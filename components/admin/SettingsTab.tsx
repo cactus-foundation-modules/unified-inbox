@@ -81,6 +81,9 @@ type Payload = {
   settings: Settings
   collection: CollectionStat[]
   unrouted: number
+  /** Mailboxes something else on this site is already watching, and what to do
+   *  about it. One per mail account, never more. */
+  warnings: Array<{ connectionId: string; message: string }>
   people: { people: number; organisations: number }
   users: StaffMember[]
   encryptionReady: boolean
@@ -177,6 +180,12 @@ export function UnifiedInboxSettingsTab() {
           Set one up before adding a mail account.
         </div>
       )}
+
+      {(data.warnings ?? []).map((warning) => (
+        <div key={warning.connectionId} className="alert alert-danger" style={{ marginBottom: '1.5rem' }}>
+          {warning.message}
+        </div>
+      ))}
 
       {data.unrouted > 0 && (
         <div className="alert alert-info" style={{ marginBottom: '1.5rem' }}>

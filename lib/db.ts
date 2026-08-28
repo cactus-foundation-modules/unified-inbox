@@ -1262,6 +1262,10 @@ export type ThreadRow = {
   id: string
   inboxId: string | null
   channel: string
+  /** Set when the conversation belongs to another module's channel, along with
+   *  that module's own id for it. Null on email, which is ours. */
+  providerModule: string | null
+  externalId: string | null
   subject: string | null
   subjectNormalised: string | null
   status: string
@@ -1269,7 +1273,8 @@ export type ThreadRow = {
 
 export async function getThread(id: string): Promise<ThreadRow | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT "id", "inbox_id", "channel", "subject", "subject_normalised", "status"
+    SELECT "id", "inbox_id", "channel", "provider_module", "external_id",
+           "subject", "subject_normalised", "status"
       FROM "uin_threads" WHERE "id" = ${id}
   `
   const r = rows[0]
@@ -1278,6 +1283,8 @@ export async function getThread(id: string): Promise<ThreadRow | null> {
     id: r.id as string,
     inboxId: (r.inbox_id as string | null) ?? null,
     channel: r.channel as string,
+    providerModule: (r.provider_module as string | null) ?? null,
+    externalId: (r.external_id as string | null) ?? null,
     subject: (r.subject as string | null) ?? null,
     subjectNormalised: (r.subject_normalised as string | null) ?? null,
     status: r.status as string,
@@ -1383,10 +1390,16 @@ export type ThreadListFilters = {
    *  true only for somebody who can administer the whole thing, because an
    *  unrouted message is the most private case there is. */
   includeUnrouted: boolean
+  /** Channels owned by another module that this reader may see, by module name.
+   *  A chat or an enquiry is in no inbox, so the inbox guest lists say nothing
+   *  about it - the owning module's own permission does. */
+  providerModules?: string[]
   /** One inbox chosen in the rail, or null for everything they may see. */
   inboxId?: string | null
   /** Only the conversations that landed in no inbox at all. */
   unroutedOnly?: boolean
+  /** One channel chosen in the rail, by the module that owns it. */
+  providerModule?: string | null
   status?: ThreadStatusFilter
   unreadOnly?: boolean
   /** A user id, or 'unassigned', or null for "do not filter". */
@@ -1423,26 +1436,40 @@ export type ThreadListRow = {
 
 /** The access half of the WHERE clause, built once and reused by the list, the
  *  count and the unread tallies so the three can never disagree. */
-function visibilityClause(inboxIds: string[], includeUnrouted: boolean): Prisma.Sql | null {
+function visibilityClause(
+  inboxIds: string[],
+  includeUnrouted: boolean,
+  providerModules: string[] = [],
+): Prisma.Sql | null {
   const parts: Prisma.Sql[] = []
   if (inboxIds.length > 0) {
     parts.push(Prisma.sql`t."inbox_id" IN (${Prisma.join(inboxIds)})`)
   }
   if (includeUnrouted) {
-    parts.push(Prisma.sql`t."inbox_id" IS NULL`)
+    // Mail that reached the account and matched none of the site's addresses.
+    // A chat or an enquiry also sits in no inbox and must NOT fall in here:
+    // "not filed" means an email nobody could place, and a channel that never
+    // had an address to be placed by is a different thing entirely.
+    parts.push(Prisma.sql`(t."inbox_id" IS NULL AND t."provider_module" IS NULL)`)
+  }
+  if (providerModules.length > 0) {
+    parts.push(Prisma.sql`t."provider_module" IN (${Prisma.join(providerModules)})`)
   }
   // Nothing visible at all. The caller returns an empty page rather than
   // running a query whose WHERE clause would be empty and therefore true.
   if (parts.length === 0) return null
-  return parts.length === 1
-    ? Prisma.sql`(${parts[0]})`
-    : Prisma.sql`(${parts[0]} OR ${parts[1]})`
+  return Prisma.sql`(${Prisma.join(parts, ' OR ')})`
 }
 
 function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
   const where: Prisma.Sql[] = []
-  if (f.unroutedOnly) where.push(Prisma.sql`t."inbox_id" IS NULL`)
-  else if (f.inboxId) where.push(Prisma.sql`t."inbox_id" = ${f.inboxId}`)
+  if (f.unroutedOnly) {
+    where.push(Prisma.sql`t."inbox_id" IS NULL AND t."provider_module" IS NULL`)
+  } else if (f.providerModule) {
+    where.push(Prisma.sql`t."provider_module" = ${f.providerModule}`)
+  } else if (f.inboxId) {
+    where.push(Prisma.sql`t."inbox_id" = ${f.inboxId}`)
+  }
   if (f.status && f.status !== 'all') where.push(Prisma.sql`t."status" = ${f.status}`)
   if (f.unreadOnly) where.push(Prisma.sql`t."unread" = true`)
   if (f.assignee === 'unassigned') where.push(Prisma.sql`t."assignee_user_id" IS NULL`)
@@ -1468,12 +1495,13 @@ const THREAD_LIST_SELECT = Prisma.sql`
            t."last_message_at", t."last_direction", t."unread", t."message_count",
            lm."from_name"        AS "last_from_name",
            lm."from_address"     AS "last_from_address",
+           lm."from_phone"       AS "last_from_phone",
            lm."to_addresses"     AS "last_to",
            lm."direction"        AS "last_direction_message",
            lm."has_attachments"  AS "last_has_attachments"
       FROM "uin_threads" t
       LEFT JOIN LATERAL (
-        SELECT m."from_name", m."from_address", m."to_addresses", m."direction",
+        SELECT m."from_name", m."from_address", m."from_phone", m."to_addresses", m."direction",
                m."has_attachments"
           FROM "uin_messages" m
          WHERE m."thread_id" = t."id" AND m."direction" <> 'note'
@@ -1500,15 +1528,18 @@ function mapThreadListRow(r: Record<string, unknown>): ThreadListRow {
     unread: !!r.unread,
     messageCount: Number(r.message_count ?? 0),
     participantName: inbound ? ((r.last_from_name as string | null) ?? null) : null,
+    // A caller has a number where a correspondent has an address, and the row
+    // says whichever of the two there is - "Unknown sender" beside a phone
+    // conversation whose number we are holding would be a plain untruth.
     participantAddress: inbound
-      ? ((r.last_from_address as string | null) ?? null)
-      : (to[0] ?? null),
+      ? ((r.last_from_address as string | null) ?? (r.last_from_phone as string | null) ?? null)
+      : (to[0] ?? (r.last_from_phone as string | null) ?? null),
     hasAttachments: !!r.last_has_attachments,
   }
 }
 
 export async function listThreads(f: ThreadListFilters): Promise<ThreadListRow[]> {
-  const visible = visibilityClause(f.inboxIds, f.includeUnrouted)
+  const visible = visibilityClause(f.inboxIds, f.includeUnrouted, f.providerModules ?? [])
   if (!visible) return []
   const where = [visible, ...filterClauses(f)]
   const offset = Math.max(0, (f.page - 1) * f.perPage)
@@ -1522,7 +1553,7 @@ export async function listThreads(f: ThreadListFilters): Promise<ThreadListRow[]
 }
 
 export async function countThreads(f: ThreadListFilters): Promise<number> {
-  const visible = visibilityClause(f.inboxIds, f.includeUnrouted)
+  const visible = visibilityClause(f.inboxIds, f.includeUnrouted, f.providerModules ?? [])
   if (!visible) return 0
   const where = [visible, ...filterClauses(f)]
   const rows = await prisma.$queryRaw<{ count: bigint }[]>`
@@ -1537,17 +1568,19 @@ export async function countThreads(f: ThreadListFilters): Promise<number> {
 export async function unreadCounts(
   inboxIds: string[],
   includeUnrouted: boolean,
+  providerModules: string[] = [],
 ): Promise<Record<string, number>> {
-  const visible = visibilityClause(inboxIds, includeUnrouted)
+  const visible = visibilityClause(inboxIds, includeUnrouted, providerModules)
   if (!visible) return {}
-  const rows = await prisma.$queryRaw<{ inbox_id: string | null; count: bigint }[]>`
-    SELECT t."inbox_id", COUNT(*)::bigint AS "count"
+  const rows = await prisma.$queryRaw<{ key: string | null; count: bigint }[]>`
+    SELECT COALESCE('m:' || t."provider_module", t."inbox_id") AS "key",
+           COUNT(*)::bigint AS "count"
       FROM "uin_threads" t
      WHERE ${visible} AND t."unread" = true AND t."status" <> 'done'
-     GROUP BY t."inbox_id"
+     GROUP BY COALESCE('m:' || t."provider_module", t."inbox_id")
   `
   const out: Record<string, number> = {}
-  for (const r of rows) out[r.inbox_id ?? ''] = Number(r.count)
+  for (const r of rows) out[r.key ?? ''] = Number(r.count)
   return out
 }
 
@@ -1600,6 +1633,10 @@ export type ThreadMessageRow = {
   channel: string
   fromName: string | null
   fromAddress: string | null
+  /** The other party's number, on the channels that have one instead of an
+   *  address. Never folded into fromAddress: that column is what email
+   *  identities are matched on. */
+  fromPhone: string | null
   /** What the sender asked replies to go to, when they asked for anything. It
    *  beats From, which is the entire purpose of the header (E13). */
   replyTo: string | null
@@ -1632,6 +1669,7 @@ function mapThreadMessage(r: Record<string, unknown>): ThreadMessageRow {
     channel: r.channel as string,
     fromName: (r.from_name as string | null) ?? null,
     fromAddress: (r.from_address as string | null) ?? null,
+    fromPhone: (r.from_phone as string | null) ?? null,
     replyTo: (r.reply_to as string | null) ?? null,
     toAddresses: (r.to_addresses as string[] | null) ?? [],
     ccAddresses: (r.cc_addresses as string[] | null) ?? [],
@@ -2089,7 +2127,7 @@ export async function setThreadPerson(
 export async function unresolvedThreads(limit: number): Promise<Array<{ id: string }>> {
   return prisma.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "uin_threads"
-     WHERE "person_id" IS NULL
+     WHERE "person_id" IS NULL AND "provider_module" IS NULL
      ORDER BY "last_message_at" DESC NULLS LAST
      LIMIT ${limit}
   `
@@ -2143,8 +2181,9 @@ export async function threadsForPerson(
   personId: string,
   inboxIds: string[],
   includeUnrouted: boolean,
+  providerModules: string[] = [],
 ): Promise<ThreadListRow[]> {
-  const visible = visibilityClause(inboxIds, includeUnrouted)
+  const visible = visibilityClause(inboxIds, includeUnrouted, providerModules)
   if (!visible) return []
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     ${THREAD_LIST_SELECT}
@@ -2592,4 +2631,239 @@ export async function peopleCount(): Promise<{ people: number; organisations: nu
     people: Number(rows[0]?.people ?? 0),
     organisations: Number(rows[0]?.organisations ?? 0),
   }
+}
+
+// ---------------------------------------------------------------------------
+// Conversations that belong to another module (S7)
+//
+// A chat, an enquiry, a call and a text land in the same two tables an email
+// does, marked with the module that owns them and that module's own id for the
+// conversation. Two rules run through everything below:
+//
+//   The owning module remains the source of truth. Nothing here writes back to
+//   it, and what is stored is a copy kept so the hub can list, search and file
+//   these conversations beside the email ones.
+//
+//   A module that goes away leaves its conversations behind. Rows with a
+//   provider nobody serves stay readable and searchable rather than
+//   disappearing or throwing (E20), which is why none of these columns is a
+//   foreign key to anything.
+// ---------------------------------------------------------------------------
+
+export type ProviderThreadInput = {
+  providerModule: string
+  externalId: string
+  channel: string
+  subject: string | null
+  subjectNormalised: string
+  preview: string | null
+  lastMessageAt: Date
+  lastDirection: 'in' | 'out' | 'note'
+  unread: boolean
+}
+
+/**
+ * The conversation as the provider currently describes it.
+ *
+ * One statement, so two ticks racing land on the unique index rather than on
+ * each other. `status` and everything a colleague has done to it here -
+ * assignee, snooze, who it belongs to - are deliberately NOT touched on the
+ * way through: those are this hub's own bookkeeping, and a refresh from the
+ * far end must not undo somebody's morning.
+ */
+export async function upsertProviderThread(data: ProviderThreadInput): Promise<{
+  id: string
+  created: boolean
+}> {
+  const rows = await prisma.$queryRaw<{ id: string; created: boolean }[]>`
+    INSERT INTO "uin_threads"
+      ("provider_module", "external_id", "channel", "subject", "subject_normalised",
+       "preview", "last_message_at", "last_direction", "unread", "message_count")
+    VALUES (${data.providerModule}, ${data.externalId}, ${data.channel}, ${data.subject},
+            ${data.subjectNormalised}, ${data.preview}, ${data.lastMessageAt},
+            ${data.lastDirection}, ${data.unread}, 0)
+    ON CONFLICT ("provider_module", "external_id")
+      WHERE "provider_module" IS NOT NULL AND "external_id" IS NOT NULL
+      DO UPDATE SET
+        "subject"            = EXCLUDED."subject",
+        "subject_normalised" = EXCLUDED."subject_normalised",
+        "preview"            = EXCLUDED."preview",
+        "last_message_at"    = GREATEST(
+                                 COALESCE("uin_threads"."last_message_at", EXCLUDED."last_message_at"),
+                                 EXCLUDED."last_message_at"),
+        "last_direction"     = EXCLUDED."last_direction",
+        -- Unread only ever goes ON from out here. A conversation somebody has
+        -- opened in this hub stays read even while the far end still counts it
+        -- as new, because the person who read it is the one sitting here.
+        "unread"             = "uin_threads"."unread" OR EXCLUDED."unread",
+        "updated_at"         = CURRENT_TIMESTAMP
+    RETURNING "id", (xmax = 0) AS "created"
+  `
+  const row = rows[0]!
+  return { id: row.id, created: row.created }
+}
+
+export type ProviderMessageInput = {
+  threadId: string
+  providerModule: string
+  providerMessageId: string
+  direction: 'in' | 'out' | 'note'
+  channel: string
+  fromName: string | null
+  fromAddress: string | null
+  fromPhone: string | null
+  subject: string | null
+  bodyText: string | null
+  bodyHtml: string | null
+  snippet: string | null
+  sentAt: Date
+}
+
+/** Files one of the provider's messages. Returns null when we already hold it,
+ *  which is the ordinary answer every time a conversation is re-read. */
+export async function insertProviderMessage(data: ProviderMessageInput): Promise<string | null> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    INSERT INTO "uin_messages"
+      ("thread_id", "direction", "channel", "from_name", "from_address", "from_phone",
+       "subject", "body_text", "body_html", "snippet", "sent_at", "source",
+       "provider_module", "provider_message_id")
+    VALUES (${data.threadId}, ${data.direction}, ${data.channel}, ${data.fromName},
+            ${data.fromAddress}, ${data.fromPhone}, ${data.subject}, ${data.bodyText},
+            ${data.bodyHtml}, ${data.snippet}, ${data.sentAt}, 'provider',
+            ${data.providerModule}, ${data.providerMessageId})
+    ON CONFLICT ("thread_id", "provider_message_id")
+      WHERE "source" = 'provider' AND "provider_message_id" IS NOT NULL
+      DO NOTHING
+    RETURNING "id"
+  `
+  return rows[0]?.id ?? null
+}
+
+/** Rolls a provider conversation's counters forward after messages land. */
+export async function recountProviderThread(threadId: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "uin_threads" t
+       SET "message_count" = (SELECT COUNT(*) FROM "uin_messages" m WHERE m."thread_id" = t."id"),
+           "updated_at" = CURRENT_TIMESTAMP
+     WHERE t."id" = ${threadId}
+  `
+}
+
+/** The newest thing we hold from each provider, which is what the tick asks it
+ *  about. One query for every channel on the site rather than one each. */
+export async function providerWatermarks(): Promise<Record<string, Date>> {
+  const rows = await prisma.$queryRaw<{ provider_module: string; newest: Date | null }[]>`
+    SELECT "provider_module", MAX("last_message_at") AS "newest"
+      FROM "uin_threads"
+     WHERE "provider_module" IS NOT NULL
+     GROUP BY "provider_module"
+  `
+  const out: Record<string, Date> = {}
+  for (const row of rows) if (row.newest) out[row.provider_module] = row.newest
+  return out
+}
+
+/** What we already hold of one provider conversation, for deciding whether it
+ *  is worth opening again. A conversation whose newest message we have got and
+ *  whose timestamp has not moved has nothing in it for us. */
+export async function providerThreadState(
+  providerModule: string,
+  externalId: string,
+): Promise<{ id: string; lastMessageAt: Date | null; messageCount: number } | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "id", "last_message_at", "message_count"
+      FROM "uin_threads"
+     WHERE "provider_module" = ${providerModule} AND "external_id" = ${externalId}
+     LIMIT 1
+  `
+  const r = rows[0]
+  if (!r) return null
+  return {
+    id: r.id as string,
+    lastMessageAt: (r.last_message_at as Date | null) ?? null,
+    messageCount: Number(r.message_count ?? 0),
+  }
+}
+
+/** The conversations from one provider that have not been given a person yet.
+ *  Bounded, like every other pass that rides on the tick. */
+export async function providerThreadsNeedingPeople(
+  limit: number,
+): Promise<Array<{ id: string; providerModule: string }>> {
+  const rows = await prisma.$queryRaw<{ id: string; provider_module: string }[]>`
+    SELECT "id", "provider_module" FROM "uin_threads"
+     WHERE "person_id" IS NULL AND "provider_module" IS NOT NULL
+     ORDER BY "last_message_at" DESC NULLS LAST
+     LIMIT ${limit}
+  `
+  return rows.map((r) => ({ id: r.id, providerModule: r.provider_module }))
+}
+
+/** The other party on a provider conversation, for working out who they are.
+ *  Their address and their number are separate columns for the reason 006
+ *  gives: one is an email identity and the other is not. */
+export async function providerCounterparty(threadId: string): Promise<{
+  name: string | null
+  address: string | null
+  phone: string | null
+} | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "from_name", "from_address", "from_phone"
+      FROM "uin_messages"
+     WHERE "thread_id" = ${threadId} AND "direction" = 'in'
+     ORDER BY "sent_at" DESC
+     LIMIT 1
+  `
+  const r = rows[0]
+  if (!r) return null
+  return {
+    name: (r.from_name as string | null) ?? null,
+    address: (r.from_address as string | null) ?? null,
+    phone: (r.from_phone as string | null) ?? null,
+  }
+}
+
+/** The mark put on a reply this hub sent through another module, until that
+ *  module hands its own id for it back. */
+export const LOCAL_OUTBOUND_PREFIX = 'uin-out:'
+
+/**
+ * Match a reply we sent through a provider with that provider's own copy of it.
+ *
+ * A reply typed here is written down the moment it goes, so the person who sent
+ * it sees it rather than waiting an hour for the next collection. The far end
+ * then hands the same message back with an id of its own, and without this the
+ * conversation would show everything anybody sent twice.
+ *
+ * Matched on the words and the clock: same conversation, same text, within a
+ * few minutes, and only against a row still carrying our own placeholder id.
+ * Claiming it rewrites the id in place, so from then on the two are one message
+ * by the ordinary unique index.
+ */
+export async function claimLocalOutbound(input: {
+  threadId: string
+  bodyText: string
+  sentAt: Date
+  providerMessageId: string
+  windowMs?: number
+}): Promise<boolean> {
+  const window = input.windowMs ?? 15 * 60_000
+  const from = new Date(input.sentAt.getTime() - window)
+  const to = new Date(input.sentAt.getTime() + window)
+  const updated = await prisma.$executeRaw`
+    UPDATE "uin_messages"
+       SET "provider_message_id" = ${input.providerMessageId}
+     WHERE "id" = (
+       SELECT "id" FROM "uin_messages"
+        WHERE "thread_id" = ${input.threadId}
+          AND "source" = 'provider'
+          AND "direction" = 'out'
+          AND "provider_message_id" LIKE ${LOCAL_OUTBOUND_PREFIX + '%'}
+          AND "body_text" = ${input.bodyText}
+          AND "sent_at" BETWEEN ${from} AND ${to}
+        ORDER BY "sent_at" ASC
+        LIMIT 1
+     )
+  `
+  return updated > 0
 }

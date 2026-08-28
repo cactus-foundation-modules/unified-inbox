@@ -2,6 +2,8 @@ import { prisma } from '@/lib/db/prisma'
 import {
   addIdentity,
   counterpartyMessage,
+  providerCounterparty,
+  providerThreadsNeedingPeople,
   createPerson,
   findOrCreateOrganisation,
   findPersonByIdentity,
@@ -22,6 +24,7 @@ import {
   displayNameFor,
   domainOf,
   identityKey,
+  phoneKey,
   isPersonalDomain,
   organisationNameFromDomain,
   resolveOwnDomains,
@@ -155,6 +158,105 @@ export async function resolveThreadPerson(
 }
 
 /**
+ * Work out who a conversation from another channel is with.
+ *
+ * A chat and an enquiry carry an address and go down the same road as an email.
+ * A call or a text carries a number and nothing else, which is why a person can
+ * be recognised by their number at all: somebody who emailed in March and rang
+ * in April is one person with two ways of being reached, which is the entire
+ * point of this layer.
+ *
+ * The gate is the same one email goes through - our own addresses and our own
+ * staff never become customers (E18) - and a number is not put through it,
+ * because a number has no domain to judge and our own numbers never appear as
+ * the other party.
+ */
+export async function resolveProviderThreadPerson(
+  threadId: string,
+  context: ResolutionContext,
+): Promise<string | null> {
+  const party = await providerCounterparty(threadId)
+  if (!party) return null
+
+  const emailKey = shouldBecomePerson(party.address, context.gate) ? identityKey(party.address) : null
+  const numberKey = phoneKey(party.phone)
+  if (!emailKey && !numberKey) return null
+
+  const existing = await findPersonByIdentity([emailKey, numberKey].filter((k): k is string => !!k))
+  if (existing) {
+    const person = await getPerson(existing)
+    await setThreadPerson(threadId, existing, person?.organisationId ?? null)
+    // Somebody known by their address who has now rung, or the other way round.
+    // The second identity is what makes the two halves one story.
+    await attachIdentities(existing, party, emailKey, numberKey)
+    return existing
+  }
+
+  const domain = emailKey ? domainOf(emailKey) : null
+  const organisationName = domain
+    ? organisationNameFromDomain(domain, context.settings.personalDomains)
+    : null
+  const organisationId = domain && organisationName
+    ? await findOrCreateOrganisation(domain, organisationName)
+    : null
+
+  const personId = await createPerson({
+    displayName: displayNameFor(party.name, party.address) ?? party.phone ?? null,
+    primaryEmail: emailKey && party.address ? party.address.toLowerCase() : null,
+    organisationId,
+  })
+  await attachIdentities(personId, party, emailKey, numberKey)
+  await setThreadPerson(threadId, personId, organisationId)
+  return personId
+}
+
+async function attachIdentities(
+  personId: string,
+  party: { address: string | null; phone: string | null },
+  emailKey: string | null,
+  numberKey: string | null,
+): Promise<void> {
+  if (emailKey && party.address) {
+    await addIdentity({
+      personId,
+      kind: 'email',
+      value: party.address,
+      matchValue: emailKey,
+      source: 'provider',
+    })
+  }
+  if (numberKey && party.phone) {
+    await addIdentity({
+      personId,
+      kind: 'phone',
+      value: party.phone,
+      matchValue: numberKey,
+      source: 'provider',
+    })
+  }
+}
+
+/**
+ * Attach a person to every conversation from another channel that has not got
+ * one yet, a batch at a time. Same shape and the same budget rules as the mail
+ * one below.
+ */
+export async function catchUpProviderPeople(limit = CATCH_UP_BATCH): Promise<number> {
+  const pending = await providerThreadsNeedingPeople(limit)
+  if (pending.length === 0) return 0
+  const context = await buildResolutionContext()
+  let resolved = 0
+  for (const thread of pending) {
+    try {
+      if (await resolveProviderThreadPerson(thread.id, context)) resolved += 1
+    } catch (err) {
+      console.error('[unified-inbox] could not work out whose conversation this is:', err)
+    }
+  }
+  return resolved
+}
+
+/**
  * Attach a person to every conversation that has not got one yet, a batch at a
  * time.
  *
@@ -201,6 +303,17 @@ export async function runPeoplePass(opts: {
       people = await catchUpPeople(opts.people ?? CATCH_UP_BATCH)
     } catch (err) {
       console.error('[unified-inbox] the people pass could not run:', err)
+    }
+  }
+
+  // The channels somebody else owns get the same treatment, in their own batch:
+  // a caller and a correspondent are the same person, and the whole people
+  // layer exists to say so.
+  if (!outOfTime()) {
+    try {
+      people += await catchUpProviderPeople(opts.people ?? CATCH_UP_BATCH)
+    } catch (err) {
+      console.error('[unified-inbox] the people pass could not run for the other channels:', err)
     }
   }
 

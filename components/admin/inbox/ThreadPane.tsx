@@ -42,10 +42,14 @@ function formatBytes(bytes: number | null): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+// Keyed on what the sync engine actually stores. 'out-of-office' was here and
+// is not one of them - the engine writes 'auto-reply' - so that label never
+// appeared and every automatic reply fell through to the general one.
 const AUTO_LABELS: Record<string, string> = {
   bounce: 'This one bounced - it never reached them',
-  'out-of-office': 'An automatic out-of-office reply',
+  'auto-reply': 'An automatic out-of-office reply',
   bulk: 'Sent to a list rather than written to you',
+  'own-notification': 'Sent by your own website, not by them',
 }
 
 function MessageHeader({ message, staffById }: { message: ThreadMessageView; staffById: Record<string, string> }) {

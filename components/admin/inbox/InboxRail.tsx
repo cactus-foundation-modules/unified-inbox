@@ -7,10 +7,15 @@ import { inboxHref } from '@/modules/unified-inbox/lib/list'
 
 export type RailInbox = { id: string; name: string; address: string }
 
+/** A channel another module owns - live chat, the contact form, the phone.
+ *  Keyed by that module's name, which is also how its conversations are marked. */
+export type RailChannel = { moduleName: string; label: string }
+
 type Props = {
   base: string
   params: Record<string, string>
   inboxes: RailInbox[]
+  channels: RailChannel[]
   counts: Record<string, number>
   currentInboxId: string | null
   /** Whether this person can see conversations that landed in no inbox. */
@@ -27,7 +32,7 @@ function Count({ value }: { value: number }) {
   )
 }
 
-export function InboxRail({ base, params, inboxes, counts, currentInboxId, showUnrouted }: Props) {
+export function InboxRail({ base, params, inboxes, channels, counts, currentInboxId, showUnrouted }: Props) {
   const total = Object.values(counts).reduce((a, b) => a + b, 0)
   // Changing inbox always goes back to page one and drops whichever conversation
   // was open - it belongs to the inbox being left.
@@ -62,6 +67,22 @@ export function InboxRail({ base, params, inboxes, counts, currentInboxId, showU
           <span className="uin-rail-name">Not filed</span>
           <Count value={counts[''] ?? 0} />
         </a>
+      )}
+
+      {channels.length > 0 && (
+        <>
+          <div className="uin-rail-heading">Other channels</div>
+          {channels.map((channel) => (
+            <a
+              key={channel.moduleName}
+              href={link(`m:${channel.moduleName}`)}
+              aria-current={currentInboxId === `m:${channel.moduleName}` ? 'page' : undefined}
+            >
+              <span className="uin-rail-name">{channel.label}</span>
+              <Count value={counts[`m:${channel.moduleName}`] ?? 0} />
+            </a>
+          ))}
+        </>
       )}
     </nav>
   )

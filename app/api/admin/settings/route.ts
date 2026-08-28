@@ -15,6 +15,7 @@ import {
   unroutedCount,
   updateSettings,
 } from '@/modules/unified-inbox/lib/db'
+import { clashMessage, mailboxClashes } from '@/modules/unified-inbox/lib/reply-catcher-guard'
 
 // Everything the settings screen draws, in one request: the mail accounts, the
 // inboxes hanging off them, who may read which, the module's own settings, and
@@ -26,7 +27,7 @@ export async function GET() {
   if (!user) return errorResponse('Not authenticated', 401)
   if (!await hasPermission(user, 'unifiedinbox.manage')) return errorResponse('Forbidden', 403)
 
-  const [connections, inboxes, access, settings, collection, unrouted, people, users] = await Promise.all([
+  const [connections, inboxes, access, settings, collection, unrouted, people, clashes, users] = await Promise.all([
     listConnections(),
     listInboxes(),
     listAllInboxAccess(),
@@ -34,6 +35,7 @@ export async function GET() {
     collectionStats(),
     unroutedCount(),
     peopleCount(),
+    mailboxClashes(),
     prisma.user.findMany({
       where: { suspendedAt: null },
       select: { id: true, displayName: true, username: true, email: true },
@@ -57,6 +59,11 @@ export async function GET() {
     // treats as one of the site's own domains - so the exclusion rule can be
     // checked rather than guessed at.
     people,
+    // Mailboxes something else on this site is already watching. Collecting one
+    // of those as well would file every email twice, so it is not collected -
+    // and the screen has to say so, or an address that quietly never checks
+    // looks exactly like an address that is broken.
+    warnings: clashes.map((c) => ({ connectionId: c.connectionId, message: clashMessage(c) })),
     users: users.map((u) => ({
       id: u.id,
       name: u.displayName || u.username,

@@ -4,7 +4,10 @@ import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { canReplyToInbox } from '@/modules/unified-inbox/lib/access'
 import { getThread } from '@/modules/unified-inbox/lib/db'
+import { htmlToText } from '@/modules/unified-inbox/lib/html'
 import { sendMessage } from '@/modules/unified-inbox/lib/send'
+import { sendProviderReply } from '@/modules/unified-inbox/lib/provider-send'
+import { visibleProviderModules } from '@/modules/unified-inbox/lib/provider-registry'
 import { SendBody } from '@/modules/unified-inbox/lib/validation'
 
 // Sending a message: a reply, a reply to everybody, a forward, or a new
@@ -14,6 +17,13 @@ import { SendBody } from '@/modules/unified-inbox/lib/validation'
 // session is. Holding unifiedinbox.reply is not enough on its own - the inbox
 // being written FROM has its own guest list, and somebody who cannot read
 // accounts@ must not be able to send as it either (D16).
+//
+// A conversation that came from another channel takes the other road entirely:
+// it has no inbox and no sending identity, and its reply goes back out through
+// the module that owns it so the customer gets a real reply on the channel they
+// used. Its access rule is that module's own permission, for the same reason -
+// this hub presenting somebody else's messages is not the same as granting
+// somebody the right to read them.
 //
 // The 60 second ceiling is for the attachments: the bytes are fetched out of
 // storage, and a message carrying a few megabytes of quote PDFs takes longer
@@ -31,7 +41,34 @@ export async function POST(request: Request) {
   }
   const body = parsed.data
 
-  const inboxId = body.inboxId ?? (body.threadId ? (await getThread(body.threadId))?.inboxId : null)
+  const thread = body.threadId ? await getThread(body.threadId) : null
+
+  // ---- a channel somebody else owns --------------------------------------
+  if (thread?.providerModule) {
+    const allowed = await visibleProviderModules(user)
+    if (!allowed.includes(thread.providerModule)) {
+      return errorResponse('You do not have permission to answer this conversation.', 403)
+    }
+    if (body.mode === 'forward' || body.mode === 'new') {
+      return errorResponse(
+        'This kind of conversation can be replied to, but not forwarded or started from here.',
+        400,
+      )
+    }
+    const result = await sendProviderReply({
+      threadId: thread.id,
+      // These channels carry words, not markup - a chat window and a text
+      // message have nowhere to put a typeface.
+      text: htmlToText(body.bodyHtml),
+      authorUserId: user.id,
+      authorName: user.displayName ?? null,
+    })
+    if (!result.ok) return errorResponse(result.reason, 400)
+    return NextResponse.json({ messageId: result.messageId, threadId: thread.id, alreadySent: false })
+  }
+
+  // ---- email -------------------------------------------------------------
+  const inboxId = body.inboxId ?? thread?.inboxId ?? null
   if (!inboxId) {
     return errorResponse(
       'This conversation is not filed in an inbox yet, so there is nothing to send it from.',

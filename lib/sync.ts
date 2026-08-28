@@ -1,4 +1,5 @@
 import type { ImapFlow } from 'imapflow'
+import { prisma } from '@/lib/db/prisma'
 import { simpleParser, type ParsedMail } from 'mailparser'
 import { upsertAlert, clearAlert } from '@/lib/notifications/alerts'
 import { normaliseAddress, parseAddressList, routeSentToInbox, routeToInbox, type RoutableInbox } from './addresses'
@@ -27,6 +28,7 @@ import {
   touchThread,
 } from './db'
 import { prepareInboundHtml, htmlToText } from './html'
+import { clashMessage, mailboxClashes } from './reply-catcher-guard'
 import { credentialsForConnection, explainImapError, listFolders, openMailbox } from './imap'
 import {
   BATCH_SIZE,
@@ -50,6 +52,7 @@ import {
   normaliseSubject,
   parseReferences,
   HEURISTIC_WINDOW_DAYS,
+  type AutomatedKind,
 } from './threading'
 import type { Inbox } from './types'
 
@@ -90,7 +93,7 @@ export type ConnectionOutcome = {
   label: string
   ok: boolean
   /** Why nothing ran, when nothing ran. */
-  skipped?: 'locked' | 'no-password' | 'no-inboxes'
+  skipped?: 'locked' | 'no-password' | 'no-inboxes' | 'other-poller'
   folders: FolderOutcome[]
   stored: number
   error?: string
@@ -134,6 +137,27 @@ export async function syncConnection(
   if (!connection.hasPassword) {
     return { connectionId, label: connection.label, ok: false, skipped: 'no-password', folders: [], stored: 0,
       error: 'No password is saved for this mail account yet.' }
+  }
+
+  // Something else is already watching this mailbox. Collecting it as well
+  // would file every email twice in two different places, so this account is
+  // left alone until somebody resolves it - and is told, rather than left to
+  // wonder why one address never collects anything.
+  // Deliberately NOT written to the account's own last-checked stamp: that
+  // stamp is what the Check now cooldown reads, and marking a blocked account
+  // as "just checked" every tick would turn the button away for everybody. The
+  // settings screen asks this same question directly and says so there.
+  const clash = (await mailboxClashes()).find((c) => c.connectionId === connectionId)
+  if (clash) {
+    return {
+      connectionId,
+      label: connection.label,
+      ok: false,
+      skipped: 'other-poller',
+      folders: [],
+      stored: 0,
+      error: clashMessage(clash),
+    }
   }
 
   const holdMs = Math.max(0, deadline - Date.now()) + LOCK_SLACK_MS
@@ -185,6 +209,14 @@ export async function syncConnection(
       ...mine.map((i) => normaliseAddress(i.address)),
       normaliseAddress(connection.imapUsername),
     ])
+    // What the site itself sends as. Mail from that address arriving in a
+    // mailbox is the site talking to its owner - an order confirmation, or the
+    // "somebody filled in your contact form" notice - and not a customer (E25).
+    const siteConfig = await prisma.siteConfig.findUnique({
+      where: { id: 'singleton' },
+      select: { emailFromAddress: true },
+    })
+    const siteSendingAddress = normaliseAddress(siteConfig?.emailFromAddress ?? '')
 
     for (const folder of folders) {
       if (outOfTime(deadline)) break
@@ -196,6 +228,7 @@ export async function syncConnection(
         floor,
         routing,
         ownAddresses,
+        siteSendingAddress,
       })
       outcome.folders.push(result)
       outcome.stored += result.stored
@@ -242,6 +275,28 @@ function routableInboxes(all: Inbox[], mine: Inbox[]): RoutableInbox[] {
   return [...mine, ...catchAlls].map((i) => ({ id: i.id, address: i.address, isCatchAll: i.isCatchAll }))
 }
 
+/**
+ * The site writing to its own owner (E25).
+ *
+ * A contact form enquiry emails the owner, so the same enquiry arrives twice:
+ * once through the channel it came in on, and once as an ordinary email in the
+ * inbox. The same is true of every order confirmation and purchase order the
+ * site sends to an address it also collects. Left alone, every enquiry a site
+ * receives is two unread enquiries and somebody answers the wrong one.
+ *
+ * Marked rather than dropped. It is still real mail and still belongs in the
+ * conversation - it simply must not mark anything unread, and must not mint a
+ * person called "your website".
+ */
+export function ownNotification(
+  direction: 'in' | 'out',
+  fromAddress: string | null,
+  siteSendingAddress: string | null,
+): AutomatedKind | null {
+  if (direction !== 'in' || !fromAddress || !siteSendingAddress) return null
+  return fromAddress === siteSendingAddress ? 'own-notification' : null
+}
+
 type FolderContext = {
   client: ImapFlow
   connectionId: string
@@ -250,6 +305,9 @@ type FolderContext = {
   floor: Date
   routing: RoutableInbox[]
   ownAddresses: Set<string>
+  /** The address the site's own automatic mail goes out as, normalised. Empty
+   *  when the site has not set one. */
+  siteSendingAddress: string | null
 }
 
 async function syncFolder(ctx: FolderContext): Promise<FolderOutcome> {
@@ -510,7 +568,7 @@ async function fileMessage(
     returnPath: headerValue(parsed, 'return-path'),
     listId: headerValue(parsed, 'list-id'),
     subject,
-  })
+  }) ?? ownNotification(direction, fromAddress, ctx.siteSendingAddress)
 
   const inReplyTo = cleanMessageId(headerValue(parsed, 'in-reply-to'))
   const references = parseReferences(headerValue(parsed, 'references'))

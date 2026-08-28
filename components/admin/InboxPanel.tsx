@@ -32,6 +32,7 @@ import { ContextRail } from './inbox/ContextRail'
 import { PersonView } from './inbox/PersonView'
 import { replyRecipients } from '@/modules/unified-inbox/lib/compose'
 import { parseInboxParams, PER_PAGE } from '@/modules/unified-inbox/lib/list'
+import { visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
 import { InboxStyles } from './inbox/styles'
 import { InboxRail } from './inbox/InboxRail'
 import { Filters } from './inbox/Filters'
@@ -78,7 +79,13 @@ export async function UnifiedInboxPanel({
   const visible = new Set(visibleIds)
   const inboxes = allInboxes.filter((i) => visible.has(i.id))
 
-  if (inboxes.length === 0) {
+  // The channels another module owns - chat, enquiries, the phone. They sit in
+  // no inbox and are not governed by the inbox guest lists: the module that owns
+  // each one says who may read it, and this hub honours that answer.
+  const channels = await visibleProviderChannels(user)
+  const channelModules = channels.map((c) => c.moduleName)
+
+  if (inboxes.length === 0 && channels.length === 0) {
     return (
       <div className="alert alert-info">
         {canManage ? (
@@ -110,12 +117,14 @@ export async function UnifiedInboxPanel({
   const staff = staffRows.map((s) => ({ id: s.id, name: s.displayName || s.username }))
   const staffById = Object.fromEntries(staff.map((s) => [s.id, s.name]))
 
-  const counts = await unreadCounts(visibleIds, canManage)
+  const counts = await unreadCounts(visibleIds, canManage, channelModules)
 
   const filters = {
     inboxIds: visibleIds,
     includeUnrouted: canManage,
+    providerModules: channelModules,
     inboxId: params.inboxId,
+    providerModule: params.providerModule,
     unroutedOnly: params.unroutedOnly,
     status: params.status,
     unreadOnly: params.unreadOnly,
@@ -143,7 +152,7 @@ export async function UnifiedInboxPanel({
     if (!person) {
       personPane = personNotHere()
     } else {
-      const personThreads = await threadsForPerson(person.id, visibleIds, canManage)
+      const personThreads = await threadsForPerson(person.id, visibleIds, canManage, channelModules)
       if (personThreads.length === 0 && !canManage) {
         // A person's page is reachable by anybody who may read the inbox, so it
         // needs the same gate the conversations themselves have. Otherwise
@@ -200,7 +209,13 @@ export async function UnifiedInboxPanel({
   if (!params.personId && params.threadId) {
     const thread = await getThreadDetail(params.threadId)
     const allowed = thread
-      ? thread.inboxId ? await canViewInbox(user, thread.inboxId) : canManage
+      ? thread.providerModule
+        // A conversation from another channel answers to that module's own
+        // permission, not to the inbox guest lists - it never had an address.
+        ? channelModules.includes(thread.providerModule)
+        : thread.inboxId
+          ? await canViewInbox(user, thread.inboxId)
+          : canManage
       : false
     if (!thread || !allowed) {
       threadPane = (
@@ -259,12 +274,23 @@ export async function UnifiedInboxPanel({
           )
         : { to: [], cc: [] }
 
-      const canReply = thread.inboxId ? await canReplyToInbox(user, thread.inboxId) : false
+      const channel = thread.providerModule
+        ? channels.find((c) => c.moduleName === thread.providerModule) ?? null
+        : null
+      const canReply = thread.providerModule
+        ? (channel?.canReply ?? false) && await hasPermission(user, 'unifiedinbox.reply')
+        : thread.inboxId
+          ? await canReplyToInbox(user, thread.inboxId)
+          : false
       const cannotReplyReason = canReply
         ? null
-        : thread.inboxId
-          ? 'You can read this inbox but not send from it. Leave a note instead, or ask whoever looks after the site.'
-          : 'This conversation is not filed in one of your addresses, so there is nothing to send it from.'
+        : thread.providerModule
+          ? channel
+            ? `${channel.label} conversations are read here and answered where they came from.`
+            : 'The part of the site that handles this channel is no longer installed, so this cannot be answered here.'
+          : thread.inboxId
+            ? 'You can read this inbox but not send from it. Leave a note instead, or ask whoever looks after the site.'
+            : 'This conversation is not filed in one of your addresses, so there is nothing to send it from.'
 
       threadPane = (
         <ThreadPane
@@ -322,8 +348,15 @@ export async function UnifiedInboxPanel({
           base={base}
           params={carried}
           inboxes={inboxes.map((i) => ({ id: i.id, name: i.name, address: i.address }))}
+          channels={channels.map((c) => ({ moduleName: c.moduleName, label: c.label }))}
           counts={counts}
-          currentInboxId={params.unroutedOnly ? 'none' : params.inboxId}
+          currentInboxId={
+            params.unroutedOnly
+              ? 'none'
+              : params.providerModule
+                ? `m:${params.providerModule}`
+                : params.inboxId
+          }
           showUnrouted={canManage}
         />
 

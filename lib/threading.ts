@@ -105,7 +105,7 @@ export function isSyntheticIdentity(id: string | null | undefined): boolean {
   return !!id && id.endsWith('@no-message-id.unified-inbox')
 }
 
-export type AutomatedKind = 'auto-reply' | 'bounce' | 'bulk'
+export type AutomatedKind = 'auto-reply' | 'bounce' | 'bulk' | 'own-notification'
 
 /**
  * Machinery, not a person (E7). An out-of-office and a bounce both quote our own

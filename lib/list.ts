@@ -17,6 +17,10 @@ export type StatusFilter = 'open' | 'snoozed' | 'done' | 'all'
 export type InboxParams = {
   /** The inbox chosen in the rail, or null for everything this person may see. */
   inboxId: string | null
+  /** A channel another module owns, chosen in the rail. Written `m:<module>` in
+   *  the address, because it takes the same place as an inbox and there is no
+   *  sense in two params that cannot both be true. */
+  providerModule: string | null
   /** The rail's "Not filed" entry: mail that reached the account and matched
    *  none of the site's addresses. Only somebody who administers the whole
    *  thing sees it at all. */
@@ -47,9 +51,15 @@ const STATUSES: StatusFilter[] = ['open', 'snoozed', 'done', 'all']
 export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
   const rawStatus = sp.status as StatusFilter | undefined
   const search = (sp.q ?? '').trim()
+  const inbox = sp.inbox ?? ''
+  // Anything with the channel prefix takes the channel slot, whether or not it
+  // names a real one - "m:" alone is nobody's inbox id either.
+  const isChannel = inbox.startsWith('m:')
+  const channel = isChannel ? inbox.slice(2) : ''
   return {
-    inboxId: sp.inbox && sp.inbox !== 'all' && sp.inbox !== 'none' ? sp.inbox : null,
-    unroutedOnly: sp.inbox === 'none',
+    inboxId: !isChannel && inbox && inbox !== 'all' && inbox !== 'none' ? inbox : null,
+    providerModule: channel.length > 0 ? channel : null,
+    unroutedOnly: inbox === 'none',
     status: rawStatus && STATUSES.includes(rawStatus) ? rawStatus : 'open',
     unreadOnly: sp.unread === '1',
     assignee: sp.assignee ? sp.assignee : null,

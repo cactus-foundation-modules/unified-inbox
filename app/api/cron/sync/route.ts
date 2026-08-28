@@ -3,6 +3,7 @@ import { errorResponse } from '@/lib/utils'
 import { syncAllConnections } from '@/modules/unified-inbox/lib/sync'
 import { CRON_BUDGET_MS, CRON_PEOPLE_DEADLINE_MS } from '@/modules/unified-inbox/lib/sync-plan'
 import { runPeoplePass } from '@/modules/unified-inbox/lib/identity'
+import { syncAllProviders, PROVIDER_BUDGET_MS } from '@/modules/unified-inbox/lib/provider-sync'
 
 // The scheduled mail check.
 //
@@ -32,6 +33,13 @@ export async function GET(request: NextRequest) {
   const started = Date.now()
   const outcomes = await syncAllConnections({ budgetMs: CRON_BUDGET_MS })
 
+  // Then the channels another module owns - chat, enquiries, calls, texts.
+  // After the mail and inside its own small budget, for the same reason the
+  // people pass runs last: their messages are safe where they are and can be
+  // copied next tick, while an email nobody fetched may be somewhere else by
+  // then.
+  const channels = await syncAllProviders({ deadline: Date.now() + PROVIDER_BUDGET_MS })
+
   // Then, with whatever is left of the slice: work out whose conversations the
   // new ones are, and attach the records they mention. Everything above is
   // already committed, so this stopping early costs a conversation one more
@@ -39,11 +47,14 @@ export async function GET(request: NextRequest) {
   const people = await runPeoplePass({ deadline: started + CRON_PEOPLE_DEADLINE_MS })
 
   return NextResponse.json({
-    ok: outcomes.every((o) => o.ok),
+    ok: outcomes.every((o) => o.ok) && channels.every((c) => c.ok),
     accounts: outcomes.length,
     collected: outcomes.reduce((total, o) => total + o.stored, 0),
+    channels: channels.length,
+    channelMessages: channels.reduce((total, c) => total + c.messages, 0),
     people: people.people,
     linked: people.links,
     outcomes,
+    channelOutcomes: channels,
   })
 }

@@ -38,6 +38,17 @@ describe('parseInboxParams', () => {
     expect(parseInboxParams({ inbox: 'none' })).toMatchObject({ inboxId: null, unroutedOnly: true })
   })
 
+  it('reads a channel another module owns, which takes the rail’s other slot', () => {
+    expect(parseInboxParams({ inbox: 'm:live-chat' })).toMatchObject({
+      inboxId: null,
+      providerModule: 'live-chat',
+      unroutedOnly: false,
+    })
+    // An ordinary inbox id is not a channel, and neither is a bare prefix.
+    expect(parseInboxParams({ inbox: 'abc' }).providerModule).toBeNull()
+    expect(parseInboxParams({ inbox: 'm:' })).toMatchObject({ inboxId: null, providerModule: null })
+  })
+
   it('caps a search long enough to be an attack on the query planner', () => {
     expect(parseInboxParams({ q: 'x'.repeat(500) }).search).toHaveLength(200)
   })
