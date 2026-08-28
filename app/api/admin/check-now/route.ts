@@ -4,7 +4,8 @@ import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { getConnection, listConnections } from '@/modules/unified-inbox/lib/db'
 import { syncAllConnections, syncConnection } from '@/modules/unified-inbox/lib/sync'
-import { MANUAL_BUDGET_MS } from '@/modules/unified-inbox/lib/sync-plan'
+import { MANUAL_BUDGET_MS, MANUAL_PEOPLE_DEADLINE_MS } from '@/modules/unified-inbox/lib/sync-plan'
+import { runPeoplePass } from '@/modules/unified-inbox/lib/identity'
 
 // Check now. Same engine as the hourly job, a bigger slice of clock (E9): this
 // runs in a module route with a 60 second ceiling of its own rather than inside
@@ -42,9 +43,13 @@ export async function POST(request: Request) {
     return errorResponse(`A check has just run - give it ${waitSeconds} seconds and try again.`, 429)
   }
 
+  const started = Date.now()
   const outcomes = connectionId
     ? [await syncConnection(connectionId, { budgetMs: MANUAL_BUDGET_MS })]
     : await syncAllConnections({ budgetMs: MANUAL_BUDGET_MS })
+
+  // Same people pass the hourly job runs, with the bigger slice this route has.
+  await runPeoplePass({ deadline: started + MANUAL_PEOPLE_DEADLINE_MS })
 
   const failed = outcomes.find((o) => !o.ok)
   const collected = outcomes.reduce((total, o) => total + o.stored, 0)

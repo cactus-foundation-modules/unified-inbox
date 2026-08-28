@@ -55,6 +55,11 @@ type Settings = {
   attachmentFetch: 'lazy' | 'always' | 'never'
   autoLink: boolean
   defaultInboxId: string | null
+  ownDomains: string[] | null
+  personalDomains: string[]
+  orderNumberPattern: string | null
+  poNumberPattern: string | null
+  quoteNumberPattern: string | null
 }
 
 type StaffMember = { id: string; name: string; email: string }
@@ -76,6 +81,7 @@ type Payload = {
   settings: Settings
   collection: CollectionStat[]
   unrouted: number
+  people: { people: number; organisations: number }
   users: StaffMember[]
   encryptionReady: boolean
 }
@@ -202,6 +208,14 @@ export function UnifiedInboxSettingsTab() {
       <ModuleSettingsSection
         settings={data.settings}
         inboxes={data.inboxes}
+        busy={busy}
+        call={call}
+      />
+
+      <PeopleSettingsSection
+        settings={data.settings}
+        inboxes={data.inboxes}
+        counts={data.people}
         busy={busy}
         call={call}
       />
@@ -765,7 +779,7 @@ function ModuleSettingsSection({ settings, inboxes, busy, call }: {
       <div className="field">
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontWeight: 400 }}>
           <input type="checkbox" checked={draft.autoLink} onChange={(e) => setDraft({ ...draft, autoLink: e.target.checked })} />
-          Show a person&rsquo;s orders and other records beside their messages
+          Attach an order or a purchase order to a conversation when the message mentions one
         </label>
       </div>
       <div className="field">
@@ -780,6 +794,140 @@ function ModuleSettingsSection({ settings, inboxes, busy, call }: {
       </div>
 
       <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>Save settings</button>
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// People
+// ---------------------------------------------------------------------------
+
+/** A textarea of one-per-line values, back and forth. Commas are accepted too,
+ *  because somebody will type them. */
+function linesToList(value: string): string[] {
+  return [...new Set(
+    value.split(/[\n,]+/).map((line) => line.trim().toLowerCase()).filter(Boolean),
+  )]
+}
+
+function PeopleSettingsSection({ settings, inboxes, counts, busy, call }: {
+  settings: Settings
+  inboxes: Inbox[]
+  counts: { people: number; organisations: number }
+  busy: boolean
+  call: Caller
+}) {
+  const [seeded, setSeeded] = useState(settings)
+  const [own, setOwn] = useState((settings.ownDomains ?? []).join('\n'))
+  const [overrideOwn, setOverrideOwn] = useState(settings.ownDomains !== null)
+  const [personal, setPersonal] = useState(settings.personalDomains.join('\n'))
+  const [order, setOrder] = useState(settings.orderNumberPattern ?? '')
+  const [po, setPo] = useState(settings.poNumberPattern ?? '')
+  const [quote, setQuote] = useState(settings.quoteNumberPattern ?? '')
+  if (seeded !== settings) {
+    setSeeded(settings)
+    setOwn((settings.ownDomains ?? []).join('\n'))
+    setOverrideOwn(settings.ownDomains !== null)
+    setPersonal(settings.personalDomains.join('\n'))
+    setOrder(settings.orderNumberPattern ?? '')
+    setPo(settings.poNumberPattern ?? '')
+    setQuote(settings.quoteNumberPattern ?? '')
+  }
+
+  // What the module will treat as one of your own domains if you leave it to
+  // work it out: the domains of the addresses you collect mail on.
+  const inferred = [...new Set(
+    inboxes
+      .map((i) => i.address.split('@')[1]?.toLowerCase())
+      .filter((d): d is string => !!d),
+  )]
+
+  async function save() {
+    await call('/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        ownDomains: overrideOwn ? linesToList(own) : null,
+        personalDomains: linesToList(personal),
+        orderNumberPattern: order.trim() === '' ? null : order,
+        poNumberPattern: po.trim() === '' ? null : po,
+        quoteNumberPattern: quote.trim() === '' ? null : quote,
+      }),
+    })
+  }
+
+  return (
+    <section className="card">
+      <div style={LABEL_STYLE}>People</div>
+      <p style={{ ...MUTED, fontSize: '0.875rem', marginTop: 0 }}>
+        Messages from the same person are gathered together so you can see everything they have
+        ever said in one place. It is deliberately simple: who somebody is, how to reach them, and
+        which company their address belongs to. Nothing more than that.
+      </p>
+      <p style={{ ...MUTED, fontSize: '0.875rem' }}>
+        {counts.people === 0
+          ? 'Nobody yet. People appear as mail is collected.'
+          : `${counts.people} ${counts.people === 1 ? 'person' : 'people'} so far, across ${counts.organisations} ${counts.organisations === 1 ? 'company' : 'companies'}.`}
+      </p>
+
+      <div className="field">
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontWeight: 400 }}>
+          <input
+            type="checkbox"
+            checked={!overrideOwn}
+            onChange={(e) => setOverrideOwn(!e.target.checked)}
+          />
+          Work out which addresses are your colleagues&rsquo; from the addresses you collect mail on
+        </label>
+        {!overrideOwn && (
+          <p style={{ ...MUTED, fontSize: '0.8125rem' }}>
+            {inferred.length > 0
+              ? `Anybody at ${inferred.join(', ')} is treated as one of you rather than as a customer.`
+              : 'Add an inbox and the domain it uses will be treated as yours.'}
+          </p>
+        )}
+      </div>
+
+      {overrideOwn && (
+        <div className="field">
+          <label>Your own domains <span style={{ ...MUTED, fontWeight: 400 }}>(one per line)</span></label>
+          <textarea rows={3} value={own} onChange={(e) => setOwn(e.target.value)} />
+          <p style={{ ...MUTED, fontSize: '0.8125rem' }}>
+            Anybody writing from one of these is a colleague, not a customer, and no record is kept
+            of them.
+          </p>
+        </div>
+      )}
+
+      <div className="field">
+        <label>Other free email providers <span style={{ ...MUTED, fontWeight: 400 }}>(one per line)</span></label>
+        <textarea rows={2} value={personal} onChange={(e) => setPersonal(e.target.value)} />
+        <p style={{ ...MUTED, fontSize: '0.8125rem' }}>
+          The usual ones are already known. Add any others your customers use, so their email
+          provider does not get mistaken for the company they work for.
+        </p>
+      </div>
+
+      <div style={{ ...LABEL_STYLE, marginTop: '1rem' }}>Spotting references</div>
+      <p style={{ ...MUTED, fontSize: '0.875rem', marginTop: 0 }}>
+        When somebody quotes an order or purchase order number, it gets attached to the
+        conversation. Nothing is attached until we have checked the number really exists, and
+        anything attached this way says so and comes off in one click. Leave a box empty unless
+        your numbers look unusual.
+      </p>
+      <div className="field">
+        <label>Order numbers look like</label>
+        <input value={order} placeholder="the usual pattern" onChange={(e) => setOrder(e.target.value)} />
+      </div>
+      <div className="field">
+        <label>Purchase order numbers look like</label>
+        <input value={po} placeholder="the usual pattern" onChange={(e) => setPo(e.target.value)} />
+      </div>
+      <div className="field">
+        <label>Quote references look like</label>
+        <input value={quote} placeholder="the usual pattern" onChange={(e) => setQuote(e.target.value)} />
+      </div>
+
+      <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>Save people settings</button>
     </section>
   )
 }

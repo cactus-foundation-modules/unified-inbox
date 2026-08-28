@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { errorResponse } from '@/lib/utils'
 import { syncAllConnections } from '@/modules/unified-inbox/lib/sync'
-import { CRON_BUDGET_MS } from '@/modules/unified-inbox/lib/sync-plan'
+import { CRON_BUDGET_MS, CRON_PEOPLE_DEADLINE_MS } from '@/modules/unified-inbox/lib/sync-plan'
+import { runPeoplePass } from '@/modules/unified-inbox/lib/identity'
 
 // The scheduled mail check.
 //
@@ -28,12 +29,21 @@ export async function GET(request: NextRequest) {
   const auth = request.headers.get('authorization')
   if (auth !== `Bearer ${secret}`) return errorResponse('Unauthorized', 401)
 
+  const started = Date.now()
   const outcomes = await syncAllConnections({ budgetMs: CRON_BUDGET_MS })
+
+  // Then, with whatever is left of the slice: work out whose conversations the
+  // new ones are, and attach the records they mention. Everything above is
+  // already committed, so this stopping early costs a conversation one more
+  // tick before it has a name - never a message.
+  const people = await runPeoplePass({ deadline: started + CRON_PEOPLE_DEADLINE_MS })
 
   return NextResponse.json({
     ok: outcomes.every((o) => o.ok),
     accounts: outcomes.length,
     collected: outcomes.reduce((total, o) => total + o.stored, 0),
+    people: people.people,
+    linked: people.links,
     outcomes,
   })
 }

@@ -6,17 +6,30 @@ import { canReplyToInbox, canViewInbox, visibleInboxIds } from '@/modules/unifie
 import {
   attachmentsForThread,
   countThreads,
+  getPerson,
   getThreadDetail,
+  linksForPerson,
+  linksForThread,
   listConnections,
+  listIdentities,
   listInboxes,
+  listPersonEvents,
   listThreadEvents,
   listThreadMessages,
   listThreads,
+  outboundLogForAddresses,
+  peopleInOrganisation,
   setThreadRead,
+  threadsForPerson,
+  undoableMerges,
   unreadCounts,
   wakeDueThreads,
   type AttachmentRow,
 } from '@/modules/unified-inbox/lib/db'
+import { loadContext } from '@/modules/unified-inbox/lib/adapters'
+import { addressesForPerson, buildContextQuery } from '@/modules/unified-inbox/lib/identity'
+import { ContextRail } from './inbox/ContextRail'
+import { PersonView } from './inbox/PersonView'
 import { replyRecipients } from '@/modules/unified-inbox/lib/compose'
 import { parseInboxParams, PER_PAGE } from '@/modules/unified-inbox/lib/list'
 import { InboxStyles } from './inbox/styles'
@@ -53,6 +66,7 @@ export async function UnifiedInboxPanel({
   const adminPath = (await headers()).get('x-cactus-admin-path') ?? ''
   const base = `/${adminPath}/inbox`
   const canManage = await hasPermission(user, 'unifiedinbox.manage')
+  const canEditLinks = canManage || await hasPermission(user, 'unifiedinbox.reply')
 
   // Anything whose snooze has elapsed is open again by the time the list is
   // drawn. Doing it here rather than on a tick means a conversation is back the
@@ -83,7 +97,7 @@ export async function UnifiedInboxPanel({
   // The tab has to survive every link on this screen, or following one lands on
   // whichever tab the host happens to render first.
   const carried: Record<string, string> = { tab: 'unified-inbox' }
-  for (const key of ['inbox', 'status', 'unread', 'assignee', 'q', 'page', 'id'] as const) {
+  for (const key of ['inbox', 'status', 'unread', 'assignee', 'q', 'page', 'id', 'person'] as const) {
     const value = searchParams[key]
     if (value) carried[key] = value
   }
@@ -118,9 +132,72 @@ export async function UnifiedInboxPanel({
   ])
   const neverSynced = connections.length === 0 || connections.every((c) => !c.lastSyncAt)
 
+  // ---- one person's own page, if the address asks for one ----------------
+  //
+  // It takes the same place on the screen as a conversation, because it answers
+  // the same question about the same human from a different angle: what have we
+  // said to each other, and what does the rest of the site know about them.
+  let personPane: React.ReactNode = null
+  if (params.personId) {
+    const person = await getPerson(params.personId)
+    if (!person) {
+      personPane = personNotHere()
+    } else {
+      const personThreads = await threadsForPerson(person.id, visibleIds, canManage)
+      if (personThreads.length === 0 && !canManage) {
+        // A person's page is reachable by anybody who may read the inbox, so it
+        // needs the same gate the conversations themselves have. Otherwise
+        // somebody who can only open hi@ learns the name, the addresses and the
+        // subject lines of a supplier who has only ever written to accounts@ -
+        // which is the breach in E17 wearing a different hat.
+        personPane = personNotHere()
+      } else {
+      const query = await buildContextQuery(person.id)
+      const [identities, sections, links, events, merges, alsoHere, addresses] =
+        await Promise.all([
+          listIdentities(person.id),
+          query ? loadContext(user, query) : Promise.resolve([]),
+          linksForPerson(person.id),
+          listPersonEvents(person.id),
+          canManage ? undoableMerges(person.id) : Promise.resolve([]),
+          person.organisationId
+            ? peopleInOrganisation(person.organisationId, person.id)
+            : Promise.resolve([]),
+          addressesForPerson(person.id),
+        ])
+      // Automated mail the site sent them: order confirmations, purchase order
+      // emails and the like. Brevo sends those and they never touch anybody's
+      // Sent folder, so core's ledger is the only record there is (D13).
+      const outbound = await outboundLogForAddresses(addresses)
+
+      personPane = (
+        <PersonView
+          adminPath={adminPath}
+          base={base}
+          params={carried}
+          person={person}
+          identities={identities}
+          threads={personThreads}
+          outbound={outbound}
+          sections={sections}
+          links={links}
+          events={events}
+          merges={merges}
+          alsoHere={alsoHere}
+          staffById={staffById}
+          canEdit={canEditLinks}
+          canManage={canManage}
+          now={new Date()}
+        />
+      )
+      }
+    }
+  }
+
   // ---- the conversation on the right, if the address asks for one ---------
   let threadPane: React.ReactNode = null
-  if (params.threadId) {
+  let contextRail: React.ReactNode = null
+  if (!params.personId && params.threadId) {
     const thread = await getThreadDetail(params.threadId)
     const allowed = thread
       ? thread.inboxId ? await canViewInbox(user, thread.inboxId) : canManage
@@ -206,13 +283,41 @@ export async function UnifiedInboxPanel({
           now={new Date()}
         />
       )
+
+      // What the rest of the site knows about whoever this is. Every block in
+      // it reads another module and writes to none of them, and a module that
+      // is not installed costs one cheap check and contributes nothing.
+      const person = thread.personId ? await getPerson(thread.personId) : null
+      const query = person ? await buildContextQuery(person.id) : null
+      const [sections, links] = await Promise.all([
+        query ? loadContext(user, query) : Promise.resolve([]),
+        linksForThread(thread.id),
+      ])
+
+      contextRail = (
+        <ContextRail
+          adminPath={adminPath}
+          threadId={thread.id}
+          base={base}
+          params={carried}
+          person={person}
+          noPersonReason={person ? null : reasonThereIsNobody(thread.channel)}
+          sections={sections}
+          links={links}
+          canEditLinks={canEditLinks}
+        />
+      )
     }
   }
 
   return (
     <>
       <InboxStyles />
-      <div className="uin" data-thread={params.threadId ? 'open' : 'closed'}>
+      <div
+        className="uin"
+        data-thread={params.personId || params.threadId ? 'open' : 'closed'}
+        data-context={contextRail ? 'on' : 'off'}
+      >
         <InboxRail
           base={base}
           params={carried}
@@ -247,8 +352,30 @@ export async function UnifiedInboxPanel({
           />
         </div>
 
-        {threadPane}
+        {personPane ?? threadPane}
+        {contextRail}
       </div>
     </>
+  )
+}
+
+/** Why a conversation has nobody attached to it. Said plainly rather than left
+ *  blank: an empty panel reads as broken, and every one of these is a decision
+ *  somebody made on purpose. */
+function reasonThereIsNobody(channel: string): string {
+  if (channel !== 'email') return 'Nobody is attached to this one yet.'
+  return 'Nobody is attached to this one. That happens with automatic mail, and with anything from one of your own addresses.'
+}
+
+/** Said the same way whether the person has genuinely gone or is simply not
+ *  somebody this reader may know about. Telling the two apart out loud would
+ *  itself be the leak. */
+function personNotHere() {
+  return (
+    <div className="uin-empty">
+      <strong>That person is not here</strong>
+      They may have been merged into somebody else, or they may only appear in an inbox that has
+      not been shared with you.
+    </div>
   )
 }

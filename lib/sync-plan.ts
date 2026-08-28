@@ -167,6 +167,20 @@ export const MANUAL_BUDGET_MS = 45_000
  *  batch of ordinary mail lands well inside the budget's slack. */
 export const BATCH_SIZE = 15
 
+/**
+ * When the people pass has to stop, measured from the start of the whole run
+ * rather than from when it began.
+ *
+ * Working out whose conversations these are runs AFTER the mail has been
+ * collected and written, so it gets whatever is left of the slice: everything
+ * before it is already committed, and stopping early costs nothing but a
+ * conversation waiting one more tick for a name. Collecting the mail is the
+ * part that must not be squeezed - a person can be worked out at any time, and
+ * an email that was never fetched cannot.
+ */
+export const CRON_PEOPLE_DEADLINE_MS = 22_000
+export const MANUAL_PEOPLE_DEADLINE_MS = 55_000
+
 export function makeDeadline(budgetMs: number, now: number = Date.now()): number {
   return now + budgetMs
 }

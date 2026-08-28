@@ -6,8 +6,13 @@ import { remoteImageUrls } from './remote-images'
 import type {
   AttachmentFetchMode,
   Connection,
+  IdentityKind,
   Inbox,
   InboxAccess,
+  Organisation,
+  Person,
+  PersonIdentity,
+  RecordLink,
   SendTransport,
   SyncStatus,
   UnifiedInboxSettings,
@@ -357,6 +362,11 @@ const DEFAULT_SETTINGS: UnifiedInboxSettings = {
   attachmentFetch: 'lazy',
   autoLink: true,
   defaultInboxId: null,
+  ownDomains: null,
+  personalDomains: [],
+  orderNumberPattern: null,
+  poNumberPattern: null,
+  quoteNumberPattern: null,
 }
 
 export async function getSettings(): Promise<UnifiedInboxSettings> {
@@ -376,6 +386,13 @@ export async function getSettings(): Promise<UnifiedInboxSettings> {
     attachmentFetch: (r.attachment_fetch as AttachmentFetchMode) ?? 'lazy',
     autoLink: r.auto_link === undefined ? true : !!r.auto_link,
     defaultInboxId: (r.default_inbox_id as string | null) ?? null,
+    // NULL and an empty array mean different things here and both are real
+    // answers: nothing set at all, versus somebody who has cleared the box.
+    ownDomains: (r.own_domains as string[] | null) ?? null,
+    personalDomains: (r.personal_domains as string[] | null) ?? [],
+    orderNumberPattern: (r.order_number_pattern as string | null) ?? null,
+    poNumberPattern: (r.po_number_pattern as string | null) ?? null,
+    quoteNumberPattern: (r.quote_number_pattern as string | null) ?? null,
   }
 }
 
@@ -386,6 +403,11 @@ export async function updateSettings(data: Partial<UnifiedInboxSettings>): Promi
   if (data.attachmentFetch !== undefined) sets.push(Prisma.sql`"attachment_fetch" = ${data.attachmentFetch}`)
   if (data.autoLink !== undefined) sets.push(Prisma.sql`"auto_link" = ${data.autoLink}`)
   if (data.defaultInboxId !== undefined) sets.push(Prisma.sql`"default_inbox_id" = ${data.defaultInboxId}`)
+  if (data.ownDomains !== undefined) sets.push(Prisma.sql`"own_domains" = ${data.ownDomains}::text[]`)
+  if (data.personalDomains !== undefined) sets.push(Prisma.sql`"personal_domains" = ${data.personalDomains}::text[]`)
+  if (data.orderNumberPattern !== undefined) sets.push(Prisma.sql`"order_number_pattern" = ${data.orderNumberPattern}`)
+  if (data.poNumberPattern !== undefined) sets.push(Prisma.sql`"po_number_pattern" = ${data.poNumberPattern}`)
+  if (data.quoteNumberPattern !== undefined) sets.push(Prisma.sql`"quote_number_pattern" = ${data.quoteNumberPattern}`)
   if (sets.length === 0) return getSettings()
 
   await prisma.$executeRaw`
@@ -1307,6 +1329,7 @@ export async function recordLink(data: {
        "label", "confidence", "linked_by")
     VALUES (${data.threadId}, ${data.personId}, ${data.moduleName}, ${data.recordType},
             ${data.recordId}, ${data.label}, ${data.confidence}, ${data.linkedBy})
+    ON CONFLICT DO NOTHING
   `
 }
 
@@ -1435,6 +1458,29 @@ function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
   return where
 }
 
+/** The columns and the participant join every list of conversations needs,
+ *  written once so the inbox list and a person's own page cannot drift apart.
+ *  See ThreadListRow for why the participant comes from their newest INBOUND
+ *  message rather than simply the newest. */
+const THREAD_LIST_SELECT = Prisma.sql`
+    SELECT t."id", t."inbox_id", t."channel", t."provider_module", t."subject",
+           t."preview", t."status", t."snooze_until", t."assignee_user_id",
+           t."last_message_at", t."last_direction", t."unread", t."message_count",
+           lm."from_name"        AS "last_from_name",
+           lm."from_address"     AS "last_from_address",
+           lm."to_addresses"     AS "last_to",
+           lm."direction"        AS "last_direction_message",
+           lm."has_attachments"  AS "last_has_attachments"
+      FROM "uin_threads" t
+      LEFT JOIN LATERAL (
+        SELECT m."from_name", m."from_address", m."to_addresses", m."direction",
+               m."has_attachments"
+          FROM "uin_messages" m
+         WHERE m."thread_id" = t."id" AND m."direction" <> 'note'
+         ORDER BY (m."direction" = 'in') DESC, m."sent_at" DESC
+         LIMIT 1
+      ) lm ON true`
+
 function mapThreadListRow(r: Record<string, unknown>): ThreadListRow {
   const direction = (r.last_direction_message as string | null) ?? null
   const to = (r.last_to as string[] | null) ?? []
@@ -1467,23 +1513,7 @@ export async function listThreads(f: ThreadListFilters): Promise<ThreadListRow[]
   const where = [visible, ...filterClauses(f)]
   const offset = Math.max(0, (f.page - 1) * f.perPage)
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT t."id", t."inbox_id", t."channel", t."provider_module", t."subject",
-           t."preview", t."status", t."snooze_until", t."assignee_user_id",
-           t."last_message_at", t."last_direction", t."unread", t."message_count",
-           lm."from_name"        AS "last_from_name",
-           lm."from_address"     AS "last_from_address",
-           lm."to_addresses"     AS "last_to",
-           lm."direction"        AS "last_direction_message",
-           lm."has_attachments"  AS "last_has_attachments"
-      FROM "uin_threads" t
-      LEFT JOIN LATERAL (
-        SELECT m."from_name", m."from_address", m."to_addresses", m."direction",
-               m."has_attachments"
-          FROM "uin_messages" m
-         WHERE m."thread_id" = t."id" AND m."direction" <> 'note'
-         ORDER BY (m."direction" = 'in') DESC, m."sent_at" DESC
-         LIMIT 1
-      ) lm ON true
+    ${THREAD_LIST_SELECT}
      WHERE ${Prisma.join(where, ' AND ')}
      ORDER BY t."last_message_at" DESC NULLS LAST, t."id" DESC
      LIMIT ${f.perPage} OFFSET ${offset}
@@ -1789,4 +1819,777 @@ export async function insertNote(data: {
     RETURNING "id"
   `
   return rows[0]!.id
+}
+
+// ---------------------------------------------------------------------------
+// People, organisations and links to the site's own records (S6).
+//
+// Same rule as everything above: the raw column names live here. Two more that
+// are particular to this half of the module:
+//
+//   A person who lost a merge is KEPT, with merged_into_id set. Merging is the
+//   operation most likely to be regretted, and a row that is still there is a
+//   row that can be put back; a row that was deleted is an apology.
+//
+//   Every read of somebody's conversations goes through the same visibility
+//   clause the list uses. A person's page is a second way of asking the same
+//   question as the search box, and it must not be a second answer (E17).
+// ---------------------------------------------------------------------------
+
+function mapPerson(r: Record<string, unknown>): Person {
+  return {
+    id: r.id as string,
+    displayName: (r.display_name as string | null) ?? null,
+    primaryEmail: (r.primary_email as string | null) ?? null,
+    organisationId: (r.organisation_id as string | null) ?? null,
+    organisationName: (r.organisation_name as string | null) ?? null,
+    notes: (r.notes as string | null) ?? null,
+    mergedIntoId: (r.merged_into_id as string | null) ?? null,
+    createdAt: r.created_at as Date,
+    updatedAt: r.updated_at as Date,
+  }
+}
+
+const PERSON_SELECT = Prisma.sql`
+  p."id", p."display_name", p."primary_email", p."organisation_id", p."notes",
+  p."merged_into_id", p."created_at", p."updated_at", o."name" AS organisation_name`
+
+/** One person, following a merge to whoever they were merged into. Somebody
+ *  holding a link to a person from before a merge should land on the person who
+ *  now holds their mail, not on an empty page.
+ *
+ *  The depth limit is not decoration. Merging refuses to point at somebody who
+ *  has themselves been merged, so a loop should be impossible - but this runs
+ *  while a page is rendering, and a row that got into a state nobody planned
+ *  must come back as "not found" rather than as a hung request. */
+export async function getPerson(id: string, depth = 0): Promise<Person | null> {
+  if (depth > 8) {
+    console.error(`[unified-inbox] person ${id} is part of a merge chain that goes round in circles`)
+    return null
+  }
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT ${PERSON_SELECT}
+      FROM "uin_people" p
+      LEFT JOIN "uin_organisations" o ON o."id" = p."organisation_id"
+     WHERE p."id" = ${id}
+  `
+  const person = rows[0] ? mapPerson(rows[0]) : null
+  if (person?.mergedIntoId && person.mergedIntoId !== id) {
+    return getPerson(person.mergedIntoId, depth + 1)
+  }
+  return person
+}
+
+export type PersonListRow = Person & { identityCount: number; threadCount: number }
+
+/** The people directory: everybody we have met, newest first, minus anybody who
+ *  lost a merge. */
+export async function listPeople(opts: {
+  search?: string | null
+  page: number
+  perPage: number
+}): Promise<{ rows: PersonListRow[]; total: number }> {
+  const term = opts.search?.trim()
+  const where = term
+    ? Prisma.sql`p."merged_into_id" IS NULL AND (
+        p."display_name" ILIKE ${`%${term}%`}
+        OR p."primary_email" ILIKE ${`%${term}%`}
+        OR o."name" ILIKE ${`%${term}%`}
+        OR EXISTS (SELECT 1 FROM "uin_person_identities" i
+                    WHERE i."person_id" = p."id" AND i."value" ILIKE ${`%${term}%`}))`
+    : Prisma.sql`p."merged_into_id" IS NULL`
+
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT ${PERSON_SELECT},
+           (SELECT COUNT(*) FROM "uin_person_identities" i WHERE i."person_id" = p."id") AS identity_count,
+           (SELECT COUNT(*) FROM "uin_threads" t WHERE t."person_id" = p."id") AS thread_count
+      FROM "uin_people" p
+      LEFT JOIN "uin_organisations" o ON o."id" = p."organisation_id"
+     WHERE ${where}
+     ORDER BY p."updated_at" DESC
+     LIMIT ${opts.perPage} OFFSET ${(opts.page - 1) * opts.perPage}
+  `
+  const counted = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(*)::bigint AS count
+      FROM "uin_people" p
+      LEFT JOIN "uin_organisations" o ON o."id" = p."organisation_id"
+     WHERE ${where}
+  `
+  return {
+    rows: rows.map((r) => ({
+      ...mapPerson(r),
+      identityCount: Number(r.identity_count ?? 0),
+      threadCount: Number(r.thread_count ?? 0),
+    })),
+    total: Number(counted[0]?.count ?? 0),
+  }
+}
+
+/** Whoever holds one of these addresses or numbers, by the matching key. A
+ *  merged-away person resolves to the person they were merged into. */
+export async function findPersonByIdentity(matchValues: string[]): Promise<string | null> {
+  if (matchValues.length === 0) return null
+  const rows = await prisma.$queryRaw<{ person_id: string; merged_into_id: string | null }[]>`
+    SELECT i."person_id", p."merged_into_id"
+      FROM "uin_person_identities" i
+      JOIN "uin_people" p ON p."id" = i."person_id"
+     WHERE i."match_value" IN (${Prisma.join(matchValues)})
+     LIMIT 1
+  `
+  const row = rows[0]
+  if (!row) return null
+  return row.merged_into_id ?? row.person_id
+}
+
+export async function createPerson(data: {
+  displayName: string | null
+  primaryEmail: string | null
+  organisationId: string | null
+}): Promise<string> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    INSERT INTO "uin_people" ("display_name", "primary_email", "organisation_id")
+    VALUES (${data.displayName}, ${data.primaryEmail}, ${data.organisationId})
+    RETURNING "id"
+  `
+  return rows[0]!.id
+}
+
+export async function updatePerson(id: string, data: {
+  displayName?: string | null
+  primaryEmail?: string | null
+  organisationId?: string | null
+  notes?: string | null
+}): Promise<void> {
+  const sets: Prisma.Sql[] = []
+  if (data.displayName !== undefined) sets.push(Prisma.sql`"display_name" = ${data.displayName}`)
+  if (data.primaryEmail !== undefined) sets.push(Prisma.sql`"primary_email" = ${data.primaryEmail}`)
+  if (data.organisationId !== undefined) sets.push(Prisma.sql`"organisation_id" = ${data.organisationId}`)
+  if (data.notes !== undefined) sets.push(Prisma.sql`"notes" = ${data.notes}`)
+  if (sets.length === 0) return
+  await prisma.$executeRaw`
+    UPDATE "uin_people" SET ${Prisma.join(sets, ', ')}, "updated_at" = now() WHERE "id" = ${id}
+  `
+}
+
+/**
+ * Attach a way of reaching somebody.
+ *
+ * `value` is unique across the whole table, so an address already known to
+ * another person is left exactly where it is - two people claiming one mailbox
+ * is a merge somebody has to decide on, not something to settle by overwriting.
+ */
+export async function addIdentity(data: {
+  personId: string
+  kind: IdentityKind
+  value: string
+  matchValue: string
+  source: string | null
+}): Promise<void> {
+  await prisma.$executeRaw`
+    INSERT INTO "uin_person_identities" ("person_id", "kind", "value", "match_value", "source")
+    VALUES (${data.personId}, ${data.kind}, ${data.value}, ${data.matchValue}, ${data.source})
+    ON CONFLICT ("value") DO NOTHING
+  `
+}
+
+function mapIdentity(r: Record<string, unknown>): PersonIdentity {
+  return {
+    id: r.id as string,
+    personId: r.person_id as string,
+    kind: r.kind as IdentityKind,
+    value: r.value as string,
+    matchValue: (r.match_value as string | null) ?? null,
+    source: (r.source as string | null) ?? null,
+    createdAt: r.created_at as Date,
+  }
+}
+
+export async function listIdentities(personId: string): Promise<PersonIdentity[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_person_identities" WHERE "person_id" = ${personId}
+     ORDER BY "kind" ASC, "value" ASC
+  `
+  return rows.map(mapIdentity)
+}
+
+export async function deleteIdentity(id: string): Promise<void> {
+  await prisma.$executeRaw`DELETE FROM "uin_person_identities" WHERE "id" = ${id}`
+}
+
+// ---------------------------------------------------------------------------
+// Organisations. One per mail domain, and only for domains that mean something:
+// a free provider is somebody's mailbox host, not a company.
+// ---------------------------------------------------------------------------
+
+export async function findOrCreateOrganisation(domain: string, name: string): Promise<string> {
+  const existing = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "uin_organisations" WHERE "domain" = ${domain} LIMIT 1
+  `
+  if (existing[0]) return existing[0].id
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    INSERT INTO "uin_organisations" ("name", "domain") VALUES (${name}, ${domain})
+    ON CONFLICT ("domain") DO UPDATE SET "updated_at" = now()
+    RETURNING "id"
+  `
+  return rows[0]!.id
+}
+
+export async function getOrganisation(id: string): Promise<Organisation | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_organisations" WHERE "id" = ${id}
+  `
+  const r = rows[0]
+  if (!r) return null
+  return {
+    id: r.id as string,
+    name: r.name as string,
+    domain: (r.domain as string | null) ?? null,
+    createdAt: r.created_at as Date,
+    updatedAt: r.updated_at as Date,
+  }
+}
+
+/** Everybody at one organisation, for the person page's "who else writes to us
+ *  from here" line. Merged-away people are not listed. */
+export async function peopleInOrganisation(organisationId: string, exceptPersonId: string): Promise<Person[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT ${PERSON_SELECT}
+      FROM "uin_people" p
+      LEFT JOIN "uin_organisations" o ON o."id" = p."organisation_id"
+     WHERE p."organisation_id" = ${organisationId}
+       AND p."id" <> ${exceptPersonId}
+       AND p."merged_into_id" IS NULL
+     ORDER BY p."display_name" ASC NULLS LAST
+     LIMIT 12
+  `
+  return rows.map(mapPerson)
+}
+
+// ---------------------------------------------------------------------------
+// Attaching a conversation to a person.
+// ---------------------------------------------------------------------------
+
+export async function setThreadPerson(
+  threadId: string,
+  personId: string | null,
+  organisationId: string | null,
+): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "uin_threads"
+       SET "person_id" = ${personId}, "organisation_id" = ${organisationId}, "updated_at" = now()
+     WHERE "id" = ${threadId}
+  `
+}
+
+/** Conversations nobody has been resolved for yet, newest first.
+ *
+ *  Newest first on purpose: mail that arrived while the module had no people
+ *  layer is what somebody is looking at today, and the archive can catch up
+ *  over the following ticks. */
+export async function unresolvedThreads(limit: number): Promise<Array<{ id: string }>> {
+  return prisma.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "uin_threads"
+     WHERE "person_id" IS NULL
+     ORDER BY "last_message_at" DESC NULLS LAST
+     LIMIT ${limit}
+  `
+}
+
+/** The newest inbound message on a conversation, which is what decides whose
+ *  conversation it is. Falls back to the newest of anything when we have only
+ *  ever written to them. */
+export async function counterpartyMessage(threadId: string): Promise<{
+  fromName: string | null
+  fromAddress: string | null
+  toAddresses: string[]
+  subject: string | null
+  bodyText: string | null
+  autoKind: string | null
+  direction: string
+} | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "from_name", "from_address", "to_addresses", "subject", "body_text", "auto_kind", "direction"
+      FROM "uin_messages"
+     WHERE "thread_id" = ${threadId} AND "direction" <> 'note'
+     ORDER BY ("direction" = 'in') DESC, "sent_at" DESC
+     LIMIT 1
+  `
+  const r = rows[0]
+  if (!r) return null
+  return {
+    fromName: (r.from_name as string | null) ?? null,
+    fromAddress: (r.from_address as string | null) ?? null,
+    toAddresses: (r.to_addresses as string[] | null) ?? [],
+    subject: (r.subject as string | null) ?? null,
+    bodyText: (r.body_text as string | null) ?? null,
+    autoKind: (r.auto_kind as string | null) ?? null,
+    direction: r.direction as string,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// A person's own conversations, and their timeline.
+// ---------------------------------------------------------------------------
+
+/**
+ * Every conversation this person has had that this viewer may read.
+ *
+ * The same visibility clause the list and the search box use, for the same
+ * reason: a person's page asks the same question in a different shape, and it
+ * must not come back with a different answer. Somebody who cannot open
+ * accounts@ does not learn what is in it by opening the person who wrote there.
+ */
+export async function threadsForPerson(
+  personId: string,
+  inboxIds: string[],
+  includeUnrouted: boolean,
+): Promise<ThreadListRow[]> {
+  const visible = visibilityClause(inboxIds, includeUnrouted)
+  if (!visible) return []
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    ${THREAD_LIST_SELECT}
+     WHERE ${visible} AND t."person_id" = ${personId}
+     ORDER BY t."last_message_at" DESC NULLS LAST
+     LIMIT 50
+  `
+  return rows.map(mapThreadListRow)
+}
+
+export type OutboundLogRow = {
+  id: string
+  toAddress: string
+  subject: string
+  templateKey: string | null
+  moduleName: string | null
+  status: string
+  error: string | null
+  sentAt: Date
+}
+
+/**
+ * Automated mail this site has sent them (D13).
+ *
+ * Order confirmations, purchase order emails, quote emails: all of it goes out
+ * through the site's sending account and never touches the owner's own Sent
+ * folder, so no amount of reading a mailbox will ever find it. Core's outbound
+ * ledger is the only record there is, which is exactly why it exists.
+ *
+ * A delivery ledger and not an archive - there are no bodies here and there
+ * never will be, so the timeline shows that it went and what it was, and that
+ * is all it can honestly show.
+ */
+export async function outboundLogForAddresses(addresses: string[]): Promise<OutboundLogRow[]> {
+  if (addresses.length === 0) return []
+  const rows = await prisma.emailLog.findMany({
+    where: { toAddress: { in: addresses, mode: 'insensitive' } },
+    select: {
+      id: true, toAddress: true, subject: true, templateKey: true,
+      moduleName: true, status: true, error: true, sentAt: true,
+    },
+    orderBy: { sentAt: 'desc' },
+    take: 25,
+  })
+  return rows
+}
+
+// ---------------------------------------------------------------------------
+// Links to the site's own records.
+// ---------------------------------------------------------------------------
+
+function mapLink(r: Record<string, unknown>): RecordLink {
+  return {
+    id: r.id as string,
+    threadId: (r.thread_id as string | null) ?? null,
+    personId: (r.person_id as string | null) ?? null,
+    moduleName: r.module_name as string,
+    recordType: r.record_type as string,
+    recordId: r.record_id as string,
+    label: (r.label as string | null) ?? null,
+    confidence: Number(r.confidence ?? 100),
+    linkedBy: (r.linked_by as 'auto' | 'user') ?? 'auto',
+    createdAt: r.created_at as Date,
+  }
+}
+
+export async function linksForThread(threadId: string): Promise<RecordLink[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_record_links" WHERE "thread_id" = ${threadId}
+     ORDER BY "linked_by" DESC, "created_at" ASC
+  `
+  return rows.map(mapLink)
+}
+
+export async function linksForPerson(personId: string): Promise<RecordLink[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_record_links" WHERE "person_id" = ${personId} AND "thread_id" IS NULL
+     ORDER BY "linked_by" DESC, "created_at" ASC
+  `
+  return rows.map(mapLink)
+}
+
+export async function getLink(id: string): Promise<RecordLink | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_record_links" WHERE "id" = ${id}
+  `
+  return rows[0] ? mapLink(rows[0]) : null
+}
+
+export async function deleteLink(id: string): Promise<void> {
+  await prisma.$executeRaw`DELETE FROM "uin_record_links" WHERE "id" = ${id}`
+}
+
+/** Does this conversation already have that record on it? Asked before the
+ *  linker spends a lookup, and again by the unique index behind it. */
+export async function threadHasLink(
+  threadId: string,
+  moduleName: string,
+  recordType: string,
+  recordId: string,
+): Promise<boolean> {
+  const rows = await prisma.$queryRaw<{ one: number }[]>`
+    SELECT 1 AS one FROM "uin_record_links"
+     WHERE "thread_id" = ${threadId} AND "module_name" = ${moduleName}
+       AND "record_type" = ${recordType} AND "record_id" = ${recordId}
+     LIMIT 1
+  `
+  return rows.length > 0
+}
+
+// ---------------------------------------------------------------------------
+// Merging, splitting, and the audit that makes both survivable.
+// ---------------------------------------------------------------------------
+
+export type PersonEventRow = {
+  id: string
+  userId: string | null
+  kind: string
+  detail: Record<string, unknown> | null
+  createdAt: Date
+}
+
+/** An audit row against a person rather than a conversation. Same table, and
+ *  the same reason for existing: "who did this and when" is asked afterwards. */
+export async function recordPersonEvent(
+  personId: string,
+  userId: string | null,
+  kind: ThreadEventKind,
+  detail: Record<string, unknown> | null = null,
+): Promise<void> {
+  await prisma.$executeRaw`
+    INSERT INTO "uin_events" ("thread_id", "person_id", "user_id", "kind", "detail")
+    VALUES (NULL, ${personId}, ${userId}, ${kind}, ${detail === null ? Prisma.DbNull : detail}::jsonb)
+  `
+}
+
+export async function listPersonEvents(personId: string): Promise<PersonEventRow[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "id", "user_id", "kind", "detail", "created_at"
+      FROM "uin_events" WHERE "person_id" = ${personId}
+     ORDER BY "created_at" DESC LIMIT 50
+  `
+  return rows.map((r) => ({
+    id: r.id as string,
+    userId: (r.user_id as string | null) ?? null,
+    kind: r.kind as string,
+    detail: (r.detail as Record<string, unknown> | null) ?? null,
+    createdAt: r.created_at as Date,
+  }))
+}
+
+export type MergeRow = {
+  id: string
+  winnerId: string
+  loserId: string
+  userId: string | null
+  loserName: string | null
+  undoneAt: Date | null
+  createdAt: Date
+}
+
+/**
+ * Fold one person into another.
+ *
+ * Everything happens in one transaction, and the losing row is kept rather than
+ * deleted: `merged_into_id` hides them from every list and redirects anybody
+ * holding an old link, and the snapshot records exactly which identities,
+ * conversations and links moved so that undoing it puts each one back where it
+ * came from. A merge nobody can take back is the one operation in this module
+ * that could genuinely lose somebody's history.
+ */
+export async function mergePeople(
+  winnerId: string,
+  loserId: string,
+  userId: string | null,
+): Promise<{ mergeId: string } | { error: string }> {
+  if (winnerId === loserId) return { error: 'Those are the same person.' }
+
+  const [winner, loser] = await Promise.all([getPerson(winnerId), getPerson(loserId)])
+  if (!winner || !loser) return { error: 'One of those people is no longer here.' }
+  if (loser.mergedIntoId) return { error: 'That person has already been merged into somebody else.' }
+  if (winner.mergedIntoId) return { error: 'You cannot merge into somebody who has themselves been merged.' }
+
+  return prisma.$transaction(async (tx) => {
+    const identities = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "uin_person_identities" WHERE "person_id" = ${loserId}
+    `
+    const threads = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "uin_threads" WHERE "person_id" = ${loserId}
+    `
+    const links = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "uin_record_links" WHERE "person_id" = ${loserId}
+    `
+
+    const snapshot = {
+      loser: {
+        displayName: loser.displayName,
+        primaryEmail: loser.primaryEmail,
+        organisationId: loser.organisationId,
+        notes: loser.notes,
+      },
+      identityIds: identities.map((r) => r.id),
+      threadIds: threads.map((r) => r.id),
+      linkIds: links.map((r) => r.id),
+    }
+
+    await tx.$executeRaw`
+      UPDATE "uin_person_identities" SET "person_id" = ${winnerId} WHERE "person_id" = ${loserId}
+    `
+    await tx.$executeRaw`
+      UPDATE "uin_threads" SET "person_id" = ${winnerId}, "updated_at" = now() WHERE "person_id" = ${loserId}
+    `
+    // A link the winner already holds would collide with the unique index, and
+    // a merge that fails because both people had the same order attached is a
+    // merge nobody can complete. The duplicate simply goes.
+    await tx.$executeRaw`
+      DELETE FROM "uin_record_links" l
+       WHERE l."person_id" = ${loserId}
+         AND EXISTS (
+           SELECT 1 FROM "uin_record_links" w
+            WHERE w."person_id" = ${winnerId} AND w."thread_id" IS NULL AND l."thread_id" IS NULL
+              AND w."module_name" = l."module_name" AND w."record_type" = l."record_type"
+              AND w."record_id" = l."record_id")
+    `
+    await tx.$executeRaw`
+      UPDATE "uin_record_links" SET "person_id" = ${winnerId} WHERE "person_id" = ${loserId}
+    `
+    await tx.$executeRaw`
+      UPDATE "uin_people"
+         SET "merged_into_id" = ${winnerId}, "updated_at" = now()
+       WHERE "id" = ${loserId}
+    `
+    // The winner keeps whatever they already had and gains only what was blank.
+    await tx.$executeRaw`
+      UPDATE "uin_people"
+         SET "display_name" = COALESCE("display_name", ${loser.displayName}),
+             "primary_email" = COALESCE("primary_email", ${loser.primaryEmail}),
+             "organisation_id" = COALESCE("organisation_id", ${loser.organisationId}),
+             "updated_at" = now()
+       WHERE "id" = ${winnerId}
+    `
+
+    const merge = await tx.$queryRaw<{ id: string }[]>`
+      INSERT INTO "uin_person_merges" ("winner_id", "loser_id", "user_id", "snapshot")
+      VALUES (${winnerId}, ${loserId}, ${userId}, ${JSON.stringify(snapshot)}::jsonb)
+      RETURNING "id"
+    `
+    const mergeId = merge[0]!.id
+
+    await tx.$executeRaw`
+      INSERT INTO "uin_events" ("thread_id", "person_id", "user_id", "kind", "detail")
+      VALUES (NULL, ${winnerId}, ${userId}, 'merged',
+              ${JSON.stringify({ mergeId, loserId, loserName: loser.displayName ?? loser.primaryEmail })}::jsonb)
+    `
+
+    return { mergeId }
+  })
+}
+
+/**
+ * Put a merge back.
+ *
+ * Only what the merge itself moved goes back, by id. Anything that arrived
+ * afterwards stays with the person it arrived on, because it was never the
+ * loser's - and quietly handing it over would be a second mistake dressed up as
+ * fixing the first.
+ */
+export async function undoMerge(mergeId: string, userId: string | null): Promise<{ ok: true; personId: string } | { error: string }> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_person_merges" WHERE "id" = ${mergeId}
+  `
+  const row = rows[0]
+  if (!row) return { error: 'That merge is not on record.' }
+  if (row.undone_at) return { error: 'That merge has already been undone.' }
+
+  const loserId = row.loser_id as string
+  const winnerId = row.winner_id as string
+  const snapshot = (row.snapshot ?? {}) as {
+    identityIds?: string[]
+    threadIds?: string[]
+    linkIds?: string[]
+  }
+  const identityIds = snapshot.identityIds ?? []
+  const threadIds = snapshot.threadIds ?? []
+  const linkIds = snapshot.linkIds ?? []
+
+  await prisma.$transaction(async (tx) => {
+    if (identityIds.length > 0) {
+      await tx.$executeRaw`
+        UPDATE "uin_person_identities" SET "person_id" = ${loserId}
+         WHERE "id" IN (${Prisma.join(identityIds)}) AND "person_id" = ${winnerId}
+      `
+    }
+    if (threadIds.length > 0) {
+      await tx.$executeRaw`
+        UPDATE "uin_threads" SET "person_id" = ${loserId}, "updated_at" = now()
+         WHERE "id" IN (${Prisma.join(threadIds)}) AND "person_id" = ${winnerId}
+      `
+    }
+    if (linkIds.length > 0) {
+      await tx.$executeRaw`
+        UPDATE "uin_record_links" SET "person_id" = ${loserId}
+         WHERE "id" IN (${Prisma.join(linkIds)}) AND "person_id" = ${winnerId}
+      `
+    }
+    await tx.$executeRaw`
+      UPDATE "uin_people" SET "merged_into_id" = NULL, "updated_at" = now() WHERE "id" = ${loserId}
+    `
+    await tx.$executeRaw`
+      UPDATE "uin_person_merges" SET "undone_at" = now(), "undone_by" = ${userId} WHERE "id" = ${mergeId}
+    `
+    await tx.$executeRaw`
+      INSERT INTO "uin_events" ("thread_id", "person_id", "user_id", "kind", "detail")
+      VALUES (NULL, ${winnerId}, ${userId}, 'merged',
+              ${JSON.stringify({ mergeId, undone: true, loserId })}::jsonb)
+    `
+  })
+
+  return { ok: true, personId: loserId }
+}
+
+/** Merges involving this person that could still be taken back. */
+export async function undoableMerges(personId: string): Promise<MergeRow[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT m."id", m."winner_id", m."loser_id", m."user_id", m."undone_at", m."created_at",
+           p."display_name" AS loser_name
+      FROM "uin_person_merges" m
+      LEFT JOIN "uin_people" p ON p."id" = m."loser_id"
+     WHERE m."winner_id" = ${personId} AND m."undone_at" IS NULL
+     ORDER BY m."created_at" DESC
+     LIMIT 10
+  `
+  return rows.map((r) => ({
+    id: r.id as string,
+    winnerId: r.winner_id as string,
+    loserId: r.loser_id as string,
+    userId: (r.user_id as string | null) ?? null,
+    loserName: (r.loser_name as string | null) ?? null,
+    undoneAt: (r.undone_at as Date | null) ?? null,
+    createdAt: r.created_at as Date,
+  }))
+}
+
+/**
+ * Take some identities off a person and give them to a new one.
+ *
+ * The other half of a mis-merge, and the answer when a role address turns out
+ * to have been two people all along. Conversations follow their address: a
+ * conversation whose newest counterparty address moved goes with it, which is
+ * what somebody splitting two people apart means by splitting them apart.
+ */
+export async function splitPerson(
+  personId: string,
+  identityIds: string[],
+  userId: string | null,
+): Promise<{ ok: true; personId: string } | { error: string }> {
+  if (identityIds.length === 0) return { error: 'Pick at least one address to move.' }
+
+  const owned = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_person_identities"
+     WHERE "person_id" = ${personId} AND "id" IN (${Prisma.join(identityIds)})
+  `
+  if (owned.length === 0) return { error: 'None of those addresses belong to this person.' }
+
+  const remaining = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(*)::bigint AS count FROM "uin_person_identities" WHERE "person_id" = ${personId}
+  `
+  if (Number(remaining[0]?.count ?? 0) <= owned.length) {
+    return { error: 'That would move every address, which leaves nobody behind. Rename them instead.' }
+  }
+
+  const moved = owned.map(mapIdentity)
+  const first = moved[0]!
+
+  const newId = await prisma.$transaction(async (tx) => {
+    // Created inside the transaction, not before it: a split that falls over
+    // half way through must not leave a person behind with nobody attached.
+    const created = await tx.$queryRaw<{ id: string }[]>`
+      INSERT INTO "uin_people" ("display_name", "primary_email")
+      VALUES (NULL, ${first.kind === 'email' ? first.value : null})
+      RETURNING "id"
+    `
+    const newId = created[0]!.id
+    await tx.$executeRaw`
+      UPDATE "uin_person_identities" SET "person_id" = ${newId}
+       WHERE "id" IN (${Prisma.join(moved.map((m) => m.id))})
+    `
+    // Conversations follow the address they were had with.
+    // The address as it was stored on the message, not the plus-stripped
+    // matching key: from_address holds what the sender actually wrote.
+    const movedAddresses = moved.map((m) => m.value.toLowerCase())
+    await tx.$executeRaw`
+      UPDATE "uin_threads" t
+         SET "person_id" = ${newId}, "updated_at" = now()
+       WHERE t."person_id" = ${personId}
+         AND EXISTS (
+           SELECT 1 FROM "uin_messages" m
+            WHERE m."thread_id" = t."id"
+              AND lower(m."from_address") IN (${Prisma.join(movedAddresses)}))
+    `
+    await tx.$executeRaw`
+      INSERT INTO "uin_events" ("thread_id", "person_id", "user_id", "kind", "detail")
+      VALUES (NULL, ${personId}, ${userId}, 'merged',
+              ${JSON.stringify({ split: true, toPersonId: newId, identityIds: moved.map((m) => m.id) })}::jsonb)
+    `
+    return newId
+  })
+
+  return { ok: true, personId: newId }
+}
+
+/**
+ * Conversations the linker should look at: never looked at, or looked at before
+ * the newest thing on them arrived.
+ *
+ * The second half is what catches a reference that turns up in the third reply
+ * rather than the first, without re-reading every conversation on the site
+ * every hour.
+ */
+export async function threadsNeedingLinks(limit: number): Promise<Array<{ id: string }>> {
+  return prisma.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "uin_threads"
+     WHERE "linked_at" IS NULL
+        OR ("last_message_at" IS NOT NULL AND "linked_at" < "last_message_at")
+     ORDER BY "last_message_at" DESC NULLS LAST
+     LIMIT ${limit}
+  `
+}
+
+export async function markThreadLinked(threadId: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "uin_threads" SET "linked_at" = now() WHERE "id" = ${threadId}
+  `
+}
+
+/** How many people the hub has worked out, and how many of them belong to an
+ *  organisation. Shown in settings so the exclusion rules can be sanity
+ *  checked rather than taken on trust. */
+export async function peopleCount(): Promise<{ people: number; organisations: number }> {
+  const rows = await prisma.$queryRaw<{ people: bigint; organisations: bigint }[]>`
+    SELECT (SELECT COUNT(*) FROM "uin_people" WHERE "merged_into_id" IS NULL)::bigint AS people,
+           (SELECT COUNT(*) FROM "uin_organisations")::bigint AS organisations
+  `
+  return {
+    people: Number(rows[0]?.people ?? 0),
+    organisations: Number(rows[0]?.organisations ?? 0),
+  }
 }

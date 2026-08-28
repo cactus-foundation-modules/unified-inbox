@@ -31,6 +31,10 @@ export type InboxParams = {
   threadId: string | null
   /** Composing a brand new message rather than answering one. */
   composing: boolean
+  /** The person whose own page is open, if any. Takes the same place on the
+   *  screen as a conversation, because it answers the same question about the
+   *  same human from a different angle. */
+  personId: string | null
 }
 
 const STATUSES: StatusFilter[] = ['open', 'snoozed', 'done', 'all']
@@ -53,6 +57,7 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
     page: Math.max(1, parseInt(sp.page ?? '1', 10) || 1),
     threadId: sp.id ? sp.id : null,
     composing: sp.compose === '1',
+    personId: sp.person ? sp.person : null,
   }
 }
 

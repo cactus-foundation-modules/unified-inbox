@@ -20,6 +20,17 @@ const CSS = `
 @media (min-width: 900px) {
   .uin { grid-template-columns: 13rem minmax(0, 1fr); }
   .uin[data-thread="open"] { grid-template-columns: 13rem minmax(18rem, 22rem) minmax(0, 1.4fr); }
+  /* Below the wide breakpoint the context panel goes under the conversation
+     rather than beside it. Squeezing a fourth column into 900px leaves the
+     conversation too narrow to read, and the conversation is what somebody came
+     here for. */
+  .uin[data-context="on"] .uin-ctx { grid-column: 1 / -1; }
+}
+@media (min-width: 1400px) {
+  .uin[data-thread="open"][data-context="on"] {
+    grid-template-columns: 13rem minmax(16rem, 20rem) minmax(0, 1.3fr) minmax(15rem, 18rem);
+  }
+  .uin[data-context="on"] .uin-ctx { grid-column: auto; }
 }
 
 /* ---- the rail ---------------------------------------------------------- */
@@ -243,6 +254,86 @@ const CSS = `
   .uin[data-thread="open"] .uin-rail,
   .uin[data-thread="open"] .uin-listpane { display: none; }
 }
+
+/* ---- the context panel ------------------------------------------------- */
+.uin-ctx { display: grid; gap: 0.75rem; align-content: start; min-width: 0; }
+.uin-ctx-block {
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-surface);
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.uin-ctx-heading {
+  margin: 0;
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  font-weight: 700;
+}
+.uin-ctx-name { margin: 0; font-size: 1rem; font-weight: 600; }
+.uin-ctx-name a { color: var(--color-text); }
+/* Secondary rather than muted: this carries real information - an address, a
+   total, a date - and muted measures under AA against the card in dark mode. */
+.uin-ctx-sub { margin: 0; font-size: 0.8125rem; color: var(--color-text-secondary); word-break: break-word; }
+.uin-ctx-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.uin-ctx-row {
+  display: grid;
+  gap: 0.2rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+  min-width: 0;
+}
+.uin-ctx-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.uin-ctx-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.875rem;
+  min-width: 0;
+}
+.uin-ctx-main a { font-weight: 600; }
+.uin-ctx-remove {
+  justify-self: start;
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.uin-ctx-remove:hover { color: var(--color-danger); }
+.uin-ctx-remove:disabled { cursor: default; opacity: 0.6; }
+.uin-ctx-add { display: grid; gap: 0.5rem; margin-top: 0.25rem; }
+/* The collapsed "attach something" chip is a button, not a field: in a grid
+   card it would otherwise stretch the full width and read as an input box. */
+.uin-ctx-block > .uin-chip { justify-self: start; }
+.uin-ctx-add input, .uin-ctx-add select, .uin-ctx-add textarea { min-width: 0; width: 100%; }
+
+/* ---- one person -------------------------------------------------------- */
+.uin-person { display: grid; gap: 1rem; align-items: start; min-width: 0; }
+@media (min-width: 1100px) {
+  .uin-person { grid-template-columns: minmax(0, 1fr) minmax(14rem, 17rem); }
+}
+.uin-person-main { display: grid; gap: 0.75rem; min-width: 0; }
+.uin-timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; }
+.uin-timeline-row {
+  display: grid;
+  grid-template-columns: 1.25rem minmax(0, 1fr);
+  grid-template-areas: "icon main" ". sub";
+  gap: 0.2rem 0.5rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.uin-timeline-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.uin-timeline-icon { grid-area: icon; color: var(--color-text-muted); line-height: 1; padding-top: 0.15rem; }
+.uin-timeline-row .uin-ctx-main { grid-area: main; }
+.uin-timeline-row .uin-ctx-sub { grid-area: sub; }
 `
 
 export function InboxStyles() {

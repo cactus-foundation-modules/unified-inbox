@@ -73,4 +73,72 @@ export type UnifiedInboxSettings = {
   attachmentFetch: AttachmentFetchMode
   autoLink: boolean
   defaultInboxId: string | null
+  /** Domains whose senders are colleagues rather than customers (E18). NULL
+   *  means "work it out from the addresses this site collects mail on", which
+   *  is right for almost everybody; an explicit list, empty included, wins. */
+  ownDomains: string[] | null
+  /** Free mail providers beyond the ones the module already knows, so a site
+   *  whose customers use a regional provider does not gain an organisation per
+   *  mailbox host. */
+  personalDomains: string[]
+  /** What a reference to one of the site's own records looks like. NULL means
+   *  the built-in default; an empty string means "do not link this kind". A
+   *  pattern only ever proposes - the owning module confirms. */
+  orderNumberPattern: string | null
+  poNumberPattern: string | null
+  quoteNumberPattern: string | null
+}
+
+// ---------------------------------------------------------------------------
+// People (S6). Thin on purpose: who somebody is, how to reach them, and which
+// organisation their mail domain belongs to. Nothing else - see D15.
+// ---------------------------------------------------------------------------
+
+export type Person = {
+  id: string
+  displayName: string | null
+  primaryEmail: string | null
+  organisationId: string | null
+  organisationName: string | null
+  notes: string | null
+  /** Set when this person lost a merge. Everything that lists people hides
+   *  these, and opening one sends you to whoever they were merged into. */
+  mergedIntoId: string | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export type PersonIdentity = {
+  id: string
+  personId: string
+  kind: IdentityKind
+  /** As the sender wrote it, plus tag and all. */
+  value: string
+  /** What matching compares on: lower cased, plus tag removed. */
+  matchValue: string | null
+  source: string | null
+  createdAt: Date
+}
+
+export type Organisation = {
+  id: string
+  name: string
+  domain: string | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+/** A link from a conversation or a person to one of the site's own records.
+ *  Soft by design: the module that owns the record can be uninstalled. */
+export type RecordLink = {
+  id: string
+  threadId: string | null
+  personId: string | null
+  moduleName: string
+  recordType: string
+  recordId: string
+  label: string | null
+  confidence: number
+  linkedBy: 'auto' | 'user'
+  createdAt: Date
 }
