@@ -1,4 +1,5 @@
 import { hasPermission } from '@/lib/permissions/check'
+import { prisma } from '@/lib/db/prisma'
 import { listAllInboxAccess, listInboxAccess } from './db'
 import type { InboxAccess } from './types'
 import type { SessionUser } from '@/lib/auth/session'
@@ -77,4 +78,35 @@ export async function visibleInboxIds(user: SessionUser, allInboxIds: string[]):
   return allInboxIds.filter((id) =>
     decideInboxAccess(byInbox.get(id) ?? [], user.id, perms).view
   )
+}
+
+/**
+ * The same question about somebody who is not the person making the request.
+ *
+ * Mentioning a colleague raises a notification, and a notification about a
+ * conversation they may not read would tell them it exists - so their own
+ * permissions and their own place on the guest list are what decide it, not the
+ * permissions of whoever typed the note. Their role is read here rather than
+ * taken from a session, because there is no session but our own to read.
+ */
+export async function canUserViewInbox(userId: string, inboxId: string): Promise<boolean> {
+  const person = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, roleId: true, suspendedAt: true, role: { select: { isProtected: true } } },
+  })
+  if (!person || person.suspendedAt) return false
+  if (person.role.isProtected) return true
+
+  const granted = await prisma.rolePermission.findMany({
+    where: { roleId: person.roleId, permissionKey: { in: ['unifiedinbox.view', 'unifiedinbox.reply', 'unifiedinbox.manage'] } },
+    select: { permissionKey: true },
+  })
+  const has = new Set(granted.map((g) => g.permissionKey))
+  const perms = {
+    canView: has.has('unifiedinbox.view'),
+    canReply: has.has('unifiedinbox.reply'),
+    canManage: has.has('unifiedinbox.manage'),
+  }
+  const rows = await listInboxAccess(inboxId)
+  return decideInboxAccess(rows, userId, perms).view
 }

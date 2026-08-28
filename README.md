@@ -15,8 +15,6 @@ the same human collapse into one story.
 
 ## What is in this version
 
-This is the groundwork release. It sets up the parts everything else stands on:
-
 - **Mail accounts.** Point it at the mailbox you already use, with a Test
   connection button that opens it, lists your folders and says in plain English
   what went wrong when it cannot.
@@ -26,10 +24,22 @@ This is the groundwork release. It sets up the parts everything else stands on:
 - **Who can read what.** An inbox with nobody named on it is open to everybody
   who can see the hub. Name one person and it becomes theirs alone, which is how
   the accounts address stays away from the rest of the team.
+- **Collecting the post.** Mail is gathered on the site's own schedule, from the
+  inbox and the folders you file things into, so a message read on a phone is
+  still here.
+- **Reading and replying.** One screen: your addresses down the side, the
+  conversations in the middle, and whichever one you have open beside them.
+  Reply, reply to everybody, forward, or leave a note only your colleagues see.
+- **Getting through it.** Hand a conversation to somebody, set it to come back
+  later, mark it done, and search everything you are allowed to see.
+- **Pictures stay off** until you ask for them, and when you do they are fetched
+  by the site rather than by your browser, so a sender learns nothing about you.
 - **Settings** for how far back to go when starting out, how long to keep
   things, and what to do about attachments.
 
-Collecting, reading and replying to mail arrive in the versions after this one.
+Live chat, contact form enquiries, calls and texts join the same screen in the
+versions after this one, along with the panel of your own records beside each
+conversation.
 
 ## Setting it up
 

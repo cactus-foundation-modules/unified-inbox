@@ -62,3 +62,24 @@ export const SendBody = z.object({
     })
     .optional(),
 })
+
+/** What the reading screen posts when somebody works through a conversation.
+ *  Every field is optional and any combination is legal, because "mark it done
+ *  and hand it to Marcus" is one press of one button. */
+export const ThreadPatchBody = z.object({
+  unread: z.boolean().optional(),
+  status: z.enum(['open', 'snoozed', 'done']).optional(),
+  /** An ISO stamp. Only read when the status is 'snoozed'. */
+  snoozeUntil: z.string().datetime().nullable().optional(),
+  /** A user id, or null to hand it back to nobody in particular. */
+  assigneeUserId: z.string().min(1).nullable().optional(),
+})
+
+/** An internal note. `mentions` carries user ids chosen from the list rather
+ *  than names scraped out of the text: a colleague called Sam Smith and another
+ *  called Sam Smyth are not something a regular expression should be deciding
+ *  between. */
+export const NoteBody = z.object({
+  text: z.string().min(1).max(20_000),
+  mentions: z.array(z.string().min(1)).max(20).optional(),
+})

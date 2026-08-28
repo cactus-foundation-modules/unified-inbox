@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db/prisma'
 import { encryptSecret } from '@/lib/crypto/secrets'
 import { normaliseAddress } from './addresses'
+import { remoteImageUrls } from './remote-images'
 import type {
   AttachmentFetchMode,
   Connection,
@@ -858,16 +859,7 @@ export type AttachmentRow = {
   inboxId: string | null
 }
 
-export async function getAttachment(id: string): Promise<AttachmentRow | null> {
-  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT a.*, m."connection_id", m."imap_folder", m."imap_uid", m."thread_id", t."inbox_id"
-      FROM "uin_attachments" a
-      JOIN "uin_messages" m ON m."id" = a."message_id"
-      JOIN "uin_threads" t ON t."id" = m."thread_id"
-     WHERE a."id" = ${id}
-  `
-  const r = rows[0]
-  if (!r) return null
+function mapAttachment(r: Record<string, unknown>): AttachmentRow {
   return {
     id: r.id as string,
     messageId: r.message_id as string,
@@ -887,16 +879,28 @@ export async function getAttachment(id: string): Promise<AttachmentRow | null> {
   }
 }
 
-export async function listAttachmentsForMessage(messageId: string): Promise<AttachmentRow[]> {
-  const rows = await prisma.$queryRaw<{ id: string }[]>`
-    SELECT "id" FROM "uin_attachments" WHERE "message_id" = ${messageId} ORDER BY "created_at" ASC
+/** Every column the mapper wants, in the one shape three callers share. */
+const ATTACHMENT_SELECT = Prisma.sql`
+    SELECT a.*, m."connection_id", m."imap_folder", m."imap_uid", m."thread_id", t."inbox_id"
+      FROM "uin_attachments" a
+      JOIN "uin_messages" m ON m."id" = a."message_id"
+      JOIN "uin_threads" t ON t."id" = m."thread_id"`
+
+export async function getAttachment(id: string): Promise<AttachmentRow | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    ${ATTACHMENT_SELECT}
+     WHERE a."id" = ${id}
   `
-  const out: AttachmentRow[] = []
-  for (const row of rows) {
-    const full = await getAttachment(row.id)
-    if (full) out.push(full)
-  }
-  return out
+  return rows[0] ? mapAttachment(rows[0]) : null
+}
+
+export async function listAttachmentsForMessage(messageId: string): Promise<AttachmentRow[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    ${ATTACHMENT_SELECT}
+     WHERE a."message_id" = ${messageId}
+     ORDER BY a."created_at" ASC
+  `
+  return rows.map(mapAttachment)
 }
 
 export async function recordAttachmentStored(id: string, stored: {
@@ -1319,6 +1323,469 @@ export async function createOutboundThread(data: {
        "last_message_at", "last_direction", "unread", "message_count")
     VALUES (${data.inboxId}, 'email', ${data.subject}, ${data.subjectNormalised},
             ${data.preview}, now(), 'out', false, 0)
+    RETURNING "id"
+  `
+  return rows[0]!.id
+}
+
+// ---------------------------------------------------------------------------
+// Reading it (S5): the rail, the list, one conversation, and search.
+//
+// Two rules run through every query below and neither is negotiable:
+//
+//   The access filter goes INSIDE the SQL, never over the results. A snippet
+//   from accounts@ appearing in somebody's search results is the same breach as
+//   letting them open accounts@, and filtering afterwards means the rows were
+//   fetched, counted and paginated before anybody asked whether they were
+//   allowed (E17). Every function here takes the visible inbox ids and folds
+//   them into the WHERE clause.
+//
+//   The search expression is spelled EXACTLY as migrations/004_ui.sql writes
+//   it. Postgres matches an expression index by the text of the expression, so
+//   a stray space or a reordered field silently turns search into a sequential
+//   scan of every email the site holds.
+// ---------------------------------------------------------------------------
+
+/** The search expression, in one place, shared by the index and the query. */
+const SEARCH_VECTOR = Prisma.sql`to_tsvector('english',
+            coalesce("subject", '') || ' ' ||
+            coalesce("from_name", '') || ' ' ||
+            coalesce("from_address", '') || ' ' ||
+            coalesce("body_text", ''))`
+
+export type ThreadListFilters = {
+  /** Inbox ids this user may read, already resolved. Empty means none. */
+  inboxIds: string[]
+  /** Whether they may also see conversations that landed in no inbox at all -
+   *  true only for somebody who can administer the whole thing, because an
+   *  unrouted message is the most private case there is. */
+  includeUnrouted: boolean
+  /** One inbox chosen in the rail, or null for everything they may see. */
+  inboxId?: string | null
+  /** Only the conversations that landed in no inbox at all. */
+  unroutedOnly?: boolean
+  status?: ThreadStatusFilter
+  unreadOnly?: boolean
+  /** A user id, or 'unassigned', or null for "do not filter". */
+  assignee?: string | null
+  search?: string | null
+  page: number
+  perPage: number
+}
+
+export type ThreadStatusFilter = 'open' | 'snoozed' | 'done' | 'all'
+
+export type ThreadListRow = {
+  id: string
+  inboxId: string | null
+  channel: string
+  providerModule: string | null
+  subject: string | null
+  preview: string | null
+  status: string
+  snoozeUntil: Date | null
+  assigneeUserId: string | null
+  lastMessageAt: Date | null
+  lastDirection: string | null
+  unread: boolean
+  messageCount: number
+  /** The other party. Taken from their newest message to us where there is
+   *  one, because that is the only place their NAME appears - our own replies
+   *  carry an address and nothing else - and from the newest thing we sent them
+   *  otherwise, which is all there is to go on. */
+  participantName: string | null
+  participantAddress: string | null
+  hasAttachments: boolean
+}
+
+/** The access half of the WHERE clause, built once and reused by the list, the
+ *  count and the unread tallies so the three can never disagree. */
+function visibilityClause(inboxIds: string[], includeUnrouted: boolean): Prisma.Sql | null {
+  const parts: Prisma.Sql[] = []
+  if (inboxIds.length > 0) {
+    parts.push(Prisma.sql`t."inbox_id" IN (${Prisma.join(inboxIds)})`)
+  }
+  if (includeUnrouted) {
+    parts.push(Prisma.sql`t."inbox_id" IS NULL`)
+  }
+  // Nothing visible at all. The caller returns an empty page rather than
+  // running a query whose WHERE clause would be empty and therefore true.
+  if (parts.length === 0) return null
+  return parts.length === 1
+    ? Prisma.sql`(${parts[0]})`
+    : Prisma.sql`(${parts[0]} OR ${parts[1]})`
+}
+
+function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
+  const where: Prisma.Sql[] = []
+  if (f.unroutedOnly) where.push(Prisma.sql`t."inbox_id" IS NULL`)
+  else if (f.inboxId) where.push(Prisma.sql`t."inbox_id" = ${f.inboxId}`)
+  if (f.status && f.status !== 'all') where.push(Prisma.sql`t."status" = ${f.status}`)
+  if (f.unreadOnly) where.push(Prisma.sql`t."unread" = true`)
+  if (f.assignee === 'unassigned') where.push(Prisma.sql`t."assignee_user_id" IS NULL`)
+  else if (f.assignee) where.push(Prisma.sql`t."assignee_user_id" = ${f.assignee}`)
+  const q = f.search?.trim()
+  if (q) {
+    where.push(Prisma.sql`EXISTS (
+      SELECT 1 FROM "uin_messages" ms
+       WHERE ms."thread_id" = t."id"
+         AND ${SEARCH_VECTOR} @@ websearch_to_tsquery('english', ${q})
+    )`)
+  }
+  return where
+}
+
+function mapThreadListRow(r: Record<string, unknown>): ThreadListRow {
+  const direction = (r.last_direction_message as string | null) ?? null
+  const to = (r.last_to as string[] | null) ?? []
+  const inbound = direction !== 'out'
+  return {
+    id: r.id as string,
+    inboxId: (r.inbox_id as string | null) ?? null,
+    channel: r.channel as string,
+    providerModule: (r.provider_module as string | null) ?? null,
+    subject: (r.subject as string | null) ?? null,
+    preview: (r.preview as string | null) ?? null,
+    status: r.status as string,
+    snoozeUntil: (r.snooze_until as Date | null) ?? null,
+    assigneeUserId: (r.assignee_user_id as string | null) ?? null,
+    lastMessageAt: (r.last_message_at as Date | null) ?? null,
+    lastDirection: (r.last_direction as string | null) ?? null,
+    unread: !!r.unread,
+    messageCount: Number(r.message_count ?? 0),
+    participantName: inbound ? ((r.last_from_name as string | null) ?? null) : null,
+    participantAddress: inbound
+      ? ((r.last_from_address as string | null) ?? null)
+      : (to[0] ?? null),
+    hasAttachments: !!r.last_has_attachments,
+  }
+}
+
+export async function listThreads(f: ThreadListFilters): Promise<ThreadListRow[]> {
+  const visible = visibilityClause(f.inboxIds, f.includeUnrouted)
+  if (!visible) return []
+  const where = [visible, ...filterClauses(f)]
+  const offset = Math.max(0, (f.page - 1) * f.perPage)
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT t."id", t."inbox_id", t."channel", t."provider_module", t."subject",
+           t."preview", t."status", t."snooze_until", t."assignee_user_id",
+           t."last_message_at", t."last_direction", t."unread", t."message_count",
+           lm."from_name"        AS "last_from_name",
+           lm."from_address"     AS "last_from_address",
+           lm."to_addresses"     AS "last_to",
+           lm."direction"        AS "last_direction_message",
+           lm."has_attachments"  AS "last_has_attachments"
+      FROM "uin_threads" t
+      LEFT JOIN LATERAL (
+        SELECT m."from_name", m."from_address", m."to_addresses", m."direction",
+               m."has_attachments"
+          FROM "uin_messages" m
+         WHERE m."thread_id" = t."id" AND m."direction" <> 'note'
+         ORDER BY (m."direction" = 'in') DESC, m."sent_at" DESC
+         LIMIT 1
+      ) lm ON true
+     WHERE ${Prisma.join(where, ' AND ')}
+     ORDER BY t."last_message_at" DESC NULLS LAST, t."id" DESC
+     LIMIT ${f.perPage} OFFSET ${offset}
+  `
+  return rows.map(mapThreadListRow)
+}
+
+export async function countThreads(f: ThreadListFilters): Promise<number> {
+  const visible = visibilityClause(f.inboxIds, f.includeUnrouted)
+  if (!visible) return 0
+  const where = [visible, ...filterClauses(f)]
+  const rows = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(*)::bigint AS "count" FROM "uin_threads" t
+     WHERE ${Prisma.join(where, ' AND ')}
+  `
+  return Number(rows[0]?.count ?? 0)
+}
+
+/** Unread conversations per inbox, for the numbers beside the rail. Keyed by
+ *  inbox id, with the empty string standing for "landed in no inbox". */
+export async function unreadCounts(
+  inboxIds: string[],
+  includeUnrouted: boolean,
+): Promise<Record<string, number>> {
+  const visible = visibilityClause(inboxIds, includeUnrouted)
+  if (!visible) return {}
+  const rows = await prisma.$queryRaw<{ inbox_id: string | null; count: bigint }[]>`
+    SELECT t."inbox_id", COUNT(*)::bigint AS "count"
+      FROM "uin_threads" t
+     WHERE ${visible} AND t."unread" = true AND t."status" <> 'done'
+     GROUP BY t."inbox_id"
+  `
+  const out: Record<string, number> = {}
+  for (const r of rows) out[r.inbox_id ?? ''] = Number(r.count)
+  return out
+}
+
+export type ThreadDetail = {
+  id: string
+  inboxId: string | null
+  channel: string
+  providerModule: string | null
+  externalId: string | null
+  subject: string | null
+  subjectNormalised: string | null
+  status: string
+  snoozeUntil: Date | null
+  assigneeUserId: string | null
+  personId: string | null
+  unread: boolean
+  messageCount: number
+  lastMessageAt: Date | null
+  createdAt: Date
+}
+
+export async function getThreadDetail(id: string): Promise<ThreadDetail | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_threads" WHERE "id" = ${id}
+  `
+  const r = rows[0]
+  if (!r) return null
+  return {
+    id: r.id as string,
+    inboxId: (r.inbox_id as string | null) ?? null,
+    channel: r.channel as string,
+    providerModule: (r.provider_module as string | null) ?? null,
+    externalId: (r.external_id as string | null) ?? null,
+    subject: (r.subject as string | null) ?? null,
+    subjectNormalised: (r.subject_normalised as string | null) ?? null,
+    status: r.status as string,
+    snoozeUntil: (r.snooze_until as Date | null) ?? null,
+    assigneeUserId: (r.assignee_user_id as string | null) ?? null,
+    personId: (r.person_id as string | null) ?? null,
+    unread: !!r.unread,
+    messageCount: Number(r.message_count ?? 0),
+    lastMessageAt: (r.last_message_at as Date | null) ?? null,
+    createdAt: r.created_at as Date,
+  }
+}
+
+export type ThreadMessageRow = {
+  id: string
+  direction: 'in' | 'out' | 'note'
+  channel: string
+  fromName: string | null
+  fromAddress: string | null
+  /** What the sender asked replies to go to, when they asked for anything. It
+   *  beats From, which is the entire purpose of the header (E13). */
+  replyTo: string | null
+  toAddresses: string[]
+  ccAddresses: string[]
+  subject: string | null
+  bodyText: string | null
+  /** Whether there is HTML to render. The markup itself is never handed to the
+   *  page - it is fetched into a sandboxed frame of its own (E16). */
+  hasHtml: boolean
+  /** How many pictures are sitting in the message waiting to be asked for. The
+   *  count is enough for the screen; the addresses stay on the server. */
+  remoteImages: number
+  snippet: string | null
+  sentAt: Date
+  hasAttachments: boolean
+  autoKind: string | null
+  deliveryStatus: string | null
+  deliveryError: string | null
+  appendStatus: string | null
+  authorUserId: string | null
+  source: string
+}
+
+function mapThreadMessage(r: Record<string, unknown>): ThreadMessageRow {
+  const html = (r.body_html as string | null) ?? null
+  return {
+    id: r.id as string,
+    direction: r.direction as 'in' | 'out' | 'note',
+    channel: r.channel as string,
+    fromName: (r.from_name as string | null) ?? null,
+    fromAddress: (r.from_address as string | null) ?? null,
+    replyTo: (r.reply_to as string | null) ?? null,
+    toAddresses: (r.to_addresses as string[] | null) ?? [],
+    ccAddresses: (r.cc_addresses as string[] | null) ?? [],
+    subject: (r.subject as string | null) ?? null,
+    bodyText: (r.body_text as string | null) ?? null,
+    hasHtml: !!html && html.trim().length > 0,
+    remoteImages: remoteImageUrls(html).length,
+    snippet: (r.snippet as string | null) ?? null,
+    sentAt: r.sent_at as Date,
+    hasAttachments: !!r.has_attachments,
+    autoKind: (r.auto_kind as string | null) ?? null,
+    deliveryStatus: (r.delivery_status as string | null) ?? null,
+    deliveryError: (r.delivery_error as string | null) ?? null,
+    appendStatus: (r.append_status as string | null) ?? null,
+    authorUserId: (r.author_user_id as string | null) ?? null,
+    source: r.source as string,
+  }
+}
+
+/** Every message on a conversation, oldest first - the order somebody reads a
+ *  story in, and the order the composer quotes from. */
+export async function listThreadMessages(threadId: string): Promise<ThreadMessageRow[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_messages"
+     WHERE "thread_id" = ${threadId}
+     ORDER BY "sent_at" ASC, "created_at" ASC
+  `
+  return rows.map(mapThreadMessage)
+}
+
+/** Attachments for a whole conversation in one query, so a thread with twelve
+ *  messages does not make twelve round trips. */
+export async function attachmentsForThread(threadId: string): Promise<AttachmentRow[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    ${ATTACHMENT_SELECT}
+     WHERE m."thread_id" = ${threadId}
+     ORDER BY a."created_at" ASC
+  `
+  return rows.map(mapAttachment)
+}
+
+/** The HTML of one message, with the inbox it belongs to so the route serving
+ *  it can check who is asking. Kept separate from the thread query because the
+ *  markup is large and only ever wanted one message at a time. */
+export async function getMessageHtml(id: string): Promise<{
+  html: string | null
+  text: string | null
+  inboxId: string | null
+  subject: string | null
+} | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT m."body_html", m."body_text", m."subject", m."inbox_id", t."inbox_id" AS "thread_inbox_id"
+      FROM "uin_messages" m
+      JOIN "uin_threads" t ON t."id" = m."thread_id"
+     WHERE m."id" = ${id}
+  `
+  const r = rows[0]
+  if (!r) return null
+  return {
+    html: (r.body_html as string | null) ?? null,
+    text: (r.body_text as string | null) ?? null,
+    // An outbound message carries the inbox it was sent from; an inbound one
+    // inherits its thread's.
+    inboxId: ((r.inbox_id as string | null) ?? (r.thread_inbox_id as string | null)) ?? null,
+    subject: (r.subject as string | null) ?? null,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Working through it: assign, snooze, done, read, notes.
+//
+// Every one of these writes a uin_events row beside the change, because "who
+// marked this done and when" is the question somebody asks a fortnight later
+// and a bare column cannot answer.
+// ---------------------------------------------------------------------------
+
+export type ThreadEventKind =
+  | 'assigned'
+  | 'snoozed'
+  | 'status'
+  | 'note'
+  | 'mentioned'
+  | 'linked'
+  | 'unlinked'
+  | 'merged'
+
+export async function recordEvent(
+  threadId: string,
+  userId: string | null,
+  kind: ThreadEventKind,
+  detail: Record<string, unknown> | null = null,
+): Promise<void> {
+  await prisma.$executeRaw`
+    INSERT INTO "uin_events" ("thread_id", "user_id", "kind", "detail")
+    VALUES (${threadId}, ${userId}, ${kind}, ${detail === null ? Prisma.DbNull : detail}::jsonb)
+  `
+}
+
+export type ThreadEventRow = {
+  id: string
+  userId: string | null
+  kind: string
+  detail: Record<string, unknown> | null
+  createdAt: Date
+}
+
+export async function listThreadEvents(threadId: string): Promise<ThreadEventRow[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "id", "user_id", "kind", "detail", "created_at"
+      FROM "uin_events"
+     WHERE "thread_id" = ${threadId}
+     ORDER BY "created_at" ASC
+  `
+  return rows.map((r) => ({
+    id: r.id as string,
+    userId: (r.user_id as string | null) ?? null,
+    kind: r.kind as string,
+    detail: (r.detail as Record<string, unknown> | null) ?? null,
+    createdAt: r.created_at as Date,
+  }))
+}
+
+export async function setThreadRead(threadId: string, unread: boolean): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "uin_threads" SET "unread" = ${unread}, "updated_at" = now() WHERE "id" = ${threadId}
+  `
+}
+
+export async function assignThread(threadId: string, userId: string | null): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "uin_threads"
+       SET "assignee_user_id" = ${userId}, "updated_at" = now()
+     WHERE "id" = ${threadId}
+  `
+}
+
+/** Status and snooze move together: a conversation put to sleep is 'snoozed'
+ *  until its time comes, and waking it clears the stamp. Leaving one without
+ *  the other is how a conversation disappears for ever. */
+export async function setThreadStatus(
+  threadId: string,
+  status: 'open' | 'snoozed' | 'done',
+  snoozeUntil: Date | null,
+): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "uin_threads"
+       SET "status" = ${status},
+           "snooze_until" = ${status === 'snoozed' ? snoozeUntil : null},
+           "updated_at" = now()
+     WHERE "id" = ${threadId}
+  `
+}
+
+/** Conversations whose snooze has elapsed, opened again. Cheap enough to run
+ *  on the way into the list, which is the only moment anybody would notice. */
+export async function wakeDueThreads(): Promise<number> {
+  return prisma.$executeRaw`
+    UPDATE "uin_threads"
+       SET "status" = 'open', "snooze_until" = NULL, "updated_at" = now()
+     WHERE "status" = 'snoozed' AND "snooze_until" IS NOT NULL AND "snooze_until" <= now()
+  `
+}
+
+/**
+ * An internal note: visible to colleagues, never sent anywhere.
+ *
+ * Deliberately does NOT touch the thread's last_message_at or its unread flag.
+ * A note is us talking among ourselves - bumping the conversation to the top of
+ * everybody's list and marking it unread would make our own remarks look like
+ * the customer had written again.
+ */
+export async function insertNote(data: {
+  threadId: string
+  channel: string
+  bodyHtml: string
+  bodyText: string
+  authorUserId: string
+}): Promise<string> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    INSERT INTO "uin_messages"
+      ("thread_id", "direction", "channel", "body_html", "body_text", "snippet",
+       "sent_at", "source", "author_user_id")
+    VALUES (${data.threadId}, 'note', ${data.channel}, ${data.bodyHtml}, ${data.bodyText},
+            ${data.bodyText.slice(0, 200)}, now(), 'manual', ${data.authorUserId})
     RETURNING "id"
   `
   return rows[0]!.id
