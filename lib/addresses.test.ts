@@ -4,6 +4,7 @@ import {
   isValidAddress,
   normaliseAddress,
   parseAddressList,
+  routeSentToInbox,
   routeToInbox,
 } from './addresses'
 
@@ -90,5 +91,34 @@ describe('routeToInbox', () => {
   it('says so plainly when there is no catch-all to fall back on', () => {
     expect(routeToInbox({ to: ['nobody@elsewhere.com'] }, inboxes.slice(0, 2)))
       .toEqual({ inboxId: null, matchedOn: 'none' })
+  })
+})
+
+describe('routeSentToInbox', () => {
+  const inboxes = [
+    { id: 'hi', address: 'hi@deskwell.co.uk', isCatchAll: true },
+    { id: 'marcus', address: 'marcus@deskwell.co.uk', isCatchAll: false },
+  ]
+
+  it('files our own sent mail under the address it was sent as', () => {
+    // The recipient is a customer and matches no inbox at all, so the From line
+    // is the only thing that can say which conversation this belongs to.
+    expect(routeSentToInbox(['marcus@deskwell.co.uk'], { to: ['customer@example.com'] }, inboxes))
+      .toEqual({ inboxId: 'marcus', matchedOn: 'from' })
+  })
+
+  it('is not fooled by the case somebody typed', () => {
+    expect(routeSentToInbox(['Marcus@Deskwell.co.uk'], { to: ['customer@example.com'] }, inboxes).inboxId)
+      .toBe('marcus')
+  })
+
+  it('falls back to the ordinary rules when it was sent from an address we do not serve', () => {
+    expect(routeSentToInbox(['personal@example.com'], { to: ['marcus@deskwell.co.uk'] }, inboxes))
+      .toEqual({ inboxId: 'marcus', matchedOn: 'to' })
+  })
+
+  it('lands in the catch-all when nothing else claims it', () => {
+    expect(routeSentToInbox(['personal@example.com'], { to: ['nobody@example.com'] }, inboxes))
+      .toEqual({ inboxId: 'hi', matchedOn: 'catch-all' })
   })
 })

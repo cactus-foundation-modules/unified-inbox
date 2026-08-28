@@ -1,6 +1,6 @@
 {
   "name": "unified-inbox",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "tablePrefix": "uin_",
   "description": "Every conversation with every customer and supplier in one place - email, live chat, contact form, calls and texts - with your own records beside them.",
   "requiresCoreVersion": "0.5.1383",
@@ -29,16 +29,31 @@
       "permission": "unifiedinbox.view",
       "import": "./components/admin/InboxPanel",
       "component": "UnifiedInboxPanel"
+    },
+    {
+      "point": "core.media-usage-providers",
+      "id": "unified-inbox",
+      "import": "./lib/media-usage-provider",
+      "component": "unifiedInboxMediaUsageProvider"
     }
   ],
   "consumesConversationProviders": true,
   "requiredEnvVars": [
-    { "name": "ENCRYPTION_KEY", "required": true },
-    { "name": "CRON_SECRET", "required": false }
+    {
+      "name": "ENCRYPTION_KEY",
+      "required": true
+    },
+    {
+      "name": "CRON_SECRET",
+      "required": false
+    }
   ],
   "cookieCategories": [],
   "cronJobs": [
-    { "path": "/api/m/unified-inbox/cron/sync", "schedule": "15 * * * *" }
+    {
+      "path": "/api/m/unified-inbox/cron/sync",
+      "schedule": "15 * * * *"
+    }
   ],
   "teardown": [
     "uin_attachments",

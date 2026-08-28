@@ -52,7 +52,7 @@ export type RoutingDecision = {
   inboxId: string | null
   /** Which header settled it, for the "why did this land here?" question that
    *  always follows a message turning up in the wrong place. */
-  matchedOn: 'delivered-to' | 'to' | 'cc' | 'catch-all' | 'none'
+  matchedOn: 'delivered-to' | 'to' | 'cc' | 'from' | 'catch-all' | 'none'
 }
 
 /**
@@ -80,4 +80,25 @@ export function routeToInbox(
   return catchAll
     ? { inboxId: catchAll.id, matchedOn: 'catch-all' }
     : { inboxId: null, matchedOn: 'none' }
+}
+
+/**
+ * Which inbox a message we SENT belongs to. The From line decides it: a reply
+ * sent as marcus@ belongs to marcus@ whoever it went to, and the recipient is a
+ * customer's address that matches no inbox at all. Only when the From line is
+ * an address we do not serve does this fall back to the ordinary inbound rules,
+ * which is the case where the owner sent something from a personal address
+ * through the same account.
+ */
+export function routeSentToInbox(
+  fromAddresses: string[],
+  headers: { deliveredTo?: string[]; to?: string[]; cc?: string[] },
+  inboxes: RoutableInbox[]
+): RoutingDecision {
+  const byAddress = new Map(inboxes.map((i) => [normaliseAddress(i.address), i]))
+  for (const address of fromAddresses) {
+    const inbox = byAddress.get(normaliseAddress(address))
+    if (inbox) return { inboxId: inbox.id, matchedOn: 'from' }
+  }
+  return routeToInbox(headers, inboxes)
 }

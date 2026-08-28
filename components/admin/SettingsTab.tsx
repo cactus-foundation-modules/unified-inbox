@@ -59,11 +59,23 @@ type Settings = {
 
 type StaffMember = { id: string; name: string; email: string }
 
+type CollectionStat = {
+  connectionId: string
+  folders: number
+  collected: number
+  estimated: number | null
+  backfillComplete: boolean
+  lastRunAt: string | null
+  lastError: string | null
+}
+
 type Payload = {
   connections: Connection[]
   inboxes: Inbox[]
   access: AccessRow[]
   settings: Settings
+  collection: CollectionStat[]
+  unrouted: number
   users: StaffMember[]
   encryptionReady: boolean
 }
@@ -160,7 +172,23 @@ export function UnifiedInboxSettingsTab() {
         </div>
       )}
 
-      <ConnectionsSection connections={data.connections} busy={busy} call={call} setMessage={setMessage} />
+      {data.unrouted > 0 && (
+        <div className="alert alert-info" style={{ marginBottom: '1.5rem' }}>
+          {data.unrouted === 1
+            ? 'One message arrived at an address that is not set up here, so it has nowhere to go.'
+            : `${data.unrouted} messages arrived at addresses that are not set up here, so they have nowhere to go.`}
+          {' '}Add the address as an inbox, or mark one of your inboxes as the catch-all, and they will be filed the next time mail is checked.
+        </div>
+      )}
+
+      <ConnectionsSection
+        connections={data.connections}
+        collection={data.collection}
+        busy={busy}
+        call={call}
+        setMessage={setMessage}
+        reload={load}
+      />
 
       <InboxesSection
         inboxes={data.inboxes}
@@ -185,18 +213,48 @@ export function UnifiedInboxSettingsTab() {
 // Mail accounts
 // ---------------------------------------------------------------------------
 
+/** How collection is getting on, in words an owner can use. Mail is gathered a
+ *  bit at a time - every hour on most plans, once a day on the smallest one -
+ *  so the honest answer to "is it done yet?" is usually "not yet, here is how
+ *  far it has got". */
+function CollectionProgress({ stat }: { stat?: CollectionStat }) {
+  if (!stat) return null
+  const collected = stat.collected.toLocaleString('en-GB')
+  if (stat.backfillComplete) {
+    return (
+      <div style={{ ...MUTED, fontSize: '0.8125rem', marginTop: '0.5rem' }}>
+        {collected} message{stat.collected === 1 ? '' : 's'} collected. All caught up.
+      </div>
+    )
+  }
+  const estimate = stat.estimated ? ` of about ${stat.estimated.toLocaleString('en-GB')}` : ''
+  return (
+    <div style={{ ...MUTED, fontSize: '0.8125rem', marginTop: '0.5rem' }}>
+      {collected}{estimate} message{stat.collected === 1 ? '' : 's'} collected so far. Older mail is
+      still being fetched a bit at a time in the background.
+    </div>
+  )
+}
+
 type Caller = (path: string, init: RequestInit) => Promise<unknown | null>
 
-function ConnectionsSection({ connections, busy, call, setMessage }: {
+function ConnectionsSection({ connections, collection, busy, call, setMessage, reload }: {
   connections: Connection[]
+  collection: CollectionStat[]
   busy: boolean
   call: Caller
   setMessage: (m: string | null) => void
+  reload: () => Promise<void>
 }) {
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState<ConnectionDraft>(blankConnection())
   const [folders, setFolders] = useState<Record<string, MailFolder[]>>({})
   const [testing, setTesting] = useState<string | null>(null)
+  const [checking, setChecking] = useState<string | null>(null)
+  const stats = useMemo(
+    () => new Map(collection.map((c) => [c.connectionId, c])),
+    [collection]
+  )
 
   function startNew() {
     setDraft(blankConnection())
@@ -252,6 +310,23 @@ function ConnectionsSection({ connections, busy, call, setMessage }: {
     }
   }
 
+  // Deliberately a longer wait than the hourly check gets: this runs with a
+  // minute of its own rather than a slice of the shared one, because somebody
+  // is stood here watching it.
+  async function checkNow(id: string) {
+    setChecking(id)
+    setMessage(null)
+    const res = await fetch(`${API}/check-now`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ connectionId: id }),
+    })
+    const body = await res.json().catch(() => ({}))
+    setChecking(null)
+    setMessage(res.ok ? (body.message ?? 'Checked.') : (body.error ?? 'That did not work.'))
+    await reload()
+  }
+
   return (
     <section className="card" style={{ marginBottom: '1.5rem' }}>
       <div style={LABEL_STYLE}>Mail accounts</div>
@@ -288,8 +363,12 @@ function ConnectionsSection({ connections, busy, call, setMessage }: {
             <button type="button" className="btn btn-secondary btn-sm" disabled={testing === connection.id} onClick={() => test(connection.id)}>
               {testing === connection.id ? 'Testing…' : 'Test connection'}
             </button>
+            <button type="button" className="btn btn-secondary btn-sm" disabled={checking === connection.id} onClick={() => checkNow(connection.id)}>
+              {checking === connection.id ? 'Checking…' : 'Check now'}
+            </button>
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => remove(connection.id)}>Remove</button>
           </div>
+          <CollectionProgress stat={stats.get(connection.id)} />
           {folders[connection.id] && (
             <div style={{ ...MUTED, fontSize: '0.8125rem', marginTop: '0.5rem' }}>
               Folders: {folders[connection.id]!.map((f) => f.path).join(', ')}

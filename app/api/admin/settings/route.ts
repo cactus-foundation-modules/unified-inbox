@@ -6,10 +6,12 @@ import { errorResponse } from '@/lib/utils'
 import { prisma } from '@/lib/db/prisma'
 import { isEncryptionKeyUsable } from '@/lib/crypto/secrets'
 import {
+  collectionStats,
   getSettings,
   listAllInboxAccess,
   listConnections,
   listInboxes,
+  unroutedCount,
   updateSettings,
 } from '@/modules/unified-inbox/lib/db'
 
@@ -23,11 +25,13 @@ export async function GET() {
   if (!user) return errorResponse('Not authenticated', 401)
   if (!await hasPermission(user, 'unifiedinbox.manage')) return errorResponse('Forbidden', 403)
 
-  const [connections, inboxes, access, settings, users] = await Promise.all([
+  const [connections, inboxes, access, settings, collection, unrouted, users] = await Promise.all([
     listConnections(),
     listInboxes(),
     listAllInboxAccess(),
     getSettings(),
+    collectionStats(),
+    unroutedCount(),
     prisma.user.findMany({
       where: { suspendedAt: null },
       select: { id: true, displayName: true, username: true, email: true },
@@ -40,6 +44,13 @@ export async function GET() {
     inboxes,
     access,
     settings,
+    // How collection is getting on, per mail account: how much has been
+    // gathered, roughly how much there is, and whether the older mail is still
+    // being worked through in the background.
+    collection,
+    // Mail that reached the account but matched no inbox and had no catch-all
+    // to fall into. Silence here means a whole address goes unread.
+    unrouted,
     users: users.map((u) => ({
       id: u.id,
       name: u.displayName || u.username,
