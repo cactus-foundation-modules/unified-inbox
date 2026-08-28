@@ -5,6 +5,7 @@ import { errorResponse } from '@/lib/utils'
 import { addressTakenBy, deleteInbox, getInbox, updateInbox } from '@/modules/unified-inbox/lib/db'
 import { isValidAddress } from '@/modules/unified-inbox/lib/addresses'
 import { InboxPatchBody } from '@/modules/unified-inbox/lib/validation'
+import { senderWarningFor } from '@/modules/unified-inbox/lib/sender-warning'
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getSessionFromCookie()
@@ -23,7 +24,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
   }
 
-  return NextResponse.json({ inbox: await updateInbox(id, parsed.data) })
+  const inbox = await updateInbox(id, parsed.data)
+  if (!inbox) return errorResponse('That inbox no longer exists.', 404)
+  return NextResponse.json({ inbox, senderWarning: await senderWarningFor(inbox) })
 }
 
 export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {

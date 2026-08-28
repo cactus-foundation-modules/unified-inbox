@@ -432,6 +432,7 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
   busy: boolean
   call: Caller
 }) {
+  const [senderWarning, setSenderWarning] = useState<string | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState<InboxDraft>(blankInbox())
   const [staff, setStaff] = useState<AccessRow[]>([])
@@ -494,14 +495,19 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
       ...(draft.brevoApiKey ? { brevoApiKey: draft.brevoApiKey } : {}),
       ...(draft.smtpPassword ? { smtpPassword: draft.smtpPassword } : {}),
     }
+    type Saved = { inbox?: Inbox; senderWarning?: string | null }
     const saved = editing === 'new'
-      ? await call('/inboxes', { method: 'POST', body: JSON.stringify(body) }) as { inbox?: Inbox } | null
-      : await call(`/inboxes/${editing}`, { method: 'PATCH', body: JSON.stringify(body) }) as { inbox?: Inbox } | null
+      ? await call('/inboxes', { method: 'POST', body: JSON.stringify(body) }) as Saved | null
+      : await call(`/inboxes/${editing}`, { method: 'PATCH', body: JSON.stringify(body) }) as Saved | null
     if (!saved?.inbox) return
     await call(`/inboxes/${saved.inbox.id}/access`, {
       method: 'PUT',
       body: JSON.stringify({ entries: staff.map((s) => ({ userId: s.userId, canReply: s.canReply })) }),
     })
+    // Saved either way. This only says whether replies will actually leave the
+    // building yet, which is a different question and one worth answering while
+    // the person who can fix it is still here (E15).
+    setSenderWarning(saved.senderWarning ?? null)
     setEditing(null)
   }
 
@@ -527,6 +533,12 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
         An address people write to. Each one can have its own staff, its own signature and its own
         name on the replies, even when they all arrive in the same mail account.
       </p>
+
+      {senderWarning && (
+        <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+          {senderWarning}
+        </div>
+      )}
 
       {inboxes.length === 0 && <p style={MUTED}>No inboxes yet.</p>}
 

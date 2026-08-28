@@ -5,6 +5,7 @@ import { errorResponse } from '@/lib/utils'
 import { addressTakenBy, createInbox, listInboxes } from '@/modules/unified-inbox/lib/db'
 import { isValidAddress } from '@/modules/unified-inbox/lib/addresses'
 import { InboxBody } from '@/modules/unified-inbox/lib/validation'
+import { senderWarningFor } from '@/modules/unified-inbox/lib/sender-warning'
 
 export async function GET() {
   const user = await getSessionFromCookie()
@@ -25,5 +26,13 @@ export async function POST(request: NextRequest) {
     return errorResponse('There is already an inbox for that address.')
   }
 
-  return NextResponse.json({ inbox: await createInbox(parsed.data) }, { status: 201 })
+  const inbox = await createInbox(parsed.data)
+
+  // Checked now, while the person who can fix it is the one standing here
+  // (E15). Never blocks the save - an inbox that cannot send yet still
+  // collects mail perfectly well.
+  return NextResponse.json(
+    { inbox, senderWarning: await senderWarningFor(inbox) },
+    { status: 201 },
+  )
 }

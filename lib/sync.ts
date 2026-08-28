@@ -440,6 +440,11 @@ async function fileMessage(
     ? normaliseAddress(parsed.from.value[0].address)
     : null
   const fromName = parsed.from?.value?.[0]?.name || null
+  // Kept because answering From when the sender named a Reply-To writes to an
+  // address nobody reads (E13). Stored raw-ish, normalised on the way out.
+  const replyToAddress = parsed.replyTo?.value?.[0]?.address
+    ? normaliseAddress(parsed.replyTo.value[0].address)
+    : null
   const subject = parsed.subject ?? null
   const sentAt = parsed.date ?? new Date()
   const sizeBytes = entry.size ?? entry.source.length
@@ -552,6 +557,7 @@ async function fileMessage(
     references,
     fromName,
     fromAddress,
+    replyTo: replyToAddress,
     toAddresses: to,
     ccAddresses: cc,
     subject,

@@ -266,6 +266,29 @@ export async function deleteInbox(id: string): Promise<void> {
 
 /** Every other inbox using this address, so a duplicate is refused with a
  *  sentence rather than a unique-constraint error. */
+/**
+ * An inbox's own sending credentials, still encrypted.
+ *
+ * Server only, and returned encrypted so the decryption happens at the single
+ * point of use rather than anywhere a value could be logged or serialised into
+ * a response by accident. Everything else about an inbox comes back with these
+ * as plain booleans (`hasBrevoKey`, `hasSmtpPassword`).
+ */
+export async function getInboxSecrets(id: string): Promise<{
+  brevoApiKey: string | null
+  smtpPassword: string | null
+}> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "brevo_api_key_encrypted", "smtp_password_encrypted"
+      FROM "uin_inboxes" WHERE "id" = ${id}
+  `
+  const r = rows[0]
+  return {
+    brevoApiKey: (r?.brevo_api_key_encrypted as string | null) ?? null,
+    smtpPassword: (r?.smtp_password_encrypted as string | null) ?? null,
+  }
+}
+
 export async function addressTakenBy(address: string, exceptId?: string): Promise<string | null> {
   const rows = await prisma.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "uin_inboxes"
@@ -626,7 +649,17 @@ export async function attachLocation(
   `
 }
 
-/** Thread ids for referenced Message-IDs, for header threading. */
+/**
+ * Thread ids for referenced Message-IDs, for header threading.
+ *
+ * Matches the provider's own id as well as ours, and that second half is not
+ * belt and braces. Brevo may replace the Message-ID we set with one of its own
+ * on the way out; if it does, the customer's mail client quotes BREVO's id back
+ * at us in In-Reply-To, and matching only on the id we generated would start a
+ * fresh conversation for every single reply. The provider's id is stored on the
+ * outbound row the moment a send settles, so both handles lead to the same
+ * thread whichever one comes back.
+ */
 export async function threadsForMessageIds(
   messageIds: string[]
 ): Promise<Map<string, string>> {
@@ -634,6 +667,9 @@ export async function threadsForMessageIds(
   const rows = await prisma.$queryRaw<{ message_id_header: string; thread_id: string }[]>`
     SELECT "message_id_header", "thread_id" FROM "uin_messages"
      WHERE "message_id_header" = ANY(${messageIds}::text[])
+    UNION ALL
+    SELECT "provider_message_id" AS "message_id_header", "thread_id" FROM "uin_messages"
+     WHERE "provider_message_id" = ANY(${messageIds}::text[])
   `
   const map = new Map<string, string>()
   for (const row of rows) if (!map.has(row.message_id_header)) map.set(row.message_id_header, row.thread_id)
@@ -710,6 +746,9 @@ export type InsertMessageInput = {
   references: string[]
   fromName: string | null
   fromAddress: string | null
+  /** The sender's Reply-To, when they set one. It beats From when we answer
+   *  (E13), so it has to survive ingest rather than be re-derived later. */
+  replyTo: string | null
   toAddresses: string[]
   ccAddresses: string[]
   subject: string | null
@@ -735,12 +774,12 @@ export async function insertMessage(data: InsertMessageInput): Promise<string | 
   const rows = await prisma.$queryRaw<{ id: string }[]>`
     INSERT INTO "uin_messages"
       ("thread_id", "connection_id", "direction", "channel", "message_id_header", "in_reply_to",
-       "references_header", "from_name", "from_address", "to_addresses", "cc_addresses", "subject",
+       "references_header", "from_name", "from_address", "reply_to", "to_addresses", "cc_addresses", "subject",
        "body_text", "body_html", "snippet", "sent_at", "has_attachments", "size_bytes", "source",
        "imap_folder", "imap_uid", "thread_match", "routed_on", "auto_kind")
     VALUES (${data.threadId}, ${data.connectionId}, ${data.direction}, 'email', ${data.messageIdHeader},
             ${data.inReplyTo}, ${data.references}::text[], ${data.fromName}, ${data.fromAddress},
-            ${data.toAddresses}::text[], ${data.ccAddresses}::text[], ${data.subject}, ${data.bodyText},
+            ${data.replyTo}, ${data.toAddresses}::text[], ${data.ccAddresses}::text[], ${data.subject}, ${data.bodyText},
             ${data.bodyHtml}, ${data.snippet}, ${data.sentAt}, ${data.hasAttachments}, ${data.sizeBytes},
             'imap', ${data.imapFolder}, ${data.imapUid}::bigint, ${data.threadMatch}, ${data.routedOn},
             ${data.autoKind})
@@ -934,4 +973,353 @@ export async function unroutedCount(): Promise<number> {
     SELECT COUNT(*)::int AS count FROM "uin_messages" WHERE "routed_on" = 'none'
   `
   return Number(rows[0]?.count ?? 0)
+}
+
+// ---------------------------------------------------------------------------
+// The send path (S4)
+//
+// The order of operations here is the whole safety story, so it is written down
+// rather than left to be inferred:
+//
+//   1. The row is written FIRST, with delivery_status 'sending'. If the process
+//      dies between here and the network call, the fact that we tried survives,
+//      and a message stuck in 'sending' is findable. Writing the row after the
+//      send would mean a crash loses an email that the customer has already
+//      received, which is the one outcome nobody can recover from.
+//   2. The row carries the idempotency key, on a unique index. A second request
+//      with the same key inserts nothing and is handed the first row back, so a
+//      double-clicked Send is one email (E14).
+//   3. The row is settled afterwards - 'sent' with the provider's id, or
+//      'failed' with a sentence explaining why in words a person can act on.
+// ---------------------------------------------------------------------------
+
+export type OutboundMessageInput = {
+  threadId: string
+  inboxId: string
+  idempotencyKey: string
+  messageIdHeader: string
+  inReplyTo: string | null
+  references: string[]
+  fromName: string | null
+  fromAddress: string
+  toAddresses: string[]
+  ccAddresses: string[]
+  subject: string
+  bodyText: string
+  bodyHtml: string
+  snippet: string
+  hasAttachments: boolean
+  sizeBytes: number | null
+  authorUserId: string
+}
+
+export type OutboundMessageRow = {
+  id: string
+  threadId: string
+  inboxId: string | null
+  direction: 'in' | 'out' | 'note'
+  messageIdHeader: string | null
+  providerMessageId: string | null
+  deliveryStatus: string | null
+  deliveryError: string | null
+  appendStatus: string | null
+  appendError: string | null
+  idempotencyKey: string | null
+  fromName: string | null
+  fromAddress: string | null
+  toAddresses: string[]
+  ccAddresses: string[]
+  subject: string | null
+  bodyText: string | null
+  bodyHtml: string | null
+  sentAt: Date
+  authorUserId: string | null
+  hasAttachments: boolean
+}
+
+function mapOutbound(r: Record<string, unknown>): OutboundMessageRow {
+  return {
+    id: r.id as string,
+    threadId: r.thread_id as string,
+    inboxId: (r.inbox_id as string | null) ?? null,
+    direction: r.direction as 'in' | 'out' | 'note',
+    messageIdHeader: (r.message_id_header as string | null) ?? null,
+    providerMessageId: (r.provider_message_id as string | null) ?? null,
+    deliveryStatus: (r.delivery_status as string | null) ?? null,
+    deliveryError: (r.delivery_error as string | null) ?? null,
+    appendStatus: (r.append_status as string | null) ?? null,
+    appendError: (r.append_error as string | null) ?? null,
+    idempotencyKey: (r.idempotency_key as string | null) ?? null,
+    fromName: (r.from_name as string | null) ?? null,
+    fromAddress: (r.from_address as string | null) ?? null,
+    toAddresses: (r.to_addresses as string[] | null) ?? [],
+    ccAddresses: (r.cc_addresses as string[] | null) ?? [],
+    subject: (r.subject as string | null) ?? null,
+    bodyText: (r.body_text as string | null) ?? null,
+    bodyHtml: (r.body_html as string | null) ?? null,
+    sentAt: r.sent_at as Date,
+    authorUserId: (r.author_user_id as string | null) ?? null,
+    hasAttachments: !!r.has_attachments,
+  }
+}
+
+/**
+ * Writes the outbound row before anything is sent.
+ *
+ * `created` false means this exact send has been asked for already - the caller
+ * must NOT send again, and should answer with the row it gets back.
+ */
+export async function insertOutboundMessage(
+  data: OutboundMessageInput
+): Promise<{ row: OutboundMessageRow; created: boolean }> {
+  const inserted = await prisma.$queryRaw<Record<string, unknown>[]>`
+    INSERT INTO "uin_messages"
+      ("thread_id", "inbox_id", "direction", "channel", "message_id_header", "in_reply_to",
+       "references_header", "from_name", "from_address", "to_addresses", "cc_addresses",
+       "subject", "body_text", "body_html", "snippet", "sent_at", "has_attachments",
+       "size_bytes", "source", "delivery_status", "author_user_id", "idempotency_key",
+       "thread_match", "routed_on")
+    VALUES (${data.threadId}, ${data.inboxId}, 'out', 'email', ${data.messageIdHeader},
+            ${data.inReplyTo}, ${data.references}::text[], ${data.fromName}, ${data.fromAddress},
+            ${data.toAddresses}::text[], ${data.ccAddresses}::text[], ${data.subject},
+            ${data.bodyText}, ${data.bodyHtml}, ${data.snippet}, now(), ${data.hasAttachments},
+            ${data.sizeBytes}, 'brevo', 'sending', ${data.authorUserId}, ${data.idempotencyKey},
+            'new', 'outbound')
+    ON CONFLICT ("idempotency_key") WHERE "idempotency_key" IS NOT NULL DO NOTHING
+    RETURNING *
+  `
+  if (inserted[0]) return { row: mapOutbound(inserted[0]), created: true }
+
+  const existing = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_messages" WHERE "idempotency_key" = ${data.idempotencyKey} LIMIT 1
+  `
+  if (!existing[0]) throw new Error('The message could not be saved. Try again.')
+  return { row: mapOutbound(existing[0]), created: false }
+}
+
+/** Settles a send: what happened, and whatever the provider called it. */
+export async function settleDelivery(
+  id: string,
+  outcome:
+    | { status: 'sent'; providerMessageId: string | null }
+    | { status: 'failed'; error: string }
+): Promise<void> {
+  if (outcome.status === 'sent') {
+    await prisma.$executeRaw`
+      UPDATE "uin_messages"
+         SET "delivery_status" = 'sent',
+             "delivery_error" = NULL,
+             "provider_message_id" = ${outcome.providerMessageId},
+             "sent_at" = now()
+       WHERE "id" = ${id}
+    `
+    return
+  }
+  await prisma.$executeRaw`
+    UPDATE "uin_messages"
+       SET "delivery_status" = 'failed',
+           "delivery_error" = ${outcome.error.slice(0, 2000)}
+     WHERE "id" = ${id}
+  `
+}
+
+/** Records what became of the copy filed in the Sent folder. A failure here is
+ *  recorded and never raised - the email has already gone (D4). */
+export async function recordAppendOutcome(
+  id: string,
+  outcome:
+    | { status: 'appended'; folder: string; uid: number | null }
+    | { status: 'failed'; error: string }
+    | { status: 'skipped' }
+): Promise<void> {
+  if (outcome.status === 'appended') {
+    await prisma.$executeRaw`
+      UPDATE "uin_messages"
+         SET "append_status" = 'appended',
+             "append_error" = NULL,
+             "imap_folder" = ${outcome.folder},
+             "imap_uid" = ${outcome.uid === null ? null : String(outcome.uid)}::bigint
+       WHERE "id" = ${id}
+    `
+    return
+  }
+  await prisma.$executeRaw`
+    UPDATE "uin_messages"
+       SET "append_status" = ${outcome.status},
+           "append_error" = ${outcome.status === 'failed' ? outcome.error.slice(0, 2000) : null}
+     WHERE "id" = ${id}
+  `
+}
+
+/** Puts a failed message back to 'sending' so it can be tried again, but only
+ *  if it really did fail - a retry that races a send in flight would be a
+ *  second email. */
+export async function reopenForRetry(id: string): Promise<boolean> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    UPDATE "uin_messages" SET "delivery_status" = 'sending', "delivery_error" = NULL
+     WHERE "id" = ${id} AND "direction" = 'out' AND "delivery_status" = 'failed'
+    RETURNING "id"
+  `
+  return rows.length > 0
+}
+
+export async function getMessage(id: string): Promise<OutboundMessageRow | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_messages" WHERE "id" = ${id}
+  `
+  return rows[0] ? mapOutbound(rows[0]) : null
+}
+
+/** The message a reply answers: the newest inbound one on the thread, or the
+ *  newest of any kind if the conversation has only ever gone one way. */
+export async function newestMessageOnThread(
+  threadId: string,
+  direction?: 'in' | 'out'
+): Promise<QuotableMessage | null> {
+  const rows = direction
+    ? await prisma.$queryRaw<Record<string, unknown>[]>`
+        SELECT * FROM "uin_messages"
+         WHERE "thread_id" = ${threadId} AND "direction" = ${direction}
+         ORDER BY "sent_at" DESC LIMIT 1
+      `
+    : await prisma.$queryRaw<Record<string, unknown>[]>`
+        SELECT * FROM "uin_messages"
+         WHERE "thread_id" = ${threadId} AND "direction" <> 'note'
+         ORDER BY "sent_at" DESC LIMIT 1
+      `
+  return rows[0] ? mapQuotable(rows[0]) : null
+}
+
+export type QuotableMessage = {
+  id: string
+  messageIdHeader: string | null
+  references: string[]
+  fromName: string | null
+  fromAddress: string | null
+  replyTo: string | null
+  toAddresses: string[]
+  ccAddresses: string[]
+  subject: string | null
+  bodyText: string | null
+  bodyHtml: string | null
+  sentAt: Date
+  direction: 'in' | 'out' | 'note'
+}
+
+function mapQuotable(r: Record<string, unknown>): QuotableMessage {
+  return {
+    id: r.id as string,
+    messageIdHeader: (r.message_id_header as string | null) ?? null,
+    references: (r.references_header as string[] | null) ?? [],
+    fromName: (r.from_name as string | null) ?? null,
+    fromAddress: (r.from_address as string | null) ?? null,
+    // Stored on the inbound row by the sync engine when the sender set one.
+    replyTo: (r.reply_to as string | null) ?? null,
+    toAddresses: (r.to_addresses as string[] | null) ?? [],
+    ccAddresses: (r.cc_addresses as string[] | null) ?? [],
+    subject: (r.subject as string | null) ?? null,
+    bodyText: (r.body_text as string | null) ?? null,
+    bodyHtml: (r.body_html as string | null) ?? null,
+    sentAt: r.sent_at as Date,
+    direction: r.direction as 'in' | 'out' | 'note',
+  }
+}
+
+export async function getQuotableMessage(id: string): Promise<QuotableMessage | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_messages" WHERE "id" = ${id}
+  `
+  return rows[0] ? mapQuotable(rows[0]) : null
+}
+
+export type ThreadRow = {
+  id: string
+  inboxId: string | null
+  channel: string
+  subject: string | null
+  subjectNormalised: string | null
+  status: string
+}
+
+export async function getThread(id: string): Promise<ThreadRow | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "id", "inbox_id", "channel", "subject", "subject_normalised", "status"
+      FROM "uin_threads" WHERE "id" = ${id}
+  `
+  const r = rows[0]
+  if (!r) return null
+  return {
+    id: r.id as string,
+    inboxId: (r.inbox_id as string | null) ?? null,
+    channel: r.channel as string,
+    subject: (r.subject as string | null) ?? null,
+    subjectNormalised: (r.subject_normalised as string | null) ?? null,
+    status: r.status as string,
+  }
+}
+
+/** An attachment on a message we are sending. No IMAP part - the bytes came
+ *  from the media library or from an upload, and are already in storage. */
+export async function insertOutboundAttachment(data: {
+  messageId: string
+  filename: string
+  contentType: string | null
+  sizeBytes: number
+  mediaKey: string | null
+  mediaProvider: string | null
+  mediaUrl: string | null
+}): Promise<string> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    INSERT INTO "uin_attachments"
+      ("message_id", "filename", "content_type", "size_bytes", "media_key",
+       "media_provider", "media_url", "fetched_at")
+    VALUES (${data.messageId}, ${data.filename}, ${data.contentType}, ${data.sizeBytes},
+            ${data.mediaKey}, ${data.mediaProvider}, ${data.mediaUrl}, now())
+    RETURNING "id"
+  `
+  return rows[0]!.id
+}
+
+/**
+ * A soft pointer from a conversation to a record in another module (D12).
+ *
+ * Deliberately no foreign key: the module that owns the record can be
+ * uninstalled, and a link to something that has gone must degrade to a label
+ * rather than break the thread it is attached to.
+ */
+export async function recordLink(data: {
+  threadId: string | null
+  personId: string | null
+  moduleName: string
+  recordType: string
+  recordId: string
+  label: string
+  confidence: number
+  linkedBy: 'auto' | 'user'
+}): Promise<void> {
+  await prisma.$executeRaw`
+    INSERT INTO "uin_record_links"
+      ("thread_id", "person_id", "module_name", "record_type", "record_id",
+       "label", "confidence", "linked_by")
+    VALUES (${data.threadId}, ${data.personId}, ${data.moduleName}, ${data.recordType},
+            ${data.recordId}, ${data.label}, ${data.confidence}, ${data.linkedBy})
+  `
+}
+
+/** Starts a conversation that begins with us writing to somebody (D12). */
+export async function createOutboundThread(data: {
+  inboxId: string
+  subject: string | null
+  subjectNormalised: string
+  preview: string | null
+}): Promise<string> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    INSERT INTO "uin_threads"
+      ("inbox_id", "channel", "subject", "subject_normalised", "preview",
+       "last_message_at", "last_direction", "unread", "message_count")
+    VALUES (${data.inboxId}, 'email', ${data.subject}, ${data.subjectNormalised},
+            ${data.preview}, now(), 'out', false, 0)
+    RETURNING "id"
+  `
+  return rows[0]!.id
 }
