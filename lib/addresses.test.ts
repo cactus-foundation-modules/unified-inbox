@@ -1,0 +1,94 @@
+import { describe, it, expect } from 'vitest'
+import {
+  addressDomain,
+  isValidAddress,
+  normaliseAddress,
+  parseAddressList,
+  routeToInbox,
+} from './addresses'
+
+describe('normaliseAddress', () => {
+  it('strips a display name and the angle brackets round the address', () => {
+    expect(normaliseAddress('"Brown, Marcus" <Marcus@Deskwell.co.uk>')).toBe('marcus@deskwell.co.uk')
+  })
+
+  it('lower-cases a bare address', () => {
+    expect(normaliseAddress('  HI@Deskwell.CO.UK ')).toBe('hi@deskwell.co.uk')
+  })
+})
+
+describe('parseAddressList', () => {
+  it('splits several addresses', () => {
+    expect(parseAddressList('hi@a.com, Marcus <marcus@b.com>')).toEqual(['hi@a.com', 'marcus@b.com'])
+  })
+
+  it('does not split on a comma inside a quoted display name', () => {
+    expect(parseAddressList('"Brown, Marcus" <marcus@b.com>, hi@a.com'))
+      .toEqual(['marcus@b.com', 'hi@a.com'])
+  })
+
+  it('treats nothing as no addresses', () => {
+    expect(parseAddressList(null)).toEqual([])
+    expect(parseAddressList('')).toEqual([])
+  })
+})
+
+describe('addressDomain', () => {
+  it('reads the domain', () => {
+    expect(addressDomain('Marcus@Deskwell.co.uk')).toBe('deskwell.co.uk')
+  })
+
+  it('gives nothing back for something that is not an address', () => {
+    expect(addressDomain('marcus')).toBeNull()
+    expect(addressDomain('@deskwell.co.uk')).toBeNull()
+  })
+})
+
+describe('isValidAddress', () => {
+  it('accepts an ordinary address', () => {
+    expect(isValidAddress('hi@deskwell.co.uk')).toBe(true)
+  })
+
+  it('rejects the near misses', () => {
+    expect(isValidAddress('hi@deskwell')).toBe(false)
+    expect(isValidAddress('hi deskwell.co.uk')).toBe(false)
+    expect(isValidAddress('@deskwell.co.uk')).toBe(false)
+  })
+})
+
+describe('routeToInbox', () => {
+  const inboxes = [
+    { id: 'hi', address: 'hi@deskwell.co.uk', isCatchAll: false },
+    { id: 'marcus', address: 'marcus@deskwell.co.uk', isCatchAll: false },
+    { id: 'general', address: 'general@deskwell.co.uk', isCatchAll: true },
+  ]
+
+  it('prefers the delivered-to address over the To line', () => {
+    expect(routeToInbox({
+      deliveredTo: ['marcus@deskwell.co.uk'],
+      to: ['hi@deskwell.co.uk'],
+    }, inboxes)).toEqual({ inboxId: 'marcus', matchedOn: 'delivered-to' })
+  })
+
+  it('falls back to To, then Cc', () => {
+    expect(routeToInbox({ to: ['hi@deskwell.co.uk'] }, inboxes))
+      .toEqual({ inboxId: 'hi', matchedOn: 'to' })
+    expect(routeToInbox({ to: ['someone@else.com'], cc: ['marcus@deskwell.co.uk'] }, inboxes))
+      .toEqual({ inboxId: 'marcus', matchedOn: 'cc' })
+  })
+
+  it('ignores case and display names in the headers', () => {
+    expect(routeToInbox({ deliveredTo: ['"Sales" <HI@Deskwell.CO.UK>'] }, inboxes))
+      .toEqual({ inboxId: 'hi', matchedOn: 'delivered-to' })
+  })
+
+  it('sends anything unmatched to the catch-all', () => {
+    expect(routeToInbox({ to: ['nobody@elsewhere.com'] }, inboxes))
+      .toEqual({ inboxId: 'general', matchedOn: 'catch-all' })
+  })
+
+  it('says so plainly when there is no catch-all to fall back on', () => {
+    expect(routeToInbox({ to: ['nobody@elsewhere.com'] }, inboxes.slice(0, 2)))
+      .toEqual({ inboxId: null, matchedOn: 'none' })
+  })
+})

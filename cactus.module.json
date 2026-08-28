@@ -1,0 +1,59 @@
+{
+  "name": "unified-inbox",
+  "version": "0.1.0",
+  "tablePrefix": "uin_",
+  "description": "Every conversation with every customer and supplier in one place - email, live chat, contact form, calls and texts - with your own records beside them.",
+  "requiresCoreVersion": "0.5.1383",
+  "requiresModules": [],
+  "permissions": [
+    "unifiedinbox.view",
+    "unifiedinbox.reply",
+    "unifiedinbox.manage"
+  ],
+  "navEntries": [],
+  "settingsTabs": [
+    {
+      "id": "unified-inbox",
+      "label": "Unified Inbox",
+      "permission": "unifiedinbox.manage",
+      "import": "./components/admin/SettingsTab",
+      "component": "UnifiedInboxSettingsTab"
+    }
+  ],
+  "extensionPoints": [
+    {
+      "point": "core.inbox-tabs",
+      "id": "unified-inbox",
+      "label": "Unified Inbox",
+      "order": 5,
+      "permission": "unifiedinbox.view",
+      "import": "./components/admin/InboxPanel",
+      "component": "UnifiedInboxPanel"
+    }
+  ],
+  "consumesConversationProviders": true,
+  "requiredEnvVars": [
+    { "name": "ENCRYPTION_KEY", "required": true },
+    { "name": "CRON_SECRET", "required": false }
+  ],
+  "cookieCategories": [],
+  "cronJobs": [
+    { "path": "/api/m/unified-inbox/cron/sync", "schedule": "15 * * * *" }
+  ],
+  "teardown": [
+    "uin_attachments",
+    "uin_messages",
+    "uin_events",
+    "uin_record_links",
+    "uin_processed_messages",
+    "uin_sync_state",
+    "uin_settings",
+    "uin_threads",
+    "uin_inbox_access",
+    "uin_inboxes",
+    "uin_connections",
+    "uin_person_identities",
+    "uin_people",
+    "uin_organisations"
+  ]
+}
