@@ -36,11 +36,13 @@ export type AccountRegistration = {
 
 type BrevoWebhook = { id?: unknown; url?: unknown; type?: unknown }
 
+type BrevoOutcome = { ok: true; body: unknown } | { ok: false; status: number | null; error: string }
+
 async function brevoRequest(
   path: string,
   apiKey: string,
   init?: { method?: string; body?: unknown },
-): Promise<{ ok: true; body: unknown } | { ok: false; error: string }> {
+): Promise<BrevoOutcome> {
   try {
     const res = await fetch(`${BREVO_API}/${path}`, {
       method: init?.method ?? 'GET',
@@ -53,15 +55,30 @@ async function brevoRequest(
     })
     if (!res.ok) {
       const text = await res.text().catch(() => '')
-      if (res.status === 401) return { ok: false, error: 'That email account key was not accepted.' }
-      return { ok: false, error: `The email service refused (${res.status}). ${text.slice(0, 200)}` }
+      if (res.status === 401) return { ok: false, status: res.status, error: 'That email account key was not accepted.' }
+      return { ok: false, status: res.status, error: `The email service refused (${res.status}). ${text.slice(0, 200)}` }
     }
     const body = await res.json().catch(() => ({}))
     return { ok: true, body }
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
-    return { ok: false, error: `The email service could not be reached. ${reason.slice(0, 160)}` }
+    return { ok: false, status: null, error: `The email service could not be reached. ${reason.slice(0, 160)}` }
   }
+}
+
+/**
+ * Whether a failed request means the webhook we were pointing at is simply not
+ * there any more.
+ *
+ * Brevo answers a delete or an update against an id it no longer holds with a
+ * 400 carrying `document_not_found` rather than a 404, so status alone will
+ * not catch it. Worth telling apart from a real failure: for a DELETE it means
+ * we already have what we wanted, and for a PUT it means the row to update is
+ * gone and a fresh one is needed instead - either way it is not something to
+ * show a site owner as a fault.
+ */
+function isGone(outcome: { ok: true; body: unknown } | { ok: false; status: number | null; error: string }): boolean {
+  return !outcome.ok && (outcome.status === 404 || outcome.error.includes('document_not_found'))
 }
 
 /** The webhooks on this account that belong to this site, whatever token they
@@ -124,7 +141,10 @@ export async function reconcileBrevoWebhooks(enabled: boolean): Promise<AccountR
       let failure: string | null = null
       for (const id of existing) {
         const removed = await brevoRequest(`webhooks/${id}`, key.apiKey, { method: 'DELETE' })
-        if (!removed.ok) failure = removed.error
+        // Already gone is the goal state, not a failure - Brevo answers a
+        // second delete of the same id (two settings saves close together,
+        // say) with document_not_found rather than treating it as a no-op.
+        if (!removed.ok && !isGone(removed)) failure = removed.error
       }
       results.push(failure
         ? { label: key.label, ok: false, message: failure }
