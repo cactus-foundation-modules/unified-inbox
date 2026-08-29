@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
-import { canViewInbox } from '@/modules/unified-inbox/lib/access'
+import { canOpenThread } from '@/modules/unified-inbox/lib/access'
 import { deleteLink, getLink, getThreadDetail, recordEvent } from '@/modules/unified-inbox/lib/db'
 
 // Removing a link, which is the half of automatic linking that makes the other
@@ -24,11 +24,7 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
   // what is attached to it either.
   if (link.threadId) {
     const thread = await getThreadDetail(link.threadId)
-    const allowed = thread
-      ? thread.inboxId
-        ? await canViewInbox(user, thread.inboxId)
-        : await hasPermission(user, 'unifiedinbox.manage')
-      : false
+    const allowed = thread ? await canOpenThread(user, thread) : false
     if (!allowed) return errorResponse('Forbidden', 403)
     await recordEvent(link.threadId, user.id, 'unlinked', {
       moduleName: link.moduleName,

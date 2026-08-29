@@ -147,3 +147,19 @@ export async function visibleProviderChannels(user: SessionUser): Promise<Provid
   }
   return channels
 }
+
+/**
+ * The permission one channel's conversations answer to, if it declares one.
+ *
+ * `known: false` means no installed module publishes that channel any more -
+ * its conversations stay readable in the list (E20) but nobody acts on them,
+ * because there is nothing left to ask about who may.
+ */
+export async function providerPermissionFor(
+  moduleName: string,
+): Promise<{ known: boolean; permission: string | null }> {
+  const entries = await providerEntries()
+  const entry = entries.find((e) => e.moduleName === moduleName)
+  if (!entry) return { known: false, permission: null }
+  return { known: true, permission: entry.permission ?? null }
+}

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
-import { canViewInbox } from '@/modules/unified-inbox/lib/access'
+import { canOpenThread } from '@/modules/unified-inbox/lib/access'
 import {
   assignThread,
   getThreadDetail,
@@ -32,10 +32,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   const thread = await getThreadDetail(id)
   if (!thread) return errorResponse('That conversation no longer exists.', 404)
 
-  const allowed = thread.inboxId
-    ? await canViewInbox(user, thread.inboxId)
-    : await hasPermission(user, 'unifiedinbox.manage')
-  if (!allowed) return errorResponse('Forbidden', 403)
+  if (!await canOpenThread(user, thread)) return errorResponse('Forbidden', 403)
 
   const parsed = ThreadPatchBody.safeParse(await request.json().catch(() => null))
   if (!parsed.success) return errorResponse('That change does not look right.', 400)

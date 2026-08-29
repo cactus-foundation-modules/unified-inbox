@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { errorResponse } from '@/lib/utils'
 import { syncAllConnections } from '@/modules/unified-inbox/lib/sync'
-import { CRON_BUDGET_MS, CRON_PEOPLE_DEADLINE_MS } from '@/modules/unified-inbox/lib/sync-plan'
+import { CRON_BUDGET_MS, CRON_PEOPLE_DEADLINE_MS, CRON_TICK_DEADLINE_MS } from '@/modules/unified-inbox/lib/sync-plan'
 import { runPeoplePass } from '@/modules/unified-inbox/lib/identity'
 import { syncAllProviders, PROVIDER_BUDGET_MS } from '@/modules/unified-inbox/lib/provider-sync'
 import { sweepStalledSends } from '@/modules/unified-inbox/lib/retention'
@@ -47,7 +47,9 @@ export async function GET(request: NextRequest) {
   // people pass runs last: their messages are safe where they are and can be
   // copied next tick, while an email nobody fetched may be somewhere else by
   // then.
-  const channels = await syncAllProviders({ deadline: Date.now() + PROVIDER_BUDGET_MS })
+  const channels = await syncAllProviders({
+    deadline: Math.min(Date.now() + PROVIDER_BUDGET_MS, started + CRON_TICK_DEADLINE_MS),
+  })
 
   // Then, with whatever is left of the slice: work out whose conversations the
   // new ones are, and attach the records they mention. Everything above is

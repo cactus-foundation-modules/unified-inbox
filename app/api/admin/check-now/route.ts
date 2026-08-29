@@ -4,7 +4,7 @@ import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { getConnection, listConnections } from '@/modules/unified-inbox/lib/db'
 import { syncAllConnections, syncConnection } from '@/modules/unified-inbox/lib/sync'
-import { MANUAL_BUDGET_MS, MANUAL_PEOPLE_DEADLINE_MS } from '@/modules/unified-inbox/lib/sync-plan'
+import { MANUAL_BUDGET_MS, MANUAL_PEOPLE_DEADLINE_MS, MANUAL_TICK_DEADLINE_MS } from '@/modules/unified-inbox/lib/sync-plan'
 import { runPeoplePass } from '@/modules/unified-inbox/lib/identity'
 import { syncAllProviders, PROVIDER_BUDGET_MS } from '@/modules/unified-inbox/lib/provider-sync'
 
@@ -53,7 +53,9 @@ export async function POST(request: Request) {
   // about one mail account means one mail account.
   const channels = connectionId
     ? []
-    : await syncAllProviders({ deadline: Date.now() + PROVIDER_BUDGET_MS })
+    : await syncAllProviders({
+        deadline: Math.min(Date.now() + PROVIDER_BUDGET_MS, started + MANUAL_TICK_DEADLINE_MS),
+      })
 
   // Same people pass the hourly job runs, with the bigger slice this route has.
   await runPeoplePass({ deadline: started + MANUAL_PEOPLE_DEADLINE_MS })

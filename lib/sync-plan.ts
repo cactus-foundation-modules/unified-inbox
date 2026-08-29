@@ -181,6 +181,26 @@ export const BATCH_SIZE = 15
 export const CRON_PEOPLE_DEADLINE_MS = 22_000
 export const MANUAL_PEOPLE_DEADLINE_MS = 55_000
 
+/**
+ * The point past which the hourly tick must have answered, measured from the
+ * start of the run.
+ *
+ * The dispatcher gives any one job 25 seconds and then aborts it. Each pass in
+ * the tick holds its own budget honestly, but they are held one after another
+ * from whatever the clock says when that pass begins - so a collection that
+ * runs to the edge of its 18 seconds hands the channels a fresh 6 on top, and
+ * the tick can be reaching for the abort just as it finishes. Nothing is lost
+ * when that happens, because every pass commits as it goes, but the run's own
+ * summary never gets written and the settings screen cannot say what happened.
+ * Capping the later passes against this keeps the answer inside the slice.
+ */
+export const CRON_TICK_DEADLINE_MS = 24_000
+
+/** The same cap for a manual check, which runs in a module route with a 60
+ *  second ceiling of its own and has to leave room to answer the person who is
+ *  sitting there watching for it. */
+export const MANUAL_TICK_DEADLINE_MS = 52_000
+
 export function makeDeadline(budgetMs: number, now: number = Date.now()): number {
   return now + budgetMs
 }

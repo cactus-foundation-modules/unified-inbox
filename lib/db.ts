@@ -1768,10 +1768,15 @@ export async function getMessageHtml(id: string): Promise<{
   html: string | null
   text: string | null
   inboxId: string | null
+  // Which channel owns it, when another module does. A message with neither an
+  // inbox nor a channel is an email nobody could place, which is a different
+  // question about who may read it - see threadAccessKind in lib/access.ts.
+  providerModule: string | null
   subject: string | null
 } | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT m."body_html", m."body_text", m."subject", m."inbox_id", t."inbox_id" AS "thread_inbox_id"
+    SELECT m."body_html", m."body_text", m."subject", m."inbox_id",
+           t."inbox_id" AS "thread_inbox_id", t."provider_module"
       FROM "uin_messages" m
       JOIN "uin_threads" t ON t."id" = m."thread_id"
      WHERE m."id" = ${id}
@@ -1784,6 +1789,7 @@ export async function getMessageHtml(id: string): Promise<{
     // An outbound message carries the inbox it was sent from; an inbound one
     // inherits its thread's.
     inboxId: ((r.inbox_id as string | null) ?? (r.thread_inbox_id as string | null)) ?? null,
+    providerModule: (r.provider_module as string | null) ?? null,
     subject: (r.subject as string | null) ?? null,
   }
 }

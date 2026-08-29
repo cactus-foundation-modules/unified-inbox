@@ -8,7 +8,10 @@ import {
   planFolders,
   outOfTime,
   makeDeadline,
+  CRON_BUDGET_MS,
+  CRON_TICK_DEADLINE_MS,
 } from './sync-plan'
+import { PROVIDER_BUDGET_MS } from './provider-sync'
 import type { MailFolder } from './imap'
 
 function folder(path: string, role: MailFolder['role']): MailFolder {
@@ -164,5 +167,26 @@ describe('the clock', () => {
     const deadline = makeDeadline(1_000, 0)
     expect(outOfTime(deadline, 500)).toBe(false)
     expect(outOfTime(deadline, 1_000)).toBe(true)
+  })
+})
+
+// The dispatcher aborts any one job at 25 seconds. Each pass in the tick holds
+// its own budget, but it takes that budget from the clock when it starts - so
+// the numbers only add up if the later ones are capped against the run's own
+// start as well.
+describe('the tick fits inside the slice it is given', () => {
+  it('leaves the channels no room past the abort, however long the mail took', () => {
+    const started = 1_000_000
+    const mailRanLong = started + CRON_BUDGET_MS
+    const deadline = Math.min(mailRanLong + PROVIDER_BUDGET_MS, started + CRON_TICK_DEADLINE_MS)
+    expect(deadline - started).toBeLessThanOrEqual(CRON_TICK_DEADLINE_MS)
+    expect(CRON_TICK_DEADLINE_MS).toBeLessThan(25_000)
+  })
+
+  it('still gives the channels their whole budget when the mail was quick', () => {
+    const started = 1_000_000
+    const mailWasQuick = started + 2_000
+    const deadline = Math.min(mailWasQuick + PROVIDER_BUDGET_MS, started + CRON_TICK_DEADLINE_MS)
+    expect(deadline).toBe(mailWasQuick + PROVIDER_BUDGET_MS)
   })
 })

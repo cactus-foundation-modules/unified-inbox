@@ -3,7 +3,7 @@ import { nanoid } from 'nanoid'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
-import { canViewInbox } from '@/modules/unified-inbox/lib/access'
+import { canOpenThread } from '@/modules/unified-inbox/lib/access'
 import { getMessageHtml } from '@/modules/unified-inbox/lib/db'
 import { buildMessageDocument, messageDocumentCsp } from '@/modules/unified-inbox/lib/message-document'
 import { restoreRemoteImages } from '@/modules/unified-inbox/lib/remote-images'
@@ -31,10 +31,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const message = await getMessageHtml(id)
   if (!message) return errorResponse('That message no longer exists.', 404)
 
-  const allowed = message.inboxId
-    ? await canViewInbox(user, message.inboxId)
-    : await hasPermission(user, 'unifiedinbox.manage')
-  if (!allowed) return errorResponse('Forbidden', 403)
+  if (!await canOpenThread(user, message)) return errorResponse('Forbidden', 403)
 
   const showImages = request.nextUrl.searchParams.get('images') === '1'
   const collapseQuoted = request.nextUrl.searchParams.get('quoted') !== '1'

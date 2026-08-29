@@ -110,3 +110,82 @@ export async function canUserViewInbox(userId: string, inboxId: string): Promise
   const rows = await listInboxAccess(inboxId)
   return decideInboxAccess(rows, userId, perms).view
 }
+
+// ---------------------------------------------------------------------------
+// Conversations that sit in no inbox.
+//
+// A conversation has one of three shapes, and telling them apart is the whole
+// of this section:
+//
+//   filed    - an email in one of the site's inboxes. The guest list decides.
+//   channel  - a chat, an enquiry, a call. It never had an address to be filed
+//              under, so the module that owns it decides, exactly as the rail
+//              and the send route already do.
+//   unfiled  - an email that reached the account and matched no address at all.
+//              "Nobody could place this" is an administrator's problem.
+//
+// Reading `inbox_id IS NULL` as unfiled collapses the middle one into the last,
+// which locks every colleague out of the chats and enquiries they can plainly
+// see on the screen in front of them - the same shape of defect as suppressing
+// a tab from somebody who cannot see its replacement.
+// ---------------------------------------------------------------------------
+
+export type ThreadShape = { inboxId: string | null; providerModule: string | null }
+
+/** Pure half, so the distinction above is a test rather than a memory. */
+export function threadAccessKind(thread: ThreadShape): 'filed' | 'channel' | 'unfiled' {
+  if (thread.providerModule) return 'channel'
+  if (thread.inboxId) return 'filed'
+  return 'unfiled'
+}
+
+/** May this person open, and therefore act on, this conversation? */
+export async function canOpenThread(user: SessionUser, thread: ThreadShape): Promise<boolean> {
+  switch (threadAccessKind(thread)) {
+    case 'channel': {
+      const { visibleProviderModules } = await import('./provider-registry')
+      const allowed = await visibleProviderModules(user)
+      return allowed.includes(thread.providerModule as string)
+    }
+    case 'filed':
+      return await canViewInbox(user, thread.inboxId as string)
+    default:
+      return await hasPermission(user, 'unifiedinbox.manage')
+  }
+}
+
+/** The same question about a colleague who is not the one asking - see
+ *  `canUserViewInbox` for why their own permissions are what decide it. */
+export async function canUserOpenThread(userId: string, thread: ThreadShape): Promise<boolean> {
+  if (threadAccessKind(thread) !== 'channel') {
+    return thread.inboxId ? await canUserViewInbox(userId, thread.inboxId) : false
+  }
+  const { providerPermissionFor } = await import('./provider-registry')
+  const channel = await providerPermissionFor(thread.providerModule as string)
+  // A channel whose module has gone answers to nobody (E20).
+  if (!channel.known) return false
+  const keys = ['unifiedinbox.view', 'unifiedinbox.manage']
+  if (channel.permission) keys.push(channel.permission)
+  const held = await permissionsForUserId(userId, keys)
+  if (!held) return false
+  if (held.has('unifiedinbox.manage')) return true
+  if (!held.has('unifiedinbox.view')) return false
+  return !channel.permission || held.has(channel.permission)
+}
+
+/** The permission keys a colleague actually holds, out of the ones asked for.
+ *  Null means there is no such person to ask about. A protected role holds
+ *  everything, which is how the rest of the site reads one. */
+async function permissionsForUserId(userId: string, keys: string[]): Promise<Set<string> | null> {
+  const person = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, roleId: true, suspendedAt: true, role: { select: { isProtected: true } } },
+  })
+  if (!person || person.suspendedAt) return null
+  if (person.role.isProtected) return new Set(keys)
+  const granted = await prisma.rolePermission.findMany({
+    where: { roleId: person.roleId, permissionKey: { in: keys } },
+    select: { permissionKey: true },
+  })
+  return new Set(granted.map((g) => g.permissionKey))
+}

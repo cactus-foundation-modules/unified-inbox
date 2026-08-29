@@ -4,7 +4,7 @@ import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { prisma } from '@/lib/db/prisma'
 import { upsertAlert } from '@/lib/notifications/alerts'
-import { canUserViewInbox, canViewInbox } from '@/modules/unified-inbox/lib/access'
+import { canOpenThread, canUserOpenThread } from '@/modules/unified-inbox/lib/access'
 import { getThreadDetail, insertNote, recordEvent } from '@/modules/unified-inbox/lib/db'
 import { NoteBody } from '@/modules/unified-inbox/lib/validation'
 import { noteHtml } from '@/modules/unified-inbox/lib/notes'
@@ -32,10 +32,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const thread = await getThreadDetail(id)
   if (!thread) return errorResponse('That conversation no longer exists.', 404)
 
-  const allowed = thread.inboxId
-    ? await canViewInbox(user, thread.inboxId)
-    : await hasPermission(user, 'unifiedinbox.manage')
-  if (!allowed) return errorResponse('Forbidden', 403)
+  if (!await canOpenThread(user, thread)) return errorResponse('Forbidden', 403)
 
   const parsed = NoteBody.safeParse(await request.json().catch(() => null))
   if (!parsed.success) return errorResponse('That note does not look right.', 400)
@@ -59,9 +56,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       select: { id: true, displayName: true, username: true },
     })
     for (const person of named) {
-      const readable = thread.inboxId
-        ? await canUserViewInbox(person.id, thread.inboxId)
-        : false
+      const readable = await canUserOpenThread(person.id, thread)
       if (!readable) continue
       await recordEvent(id, user.id, 'mentioned', { userId: person.id })
       await upsertAlert({

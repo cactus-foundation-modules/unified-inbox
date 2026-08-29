@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
-import { canViewInbox } from '@/modules/unified-inbox/lib/access'
+import { canOpenThread } from '@/modules/unified-inbox/lib/access'
 import { getThreadDetail, recordEvent, recordLink, threadHasLink } from '@/modules/unified-inbox/lib/db'
 import { confirmReference } from '@/modules/unified-inbox/lib/adapters'
 import type { LinkKind } from '@/modules/unified-inbox/lib/linking'
@@ -29,10 +29,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const { id } = await params
   const thread = await getThreadDetail(id)
   if (!thread) return errorResponse('That conversation is no longer here.', 404)
-  const allowed = thread.inboxId
-    ? await canViewInbox(user, thread.inboxId)
-    : await hasPermission(user, 'unifiedinbox.manage')
-  if (!allowed) return errorResponse('Forbidden', 403)
+  if (!await canOpenThread(user, thread)) return errorResponse('Forbidden', 403)
 
   const parsed = Body.safeParse(await request.json().catch(() => null))
   if (!parsed.success) return errorResponse('Type the reference you want to attach.')

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
-import { canViewInbox } from '@/modules/unified-inbox/lib/access'
+import { canOpenThread } from '@/modules/unified-inbox/lib/access'
 import { getMessageHtml } from '@/modules/unified-inbox/lib/db'
 import { fetchRemoteImage, remoteImageUrls } from '@/modules/unified-inbox/lib/remote-images'
 
@@ -32,10 +32,7 @@ export async function GET(
   const message = await getMessageHtml(id)
   if (!message) return errorResponse('That message no longer exists.', 404)
 
-  const allowed = message.inboxId
-    ? await canViewInbox(user, message.inboxId)
-    : await hasPermission(user, 'unifiedinbox.manage')
-  if (!allowed) return errorResponse('Forbidden', 403)
+  if (!await canOpenThread(user, message)) return errorResponse('Forbidden', 403)
 
   const urls = remoteImageUrls(message.html)
   const position = Number.parseInt(index, 10)

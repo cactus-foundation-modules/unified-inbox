@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { decideInboxAccess } from './access'
+import { decideInboxAccess, threadAccessKind } from './access'
 
 // The rule these cover is D16, and getting it backwards is a privacy defect
 // rather than a bug: an inbox with a guest list must be closed to everybody not
@@ -41,5 +41,24 @@ describe('decideInboxAccess', () => {
   it('lets whoever edits the guest lists past them', () => {
     expect(decideInboxAccess([{ userId: 'u2', canReply: true }], 'u1', MANAGER))
       .toEqual({ view: true, reply: true })
+  })
+})
+
+// A conversation that arrived through another module's channel has no address,
+// so it has no inbox - and reading that as "nobody could place this" is what
+// locks a colleague out of the chats and enquiries on their own screen. These
+// three cases are the whole distinction.
+describe('threadAccessKind', () => {
+  it('sends a channel conversation to the module that owns it, inbox or not', () => {
+    expect(threadAccessKind({ inboxId: null, providerModule: 'live-chat' })).toBe('channel')
+    expect(threadAccessKind({ inboxId: 'in1', providerModule: 'contact-form' })).toBe('channel')
+  })
+
+  it('sends a filed email to its inbox guest list', () => {
+    expect(threadAccessKind({ inboxId: 'in1', providerModule: null })).toBe('filed')
+  })
+
+  it('leaves only genuinely unplaceable email to an administrator', () => {
+    expect(threadAccessKind({ inboxId: null, providerModule: null })).toBe('unfiled')
   })
 })
