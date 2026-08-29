@@ -23,6 +23,7 @@ const db = vi.hoisted(() => ({
   reopenForRetry: vi.fn(),
   getMessage: vi.fn(),
   listAttachmentsForMessage: vi.fn(),
+  getSettings: vi.fn(),
 }))
 
 const transport = vi.hoisted(() => ({
@@ -74,7 +75,10 @@ const INBOX = {
   smtpUsername: null,
   hasSmtpPassword: false,
   fromName: 'Deskwell',
+  signatureKind: 'html' as const,
+  signature: null,
   signatureHtml: '<p>Deskwell</p>',
+  signaturePuck: null,
   appendToSent: true,
   colour: null,
   sortOrder: 0,
@@ -111,6 +115,9 @@ function baseRequest(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Delivery receipts off, which is how every site starts and what every test
+  // below assumes unless it says otherwise.
+  db.getSettings.mockResolvedValue({ trackOpens: false, requestReadReceipts: false })
   db.getThread.mockResolvedValue({
     id: 'thread-1',
     inboxId: 'inbox-1',
@@ -224,6 +231,33 @@ describe('sendMessage - headers (E11, and what S5/S7 depend on)', () => {
     await sendMessage(baseRequest())
     const sent = transport.deliver.mock.calls[0]![0].headers as Record<string, string>
     expect(Object.keys(sent).sort()).toEqual(['In-Reply-To', 'Message-ID', 'References'])
+  })
+
+  it('carries the tracking tag and the receipt request when the site asks for them', async () => {
+    db.getSettings.mockResolvedValue({ trackOpens: true, requestReadReceipts: true })
+    await sendMessage(baseRequest())
+
+    const row = db.insertOutboundMessage.mock.results[0]!.value as Promise<{ row: { id: string } }>
+    const { row: written } = await row
+    const sent = transport.deliver.mock.calls[0]![0].headers as Record<string, string>
+
+    // The tag is the message's own row id, which is what lets an event arriving
+    // three days later find the reply it belongs to.
+    expect(sent['X-Mailin-custom']).toBe(JSON.stringify({ uin: written.id }))
+    expect(sent['Disposition-Notification-To']).toBe('<hi@deskwell.co.uk>')
+  })
+
+  it('leaves the tracking tag off an inbox sending through its own mail server', async () => {
+    db.getSettings.mockResolvedValue({ trackOpens: true, requestReadReceipts: true })
+    db.getInbox.mockResolvedValue({ ...INBOX, sendTransport: 'smtp', smtpHost: 'mail.example.com' })
+    await sendMessage(baseRequest())
+
+    const sent = transport.deliver.mock.calls[0]![0].headers as Record<string, string>
+    // Brevo is the only thing that hands the tag back, so on anything else it
+    // would be a meaningless header travelling to a stranger. The read receipt
+    // works on any transport and stays.
+    expect(sent['X-Mailin-custom']).toBeUndefined()
+    expect(sent['Disposition-Notification-To']).toBe('<hi@deskwell.co.uk>')
   })
 
   it('the copy filed in Sent carries the SAME Message-ID, which is what stops the loop', async () => {

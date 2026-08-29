@@ -185,7 +185,7 @@ describe('assembleBody', () => {
   it('puts what was typed first, then the signature, then the quote', () => {
     const out = assembleBody({
       bodyHtml: '<p>Yes, in blue.</p>',
-      signatureHtml: '<p>Marcus</p>',
+      signature: { html: '<p>Marcus</p>', text: 'Marcus' },
       quoted: { html: '<blockquote>old</blockquote>', text: '\n\n> old' },
     })
     expect(out.html.indexOf('Yes, in blue.')).toBeLessThan(out.html.indexOf('Marcus'))
@@ -194,8 +194,19 @@ describe('assembleBody', () => {
     expect(out.text).toContain('> old')
   })
 
+  it('takes the plain text half from the signature rather than flattening it again', () => {
+    const out = assembleBody({
+      bodyHtml: '<p>Yes.</p>',
+      // What a rich text signature renders to: the markdown flattens more
+      // kindly than its own HTML does.
+      signature: { html: '<p>Kind regards,<br>Marcus</p>', text: 'Kind regards,\nMarcus' },
+      quoted: null,
+    })
+    expect(out.text).toContain('Kind regards,\nMarcus')
+  })
+
   it('copes with no signature and no quote', () => {
-    const out = assembleBody({ bodyHtml: '<p>Hello</p>', signatureHtml: null, quoted: null })
+    const out = assembleBody({ bodyHtml: '<p>Hello</p>', signature: null, quoted: null })
     expect(out.html).toBe('<p>Hello</p>')
     expect(out.text).toBe('Hello')
   })
@@ -203,7 +214,7 @@ describe('assembleBody', () => {
   it('sanitises what the composer sends, because a composer is still an input', () => {
     const out = assembleBody({
       bodyHtml: '<p>Hi</p><script>alert(1)</script>',
-      signatureHtml: null,
+      signature: null,
       quoted: null,
     })
     expect(out.html).not.toContain('<script')

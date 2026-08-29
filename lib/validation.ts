@@ -17,7 +17,12 @@ export const InboxBody = z.object({
   smtpUsername: z.string().max(255).nullable().optional(),
   smtpPassword: z.string().nullable().optional(),
   fromName: z.string().max(120).nullable().optional(),
-  signatureHtml: z.string().max(20000).nullable().optional(),
+  // All three signature kinds are sent on every save, not only the active one:
+  // switching kind in the editor must not throw the other two away.
+  signatureKind: z.enum(['markdown', 'html', 'puck']).optional(),
+  signature: z.string().max(5000).nullable().optional(),
+  signatureHtml: z.string().max(50000).nullable().optional(),
+  signaturePuck: z.unknown().nullable().optional(),
   appendToSent: z.boolean().optional(),
   colour: z.string().max(32).nullable().optional(),
   sortOrder: z.number().int().min(0).max(9999).optional(),

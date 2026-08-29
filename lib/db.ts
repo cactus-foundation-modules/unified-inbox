@@ -1,8 +1,10 @@
+import { randomBytes } from 'node:crypto'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db/prisma'
-import { encryptSecret } from '@/lib/crypto/secrets'
+import { encryptSecret, tryDecryptSecret } from '@/lib/crypto/secrets'
 import { normaliseAddress } from './addresses'
 import { remoteImageUrls } from './remote-images'
+import { isSignatureKind } from './types'
 import type {
   AttachmentFetchMode,
   Connection,
@@ -14,6 +16,7 @@ import type {
   PersonIdentity,
   RecordLink,
   SendTransport,
+  SignatureKind,
   SyncStatus,
   UnifiedInboxSettings,
 } from './types'
@@ -30,6 +33,15 @@ import type {
 // engine (S3) writes those, and guessing its shape now would only mean writing
 // it twice.
 // ---------------------------------------------------------------------------
+
+/** A JSONB value for a raw query, or a real NULL. Kept apart because "no
+ * signature was ever built" and "a signature made of the JSON literal null"
+ * are different rows, and only the first one is what an empty editor means. */
+function jsonOrNull(value: unknown): Prisma.Sql {
+  return value === null || value === undefined
+    ? Prisma.sql`NULL`
+    : Prisma.sql`${JSON.stringify(value)}::jsonb`
+}
 
 function optionalSecret(value: string | null | undefined): string | null | undefined {
   // undefined = "leave whatever is there alone", '' = "clear it", anything
@@ -183,7 +195,10 @@ function mapInbox(r: Record<string, unknown>): Inbox {
     smtpUsername: (r.smtp_username as string | null) ?? null,
     hasSmtpPassword: !!r.smtp_password_encrypted,
     fromName: (r.from_name as string | null) ?? null,
+    signatureKind: isSignatureKind(r.signature_kind) ? r.signature_kind : 'markdown',
+    signature: (r.signature as string | null) ?? null,
     signatureHtml: (r.signature_html as string | null) ?? null,
+    signaturePuck: r.signature_puck ?? null,
     appendToSent: !!r.append_to_sent,
     colour: (r.colour as string | null) ?? null,
     sortOrder: Number(r.sort_order ?? 0),
@@ -220,7 +235,10 @@ export type InboxInput = {
   smtpUsername?: string | null
   smtpPassword?: string | null
   fromName?: string | null
+  signatureKind?: SignatureKind
+  signature?: string | null
   signatureHtml?: string | null
+  signaturePuck?: unknown
   appendToSent?: boolean
   colour?: string | null
   sortOrder?: number
@@ -231,13 +249,15 @@ export async function createInbox(data: InboxInput): Promise<Inbox> {
     INSERT INTO "uin_inboxes"
       ("name", "address", "connection_id", "imap_folder", "sent_folder", "is_catch_all",
        "send_transport", "brevo_api_key_encrypted", "smtp_host", "smtp_port", "smtp_username",
-       "smtp_password_encrypted", "from_name", "signature_html", "append_to_sent", "colour", "sort_order")
+       "smtp_password_encrypted", "from_name", "signature_kind", "signature", "signature_html",
+       "signature_puck", "append_to_sent", "colour", "sort_order")
     VALUES (${data.name}, ${normaliseAddress(data.address)}, ${data.connectionId ?? null},
             ${data.imapFolder ?? 'INBOX'}, ${data.sentFolder ?? null}, ${data.isCatchAll ?? false},
             ${data.sendTransport ?? 'brevo'}, ${optionalSecret(data.brevoApiKey) ?? null},
             ${data.smtpHost ?? null}, ${data.smtpPort ?? null}, ${data.smtpUsername ?? null},
             ${optionalSecret(data.smtpPassword) ?? null}, ${data.fromName ?? null},
-            ${data.signatureHtml ?? null}, ${data.appendToSent ?? false}, ${data.colour ?? null},
+            ${data.signatureKind ?? 'markdown'}, ${data.signature ?? null}, ${data.signatureHtml ?? null},
+            ${jsonOrNull(data.signaturePuck)}, ${data.appendToSent ?? false}, ${data.colour ?? null},
             ${data.sortOrder ?? 0})
     RETURNING *
   `
@@ -257,7 +277,10 @@ export async function updateInbox(id: string, data: Partial<InboxInput>): Promis
   if (data.smtpPort !== undefined) sets.push(Prisma.sql`"smtp_port" = ${data.smtpPort}`)
   if (data.smtpUsername !== undefined) sets.push(Prisma.sql`"smtp_username" = ${data.smtpUsername}`)
   if (data.fromName !== undefined) sets.push(Prisma.sql`"from_name" = ${data.fromName}`)
+  if (data.signatureKind !== undefined) sets.push(Prisma.sql`"signature_kind" = ${data.signatureKind}`)
+  if (data.signature !== undefined) sets.push(Prisma.sql`"signature" = ${data.signature}`)
   if (data.signatureHtml !== undefined) sets.push(Prisma.sql`"signature_html" = ${data.signatureHtml}`)
+  if (data.signaturePuck !== undefined) sets.push(Prisma.sql`"signature_puck" = ${jsonOrNull(data.signaturePuck)}`)
   if (data.appendToSent !== undefined) sets.push(Prisma.sql`"append_to_sent" = ${data.appendToSent}`)
   if (data.colour !== undefined) sets.push(Prisma.sql`"colour" = ${data.colour}`)
   if (data.sortOrder !== undefined) sets.push(Prisma.sql`"sort_order" = ${data.sortOrder}`)
@@ -379,6 +402,8 @@ const DEFAULT_SETTINGS: UnifiedInboxSettings = {
   orderNumberPattern: null,
   poNumberPattern: null,
   quoteNumberPattern: null,
+  trackOpens: false,
+  requestReadReceipts: false,
 }
 
 export async function getSettings(): Promise<UnifiedInboxSettings> {
@@ -410,6 +435,11 @@ export async function getSettings(): Promise<UnifiedInboxSettings> {
     orderNumberPattern: (r.order_number_pattern as string | null) ?? null,
     poNumberPattern: (r.po_number_pattern as string | null) ?? null,
     quoteNumberPattern: (r.quote_number_pattern as string | null) ?? null,
+    // Both default to off for a row written before these columns existed, which
+    // is the same answer a fresh install gets. Nobody is opted into being
+    // tracked by a restore.
+    trackOpens: !!r.track_opens,
+    requestReadReceipts: !!r.request_read_receipts,
   }
 }
 
@@ -429,6 +459,8 @@ export async function updateSettings(data: Partial<UnifiedInboxSettings>): Promi
   if (data.orderNumberPattern !== undefined) sets.push(Prisma.sql`"order_number_pattern" = ${data.orderNumberPattern}`)
   if (data.poNumberPattern !== undefined) sets.push(Prisma.sql`"po_number_pattern" = ${data.poNumberPattern}`)
   if (data.quoteNumberPattern !== undefined) sets.push(Prisma.sql`"quote_number_pattern" = ${data.quoteNumberPattern}`)
+  if (data.trackOpens !== undefined) sets.push(Prisma.sql`"track_opens" = ${data.trackOpens}`)
+  if (data.requestReadReceipts !== undefined) sets.push(Prisma.sql`"request_read_receipts" = ${data.requestReadReceipts}`)
   if (sets.length === 0) return getSettings()
 
   await prisma.$executeRaw`
@@ -1717,6 +1749,18 @@ export type ThreadMessageRow = {
   deliveryStatus: string | null
   deliveryError: string | null
   appendStatus: string | null
+  /** What became of it after it left, when the site is watching for that. All
+   *  null on every message a site with receipts switched off ever sends. */
+  deliveredAt: Date | null
+  openedAt: Date | null
+  lastOpenAt: Date | null
+  openCount: number
+  /** 'human' | 'proxy' | 'receipt'. A proxy open is the recipient's mail app
+   *  fetching the picture, not the recipient. */
+  openSource: string | null
+  bouncedAt: Date | null
+  bounceKind: string | null
+  bounceDetail: string | null
   authorUserId: string | null
   source: string
 }
@@ -1744,6 +1788,14 @@ function mapThreadMessage(r: Record<string, unknown>): ThreadMessageRow {
     deliveryStatus: (r.delivery_status as string | null) ?? null,
     deliveryError: (r.delivery_error as string | null) ?? null,
     appendStatus: (r.append_status as string | null) ?? null,
+    deliveredAt: (r.delivered_at as Date | null) ?? null,
+    openedAt: (r.opened_at as Date | null) ?? null,
+    lastOpenAt: (r.last_open_at as Date | null) ?? null,
+    openCount: Number(r.open_count ?? 0),
+    openSource: (r.open_source as string | null) ?? null,
+    bouncedAt: (r.bounced_at as Date | null) ?? null,
+    bounceKind: (r.bounce_kind as string | null) ?? null,
+    bounceDetail: (r.bounce_detail as string | null) ?? null,
     authorUserId: (r.author_user_id as string | null) ?? null,
     source: r.source as string,
   }
@@ -3269,4 +3321,210 @@ export async function exportThreadsForPerson(personId: string): Promise<Array<{
     messageCount: Number(r.message_count ?? 0),
     inboxName: (r.inbox_name as string | null) ?? null,
   }))
+}
+
+// ---------------------------------------------------------------------------
+// Delivery receipts (S11)
+//
+// What became of a reply after it left, written by two things that both talk to
+// the outside world and neither of which is trusted with more than it needs:
+// the webhook route the mail service pushes events at, and the sync engine when
+// a read receipt arrives back as an email.
+//
+// Every write here is idempotent. The mail service redelivers anything it did
+// not get a prompt answer to, and a redelivered open is not a second open - so
+// the occurrence lands on the unique index, changes nothing, and the counters
+// only move when a row was genuinely new.
+// ---------------------------------------------------------------------------
+
+/** One thing that happened to a sent message. `receipt_unread` is a read
+ *  receipt saying the message was deleted without being opened, which is worth
+ *  recording and is emphatically not an open. */
+export type DeliveryUpdate = {
+  kind: 'delivered' | 'opened' | 'proxy_open' | 'bounced' | 'receipt' | 'receipt_unread'
+  occurredAt: Date
+  detail: string | null
+  bounceKind: string | null
+  source: 'brevo' | 'receipt'
+}
+
+/**
+ * Files one delivery event against one of our sent messages.
+ *
+ * Returns false when there was nothing to file: a message that no longer exists
+ * because the retention sweep has been through, one that was never ours, or an
+ * occurrence already recorded. None of those is an error - two of them are the
+ * system working - so the caller answers the sender cheerfully either way and
+ * nothing gets retried for ever.
+ */
+export async function recordDeliveryEvent(
+  messageId: string,
+  update: DeliveryUpdate,
+): Promise<boolean> {
+  const owned = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "uin_messages"
+     WHERE "id" = ${messageId} AND "direction" = 'out'
+     LIMIT 1
+  `
+  if (!owned[0]) return false
+
+  const inserted = await prisma.$queryRaw<{ id: string }[]>`
+    INSERT INTO "uin_delivery_events" ("message_id", "kind", "source", "detail", "occurred_at")
+    VALUES (${messageId}, ${update.kind}, ${update.source}, ${update.detail}, ${update.occurredAt})
+    ON CONFLICT ("message_id", "kind", "occurred_at") DO NOTHING
+    RETURNING "id"
+  `
+  // Already had it. The counters must not move, which is the entire reason the
+  // insert happens before the update rather than beside it.
+  if (!inserted[0]) return false
+
+  await applyDeliveryEvent(messageId, update)
+  return true
+}
+
+/** The summary columns on the message, brought up to date by one new event. */
+async function applyDeliveryEvent(messageId: string, update: DeliveryUpdate): Promise<void> {
+  if (update.kind === 'delivered') {
+    // A soft bounce or a deferral that was followed by a delivery was the mail
+    // service retrying and getting there. Leaving the failure showing would
+    // have somebody chasing a message that arrived.
+    await prisma.$executeRaw`
+      UPDATE "uin_messages"
+         SET "delivered_at" = COALESCE("delivered_at", ${update.occurredAt}),
+             "bounced_at"    = CASE WHEN "bounce_kind" IN ('soft', 'deferred') THEN NULL ELSE "bounced_at" END,
+             "bounce_kind"   = CASE WHEN "bounce_kind" IN ('soft', 'deferred') THEN NULL ELSE "bounce_kind" END,
+             "bounce_detail" = CASE WHEN "bounce_kind" IN ('soft', 'deferred') THEN NULL ELSE "bounce_detail" END
+       WHERE "id" = ${messageId}
+    `
+    return
+  }
+
+  if (update.kind === 'opened' || update.kind === 'receipt') {
+    // A receipt beats a pixel: somebody's mail program was asked and answered.
+    const strength = update.kind === 'receipt' ? 'receipt' : 'human'
+    await prisma.$executeRaw`
+      UPDATE "uin_messages"
+         SET "opened_at"    = COALESCE("opened_at", ${update.occurredAt}),
+             "last_open_at" = GREATEST(COALESCE("last_open_at", ${update.occurredAt}), ${update.occurredAt}),
+             "open_count"   = "open_count" + 1,
+             "open_source"  = CASE
+                                WHEN "open_source" = 'receipt' THEN "open_source"
+                                ELSE ${strength}
+                              END,
+             "delivered_at" = COALESCE("delivered_at", ${update.occurredAt})
+       WHERE "id" = ${messageId}
+    `
+    return
+  }
+
+  if (update.kind === 'proxy_open') {
+    // Deliberately does NOT set opened_at or move the counter. A mail app
+    // fetched the picture; that is all anybody knows, and the screen says so in
+    // those words rather than claiming somebody read it.
+    await prisma.$executeRaw`
+      UPDATE "uin_messages"
+         SET "last_open_at" = GREATEST(COALESCE("last_open_at", ${update.occurredAt}), ${update.occurredAt}),
+             "open_source"  = COALESCE("open_source", 'proxy'),
+             "delivered_at" = COALESCE("delivered_at", ${update.occurredAt})
+       WHERE "id" = ${messageId}
+    `
+    return
+  }
+
+  if (update.kind === 'bounced') {
+    await prisma.$executeRaw`
+      UPDATE "uin_messages"
+         SET "bounced_at"    = ${update.occurredAt},
+             "bounce_kind"   = ${update.bounceKind},
+             "bounce_detail" = ${update.detail === null ? null : update.detail.slice(0, 2000)}
+       WHERE "id" = ${messageId}
+    `
+    return
+  }
+
+  // receipt_unread. The event row is the whole point of it - nothing on the
+  // message changes, because nothing about the message did.
+}
+
+/** Every event on one sent message, newest first. For the screen that wants to
+ *  show the working rather than the conclusion. */
+export async function listDeliveryEvents(messageId: string): Promise<
+  Array<{ kind: string; source: string; detail: string | null; occurredAt: Date }>
+> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "kind", "source", "detail", "occurred_at"
+      FROM "uin_delivery_events"
+     WHERE "message_id" = ${messageId}
+     ORDER BY "occurred_at" DESC
+  `
+  return rows.map((r) => ({
+    kind: r.kind as string,
+    source: r.source as string,
+    detail: (r.detail as string | null) ?? null,
+    occurredAt: r.occurred_at as Date,
+  }))
+}
+
+/**
+ * The token on the end of the webhook address, minted the first time it is
+ * wanted and kept afterwards.
+ *
+ * Kept rather than regenerated because switching tracking off and on again
+ * would otherwise leave a webhook registered at the mail service pointing at an
+ * address that now rejects everything, and the only symptom would be silence.
+ */
+export async function ensureBrevoWebhookSecret(): Promise<string> {
+  const existing = await getBrevoWebhookSecret()
+  if (existing) return existing
+  const secret = randomBytes(24).toString('hex')
+  await prisma.$executeRaw`
+    INSERT INTO "uin_settings" ("id") VALUES ('singleton') ON CONFLICT ("id") DO NOTHING
+  `
+  await prisma.$executeRaw`
+    UPDATE "uin_settings"
+       SET "brevo_webhook_secret" = ${secret}, "updated_at" = now()
+     WHERE "id" = 'singleton' AND "brevo_webhook_secret" IS NULL
+  `
+  return (await getBrevoWebhookSecret()) ?? secret
+}
+
+export async function getBrevoWebhookSecret(): Promise<string | null> {
+  const rows = await prisma.$queryRaw<{ brevo_webhook_secret: string | null }[]>`
+    SELECT "brevo_webhook_secret" FROM "uin_settings" WHERE "id" = 'singleton'
+  `
+  return rows[0]?.brevo_webhook_secret ?? null
+}
+
+/** Every Brevo key this site sends through: the site's own, plus whatever an
+ *  inbox has been given of its own. Decrypted here because registering a
+ *  webhook is the one other thing a sending key is for, and thrown away by the
+ *  caller as soon as the registration is done. */
+export async function brevoSendingKeys(): Promise<Array<{ label: string; apiKey: string }>> {
+  const keys: Array<{ label: string; apiKey: string }> = []
+  const siteKey = process.env.BREVO_API_KEY
+  if (siteKey) keys.push({ label: 'This site', apiKey: siteKey })
+
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "name", "address", "brevo_api_key_encrypted"
+      FROM "uin_inboxes"
+     WHERE "brevo_api_key_encrypted" IS NOT NULL AND "send_transport" = 'brevo'
+     ORDER BY "sort_order" ASC
+  `
+  for (const row of rows) {
+    const stored = row.brevo_api_key_encrypted as string | null
+    if (!stored) continue
+    const apiKey = tryDecryptSecret(stored)
+    if (!apiKey) continue
+    keys.push({ label: (row.name as string) || (row.address as string), apiKey })
+  }
+
+  // The same key set up twice - once for the site and once on an inbox - is one
+  // account, and registering the same webhook on it twice would deliver every
+  // event two or three times.
+  const seen = new Set<string>()
+  return keys.filter((entry) => {
+    if (seen.has(entry.apiKey)) return false
+    seen.add(entry.apiKey)
+    return true
+  })
 }

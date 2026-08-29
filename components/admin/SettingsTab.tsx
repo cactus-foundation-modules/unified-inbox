@@ -1,7 +1,22 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import dynamic from 'next/dynamic'
+import type { Data } from '@puckeditor/core'
+import MarkdownEditor from './MarkdownEditor'
 import { WebhooksSection } from './WebhooksSection'
+
+// Puck and its stylesheet are a large import for a screen most people open to
+// change a folder name, so the signature builder only arrives if they ask for
+// it.
+const SignaturePuckEditor = dynamic(() => import('./SignaturePuckEditor'), {
+  ssr: false,
+  loading: () => (
+    <div style={{ height: 560, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-muted)' }}>
+      Loading the builder…
+    </div>
+  ),
+})
 
 // Settings for the Unified Inbox: the mail accounts it reads, the addresses
 // people write to, who may read which of them, and how far back to go.
@@ -44,11 +59,28 @@ type Inbox = {
   smtpUsername: string | null
   hasSmtpPassword: boolean
   fromName: string | null
+  signatureKind: SignatureKind
+  signature: string | null
   signatureHtml: string | null
+  signaturePuck: unknown
   appendToSent: boolean
   colour: string | null
   sortOrder: number
 }
+
+type SignatureKind = 'markdown' | 'html' | 'puck'
+
+const SIGNATURE_KIND_OPTIONS: Array<{ value: SignatureKind; label: string; hint: string }> = [
+  { value: 'markdown', label: 'Rich text', hint: 'Type it. Bold, links, lists - nothing to think about.' },
+  { value: 'html', label: 'HTML', hint: 'Paste the signature your organisation already uses.' },
+  { value: 'puck', label: 'Page builder', hint: 'Build it out of blocks, the way you build a page.' },
+]
+
+const SIGNATURE_MERGE_TAGS: Array<{ tag: string; label: string }> = [
+  { tag: '{{FROM_NAME}}', label: 'the name replies go out under' },
+  { tag: '{{INBOX_NAME}}', label: 'what this inbox is called' },
+  { tag: '{{EMAIL}}', label: 'this inbox\u2019s address' },
+]
 
 type AccessRow = { inboxId: string; userId: string; canReply: boolean }
 
@@ -65,6 +97,8 @@ type Settings = {
   orderNumberPattern: string | null
   poNumberPattern: string | null
   quoteNumberPattern: string | null
+  trackOpens: boolean
+  requestReadReceipts: boolean
 }
 
 type StaffMember = { id: string; name: string; email: string }
@@ -131,7 +165,10 @@ function blankInbox() {
     smtpUsername: '',
     smtpPassword: '',
     fromName: '',
+    signatureKind: 'markdown' as SignatureKind,
+    signature: '',
     signatureHtml: '',
+    signaturePuck: null as unknown,
     appendToSent: false,
     sortOrder: 0,
   }
@@ -230,6 +267,12 @@ export function UnifiedInboxSettingsTab() {
         settings={data.settings}
         inboxes={data.inboxes}
         retention={data.retention ?? null}
+        busy={busy}
+        call={call}
+      />
+
+      <DeliveryReceiptsSection
+        settings={data.settings}
         busy={busy}
         call={call}
       />
@@ -532,7 +575,10 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
       smtpUsername: inbox.smtpUsername ?? '',
       smtpPassword: '',
       fromName: inbox.fromName ?? '',
+      signatureKind: inbox.signatureKind ?? 'markdown',
+      signature: inbox.signature ?? '',
       signatureHtml: inbox.signatureHtml ?? '',
+      signaturePuck: inbox.signaturePuck ?? null,
       appendToSent: inbox.appendToSent,
       sortOrder: inbox.sortOrder,
     })
@@ -553,7 +599,12 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
       smtpPort: draft.smtpPort ? Number(draft.smtpPort) : null,
       smtpUsername: draft.smtpUsername || null,
       fromName: draft.fromName || null,
+      // All three kinds go up on every save, not only the one showing: somebody
+      // trying the builder out must not lose the signature they typed first.
+      signatureKind: draft.signatureKind,
+      signature: draft.signature || null,
       signatureHtml: draft.signatureHtml || null,
+      signaturePuck: draft.signaturePuck ?? null,
       appendToSent: draft.appendToSent,
       sortOrder: Number(draft.sortOrder) || 0,
       ...(draft.brevoApiKey ? { brevoApiKey: draft.brevoApiKey } : {}),
@@ -715,10 +766,7 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
               </div>
             </>
           )}
-          <div className="field">
-            <label>Signature <span style={{ ...MUTED, fontWeight: 400 }}>(optional)</span></label>
-            <textarea rows={3} value={draft.signatureHtml} onChange={(e) => setDraft({ ...draft, signatureHtml: e.target.value })} />
-          </div>
+          <SignatureEditor draft={draft} setDraft={setDraft} />
 
           <div className="field">
             <label>Who can read this inbox</label>
@@ -758,6 +806,158 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
 }
 
 // ---------------------------------------------------------------------------
+// An inbox's signature
+// ---------------------------------------------------------------------------
+
+/** One signature per inbox, written whichever way suits the person writing it:
+ *  typed as rich text, pasted as the markup the organisation already uses, or
+ *  built out of the same blocks the site's emails are built from. All three are
+ *  kept, so switching between them loses nothing.
+ *
+ *  The preview is rendered on the server on purpose - the block-built kind
+ *  resolves the site's colours and fonts there, and a preview drawn any other
+ *  way is a preview that can disagree with the email that goes out. */
+function SignatureEditor({ draft, setDraft }: {
+  draft: InboxDraft
+  setDraft: React.Dispatch<React.SetStateAction<InboxDraft>>
+}) {
+  const [preview, setPreview] = useState<string | null>(null)
+  const [previewShown, setPreviewShown] = useState(false)
+  const [previewBusy, setPreviewBusy] = useState(false)
+
+  const handlePuckChange = useCallback(
+    (data: Data) => setDraft((d) => ({ ...d, signaturePuck: data })),
+    [setDraft],
+  )
+
+  async function refreshPreview() {
+    setPreviewBusy(true)
+    try {
+      const res = await fetch(`${API}/signature-preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: draft.signatureKind,
+          signature: draft.signature || null,
+          signatureHtml: draft.signatureHtml || null,
+          signaturePuck: draft.signaturePuck ?? null,
+          name: draft.name,
+          address: draft.address,
+          fromName: draft.fromName || null,
+        }),
+      })
+      const body = res.ok ? (await res.json()) as { html: string | null } : { html: null }
+      setPreview(body.html)
+    } catch {
+      setPreview(null)
+    }
+    setPreviewShown(true)
+    setPreviewBusy(false)
+  }
+
+  return (
+    <div className="field">
+      <label>Signature <span style={{ ...MUTED, fontWeight: 400 }}>(optional)</span></label>
+      <span style={{ ...MUTED, fontSize: '0.8125rem', display: 'block', marginBottom: '0.5rem' }}>
+        Goes below a dividing line at the foot of every reply sent from this address, whoever sends it.
+      </span>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
+        {SIGNATURE_KIND_OPTIONS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => setDraft((d) => ({ ...d, signatureKind: option.value }))}
+            aria-pressed={draft.signatureKind === option.value}
+            style={{
+              flex: '1 1 12rem', textAlign: 'left', cursor: 'pointer',
+              padding: '0.75rem', borderRadius: 6,
+              border: `1px solid ${draft.signatureKind === option.value ? 'var(--color-accent)' : 'var(--color-border)'}`,
+              background: draft.signatureKind === option.value ? 'var(--color-bg-subtle)' : 'var(--color-bg)',
+              color: 'var(--color-text)',
+            }}
+          >
+            <span style={{ display: 'block', fontWeight: 600, fontSize: '0.875rem' }}>{option.label}</span>
+            <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--color-text-secondary)', marginTop: '0.25rem' }}>
+              {option.hint}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {draft.signatureKind === 'markdown' && (
+        <MarkdownEditor
+          value={draft.signature}
+          onChange={(value) => setDraft((d) => ({ ...d, signature: value }))}
+          rows={6}
+          placeholder={'Kind regards,\nThe Sales Team\n\nDeskwell'}
+        />
+      )}
+
+      {draft.signatureKind === 'html' && (
+        <>
+          <textarea
+            rows={12}
+            spellCheck={false}
+            maxLength={50000}
+            value={draft.signatureHtml}
+            onChange={(e) => setDraft((d) => ({ ...d, signatureHtml: e.target.value }))}
+            placeholder="<table>…</table>"
+            style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.8125rem' }}
+          />
+          <span style={{ ...MUTED, fontSize: '0.75rem', display: 'block', marginTop: '0.5rem' }}>
+            Tables, inline styles, images and links all come through as written. Scripts and anything
+            that runs on its own - <code>onerror</code> and the like - are removed when you save,
+            because this markup ends up in a customer&rsquo;s inbox rather than in here.
+          </span>
+        </>
+      )}
+
+      {draft.signatureKind === 'puck' && (
+        <>
+          <span style={{ ...MUTED, fontSize: '0.8125rem', display: 'block', marginBottom: '0.5rem' }}>
+            The same blocks the site&rsquo;s emails are built from. Text blocks accept the tags below.
+          </span>
+          <SignaturePuckEditor value={draft.signaturePuck} onChange={handlePuckChange} />
+        </>
+      )}
+
+      {draft.signatureKind !== 'markdown' && (
+        <span style={{ ...MUTED, fontSize: '0.75rem', display: 'block', marginTop: '0.5rem' }}>
+          Fill-in tags:{' '}
+          {SIGNATURE_MERGE_TAGS.map((t, i) => (
+            <span key={t.tag}>{i > 0 ? ', ' : ''}<code>{t.tag}</code> ({t.label})</span>
+          ))}
+        </span>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.75rem' }}>
+        <button type="button" className="btn btn-secondary btn-sm" disabled={previewBusy} onClick={refreshPreview}>
+          {previewBusy ? 'Working…' : 'Show me how it will look'}
+        </button>
+      </div>
+
+      {previewShown && (
+        preview ? (
+          <div
+            style={{
+              marginTop: '0.75rem', padding: '1rem', borderRadius: 6,
+              border: '1px solid var(--color-border)',
+              background: '#ffffff', colorScheme: 'light', overflowX: 'auto',
+            }}
+            dangerouslySetInnerHTML={{ __html: preview }}
+          />
+        ) : (
+          <span style={{ ...MUTED, fontSize: '0.8125rem', display: 'block', marginTop: '0.75rem' }}>
+            Nothing to show - this signature is empty, so replies go out without one.
+          </span>
+        )
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Module settings
 // ---------------------------------------------------------------------------
 
@@ -793,7 +993,7 @@ function ModuleSettingsSection({ settings, inboxes, retention, busy, call }: {
   }
 
   return (
-    <section className="card">
+    <section className="card" style={{ marginBottom: '1.5rem' }}>
       <div style={LABEL_STYLE}>How much mail to keep</div>
       <p style={{ ...MUTED, fontSize: '0.875rem', marginTop: 0 }}>
         Mail is collected on a schedule rather than the second it arrives - about once an hour on a
@@ -882,6 +1082,114 @@ function ModuleSettingsSection({ settings, inboxes, retention, busy, call }: {
           {inboxes.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
         </select>
       </div>
+
+      <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>Save settings</button>
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Delivery receipts
+// ---------------------------------------------------------------------------
+
+type AccountRegistration = { label: string; ok: boolean; message: string }
+
+/**
+ * Whether to find out what became of a reply after it left.
+ *
+ * Both switches are off until somebody turns them on, and the copy says plainly
+ * what each one does, because both of them amount to watching what a customer
+ * did with an email. A site owner is entitled to do that; they are not entitled
+ * to have it switched on for them by an update, and their privacy notice has to
+ * mention it.
+ */
+function DeliveryReceiptsSection({ settings, busy, call }: {
+  settings: Settings
+  busy: boolean
+  call: Caller
+}) {
+  const [draft, setDraft] = useState(settings)
+  const [seeded, setSeeded] = useState(settings)
+  if (seeded !== settings) {
+    setSeeded(settings)
+    setDraft(settings)
+  }
+  const [accounts, setAccounts] = useState<AccountRegistration[] | null>(null)
+
+  async function save() {
+    const body = await call('/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        trackOpens: draft.trackOpens,
+        requestReadReceipts: draft.requestReadReceipts,
+      }),
+    })
+    setAccounts((body as { brevoRegistrations?: AccountRegistration[] | null })?.brevoRegistrations ?? null)
+  }
+
+  return (
+    <section className="card" style={{ marginBottom: '1.5rem' }}>
+      <div style={LABEL_STYLE}>What happened to a reply after you sent it</div>
+      <p style={{ ...MUTED, fontSize: '0.875rem', marginTop: 0 }}>
+        On its own, &ldquo;Sent&rdquo; only means the email service took the message off your hands.
+        Switch these on and a reply can also tell you it arrived, that somebody opened it, or that it
+        bounced straight back. Worth having when you are deciding whether to chase somebody.
+      </p>
+
+      <div className="field">
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontWeight: 400 }}>
+          <input
+            type="checkbox"
+            checked={draft.trackOpens}
+            onChange={(e) => setDraft({ ...draft, trackOpens: e.target.checked })}
+          />
+          Tell me when a reply is delivered, opened or bounces
+        </label>
+        <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.375rem 0 0' }}>
+          Only works for addresses sending through Brevo. An open is worked out from a tiny invisible
+          picture in the message, so it is a good clue rather than proof: some mail apps fetch that
+          picture before anybody has read a word, and when that happens you are told so rather than
+          told a fib. Anything sent through your own mail server carries on saying nothing but
+          &ldquo;Sent&rdquo;.
+        </p>
+      </div>
+
+      <div className="field">
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontWeight: 400 }}>
+          <input
+            type="checkbox"
+            checked={draft.requestReadReceipts}
+            onChange={(e) => setDraft({ ...draft, requestReadReceipts: e.target.checked })}
+          />
+          Ask the person&rsquo;s own email program for a read receipt
+        </label>
+        <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.375rem 0 0' }}>
+          The old-fashioned kind. Most email programs ignore it and the rest ask the reader first, so
+          expect an answer perhaps one time in ten, mostly from people in offices. When one does come
+          back it lands on the message it belongs to rather than cluttering up the conversation.
+        </p>
+      </div>
+
+      <div className="alert alert-info">
+        <p style={{ margin: 0, fontSize: '0.875rem' }}>
+          Both of these mean keeping a note of what somebody did with an email you sent them. If your
+          privacy notice does not mention it yet, add a line before you switch them on.
+        </p>
+      </div>
+
+      {accounts && accounts.length > 0 && (
+        <div style={{ display: 'grid', gap: '0.375rem', margin: '0 0 0.75rem' }}>
+          {accounts.map((account) => (
+            <div
+              key={account.label}
+              className={account.ok ? 'alert alert-info' : 'alert alert-danger'}
+              style={{ margin: 0 }}
+            >
+              <strong>{account.label}:</strong> {account.message}
+            </div>
+          ))}
+        </div>
+      )}
 
       <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>Save settings</button>
     </section>

@@ -21,6 +21,10 @@ the same human collapse into one story.
 - **Inboxes.** The addresses people write to. One mail account can serve several
   of them, each with its own name on the replies, its own signature and its own
   staff.
+- **Signatures.** One per inbox, written whichever way suits: typed as rich
+  text, pasted as the markup your organisation already uses, or built out of the
+  same blocks your site's emails are built from. Fill-in tags for the address,
+  its name and the name replies go out under, and a preview before you save.
 - **Who can read what.** An inbox with nobody named on it is open to everybody
   who can see the hub. Name one person and it becomes theirs alone, which is how
   the accounts address stays away from the rest of the team.

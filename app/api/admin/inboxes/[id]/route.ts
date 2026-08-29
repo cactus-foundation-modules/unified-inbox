@@ -5,6 +5,7 @@ import { errorResponse } from '@/lib/utils'
 import { addressTakenBy, deleteInbox, getInbox, updateInbox } from '@/modules/unified-inbox/lib/db'
 import { isValidAddress } from '@/modules/unified-inbox/lib/addresses'
 import { InboxPatchBody } from '@/modules/unified-inbox/lib/validation'
+import { cleanSignatureHtml } from '@/modules/unified-inbox/lib/signature'
 import { senderWarningFor } from '@/modules/unified-inbox/lib/sender-warning'
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -24,7 +25,12 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
   }
 
-  const inbox = await updateInbox(id, parsed.data)
+  const inbox = await updateInbox(id, {
+    ...parsed.data,
+    ...(parsed.data.signatureHtml !== undefined
+      ? { signatureHtml: cleanSignatureHtml(parsed.data.signatureHtml) }
+      : {}),
+  })
   if (!inbox) return errorResponse('That inbox no longer exists.', 404)
   return NextResponse.json({ inbox, senderWarning: await senderWarningFor(inbox) })
 }

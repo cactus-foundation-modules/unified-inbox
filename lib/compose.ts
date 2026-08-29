@@ -1,6 +1,7 @@
 import { nanoid } from 'nanoid'
 import { sanitizeEmailHtml } from '@/lib/sanitize'
 import { normaliseAddress, addressDomain, isValidAddress } from './addresses'
+import { CUSTOM_TAG_HEADER, READ_RECEIPT_HEADER, customTagFor } from './receipts'
 import { htmlToText } from './html'
 
 // ---------------------------------------------------------------------------
@@ -263,11 +264,18 @@ export function quoteForForward(original: QuotedOriginal): { html: string; text:
  *  where a reader expects to find them. */
 export function assembleBody(parts: {
   bodyHtml: string
-  signatureHtml: string | null
+  /** Already rendered by lib/signature.ts, whichever kind it was written in.
+   *  The text half comes with it because a rich text signature reads better
+   *  flattened from its markdown than from its HTML. */
+  signature: { html: string; text: string } | null
   quoted: { html: string; text: string } | null
 }): { html: string; text: string } {
   const typed = sanitizeEmailHtml(parts.bodyHtml)
-  const signature = parts.signatureHtml ? sanitizeEmailHtml(parts.signatureHtml) : ''
+  // Sanitised again on the way out. The pasted kind was cleaned when it was
+  // saved, but a row written before that was, or by anything other than the
+  // settings screen, has not been - and this is the last gate before it leaves.
+  const signature = parts.signature?.html ? sanitizeEmailHtml(parts.signature.html) : ''
+  const signatureText = (parts.signature?.text ?? '').trim() || (signature ? htmlToText(signature) : '')
 
   const html = [
     typed,
@@ -279,7 +287,7 @@ export function assembleBody(parts: {
 
   const text = [
     htmlToText(typed),
-    signature ? `\n--\n${htmlToText(signature)}` : '',
+    signature ? `\n--\n${signatureText}` : '',
     parts.quoted?.text ?? '',
   ]
     .filter(Boolean)
@@ -358,6 +366,14 @@ export function outgoingHeaders(input: {
   messageId: string
   inReplyTo: string | null
   references: string[]
+  /** Our own row id, carried out with the message so the mail service's later
+   *  events about it can be matched back to the reply somebody wrote. Only
+   *  meaningful on Brevo, and only set when the site has asked to be told. */
+  trackingTag?: string | null
+  /** Where a read receipt should be sent, when the site is asking for one. The
+   *  recipient's mail program decides whether to honour it, and most of them
+   *  ask the reader first, which is the honest version of the question. */
+  readReceiptTo?: string | null
 }): Record<string, string> {
   const headers: Record<string, string> = {
     'Message-ID': messageIdHeader(input.messageId),
@@ -366,5 +382,7 @@ export function outgoingHeaders(input: {
   if (input.references.length) {
     headers['References'] = input.references.map(messageIdHeader).join(' ')
   }
+  if (input.trackingTag) headers[CUSTOM_TAG_HEADER] = customTagFor(input.trackingTag)
+  if (input.readReceiptTo) headers[READ_RECEIPT_HEADER] = `<${input.readReceiptTo}>`
   return headers
 }

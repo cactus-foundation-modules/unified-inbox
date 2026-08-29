@@ -16,6 +16,17 @@ export type MessageSource = 'imap' | 'brevo' | 'provider' | 'manual'
 
 export type IdentityKind = 'email' | 'phone' | 'chat'
 
+/** How an inbox's signature was written. The same three the contact form
+ *  offers, rendered through the same core code, so a site only ever learns one
+ *  signature editor. */
+export type SignatureKind = 'markdown' | 'html' | 'puck'
+
+export const SIGNATURE_KINDS: readonly SignatureKind[] = ['markdown', 'html', 'puck']
+
+export function isSignatureKind(value: unknown): value is SignatureKind {
+  return typeof value === 'string' && (SIGNATURE_KINDS as readonly string[]).includes(value)
+}
+
 /** A mail account. The password is never handed out - callers get
  *  `hasPassword` and set a new one if they want it changed. */
 export type Connection = {
@@ -58,7 +69,15 @@ export type Inbox = {
   smtpUsername: string | null
   hasSmtpPassword: boolean
   fromName: string | null
+  /** Which of the three below is actually sent. The other two are kept, so
+   *  switching back and forth loses nothing. */
+  signatureKind: SignatureKind
+  /** The rich text kind, stored as markdown. */
+  signature: string | null
+  /** The pasted kind, sanitised on the way in. */
   signatureHtml: string | null
+  /** The block-built kind: Puck data rendered by core's email blocks. */
+  signaturePuck: unknown
   appendToSent: boolean
   colour: string | null
   sortOrder: number
@@ -101,6 +120,15 @@ export type UnifiedInboxSettings = {
   orderNumberPattern: string | null
   poNumberPattern: string | null
   quoteNumberPattern: string | null
+  /** Whether the mail service is asked to tell us when a reply is delivered,
+   *  opened or bounced. Off until somebody switches it on: watching whether a
+   *  customer opened an email is tracking, and tracking does not arrive with an
+   *  update. */
+  trackOpens: boolean
+  /** Whether outgoing replies ask the recipient's own mail program for a read
+   *  receipt. Most ignore it; the ones that do not ask the reader first, which
+   *  is the honest version of the same question. */
+  requestReadReceipts: boolean
 }
 
 // ---------------------------------------------------------------------------

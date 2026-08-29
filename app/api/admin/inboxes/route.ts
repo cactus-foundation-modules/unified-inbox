@@ -5,6 +5,7 @@ import { errorResponse } from '@/lib/utils'
 import { addressTakenBy, createInbox, listInboxes } from '@/modules/unified-inbox/lib/db'
 import { isValidAddress } from '@/modules/unified-inbox/lib/addresses'
 import { InboxBody } from '@/modules/unified-inbox/lib/validation'
+import { cleanSignatureHtml } from '@/modules/unified-inbox/lib/signature'
 import { senderWarningFor } from '@/modules/unified-inbox/lib/sender-warning'
 
 export async function GET() {
@@ -26,7 +27,15 @@ export async function POST(request: NextRequest) {
     return errorResponse('There is already an inbox for that address.')
   }
 
-  const inbox = await createInbox(parsed.data)
+  // Pasted markup is cleaned on the way in rather than on the way out: what is
+  // stored is then what was checked, and every later reader gets the same
+  // markup without having to remember to clean it again.
+  const inbox = await createInbox({
+    ...parsed.data,
+    ...(parsed.data.signatureHtml !== undefined
+      ? { signatureHtml: cleanSignatureHtml(parsed.data.signatureHtml) }
+      : {}),
+  })
 
   // Checked now, while the person who can fix it is the one standing here
   // (E15). Never blocks the save - an inbox that cannot send yet still

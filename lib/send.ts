@@ -15,6 +15,7 @@ import {
   reopenForRetry,
   settleDelivery,
   getMessage,
+  getSettings,
   listAttachmentsForMessage,
   type OutboundMessageRow,
 } from './db'
@@ -38,6 +39,7 @@ import { normaliseSubject, buildSnippet, cleanMessageId } from './threading'
 import { htmlToText } from './html'
 import { buildRawMessage } from './mime'
 import { appendToSent } from './append'
+import { renderInboxSignature } from './signature'
 import { deliver, sendingIdentity, transportForInbox, type SendableMessage } from './transport'
 
 // ---------------------------------------------------------------------------
@@ -213,7 +215,10 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
 
   const body = assembleBody({
     bodyHtml: request.bodyHtml,
-    signatureHtml: inbox.signatureHtml,
+    // Rendered rather than read: the inbox's signature may be rich text, pasted
+    // markup or a stack of email blocks, and only one place knows how to turn
+    // each of those into an email.
+    signature: await renderInboxSignature(inbox),
     quoted,
   })
 
@@ -316,6 +321,11 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
       messageId: messageIdHeaderValue,
       inReplyTo: parent?.messageIdHeader ?? null,
       references,
+      // Both off unless the site has said otherwise. The tracking tag is only
+      // any use on Brevo - it is Brevo that hands it back on its events - and
+      // putting it on a message going out through somebody's own mail server
+      // would be a header that means nothing travelling to a stranger.
+      ...(await receiptHeaderOptions(inbox.sendTransport, inbox.address, row.id)),
     }),
     attachments: files.items.map((f) => ({
       filename: f.filename,
@@ -566,6 +576,9 @@ export async function retrySend(messageId: string): Promise<SendResult> {
         ? quotable.references[quotable.references.length - 1]!
         : null,
       references: quotable.references,
+      // The same row id as the first attempt, for the same reason: whichever
+      // attempt actually lands, its events belong to this one message.
+      ...(await receiptHeaderOptions(inbox.sendTransport, inbox.address, messageId)),
     }),
     attachments: files,
   }
@@ -583,6 +596,25 @@ export async function retrySend(messageId: string): Promise<SendResult> {
   await copyToSentFolder({ messageId, inbox, identity, sendable, sentAt: new Date() })
 
   return { ok: true, messageId, threadId: message.threadId, alreadySent: false }
+}
+
+/**
+ * The two receipt headers, or nothing at all.
+ *
+ * Read from the settings on every send rather than passed in, because the
+ * answer can change between one reply and the next and a stale copy would mean
+ * a site that switched tracking off yesterday is still tracking today.
+ */
+async function receiptHeaderOptions(
+  sendTransport: string,
+  inboxAddress: string,
+  messageRowId: string,
+): Promise<{ trackingTag?: string; readReceiptTo?: string }> {
+  const settings = await getSettings()
+  return {
+    ...(settings.trackOpens && sendTransport === 'brevo' ? { trackingTag: messageRowId } : {}),
+    ...(settings.requestReadReceipts ? { readReceiptTo: inboxAddress } : {}),
+  }
 }
 
 /** A token for one press of Send, for callers that have not got one. */
