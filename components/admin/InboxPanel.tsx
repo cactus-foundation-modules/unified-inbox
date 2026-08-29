@@ -37,7 +37,7 @@ import {
 import { attachableKinds, loadContext } from '@/modules/unified-inbox/lib/adapters'
 import { defaultLinkKind } from '@/modules/unified-inbox/lib/link-kinds'
 import { modulesForInbox } from '@/modules/unified-inbox/lib/module-senders'
-import { forComposer } from '@/modules/unified-inbox/lib/drafts'
+import { canEditDraft, forComposer } from '@/modules/unified-inbox/lib/drafts'
 import { addressesForPerson, buildContextQuery } from '@/modules/unified-inbox/lib/identity'
 import { ContextRail } from './inbox/ContextRail'
 import { PersonView } from './inbox/PersonView'
@@ -53,6 +53,7 @@ import { DraftListView } from './inbox/DraftListView'
 import { SentListView } from './inbox/SentListView'
 import { ThreadPane, type ThreadMessageView } from './inbox/ThreadPane'
 import { ComposeView } from './inbox/ComposeView'
+import { DraftReadOnlyView } from './inbox/DraftReadOnlyView'
 
 // The hub's tab on core's Inbox page: the addresses along the top, where each
 // conversation stands under them, the list, and whichever one is open.
@@ -146,9 +147,10 @@ export async function UnifiedInboxPanel({
     ? inboxHref(base, carried, { compose: '1', draft: null, id: null, person: null })
     : null
 
-  // Drafts are one person's own, and the query says so rather than the caller
-  // (see lib/db.ts). The count is what the Drafts tab shows; the list itself is
-  // only fetched when that tab is the one open.
+  // Drafts filed on an address are read by whoever can read that address, the
+  // same as every other message on it, and the query says so rather than the
+  // caller (see lib/db.ts). The count is what the Drafts tab shows; the list
+  // itself is only fetched when that tab is the one open.
   const draftCount = await countDrafts(user.id, visibleIds)
   const drafts = params.draftsOnly ? await listDrafts(user.id, visibleIds) : []
 
@@ -410,11 +412,26 @@ export async function UnifiedInboxPanel({
   // answer, only something to be told.
   let cannotComposePane: React.ReactNode = null
   if (params.composing) {
-    // Only ever this person's own, and only ever one they may still write from:
-    // getDraft takes the author as part of the question rather than as an
-    // afterthought, so a guessed id in the address finds nothing.
-    const editing = params.draftId ? await getDraft(params.draftId, user.id) : null
-    if (sendable.length > 0) {
+    // Only ever one this person may READ, and the query is what decides it
+    // rather than a check afterwards, so a guessed id in the address finds
+    // nothing. Whether they may also change it is the next question down.
+    const editing = params.draftId
+      ? await getDraft(params.draftId, user.id, visibleIds)
+      : null
+    if (editing && !canEditDraft(editing, user.id)) {
+      // Somebody else's. Readable, because it sits on an address this person
+      // can read; not editable, because finishing a colleague's sentence and
+      // posting it over their name is a different favour entirely.
+      composePane = (
+        <DraftReadOnlyView
+          base={base}
+          params={carried}
+          draft={editing}
+          authorName={staffById[editing.authorUserId] ?? 'A colleague'}
+          inboxName={editing.inboxId ? allInboxes.find((i) => i.id === editing.inboxId)?.name ?? null : null}
+        />
+      )
+    } else if (sendable.length > 0) {
       composePane = (
         <ComposeView
           base={base}
@@ -515,6 +532,8 @@ export async function UnifiedInboxPanel({
               inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
               openThreadId={params.threadId}
               openDraftId={params.draftId}
+              staffById={staffById}
+              currentUserId={user.id}
               now={new Date()}
             />
           ) : params.sentOnly ? (

@@ -125,3 +125,36 @@ export function forComposer(draft: Draft): DraftForComposer {
     attachments: draft.attachments,
   }
 }
+
+// ---------------------------------------------------------------------------
+// Who may see a draft, and who may change one.
+//
+// These used to be the same question and are not any more. A draft filed on one
+// of the site's addresses is now READ by whoever can read that address, exactly
+// as every other message on that address already was - somebody covering for a
+// colleague who is off can see what was half-written to the supplier rather than
+// being told the conversation has nothing pending. A draft with no address on it
+// is answering a conversation another module owns, and there is no guest list to
+// grant sight through, so it stays with the person who wrote it.
+//
+// WRITING is a different question and has not moved. Editing, discarding and
+// sending stay with the author: finishing somebody else's sentence and putting
+// it in the post over their name is not the same favour as reading it.
+// ---------------------------------------------------------------------------
+
+/** Whether this person may READ this draft. Mirrors the SQL in `draftScope`
+ *  (lib/db.ts) - if you change one, change the other, and the tests below are
+ *  what will tell you that you did not. */
+export function canReadDraft(
+  draft: { authorUserId: string; inboxId: string | null },
+  userId: string,
+  visibleInboxIds: string[],
+): boolean {
+  if (draft.inboxId) return visibleInboxIds.includes(draft.inboxId)
+  return draft.authorUserId === userId
+}
+
+/** Whether this person may change, discard or send this draft. */
+export function canEditDraft(draft: { authorUserId: string }, userId: string): boolean {
+  return draft.authorUserId === userId
+}

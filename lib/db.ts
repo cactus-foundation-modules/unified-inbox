@@ -2034,16 +2034,27 @@ export async function insertNote(data: {
 // ---------------------------------------------------------------------------
 // Drafts.
 //
-// A draft belongs to its author and to nobody else, and every query below says
-// so in its WHERE clause rather than leaving it to the route. A shared inbox
-// has several people reading it, half-written text is not the team's business
-// until it is sent, and "the caller will remember to filter" is how it stops
-// being true.
+// READING one now follows the address it is filed on, exactly as every other
+// message on that address does: if you can read accounts@, you can read what is
+// half-written to accounts@. That is a deliberate reversal of the original rule
+// (author-only, see the header of migrations/013_drafts.sql, which describes
+// how this used to work and is left as written because an applied migration is
+// never edited). A shared inbox is shared, and a colleague who is off sick
+// should not take the supplier's half-answered question with them.
+//
+// A draft with no address on it answers a conversation another module owns.
+// There is no guest list to grant sight through, so it stays with its author.
+//
+// WRITING has not moved. saveDraft, deleteDraft and the send route all still
+// name the author in their WHERE clause, so reading somebody's draft never
+// becomes editing it or posting it over their name. The pure statement of both
+// halves, with the tests, is canReadDraft/canEditDraft in lib/drafts.ts - change
+// one and change the other.
 //
 // The visible-inbox list goes into the SQL for the same reason it does
-// everywhere else in this file (E17): a draft written from an address somebody
-// has since been taken off is not theirs to pick up again, and dropping the row
-// afterwards would still have counted it on the tabs.
+// everywhere else in this file (E17): the rule is ANDed into the query rather
+// than applied to the rows afterwards, so a draft on an address this reader
+// cannot open is never fetched and never counted on the tabs.
 // ---------------------------------------------------------------------------
 
 function mapDraft(r: Record<string, unknown>): Draft {
@@ -2066,17 +2077,18 @@ function mapDraft(r: Record<string, unknown>): Draft {
   }
 }
 
-/** Drafts on an address this person may still write from, or on a conversation
- *  another module owns (which has no address to be taken off). */
-function draftScope(authorUserId: string, inboxIds: string[]): Prisma.Sql {
-  return Prisma.sql`d."author_user_id" = ${authorUserId}
-     AND (d."inbox_id" IS NULL OR d."inbox_id" = ANY(${inboxIds}::text[]))`
+/** Anybody's draft on an address this person can read, or this person's own on
+ *  a conversation another module owns (which has no address to read through).
+ *  The SQL twin of canReadDraft in lib/drafts.ts. */
+function draftScope(userId: string, inboxIds: string[]): Prisma.Sql {
+  return Prisma.sql`(d."inbox_id" = ANY(${inboxIds}::text[])
+      OR (d."inbox_id" IS NULL AND d."author_user_id" = ${userId}))`
 }
 
-export async function listDrafts(authorUserId: string, inboxIds: string[]): Promise<Draft[]> {
+export async function listDrafts(userId: string, inboxIds: string[]): Promise<Draft[]> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT d.* FROM "uin_drafts" d
-     WHERE ${draftScope(authorUserId, inboxIds)}
+     WHERE ${draftScope(userId, inboxIds)}
      ORDER BY d."updated_at" DESC
      LIMIT 200
   `
@@ -2084,10 +2096,10 @@ export async function listDrafts(authorUserId: string, inboxIds: string[]): Prom
 }
 
 /** How many are waiting, for the number on the Drafts tab. */
-export async function countDrafts(authorUserId: string, inboxIds: string[]): Promise<number> {
+export async function countDrafts(userId: string, inboxIds: string[]): Promise<number> {
   const rows = await prisma.$queryRaw<{ count: bigint }[]>`
     SELECT COUNT(*)::bigint AS "count" FROM "uin_drafts" d
-     WHERE ${draftScope(authorUserId, inboxIds)}
+     WHERE ${draftScope(userId, inboxIds)}
   `
   return Number(rows[0]?.count ?? 0)
 }
@@ -2192,17 +2204,30 @@ export async function countSentMessages(
 
 /** One draft, and only if it is this person's. Never "one draft, then check" -
  *  a route that forgets the second half hands somebody else's writing out. */
-export async function getDraft(id: string, authorUserId: string): Promise<Draft | null> {
+/** One draft, if this person may read it. Whether they may CHANGE it is a
+ *  second question - ask canEditDraft, and note that saveDraft and deleteDraft
+ *  enforce it themselves regardless of what any screen decided. */
+export async function getDraft(
+  id: string,
+  userId: string,
+  inboxIds: string[],
+): Promise<Draft | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT * FROM "uin_drafts"
-     WHERE "id" = ${id} AND "author_user_id" = ${authorUserId}
+    SELECT d.* FROM "uin_drafts" d
+     WHERE d."id" = ${id} AND ${draftScope(userId, inboxIds)}
      LIMIT 1
   `
   return rows[0] ? mapDraft(rows[0]) : null
 }
 
-/** Whatever this person left under this conversation, which the reply box
- *  opens on. One row at most - the unique index sees to that. */
+/** Whatever THIS person left under this conversation, which the reply box opens
+ *  on. One row at most - the unique index sees to that.
+ *
+ *  Deliberately still the author's own, unlike listDrafts above: this is what
+ *  gets loaded into the reply box, and putting a colleague's half-written
+ *  paragraph into somebody else's editor is how it ends up sent over the wrong
+ *  name. Their draft is readable from the Drafts tab, which is where reading
+ *  belongs. */
 export async function draftForThread(threadId: string, authorUserId: string): Promise<Draft | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT * FROM "uin_drafts"

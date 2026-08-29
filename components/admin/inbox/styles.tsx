@@ -145,6 +145,20 @@ const CSS = `
   .uin-refresh[data-busy="1"] svg { animation: none; }
 }
 
+/* ---- somebody else's draft, open for reading --------------------------- */
+/* Label beside value rather than above it: there are three of them at most and
+   a stack of six lines for To, Cc and Subject reads as a form somebody forgot
+   to make editable. */
+.uin-draft-read {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.25rem 0.75rem;
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+}
+.uin-draft-read dt { color: var(--color-text-muted); }
+.uin-draft-read dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+
 /* ---- the search box, at the end of the status tabs ---------------------- */
 .uin-search { display: flex; gap: 0.375rem; align-items: center; }
 .uin-search input { min-width: 0; width: 9rem; }

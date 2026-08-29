@@ -9,7 +9,8 @@ import {
 } from '@/modules/unified-inbox/lib/drafts'
 import { PaperclipIcon, PenIcon } from './icons'
 
-// The Drafts list: what this person started and has not sent.
+// The Drafts list: what anybody has started on an address you can read, and
+// has not sent.
 //
 // It takes the list pane's place rather than sitting somewhere else on the
 // screen, because it answers the same question the conversation list answers -
@@ -29,17 +30,23 @@ type Props = {
   inboxNames: Record<string, string>
   openThreadId: string | null
   openDraftId: string | null
+  /** Who each colleague is, for the tag on somebody else's row. */
+  staffById: Record<string, string>
+  /** So a row can say whose it is only when it is not the reader's own - a
+   *  badge on every row marks nothing. */
+  currentUserId: string
   now: Date
 }
 
 export function DraftListView({
-  base, params, drafts, inboxNames, openThreadId, openDraftId, now,
+  base, params, drafts, inboxNames, openThreadId, openDraftId, staffById, currentUserId, now,
 }: Props) {
   if (drafts.length === 0) {
     return (
       <div className="uin-empty">
         <strong>Nothing put down half-written</strong>
-        Anything you start and save rather than send waits here until you come back to it.
+        Anything anybody starts and saves rather than sends waits here until somebody comes
+        back to it.
       </div>
     )
   }
@@ -88,6 +95,13 @@ export function DraftListView({
                   )}
                   {/* The words go in a span of their own so a long name ends in an
                       ellipsis rather than being cut off mid-letter. */}
+                  {draft.authorUserId !== currentUserId && (
+                    <span className="uin-tag">
+                      <span className="uin-tag-text">
+                        {staffById[draft.authorUserId] ?? 'Somebody else'}
+                      </span>
+                    </span>
+                  )}
                   {draft.threadId && <span className="uin-tag"><span className="uin-tag-text">Reply</span></span>}
                   {inboxName && (
                     <span className="uin-tag"><span className="uin-tag-text">{inboxName}</span></span>

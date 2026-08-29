@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
+  canEditDraft,
+  canReadDraft,
   draftHref,
   draftPreview,
   draftRecipientLabel,
@@ -94,5 +96,36 @@ describe('draftHref', () => {
     expect(href).toContain('compose=1')
     expect(href).toContain('draft=dft_2')
     expect(href).not.toContain('id=')
+  })
+})
+
+describe('canReadDraft', () => {
+  const filed = { authorUserId: 'marcus', inboxId: 'accounts' }
+  const loose = { authorUserId: 'marcus', inboxId: null }
+
+  it('lets anybody who can read the address read a draft filed on it', () => {
+    expect(canReadDraft(filed, 'chris', ['accounts', 'hi'])).toBe(true)
+  })
+
+  it('refuses a draft filed on an address this person cannot read', () => {
+    expect(canReadDraft(filed, 'chris', ['hi'])).toBe(false)
+  })
+
+  it('refuses even the author once they are off that address', () => {
+    // The old rule let an author keep their own draft on an inbox they had been
+    // removed from. It is the address that decides now, for everybody.
+    expect(canReadDraft(filed, 'marcus', ['hi'])).toBe(false)
+  })
+
+  it('keeps a draft with no address to its author', () => {
+    expect(canReadDraft(loose, 'marcus', [])).toBe(true)
+    expect(canReadDraft(loose, 'chris', ['accounts', 'hi'])).toBe(false)
+  })
+})
+
+describe('canEditDraft', () => {
+  it('is the author and nobody else, however much of the inbox they can read', () => {
+    expect(canEditDraft({ authorUserId: 'marcus' }, 'marcus')).toBe(true)
+    expect(canEditDraft({ authorUserId: 'marcus' }, 'chris')).toBe(false)
   })
 })
