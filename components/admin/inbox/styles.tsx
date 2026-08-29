@@ -81,6 +81,18 @@ const CSS = `
   font-weight: 600;
 }
 .uin-rail-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Rearranging the rail. The grab cursor is the only thing that says so until
+   somebody takes hold of one - a row of handles would put furniture beside
+   every address to serve a job done once a year. While one is in the air it
+   fades, and the address it would land on carries a line on top, so the answer
+   to "where does this go" is on the screen rather than in the wrist. */
+.uin-rail a[data-uin-drag] { cursor: grab; }
+.uin-rail a[data-uin-drag]:active { cursor: grabbing; }
+.uin-rail a[data-uin-dragging] { opacity: 0.45; }
+.uin-rail a[data-uin-over] { box-shadow: inset 0 2px 0 0 var(--color-primary); }
+@media (prefers-reduced-motion: reduce) {
+  .uin-rail a[data-uin-dragging] { opacity: 0.7; }
+}
 /* The unread badge is a tinted chip rather than a solid primary pill: white on
    the primary green measures 3.61:1, which is under AA for text this small, and
    a count nobody can read is not a count. */

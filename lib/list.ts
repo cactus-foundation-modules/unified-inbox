@@ -25,6 +25,10 @@ export type InboxParams = {
    *  none of the site's addresses. Only somebody who administers the whole
    *  thing sees it at all. */
   unroutedOnly: boolean
+  /** The rail's "Drafts" entry: this person's own half-written messages,
+   *  across every address they can write from. It takes the same slot as an
+   *  inbox because it is the same choice - what the list is a list of. */
+  draftsOnly: boolean
   status: StatusFilter
   unreadOnly: boolean
   /** A user id, the literal 'unassigned', or null for no filter. */
@@ -35,6 +39,8 @@ export type InboxParams = {
   threadId: string | null
   /** Composing a brand new message rather than answering one. */
   composing: boolean
+  /** The draft being finished, if the address names one. */
+  draftId: string | null
   /** The person whose own page is open, if any. Takes the same place on the
    *  screen as a conversation, because it answers the same question about the
    *  same human from a different angle. */
@@ -57,9 +63,13 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
   const isChannel = inbox.startsWith('m:')
   const channel = isChannel ? inbox.slice(2) : ''
   return {
-    inboxId: !isChannel && inbox && inbox !== 'all' && inbox !== 'none' ? inbox : null,
+    inboxId:
+      !isChannel && inbox && inbox !== 'all' && inbox !== 'none' && inbox !== 'drafts'
+        ? inbox
+        : null,
     providerModule: channel.length > 0 ? channel : null,
     unroutedOnly: inbox === 'none',
+    draftsOnly: inbox === 'drafts',
     status: rawStatus && STATUSES.includes(rawStatus) ? rawStatus : 'open',
     unreadOnly: sp.unread === '1',
     assignee: sp.assignee ? sp.assignee : null,
@@ -67,6 +77,7 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
     page: Math.max(1, parseInt(sp.page ?? '1', 10) || 1),
     threadId: sp.id ? sp.id : null,
     composing: sp.compose === '1',
+    draftId: sp.draft ? sp.draft : null,
     personId: sp.person ? sp.person : null,
   }
 }
@@ -272,4 +283,22 @@ export function quotedHtmlIndex(html: string): number {
   // Right at the top means the whole message is a quote, which is a forward
   // with no covering note rather than a reply with history under it.
   return found <= 0 ? -1 : found
+}
+
+/**
+ * The rail's addresses with one of them moved to a different place.
+ *
+ * Pure, and out here rather than inside the component, because "dropped on the
+ * one below it" and "dropped on the one it already was" are exactly the cases
+ * that are tedious to reproduce with a mouse and trivial to write down. Out of
+ * range, or a move to where it already is, returns the list untouched, so the
+ * caller can hand a drop straight in without checking first.
+ */
+export function moveInOrder<T>(list: T[], from: number, to: number): T[] {
+  if (from === to) return list
+  if (from < 0 || to < 0 || from >= list.length || to >= list.length) return list
+  const next = [...list]
+  const [moved] = next.splice(from, 1)
+  next.splice(to, 0, moved!)
+  return next
 }

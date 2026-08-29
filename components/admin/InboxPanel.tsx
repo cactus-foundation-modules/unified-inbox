@@ -5,12 +5,16 @@ import { prisma } from '@/lib/db/prisma'
 import { canReplyToInbox, canViewInbox, replyableInboxIds, visibleInboxIds } from '@/modules/unified-inbox/lib/access'
 import {
   attachmentsForThread,
+  countDrafts,
   countThreads,
+  draftForThread,
+  getDraft,
   getPerson,
   getThreadDetail,
   linksForPerson,
   linksForThread,
   listConnections,
+  listDrafts,
   listIdentities,
   listInboxes,
   listPersonEvents,
@@ -27,6 +31,7 @@ import {
   type AttachmentRow,
 } from '@/modules/unified-inbox/lib/db'
 import { loadContext } from '@/modules/unified-inbox/lib/adapters'
+import { forComposer } from '@/modules/unified-inbox/lib/drafts'
 import { addressesForPerson, buildContextQuery } from '@/modules/unified-inbox/lib/identity'
 import { ContextRail } from './inbox/ContextRail'
 import { PersonView } from './inbox/PersonView'
@@ -37,6 +42,7 @@ import { InboxStyles } from './inbox/styles'
 import { InboxRail } from './inbox/InboxRail'
 import { Filters } from './inbox/Filters'
 import { ThreadListView } from './inbox/ThreadListView'
+import { DraftListView } from './inbox/DraftListView'
 import { ThreadPane, type ThreadMessageView } from './inbox/ThreadPane'
 import { ComposeView } from './inbox/ComposeView'
 
@@ -128,8 +134,14 @@ export async function UnifiedInboxPanel({
   const sendableIds = await replyableInboxIds(user, inboxes.map((i) => i.id))
   const sendable = inboxes.filter((i) => sendableIds.includes(i.id))
   const composeHref = sendable.length > 0
-    ? inboxHref(base, carried, { compose: '1', id: null, person: null })
+    ? inboxHref(base, carried, { compose: '1', draft: null, id: null, person: null })
     : null
+
+  // Drafts are one person's own, and the query says so rather than the caller
+  // (see lib/db.ts). The count is what the rail shows; the list is only fetched
+  // when the rail is actually on Drafts.
+  const draftCount = await countDrafts(user.id, visibleIds)
+  const drafts = params.draftsOnly ? await listDrafts(user.id, visibleIds) : []
 
   const filters = {
     inboxIds: visibleIds,
@@ -146,11 +158,12 @@ export async function UnifiedInboxPanel({
     perPage: PER_PAGE,
   }
 
-  const [rows, total, connections] = await Promise.all([
-    listThreads(filters),
-    countThreads(filters),
-    listConnections(),
-  ])
+  // Drafts take the list pane's place, so the conversation queries are not run
+  // at all rather than run and thrown away.
+  const connections = await listConnections()
+  const [rows, total] = params.draftsOnly
+    ? [[] as Awaited<ReturnType<typeof listThreads>>, 0]
+    : await Promise.all([listThreads(filters), countThreads(filters)])
   const neverSynced = connections.length === 0 || connections.every((c) => !c.lastSyncAt)
 
   // ---- one person's own page, if the address asks for one ----------------
@@ -241,10 +254,11 @@ export async function UnifiedInboxPanel({
       // means by opening one.
       if (thread.unread) await setThreadRead(thread.id, false)
 
-      const [messages, files, events] = await Promise.all([
+      const [messages, files, events, ownDraft] = await Promise.all([
         listThreadMessages(thread.id),
         attachmentsForThread(thread.id),
         listThreadEvents(thread.id),
+        draftForThread(thread.id, user.id),
       ])
       const byMessage = new Map<string, AttachmentRow[]>()
       for (const file of files) {
@@ -318,6 +332,7 @@ export async function UnifiedInboxPanel({
           cannotReplyReason={cannotReplyReason}
           replyTo={[...reply.to, ...reply.cc]}
           replyAllTo={[...replyAll.to, ...replyAll.cc]}
+          draft={ownDraft ? forComposer(ownDraft) : null}
           now={new Date()}
         />
       )
@@ -351,12 +366,17 @@ export async function UnifiedInboxPanel({
   // ---- writing a brand new one, if the address asks for it ---------------
   let composePane: React.ReactNode = null
   if (params.composing) {
+    // Only ever this person's own, and only ever one they may still write from:
+    // getDraft takes the author as part of the question rather than as an
+    // afterthought, so a guessed id in the address finds nothing.
+    const editing = params.draftId ? await getDraft(params.draftId, user.id) : null
     composePane = sendable.length > 0 ? (
       <ComposeView
         base={base}
         params={carried}
         inboxes={sendable.map((i) => ({ id: i.id, name: i.name, address: i.address }))}
-        defaultInboxId={chooseSendingInbox(sendableIds, params.inboxId)}
+        defaultInboxId={chooseSendingInbox(sendableIds, editing?.inboxId ?? params.inboxId)}
+        draft={editing ? forComposer(editing) : null}
       />
     ) : (
       <div className="uin-empty">
@@ -382,39 +402,60 @@ export async function UnifiedInboxPanel({
           channels={channels.map((c) => ({ moduleName: c.moduleName, label: c.label }))}
           counts={counts}
           currentInboxId={
-            params.unroutedOnly
-              ? 'none'
-              : params.providerModule
-                ? `m:${params.providerModule}`
-                : params.inboxId
+            params.draftsOnly
+              ? 'drafts'
+              : params.unroutedOnly
+                ? 'none'
+                : params.providerModule
+                  ? `m:${params.providerModule}`
+                  : params.inboxId
           }
           showUnrouted={canManage}
+          showDrafts={sendable.length > 0 || draftCount > 0}
+          draftCount={draftCount}
           composeHref={composeHref}
+          canReorder={canManage}
         />
 
         <div className="uin-listpane">
-          <Filters
-            base={base}
-            params={carried}
-            status={params.status}
-            unreadOnly={params.unreadOnly}
-            assignee={params.assignee}
-            search={params.search}
-            staff={staff}
-            currentUserId={user.id}
-          />
-          <ThreadListView
-            base={base}
-            params={carried}
-            rows={rows}
-            total={total}
-            page={params.page}
-            openThreadId={params.threadId}
-            staffById={staffById}
-            neverSynced={neverSynced}
-            searching={!!params.search}
-            now={new Date()}
-          />
+          {params.draftsOnly ? (
+            // No filters above the drafts: a status filter over messages that
+            // have no status would be furniture rather than a control.
+            <DraftListView
+              base={base}
+              params={carried}
+              drafts={drafts}
+              inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
+              openThreadId={params.threadId}
+              openDraftId={params.draftId}
+              now={new Date()}
+            />
+          ) : (
+            <>
+              <Filters
+                base={base}
+                params={carried}
+                status={params.status}
+                unreadOnly={params.unreadOnly}
+                assignee={params.assignee}
+                search={params.search}
+                staff={staff}
+                currentUserId={user.id}
+              />
+              <ThreadListView
+                base={base}
+                params={carried}
+                rows={rows}
+                total={total}
+                page={params.page}
+                openThreadId={params.threadId}
+                staffById={staffById}
+                neverSynced={neverSynced}
+                searching={!!params.search}
+                now={new Date()}
+              />
+            </>
+          )}
         </div>
 
         {composePane ?? personPane ?? threadPane}

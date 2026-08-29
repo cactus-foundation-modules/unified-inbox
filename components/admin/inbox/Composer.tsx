@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { isWorthSaving, splitAddresses, type DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
 import { AttachmentChips, AttachmentPicker, toHtml, type Attachment } from './AttachmentPicker'
 
 // The composer: reply, reply to everybody, forward, and an internal note.
@@ -29,20 +30,30 @@ type Props = {
   /** Left over when the inbox this conversation belongs to cannot send - no
    *  sending identity, or the person may read it but not answer it. */
   cannotReplyReason: string | null
+  /** What this person left in this box last time, if they left anything. */
+  draft: DraftForComposer | null
 }
 
 export function Composer({
-  threadId, replyTo, replyAllTo, canReply, canForward, staff, cannotReplyReason,
+  threadId, replyTo, replyAllTo, canReply, canForward, staff, cannotReplyReason, draft,
 }: Props) {
   const router = useRouter()
-  const [mode, setMode] = useState<Mode>(canReply ? 'reply' : 'note')
-  const [text, setText] = useState('')
-  const [forwardTo, setForwardTo] = useState('')
+  // A saved draft says which of the three it was, and opening the conversation
+  // on the wrong one puts a forward's recipients in front of a reply.
+  const [mode, setMode] = useState<Mode>(
+    draft && draft.mode !== 'new' ? draft.mode : canReply ? 'reply' : 'note',
+  )
+  const [text, setText] = useState(draft?.body ?? '')
+  const [forwardTo, setForwardTo] = useState((draft?.to ?? []).join(', '))
   const [mentions, setMentions] = useState<string[]>([])
-  const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [attachments, setAttachments] = useState<Attachment[]>(
+    (draft?.attachments ?? []).map((file) => ({ ...file, sizeBytes: file.sizeBytes ?? null })),
+  )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [note, setNote] = useState('')
   const [picking, setPicking] = useState(false)
+  const [draftId, setDraftId] = useState<string | null>(draft?.id ?? null)
 
   // One token per composer session, deliberately NOT regenerated per click: it
   // is what makes a double press, or a retry after a timeout that may or may not
@@ -100,6 +111,7 @@ export function Composer({
             })),
             includeOriginalAttachments: mode === 'forward',
             idempotencyKey: token.current,
+            draftId: draftId ?? undefined,
           }),
         })
         if (!response.ok) {
@@ -111,6 +123,11 @@ export function Composer({
       setForwardTo('')
       setAttachments([])
       setMentions([])
+      setNote('')
+      // The message has gone, so the draft behind it went with it - server
+      // side, in the send route, rather than as a second request from here
+      // that a closed tab could swallow.
+      setDraftId(null)
       token.current = crypto.randomUUID()
       router.refresh()
     } catch {
@@ -118,7 +135,67 @@ export function Composer({
     } finally {
       setBusy(false)
     }
-  }, [attachments, forwardTo, mentions, mode, router, text, threadId])
+  }, [attachments, draftId, forwardTo, mentions, mode, router, text, threadId])
+
+  const save = useCallback(async () => {
+    const payload = {
+      id: draftId ?? undefined,
+      threadId,
+      mode: mode === 'note' ? ('reply' as const) : mode,
+      to: mode === 'forward' ? splitAddresses(forwardTo) : [],
+      cc: [],
+      subject: null,
+      body: text,
+      attachments: attachments.map(({ key, url, filename, contentType, sizeBytes }) => ({
+        key, url, filename, contentType, sizeBytes,
+      })),
+    }
+    if (!isWorthSaving(payload)) {
+      setError('There is nothing to save yet.')
+      return
+    }
+    setBusy(true)
+    setError('')
+    setNote('')
+    try {
+      const response = await fetch('/api/m/unified-inbox/drafts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) {
+        setError(data?.error ?? 'That draft could not be saved.')
+        return
+      }
+      if (data?.id) setDraftId(data.id as string)
+      setNote('Saved. It is waiting under Drafts, and here.')
+      router.refresh()
+    } catch {
+      setError('The site could not be reached. Nothing was saved.')
+    } finally {
+      setBusy(false)
+    }
+  }, [attachments, draftId, forwardTo, mode, router, text, threadId])
+
+  const discard = useCallback(async () => {
+    if (!draftId) return
+    setBusy(true)
+    setError('')
+    try {
+      await fetch(`/api/m/unified-inbox/drafts/${draftId}`, { method: 'DELETE' })
+      setDraftId(null)
+      setText('')
+      setForwardTo('')
+      setAttachments([])
+      setNote('')
+      router.refresh()
+    } catch {
+      setError('The site could not be reached. Nothing was thrown away.')
+    } finally {
+      setBusy(false)
+    }
+  }, [draftId, router])
 
   const recipients = mode === 'reply' ? replyTo : mode === 'reply-all' ? replyAllTo : []
 
@@ -131,7 +208,7 @@ export function Composer({
             type="button"
             className="uin-chip"
             aria-pressed={mode === m.id}
-            onClick={() => { setMode(m.id); setError('') }}
+            onClick={() => { setMode(m.id); setError(''); setNote('') }}
           >
             {m.label}
           </button>
@@ -171,7 +248,7 @@ export function Composer({
         <textarea
           id="uin-composer-text"
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => { setText(e.target.value); setNote('') }}
           placeholder={mode === 'note' ? 'Something for the others to see' : 'Write your reply'}
         />
       </div>
@@ -208,11 +285,22 @@ export function Composer({
       )}
 
       {error && <div className="alert alert-danger">{error}</div>}
+      {note && !error && <div className="alert alert-success">{note}</div>}
 
       <div className="uin-composer-row">
         <button type="button" className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
           {busy ? 'Sending...' : mode === 'note' ? 'Save note' : 'Send'}
         </button>
+        {mode !== 'note' && (
+          <button type="button" className="btn btn-secondary btn-sm" onClick={save} disabled={busy}>
+            Save as a draft
+          </button>
+        )}
+        {mode !== 'note' && draftId && (
+          <button type="button" className="uin-chip" onClick={discard} disabled={busy}>
+            Throw the draft away
+          </button>
+        )}
       </div>
 
       {picking && (

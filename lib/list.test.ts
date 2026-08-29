@@ -50,6 +50,27 @@ describe('parseInboxParams', () => {
     expect(parseInboxParams({ inbox: 'm:' })).toMatchObject({ inboxId: null, providerModule: null })
   })
 
+  it('reads the rail’s Drafts entry, which is not an inbox id', () => {
+    expect(parseInboxParams({ inbox: 'drafts' })).toMatchObject({
+      inboxId: null,
+      draftsOnly: true,
+      unroutedOnly: false,
+      providerModule: null,
+    })
+    // An address genuinely called "drafts" would be a channel or an id; neither
+    // of those is the rail entry.
+    expect(parseInboxParams({ inbox: 'abc' }).draftsOnly).toBe(false)
+    expect(parseInboxParams({}).draftsOnly).toBe(false)
+  })
+
+  it('reads which draft is being finished', () => {
+    expect(parseInboxParams({}).draftId).toBeNull()
+    expect(parseInboxParams({ compose: '1', draft: 'dft_7' })).toMatchObject({
+      composing: true,
+      draftId: 'dft_7',
+    })
+  })
+
   it('reads the compose flag, and only the one value that means it', () => {
     expect(parseInboxParams({}).composing).toBe(false)
     expect(parseInboxParams({ compose: '1' }).composing).toBe(true)

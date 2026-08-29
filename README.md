@@ -34,6 +34,11 @@ the same human collapse into one story.
 - **Reading and replying.** One screen: your addresses down the side, the
   conversations in the middle, and whichever one you have open beside them.
   Reply, reply to everybody, forward, or leave a note only your colleagues see.
+- **Drafts.** Save a half-written reply, or a message you have not finished
+  starting, and it waits under **Drafts** in the list of addresses until you
+  come back to it. Your own only: a shared address does not mean a shared
+  notepad. A reply goes back under its conversation with the words still in the
+  box; a new message opens where you left it. Sending one clears it away.
 - **Getting through it.** Hand a conversation to somebody, set it to come back
   later, mark it done, and search everything you are allowed to see.
 - **Pictures stay off** until you ask for them, and when you do they are fetched

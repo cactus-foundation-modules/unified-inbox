@@ -27,6 +27,47 @@ export function isSignatureKind(value: unknown): value is SignatureKind {
   return typeof value === 'string' && (SIGNATURE_KINDS as readonly string[]).includes(value)
 }
 
+/** What a half-written message was going to be when it grew up. The same four
+ *  the send route accepts, because a draft is only a send that has not happened
+ *  yet. */
+export type DraftMode = 'new' | 'reply' | 'reply-all' | 'forward'
+
+export const DRAFT_MODES: readonly DraftMode[] = ['new', 'reply', 'reply-all', 'forward']
+
+/** A file travelling with a draft, described by where it already lives in
+ *  storage rather than by its bytes - exactly as the send route wants it. */
+export type DraftAttachment = {
+  key: string
+  url: string
+  filename: string
+  contentType: string | null
+  sizeBytes: number | null
+}
+
+/** A message somebody started and has not sent.
+ *
+ *  It belongs to its author and to nobody else: a shared inbox has several
+ *  people in it, and half-written text is not the team's business until it is
+ *  sent. `body` is what was typed, newlines and all, because what goes back
+ *  into the box has to be what came out of it. */
+export type Draft = {
+  id: string
+  authorUserId: string
+  /** Which address it would leave as, or null while it answers a conversation
+   *  another module owns. */
+  inboxId: string | null
+  /** The conversation being answered, or null for one starting from nothing. */
+  threadId: string | null
+  mode: DraftMode
+  to: string[]
+  cc: string[]
+  subject: string | null
+  body: string
+  attachments: DraftAttachment[]
+  createdAt: Date
+  updatedAt: Date
+}
+
 /** A mail account. The password is never handed out - callers get
  *  `hasPassword` and set a new one if they want it changed. */
 export type Connection = {

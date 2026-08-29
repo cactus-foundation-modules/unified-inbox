@@ -1,4 +1,5 @@
 import type { AttachmentRow, ThreadDetail, ThreadEventRow, ThreadMessageRow } from '@/modules/unified-inbox/lib/db'
+import type { DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
 import { channelLabel, formatFull, formatWhen, inboxHref, splitQuotedText } from '@/modules/unified-inbox/lib/list'
 import { BackIcon, ClockIcon, InboundIcon, NoteIcon, OutboundIcon, PaperclipIcon, TickIcon } from './icons'
 import { MessageBody } from './MessageBody'
@@ -32,6 +33,9 @@ type Props = {
   cannotReplyReason: string | null
   replyTo: string[]
   replyAllTo: string[]
+  /** What this reader left half-written under this conversation, if anything.
+   *  Nobody else's, ever - a shared inbox is not a shared notepad. */
+  draft: DraftForComposer | null
   now: Date
 }
 
@@ -229,7 +233,7 @@ const EVENT_WORDS: Record<string, string> = {
 
 export function ThreadPane({
   base, params, thread, inboxName, messages, events, staff, staffById,
-  canReply, cannotReplyReason, replyTo, replyAllTo, now,
+  canReply, cannotReplyReason, replyTo, replyAllTo, draft, now,
 }: Props) {
   return (
     <div className="uin-thread">
@@ -282,6 +286,7 @@ export function ThreadPane({
         canForward={canReply}
         staff={staff}
         cannotReplyReason={cannotReplyReason}
+        draft={draft}
       />
 
       {events.length > 0 && (

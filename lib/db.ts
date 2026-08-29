@@ -4,10 +4,13 @@ import { prisma } from '@/lib/db/prisma'
 import { encryptSecret, tryDecryptSecret } from '@/lib/crypto/secrets'
 import { normaliseAddress } from './addresses'
 import { remoteImageUrls } from './remote-images'
-import { isSignatureKind } from './types'
+import { DRAFT_MODES, isSignatureKind } from './types'
 import type {
   AttachmentFetchMode,
   Connection,
+  Draft,
+  DraftAttachment,
+  DraftMode,
   IdentityKind,
   Inbox,
   InboxAccess,
@@ -301,6 +304,27 @@ export async function updateInbox(id: string, data: Partial<InboxInput>): Promis
 
 export async function deleteInbox(id: string): Promise<void> {
   await prisma.$executeRaw`DELETE FROM "uin_inboxes" WHERE "id" = ${id}`
+}
+
+/**
+ * Put the inboxes in the order somebody dragged them into.
+ *
+ * The whole list arrives at once and is written as positions 0..n-1, rather
+ * than one inbox being nudged up by a place: two people rearranging the rail at
+ * the same time then end up with one of the two orders, not a shuffle of both.
+ * One statement, so the rail is never briefly half-sorted.
+ */
+export async function reorderInboxes(ids: string[]): Promise<void> {
+  if (ids.length === 0) return
+  // The positions are cast rather than left bare: every arm of the CASE is a
+  // parameter, and Postgres will not guess a type it has never been told.
+  const cases = ids.map((id, index) => Prisma.sql`WHEN ${id} THEN ${index}::int`)
+  await prisma.$executeRaw`
+    UPDATE "uin_inboxes"
+       SET "sort_order" = CASE "id" ${Prisma.join(cases, ' ')} END,
+           "updated_at" = now()
+     WHERE "id" IN (${Prisma.join(ids)})
+  `
 }
 
 /** Every other inbox using this address, so a duplicate is refused with a
@@ -1975,6 +1999,180 @@ export async function insertNote(data: {
     RETURNING "id"
   `
   return rows[0]!.id
+}
+
+// ---------------------------------------------------------------------------
+// Drafts.
+//
+// A draft belongs to its author and to nobody else, and every query below says
+// so in its WHERE clause rather than leaving it to the route. A shared inbox
+// has several people reading it, half-written text is not the team's business
+// until it is sent, and "the caller will remember to filter" is how it stops
+// being true.
+//
+// The visible-inbox list goes into the SQL for the same reason it does
+// everywhere else in this file (E17): a draft written from an address somebody
+// has since been taken off is not theirs to pick up again, and dropping the row
+// afterwards would still have counted it in the rail.
+// ---------------------------------------------------------------------------
+
+function mapDraft(r: Record<string, unknown>): Draft {
+  const mode = r.mode as DraftMode
+  return {
+    id: r.id as string,
+    authorUserId: r.author_user_id as string,
+    inboxId: (r.inbox_id as string | null) ?? null,
+    threadId: (r.thread_id as string | null) ?? null,
+    mode: DRAFT_MODES.includes(mode) ? mode : 'new',
+    to: (r.to_addresses as string[] | null) ?? [],
+    cc: (r.cc_addresses as string[] | null) ?? [],
+    subject: (r.subject as string | null) ?? null,
+    body: (r.body as string | null) ?? '',
+    // jsonb comes back parsed, and can be any shape at all if somebody has been
+    // at the table by hand. Anything that is not a list of files is no files.
+    attachments: Array.isArray(r.attachments) ? (r.attachments as DraftAttachment[]) : [],
+    createdAt: r.created_at as Date,
+    updatedAt: r.updated_at as Date,
+  }
+}
+
+/** Drafts on an address this person may still write from, or on a conversation
+ *  another module owns (which has no address to be taken off). */
+function draftScope(authorUserId: string, inboxIds: string[]): Prisma.Sql {
+  return Prisma.sql`d."author_user_id" = ${authorUserId}
+     AND (d."inbox_id" IS NULL OR d."inbox_id" = ANY(${inboxIds}::text[]))`
+}
+
+export async function listDrafts(authorUserId: string, inboxIds: string[]): Promise<Draft[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT d.* FROM "uin_drafts" d
+     WHERE ${draftScope(authorUserId, inboxIds)}
+     ORDER BY d."updated_at" DESC
+     LIMIT 200
+  `
+  return rows.map(mapDraft)
+}
+
+/** How many are waiting, for the number beside Drafts in the rail. */
+export async function countDrafts(authorUserId: string, inboxIds: string[]): Promise<number> {
+  const rows = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(*)::bigint AS "count" FROM "uin_drafts" d
+     WHERE ${draftScope(authorUserId, inboxIds)}
+  `
+  return Number(rows[0]?.count ?? 0)
+}
+
+/** One draft, and only if it is this person's. Never "one draft, then check" -
+ *  a route that forgets the second half hands somebody else's writing out. */
+export async function getDraft(id: string, authorUserId: string): Promise<Draft | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_drafts"
+     WHERE "id" = ${id} AND "author_user_id" = ${authorUserId}
+     LIMIT 1
+  `
+  return rows[0] ? mapDraft(rows[0]) : null
+}
+
+/** Whatever this person left under this conversation, which the reply box
+ *  opens on. One row at most - the unique index sees to that. */
+export async function draftForThread(threadId: string, authorUserId: string): Promise<Draft | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_drafts"
+     WHERE "thread_id" = ${threadId} AND "author_user_id" = ${authorUserId}
+     LIMIT 1
+  `
+  return rows[0] ? mapDraft(rows[0]) : null
+}
+
+export type DraftInput = {
+  id?: string | null
+  authorUserId: string
+  inboxId: string | null
+  threadId: string | null
+  mode: DraftMode
+  to: string[]
+  cc: string[]
+  subject: string | null
+  body: string
+  attachments: DraftAttachment[]
+}
+
+/**
+ * Saves a draft, over the top of whichever one it already was.
+ *
+ * Three ways in, and they are all the same row in the end: an id, because the
+ * composer already saved once; a conversation, because the reply box only ever
+ * has one draft in it; or neither, which is a brand new message. The
+ * conversation route conflicts onto the unique index rather than reading first
+ * and then writing, so two saves racing each other leave one draft rather than
+ * one draft and one lost paragraph.
+ */
+export async function saveDraft(data: DraftInput): Promise<Draft> {
+  if (data.id) {
+    const updated = await prisma.$queryRaw<Record<string, unknown>[]>`
+      UPDATE "uin_drafts"
+         SET "inbox_id"     = ${data.inboxId},
+             "mode"         = ${data.mode},
+             "to_addresses" = ${data.to}::text[],
+             "cc_addresses" = ${data.cc}::text[],
+             "subject"      = ${data.subject},
+             "body"         = ${data.body},
+             "attachments"  = ${JSON.stringify(data.attachments)}::jsonb,
+             "updated_at"   = now()
+       WHERE "id" = ${data.id} AND "author_user_id" = ${data.authorUserId}
+      RETURNING *
+    `
+    if (updated[0]) return mapDraft(updated[0])
+    // The draft was discarded, or sent, while this composer had it open. Saving
+    // again writes a new one rather than throwing away what is on the screen.
+  }
+
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    INSERT INTO "uin_drafts"
+      ("author_user_id", "inbox_id", "thread_id", "mode", "to_addresses",
+       "cc_addresses", "subject", "body", "attachments")
+    VALUES (${data.authorUserId}, ${data.inboxId}, ${data.threadId}, ${data.mode},
+            ${data.to}::text[], ${data.cc}::text[], ${data.subject}, ${data.body},
+            ${JSON.stringify(data.attachments)}::jsonb)
+    ON CONFLICT ("thread_id", "author_user_id") WHERE "thread_id" IS NOT NULL
+    DO UPDATE SET "inbox_id"     = EXCLUDED."inbox_id",
+                  "mode"         = EXCLUDED."mode",
+                  "to_addresses" = EXCLUDED."to_addresses",
+                  "cc_addresses" = EXCLUDED."cc_addresses",
+                  "subject"      = EXCLUDED."subject",
+                  "body"         = EXCLUDED."body",
+                  "attachments"  = EXCLUDED."attachments",
+                  "updated_at"   = now()
+    RETURNING *
+  `
+  return mapDraft(rows[0]!)
+}
+
+/** Throws one away. Returns whether there was one to throw - a Discard pressed
+ *  twice is not an error, and neither is sending a message whose draft another
+ *  tab has already tidied up. */
+export async function deleteDraft(id: string, authorUserId: string): Promise<boolean> {
+  const count = await prisma.$executeRaw`
+    DELETE FROM "uin_drafts" WHERE "id" = ${id} AND "author_user_id" = ${authorUserId}
+  `
+  return count > 0
+}
+
+/** The draft behind a message that has just gone. Called by the send route
+ *  with whatever the composer was carrying, so finishing a draft removes it
+ *  from the list without the browser having to remember to ask. */
+export async function discardDraftAfterSend(
+  id: string | null | undefined,
+  authorUserId: string,
+): Promise<void> {
+  if (!id) return
+  try {
+    await deleteDraft(id, authorUserId)
+  } catch (err) {
+    // The message has gone. A draft left behind is untidy; a failed send
+    // reported to somebody whose email actually left is a lie.
+    console.error('[unified-inbox] could not tidy up the draft after sending', err)
+  }
 }
 
 // ---------------------------------------------------------------------------

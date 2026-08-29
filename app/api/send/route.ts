@@ -3,7 +3,7 @@ import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { canReplyToInbox } from '@/modules/unified-inbox/lib/access'
-import { getThread } from '@/modules/unified-inbox/lib/db'
+import { discardDraftAfterSend, getThread } from '@/modules/unified-inbox/lib/db'
 import { htmlToText } from '@/modules/unified-inbox/lib/html'
 import { sendMessage } from '@/modules/unified-inbox/lib/send'
 import { sendProviderReply } from '@/modules/unified-inbox/lib/provider-send'
@@ -64,6 +64,7 @@ export async function POST(request: Request) {
       authorName: user.displayName ?? null,
     })
     if (!result.ok) return errorResponse(result.reason, 400)
+    await discardDraftAfterSend(body.draftId, user.id)
     return NextResponse.json({ messageId: result.messageId, threadId: thread.id, alreadySent: false })
   }
 
@@ -84,6 +85,11 @@ export async function POST(request: Request) {
   // A refusal is a 400 with a sentence, never a 500 with a stack trace. The
   // person reading it is deciding what to do next.
   if (!result.ok) return errorResponse(result.reason, 400)
+
+  // The draft it was written in, now that the message has genuinely gone. A
+  // draft that outlives its own send is the reply somebody sends again next
+  // week, having found it still sitting in the list.
+  await discardDraftAfterSend(body.draftId, user.id)
 
   return NextResponse.json({
     messageId: result.messageId,

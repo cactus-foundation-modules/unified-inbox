@@ -1,6 +1,6 @@
 {
   "name": "unified-inbox",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "tablePrefix": "uin_",
   "description": "Every conversation with every customer and supplier in one place - email, live chat, contact form, calls and texts - with your own records beside them.",
   "requiresCoreVersion": "0.5.1400",
@@ -91,6 +91,7 @@
     "uin_processed_messages",
     "uin_sync_state",
     "uin_settings",
+    "uin_drafts",
     "uin_threads",
     "uin_inbox_access",
     "uin_webhook_deliveries",
