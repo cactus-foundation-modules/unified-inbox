@@ -36,6 +36,15 @@ the same human collapse into one story.
   by the site rather than by your browser, so a sender learns nothing about you.
 - **Settings** for how far back to go when starting out, how long to keep
   things, and what to do about attachments.
+- **Sending another module's post from one of your inboxes.** Purchase Orders'
+  settings and the shop's Notifications settings each carry a box asking which
+  inbox that module's automatic email goes out as, so a supplier answering a
+  purchase order or a customer answering an order confirmation lands with the
+  people who deal with it. Contributed through core's
+  `core.outbound-email-identity` point and a hosted settings panel in each of
+  those tabs - neither module gains a table, a column or a line of UI of its own,
+  and both go straight back to the site's usual address if this module is
+  removed.
 
 Live chat, contact form enquiries, calls and texts join the same screen in the
 versions after this one, along with the panel of your own records beside each
