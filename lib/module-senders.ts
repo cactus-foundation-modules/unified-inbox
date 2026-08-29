@@ -22,6 +22,21 @@ export async function listModuleSenders(): Promise<ModuleSender[]> {
   return rows.map((r) => ({ moduleName: r.module_name, inboxId: r.inbox_id }))
 }
 
+/**
+ * Which modules an inbox is used for - the other way round from the lookup
+ * below, and the question the conversation screen asks: an address purchasing
+ * sends from is an address suppliers reply to about purchase orders, so the
+ * picker for attaching a record to a conversation there should open on those.
+ */
+export async function modulesForInbox(inboxId: string): Promise<string[]> {
+  const rows = await prisma.$queryRaw<{ module_name: string }[]>`
+    SELECT "module_name" FROM "uin_module_senders"
+     WHERE "inbox_id" = ${inboxId}
+     ORDER BY "created_at" ASC, "module_name" ASC
+  `
+  return rows.map((r) => r.module_name)
+}
+
 /** The inbox chosen for one module, or null for "leave it to the site's own
  *  address". */
 export async function getModuleSenderInboxId(moduleName: string): Promise<string | null> {

@@ -1,7 +1,8 @@
 import type { ContextSection } from '@/modules/unified-inbox/lib/adapters'
+import type { LinkKind } from '@/modules/unified-inbox/lib/linking'
 import type { Person, RecordLink } from '@/modules/unified-inbox/lib/types'
 import { inboxHref } from '@/modules/unified-inbox/lib/list'
-import { AddLink, LinkActions } from './LinkActions'
+import { AddLink, LinkActions, type LinkKindChoice } from './LinkActions'
 
 // What the rest of the site knows about the person on the other end of the
 // conversation, beside the conversation.
@@ -26,6 +27,12 @@ type Props = {
   sections: ContextSection[]
   links: RecordLink[]
   canEditLinks: boolean
+  /** What may be attached here at all: the record kinds whose module is
+   *  installed and whose records this viewer may see. */
+  linkKinds?: LinkKindChoice[]
+  /** Which of them the picker opens on, decided from what the inbox is used
+   *  for. */
+  defaultLinkKind?: LinkKind | null
 }
 
 function LinkedRecord({
@@ -67,7 +74,14 @@ function linkHref(link: RecordLink): string | null {
 
 export function ContextRail({
   adminPath, threadId, base, params, person, noPersonReason, sections, links, canEditLinks,
+  linkKinds = [], defaultLinkKind = null,
 }: Props) {
+  const canAttach = canEditLinks && !!threadId && linkKinds.length > 0
+  // The block still stands on a person's page, where there is nothing to attach
+  // from but plenty that may have been attached already. What it does not do is
+  // stand on a conversation offering an attach button on a site that keeps no
+  // records anybody could attach.
+  const showAttached = links.length > 0 || canAttach || (canEditLinks && !threadId)
   const nothing = !person && sections.length === 0 && links.length === 0
 
   return (
@@ -94,7 +108,7 @@ export function ContextRail({
         )
       )}
 
-      {(links.length > 0 || canEditLinks) && (
+      {showAttached && (
         <section className="uin-ctx-block">
           <h3 className="uin-ctx-heading">
             {threadId ? 'Attached to this conversation' : 'Attached to them'}
@@ -108,7 +122,9 @@ export function ContextRail({
           ) : (
             <p className="uin-ctx-sub">Nothing attached yet.</p>
           )}
-          {canEditLinks && threadId && <AddLink threadId={threadId} />}
+          {canAttach && threadId && (
+            <AddLink threadId={threadId} kinds={linkKinds} defaultKind={defaultLinkKind} />
+          )}
         </section>
       )}
 

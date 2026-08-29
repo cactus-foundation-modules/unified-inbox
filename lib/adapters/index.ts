@@ -2,15 +2,19 @@ import { hasPermissions } from '@/lib/permissions/check'
 import type { SessionUser } from '@/lib/auth/session'
 import { existingTables, installedModuleNames } from '../installed'
 import type { LinkKind } from '../linking'
-import type { ContextAdapter, ContextQuery, ContextSection, LinkTarget } from './types'
+import type { LinkKindOption } from '../link-kinds'
+import type { ContextAdapter, ContextQuery, ContextSection, LinkSuggestion, LinkTarget } from './types'
+import { SUGGEST_LIMIT } from './types'
 import { shopAdapter } from './shop'
 import { purchaseOrdersAdapter } from './purchase-orders'
 import { bookkeepingAdapter } from './uk-bookkeeping'
 import { quotesAdapter } from './quote-for-shop'
 import { membersAdapter } from './members'
 
-export type { ContextAdapter, ContextItem, ContextQuery, ContextSection, LinkTarget } from './types'
-export { SECTION_LIMIT } from './types'
+export type {
+  ContextAdapter, ContextItem, ContextQuery, ContextSection, LinkSuggestion, LinkTarget,
+} from './types'
+export { SECTION_LIMIT, SUGGEST_LIMIT } from './types'
 
 /**
  * Every adapter, in the order the rail draws them.
@@ -102,4 +106,52 @@ export async function confirmReference(kind: LinkKind, reference: string): Promi
     }
   }
   return null
+}
+
+/**
+ * The kinds of record this viewer may attach to a conversation, in the order
+ * the picker offers them.
+ *
+ * Same three gates as the rail, and for the same reason: somebody who may read
+ * the inbox but not the shop is not offered a list of the site's orders to
+ * browse. A module with no `linkKind` - bookkeeping, the members list - has
+ * nothing anybody attaches by hand and is simply not in the list.
+ */
+export async function attachableKinds(user: SessionUser): Promise<LinkKindOption[]> {
+  const adapters = await usableAdapters(user)
+  return adapters
+    .filter((a) => a.linkKind && a.lookup)
+    .map((a) => ({
+      id: a.linkKind as LinkKind,
+      label: a.linkLabel || (a.linkKind as string),
+      moduleName: a.moduleName,
+    }))
+}
+
+/**
+ * The records somebody could mean, for choosing one off a list rather than
+ * typing its number.
+ *
+ * The viewer's permissions apply here, unlike the automatic linker: this is a
+ * person being shown other people's orders, and which of them they may see is
+ * exactly what the adapter's permission answers.
+ */
+export async function suggestRecords(
+  user: SessionUser,
+  kind: LinkKind,
+  term: string,
+  query: ContextQuery | null,
+): Promise<LinkSuggestion[]> {
+  const adapters = (await usableAdapters(user)).filter((a) => a.suggest && a.linkKind === kind)
+  const settled = await Promise.all(
+    adapters.map(async (adapter) => {
+      try {
+        return await adapter.suggest!(kind, term, query)
+      } catch (err) {
+        console.error(`[unified-inbox] could not list ${adapter.moduleName} records to attach:`, err)
+        return [] as LinkSuggestion[]
+      }
+    }),
+  )
+  return settled.flat().slice(0, SUGGEST_LIMIT)
 }

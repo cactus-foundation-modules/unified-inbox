@@ -93,7 +93,39 @@ export type ContextAdapter = {
    * of ours - which is exactly why a pattern is allowed to be generous.
    */
   lookup?(kind: LinkKind, reference: string): Promise<LinkTarget | null>
+  /**
+   * The kind of reference this module owns, and what somebody calls it out
+   * loud. Declared rather than mapped in the panel so that the list of things
+   * you may attach is exactly the list of modules the site actually has, with
+   * nothing to keep in step when one is uninstalled.
+   */
+  linkKind?: LinkKind
+  linkLabel?: string
+  /**
+   * The records somebody could mean, for choosing one off a list instead of
+   * typing its number. An empty term is a browse rather than a search, and
+   * `query` - the person on the other end of the conversation, when we know who
+   * that is - decides what floats to the top of it rather than what is in it:
+   * a supplier writes about their own orders nine times in ten, and about
+   * somebody else's the tenth.
+   */
+  suggest?(kind: LinkKind, term: string, query: ContextQuery | null): Promise<LinkSuggestion[]>
+}
+
+/** One record offered for attaching: a link target with enough beside it to
+ *  tell two similar-looking orders apart before clicking. */
+export type LinkSuggestion = LinkTarget & {
+  /** Its number, exactly as the lookup will be asked for it. */
+  reference: string
+  /** One line under the title. Money, a date, who it is with. */
+  detail: string | null
+  /** A short word rendered as a tag, or null for nothing to say. */
+  status: string | null
 }
 
 /** How many rows a section shows before it stops and offers a link to the rest. */
 export const SECTION_LIMIT = 5
+
+/** How many records the attach picker offers at once. Long enough to hold the
+ *  ones somebody plausibly means, short enough to read without scrolling. */
+export const SUGGEST_LIMIT = 8

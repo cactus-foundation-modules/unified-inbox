@@ -67,3 +67,15 @@ export function detailLine(...parts: Array<string | null | undefined>): string |
 export function inList(values: readonly string[]): Prisma.Sql {
   return Prisma.join(values.length > 0 ? [...values] : ['\u0000-no-such-value'])
 }
+
+/**
+ * A typed search term as a LIKE pattern.
+ *
+ * The wildcards are escaped rather than stripped: somebody searching for an
+ * order number with an underscore in it means that underscore, and LIKE reads
+ * it as "any character" unless told otherwise. Postgres takes a backslash as
+ * the escape by default, which is what this writes.
+ */
+export function likeTerm(term: string): string {
+  return `%${term.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%`
+}

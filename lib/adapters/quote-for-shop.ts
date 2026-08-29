@@ -1,7 +1,9 @@
 import { prisma } from '@/lib/db/prisma'
-import type { ContextAdapter, ContextItem, ContextQuery, ContextSection, LinkTarget } from './types'
-import { SECTION_LIMIT } from './types'
-import { detailLine, humanStatus, inList, shortDate, toDate } from './format'
+import type {
+  ContextAdapter, ContextItem, ContextQuery, ContextSection, LinkSuggestion, LinkTarget,
+} from './types'
+import { SECTION_LIMIT, SUGGEST_LIMIT } from './types'
+import { detailLine, humanStatus, inList, likeTerm, shortDate, toDate } from './format'
 
 // Quotes this person has asked for, matched on the address they gave. Only the
 // ones still live: a quote that was won became an order and shows up under the
@@ -14,6 +16,8 @@ export const quotesAdapter: ContextAdapter = {
   moduleName: 'quote-for-shop',
   permission: 'quotes.access',
   tables: ['qfs_quotes'],
+  linkKind: 'quote',
+  linkLabel: 'Quote',
 
   async load(query: ContextQuery): Promise<ContextSection | null> {
     if (query.emails.length === 0) return null
@@ -72,5 +76,40 @@ export const quotesAdapter: ContextAdapter = {
       label: `Quote ${row.quote_number}`,
       href: `quote-for-shop/quotes/${row.id}`,
     }
+  },
+
+  /** Quotes to choose from when attaching one by hand. Unlike the panel above
+   *  this does not hide the settled ones: a conversation about a quote that was
+   *  turned down is exactly the conversation somebody wants it attached to. */
+  async suggest(kind, term, query): Promise<LinkSuggestion[]> {
+    if (kind !== 'quote') return []
+    const trimmed = term.trim()
+    const like = likeTerm(trimmed)
+    const emails = query?.emails ?? []
+
+    const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+      SELECT "id", "quote_number", "status", "created_at", "expires_at",
+             "customer_name", "customer_email"
+        FROM "qfs_quotes"
+       WHERE ${trimmed.length === 0}
+          OR "quote_number" ILIKE ${like}
+          OR "customer_name" ILIKE ${like}
+          OR "customer_email" ILIKE ${like}
+       ORDER BY (CASE WHEN ${emails.length > 0}
+                       AND lower("customer_email") IN (${inList(emails)}) THEN 0 ELSE 1 END) ASC,
+                "created_at" DESC
+       LIMIT ${SUGGEST_LIMIT}
+    `
+
+    return rows.map((r) => ({
+      moduleName: 'quote-for-shop',
+      recordType: 'quote',
+      recordId: r.id as string,
+      reference: (r.quote_number as string) || '',
+      label: `Quote ${(r.quote_number as string) || ''}`.trim(),
+      href: `quote-for-shop/quotes/${r.id as string}`,
+      detail: detailLine((r.customer_name as string) || null, shortDate(r.created_at)),
+      status: humanStatus(r.status),
+    })).filter((row) => row.reference.length > 0)
   },
 }

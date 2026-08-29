@@ -666,6 +666,51 @@ const CSS = `
    card it would otherwise stretch the full width and read as an input box. */
 .uin-ctx-block > .uin-chip { justify-self: start; }
 .uin-ctx-add input, .uin-ctx-add select, .uin-ctx-add textarea { min-width: 0; width: 100%; }
+.uin-ctx-add-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+/* The list of records to choose from. Capped and scrolled rather than allowed
+   to push the conversation off the screen: eight rows is what the server sends
+   and about four is what a narrow rail can show without the card growing taller
+   than the message beside it. */
+.uin-ctx-picker {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.15rem;
+  max-height: 15rem;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-bg-subtle);
+}
+.uin-ctx-picker button {
+  display: grid;
+  gap: 0.15rem;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 0.375rem;
+  padding: 0.4rem 0.5rem;
+  color: var(--color-text);
+  cursor: pointer;
+  font: inherit;
+}
+/* --color-bg-subtle and --color-surface are the SAME colour in dark mode,
+   so a hover painted in either would be no hover at all on half the sites.
+   Raised differs from both in both themes, and the label underlines as well,
+   because a 1.1:1 lift is a hint rather than an answer. */
+.uin-ctx-picker button:hover, .uin-ctx-picker button:focus-visible {
+  background: var(--color-surface-raised);
+}
+/* The name only. The status beside it is a tag, and an underlined tag reads as
+   a second link to somewhere else. */
+.uin-ctx-picker button:hover .uin-ctx-main > span:first-child,
+.uin-ctx-picker button:focus-visible .uin-ctx-main > span:first-child {
+  text-decoration: underline;
+}
+.uin-ctx-picker button:disabled { cursor: default; opacity: 0.6; }
+.uin-ctx-picker .uin-ctx-main { font-weight: 600; }
 
 /* ---- one person --------------------------------------------------------- */
 .uin-person { display: grid; gap: 1rem; align-items: start; min-width: 0; }

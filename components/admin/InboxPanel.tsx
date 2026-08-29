@@ -33,7 +33,9 @@ import {
   wakeDueThreads,
   type AttachmentRow,
 } from '@/modules/unified-inbox/lib/db'
-import { loadContext } from '@/modules/unified-inbox/lib/adapters'
+import { attachableKinds, loadContext } from '@/modules/unified-inbox/lib/adapters'
+import { defaultLinkKind } from '@/modules/unified-inbox/lib/link-kinds'
+import { modulesForInbox } from '@/modules/unified-inbox/lib/module-senders'
 import { forComposer } from '@/modules/unified-inbox/lib/drafts'
 import { addressesForPerson, buildContextQuery } from '@/modules/unified-inbox/lib/identity'
 import { ContextRail } from './inbox/ContextRail'
@@ -360,9 +362,18 @@ export async function UnifiedInboxPanel({
       // is not installed costs one cheap check and contributes nothing.
       const person = thread.personId ? await getPerson(thread.personId) : null
       const query = person ? await buildContextQuery(person.id) : null
-      const [sections, links] = await Promise.all([
+      //
+      // What may be attached by hand is a separate question from what is here
+      // already: the kinds are whichever record-keeping modules this viewer may
+      // see, and which one the picker opens on comes from what the inbox is
+      // used for. An address purchasing sends from is an address suppliers
+      // answer purchase orders at, and that is worth one less choice made by
+      // hand on every conversation in it.
+      const [sections, links, kindOptions, senderModules] = await Promise.all([
         query ? loadContext(user, query) : Promise.resolve([]),
         linksForThread(thread.id),
+        canEditLinks ? attachableKinds(user) : Promise.resolve([]),
+        canEditLinks && thread.inboxId ? modulesForInbox(thread.inboxId) : Promise.resolve([]),
       ])
 
       contextRail = (
@@ -376,6 +387,8 @@ export async function UnifiedInboxPanel({
           sections={sections}
           links={links}
           canEditLinks={canEditLinks}
+          linkKinds={kindOptions}
+          defaultLinkKind={defaultLinkKind(kindOptions, senderModules)}
         />
       )
     }
