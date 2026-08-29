@@ -15,13 +15,18 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 // scrollbar. Until that message arrives it stands at a sensible height, so a
 // blocked script or a slow load costs a slightly wrong size and nothing else.
 //
-// MIN_HEIGHT is a FLOOR and a starting point, never a fixed size - it is both
-// the height the frame opens at and the smallest the reported height is allowed
-// to settle to. It was 120px, which is about four lines: every message opened in
-// a letterbox and grew a moment later, and any message whose frame never
-// reported stayed in the letterbox for good. A reading height to begin with
-// costs nothing when the real height arrives and is the difference between a
-// message and a peephole when it does not.
+// Two different numbers, and conflating them was the whole of the problem.
+//
+// OPENING_HEIGHT is what the frame stands at before it has said anything, and
+// what it keeps if it never says anything at all. That is the case worth being
+// generous about: a message whose frame never reports - a blocked script, an
+// extension - used to sit in a 120px letterbox for good.
+//
+// MIN_HEIGHT is the floor once the frame HAS reported, and it is deliberately
+// small. The reported height is the true height, so a two-line "Thanks,
+// received" should occupy two lines. Using the opening height as the floor as
+// well padded every short reply out to 400px of empty white, which is its own
+// kind of wrong in a thread of short replies.
 //
 // If the height never arrives, something may have gone wrong with the frame -
 // or nothing may have, since a browser extension can stop the script that
@@ -32,7 +37,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 // open. A blank rectangle with no explanation is the one outcome worth ruling
 // out: it reads as an empty message rather than as a message that did not come.
 
-const MIN_HEIGHT = 400
+const OPENING_HEIGHT = 400
+const MIN_HEIGHT = 60
 const MAX_HEIGHT = 4000
 /** How long to let the frame stay silent before asking whether it was ever
  *  going to say anything. Long enough for a large message on a slow line. */
@@ -47,7 +53,7 @@ type Props = {
 
 export function MessageBody({ messageId, hasRemoteImages }: Props) {
   const frame = useRef<HTMLIFrameElement | null>(null)
-  const [height, setHeight] = useState(MIN_HEIGHT)
+  const [height, setHeight] = useState(OPENING_HEIGHT)
   const [showImages, setShowImages] = useState(false)
   // Which message would not open, rather than a plain yes or no: showing the
   // pictures loads a different address, and the answer for one is not the answer
