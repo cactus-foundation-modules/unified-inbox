@@ -131,11 +131,15 @@ export async function reconcileBrevoWebhooks(enabled: boolean): Promise<AccountR
   const results: AccountRegistration[] = []
   for (const key of keys) {
     const listed = await brevoRequest('webhooks?type=transactional', key.apiKey)
-    if (!listed.ok) {
+    // An account with no webhooks on it is answered with a 400 and
+    // document_not_found rather than an empty list. Treating that as a failure
+    // is a deadlock: the account that has never had a webhook is exactly the
+    // account that needs its first one, and it would never get past this line.
+    if (!listed.ok && !isGone(listed)) {
       results.push({ label: key.label, ok: false, message: listed.error })
       continue
     }
-    const existing = oursAmong(listed.body, siteUrl)
+    const existing = listed.ok ? oursAmong(listed.body, siteUrl) : []
 
     if (!enabled) {
       let failure: string | null = null
