@@ -23,3 +23,4 @@ export const ClockIcon = <svg {...ICON}><circle cx="12" cy="12" r="8" /><path d=
 export const TickIcon = <svg {...ICON}><path d="m5 12.5 4.5 4.5L19 7" /></svg>
 export const SearchIcon = <svg {...ICON}><circle cx="11" cy="11" r="6" /><path d="m20 20-4.5-4.5" /></svg>
 export const BackIcon = <svg {...ICON}><path d="M15 5 8 12l7 7" /></svg>
+export const PenIcon = <svg {...ICON}><path d="M4 20h4l10-10a2.8 2.8 0 0 0-4-4L4 16z" /><path d="m13.5 6.5 4 4" /></svg>

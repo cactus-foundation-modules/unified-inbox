@@ -88,6 +88,25 @@ export function inboxHref(
   return query ? `${base}?${query}` : base
 }
 
+/**
+ * Which address a brand new message should go out as.
+ *
+ * Whichever inbox the rail is showing, when that is one this person may send
+ * from - "write a new one" from inside accounts@ means writing as accounts@,
+ * and having to pick it again from a menu is the sort of thing that gets
+ * forgotten and sends the supplier a note from hi@. Everything else - the All
+ * view, Not filed, a channel another module owns, or an inbox this person may
+ * read but not write from - falls back to the first they can send from, and
+ * null when there is none. The menu is still there either way.
+ */
+export function chooseSendingInbox(
+  sendableIds: string[],
+  currentInboxId: string | null,
+): string | null {
+  if (currentInboxId && sendableIds.includes(currentInboxId)) return currentInboxId
+  return sendableIds[0] ?? null
+}
+
 export function pageCount(total: number, perPage: number = PER_PAGE): number {
   if (total <= 0) return 1
   return Math.ceil(total / perPage)

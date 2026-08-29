@@ -34,7 +34,27 @@ const CSS = `
 }
 
 /* ---- the rail ---------------------------------------------------------- */
+.uin-railpane { display: grid; gap: 0.625rem; align-content: start; min-width: 0; }
 .uin-rail { display: grid; gap: 0.125rem; align-content: start; }
+/* Write a message sits above the addresses rather than among them, because it
+   is the one thing on this rail that is not a place to go. Its own colours are
+   spelled out here rather than borrowed from .btn-primary: white on the primary
+   green measures 3.61:1, which is under AA, and this button carries words. */
+.uin-compose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.375rem;
+  border: 1px solid var(--color-primary-border);
+  background: var(--color-primary-subtle);
+  color: var(--color-text);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+.uin-compose:hover { border-color: var(--color-primary); background: var(--color-surface-raised); color: var(--color-text); }
 .uin-rail-heading {
   font-size: 0.6875rem;
   letter-spacing: 0.06em;
@@ -251,7 +271,7 @@ const CSS = `
 
 /* Only one pane at a time on a phone: the list, or the conversation. */
 @media (max-width: 899px) {
-  .uin[data-thread="open"] .uin-rail,
+  .uin[data-thread="open"] .uin-railpane,
   .uin[data-thread="open"] .uin-listpane { display: none; }
 }
 

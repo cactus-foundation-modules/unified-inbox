@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   channelLabel,
+  chooseSendingInbox,
   formatWhen,
   inboxHref,
   initialsFor,
@@ -49,8 +50,36 @@ describe('parseInboxParams', () => {
     expect(parseInboxParams({ inbox: 'm:' })).toMatchObject({ inboxId: null, providerModule: null })
   })
 
+  it('reads the compose flag, and only the one value that means it', () => {
+    expect(parseInboxParams({}).composing).toBe(false)
+    expect(parseInboxParams({ compose: '1' }).composing).toBe(true)
+    expect(parseInboxParams({ compose: 'yes' }).composing).toBe(false)
+    expect(parseInboxParams({ compose: '0' }).composing).toBe(false)
+  })
+
   it('caps a search long enough to be an attack on the query planner', () => {
     expect(parseInboxParams({ q: 'x'.repeat(500) }).search).toHaveLength(200)
+  })
+})
+
+describe('chooseSendingInbox', () => {
+  it('writes as the inbox you are standing in', () => {
+    expect(chooseSendingInbox(['a', 'b'], 'b')).toBe('b')
+  })
+
+  it('falls back to the first when the rail is showing everything', () => {
+    expect(chooseSendingInbox(['a', 'b'], null)).toBe('a')
+  })
+
+  it('falls back rather than offering an inbox they may read but not send from', () => {
+    // 'c' is on screen and visible; it is not in the sendable list, so the menu
+    // must not open on it and then be refused by the send route.
+    expect(chooseSendingInbox(['a', 'b'], 'c')).toBe('a')
+  })
+
+  it('has no answer when there is nothing to send from', () => {
+    expect(chooseSendingInbox([], 'a')).toBeNull()
+    expect(chooseSendingInbox([], null)).toBeNull()
   })
 })
 

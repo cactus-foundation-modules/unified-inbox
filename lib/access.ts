@@ -80,6 +80,30 @@ export async function visibleInboxIds(user: SessionUser, allInboxIds: string[]):
   )
 }
 
+/** Every inbox id this user may SEND FROM, in one query.
+ *
+ *  The compose screen needs this rather than `visibleInboxIds`: reading
+ *  accounts@ and writing as accounts@ are two different grants (D16), and an
+ *  address offered in the From menu that the send route would then refuse is a
+ *  worse answer than not offering it. Shaped like `visibleInboxIds` on purpose -
+ *  one query for the whole list, never one per inbox.
+ */
+export async function replyableInboxIds(user: SessionUser, allInboxIds: string[]): Promise<string[]> {
+  const perms = await permissionsFor(user)
+  if (perms.canManage) return allInboxIds
+  if (!perms.canView || !perms.canReply) return []
+  const all = await listAllInboxAccess()
+  const byInbox = new Map<string, InboxAccess[]>()
+  for (const row of all) {
+    const list = byInbox.get(row.inboxId)
+    if (list) list.push(row)
+    else byInbox.set(row.inboxId, [row])
+  }
+  return allInboxIds.filter((id) =>
+    decideInboxAccess(byInbox.get(id) ?? [], user.id, perms).reply
+  )
+}
+
 /**
  * The same question about somebody who is not the person making the request.
  *

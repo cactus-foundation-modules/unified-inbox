@@ -2,7 +2,7 @@ import { headers } from 'next/headers'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { prisma } from '@/lib/db/prisma'
-import { canReplyToInbox, canViewInbox, visibleInboxIds } from '@/modules/unified-inbox/lib/access'
+import { canReplyToInbox, canViewInbox, replyableInboxIds, visibleInboxIds } from '@/modules/unified-inbox/lib/access'
 import {
   attachmentsForThread,
   countThreads,
@@ -31,13 +31,14 @@ import { addressesForPerson, buildContextQuery } from '@/modules/unified-inbox/l
 import { ContextRail } from './inbox/ContextRail'
 import { PersonView } from './inbox/PersonView'
 import { replyRecipients } from '@/modules/unified-inbox/lib/compose'
-import { parseInboxParams, PER_PAGE } from '@/modules/unified-inbox/lib/list'
+import { chooseSendingInbox, inboxHref, parseInboxParams, PER_PAGE } from '@/modules/unified-inbox/lib/list'
 import { visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
 import { InboxStyles } from './inbox/styles'
 import { InboxRail } from './inbox/InboxRail'
 import { Filters } from './inbox/Filters'
 import { ThreadListView } from './inbox/ThreadListView'
 import { ThreadPane, type ThreadMessageView } from './inbox/ThreadPane'
+import { ComposeView } from './inbox/ComposeView'
 
 // The hub's tab on core's Inbox page: the rail of addresses, the list of
 // conversations, and whichever one is open.
@@ -119,6 +120,17 @@ export async function UnifiedInboxPanel({
 
   const counts = await unreadCounts(visibleIds, canManage, channelModules)
 
+  // Writing a new one is a different grant from reading (D16), so the From menu
+  // and the button that opens it are both built from the inboxes this person may
+  // SEND from. No sendable address means no button: an invitation to write that
+  // ends in "you do not have permission to send from that inbox" is worse than
+  // no invitation.
+  const sendableIds = await replyableInboxIds(user, inboxes.map((i) => i.id))
+  const sendable = inboxes.filter((i) => sendableIds.includes(i.id))
+  const composeHref = sendable.length > 0
+    ? inboxHref(base, carried, { compose: '1', id: null, person: null })
+    : null
+
   const filters = {
     inboxIds: visibleIds,
     includeUnrouted: canManage,
@@ -147,7 +159,7 @@ export async function UnifiedInboxPanel({
   // the same question about the same human from a different angle: what have we
   // said to each other, and what does the rest of the site know about them.
   let personPane: React.ReactNode = null
-  if (params.personId) {
+  if (params.personId && !params.composing) {
     const person = await getPerson(params.personId)
     if (!person) {
       personPane = personNotHere()
@@ -206,7 +218,7 @@ export async function UnifiedInboxPanel({
   // ---- the conversation on the right, if the address asks for one ---------
   let threadPane: React.ReactNode = null
   let contextRail: React.ReactNode = null
-  if (!params.personId && params.threadId) {
+  if (!params.composing && !params.personId && params.threadId) {
     const thread = await getThreadDetail(params.threadId)
     const allowed = thread
       ? thread.providerModule
@@ -336,12 +348,31 @@ export async function UnifiedInboxPanel({
     }
   }
 
+  // ---- writing a brand new one, if the address asks for it ---------------
+  let composePane: React.ReactNode = null
+  if (params.composing) {
+    composePane = sendable.length > 0 ? (
+      <ComposeView
+        base={base}
+        params={carried}
+        inboxes={sendable.map((i) => ({ id: i.id, name: i.name, address: i.address }))}
+        defaultInboxId={chooseSendingInbox(sendableIds, params.inboxId)}
+      />
+    ) : (
+      <div className="uin-empty">
+        <strong>There is no address you can write from</strong>
+        You can read what arrives, but sending needs an inbox shared with you to write from.
+        Whoever looks after the site can put you on one.
+      </div>
+    )
+  }
+
   return (
     <>
       <InboxStyles />
       <div
         className="uin"
-        data-thread={params.personId || params.threadId ? 'open' : 'closed'}
+        data-thread={params.composing || params.personId || params.threadId ? 'open' : 'closed'}
         data-context={contextRail ? 'on' : 'off'}
       >
         <InboxRail
@@ -358,6 +389,7 @@ export async function UnifiedInboxPanel({
                 : params.inboxId
           }
           showUnrouted={canManage}
+          composeHref={composeHref}
         />
 
         <div className="uin-listpane">
@@ -385,7 +417,7 @@ export async function UnifiedInboxPanel({
           />
         </div>
 
-        {personPane ?? threadPane}
+        {composePane ?? personPane ?? threadPane}
         {contextRail}
       </div>
     </>

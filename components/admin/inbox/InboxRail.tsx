@@ -1,4 +1,5 @@
 import { inboxHref } from '@/modules/unified-inbox/lib/list'
+import { PenIcon } from './icons'
 
 // The rail: the addresses people write to, then everything at once (D1 - the
 // All view exists, but it is not where the screen opens). Unread counts sit
@@ -20,6 +21,10 @@ type Props = {
   currentInboxId: string | null
   /** Whether this person can see conversations that landed in no inbox. */
   showUnrouted: boolean
+  /** Where "Write a message" goes, or null when there is no address this person
+   *  may send from - in which case the button is not there at all, rather than
+   *  there and disappointing. */
+  composeHref: string | null
 }
 
 function Count({ value }: { value: number }) {
@@ -32,7 +37,9 @@ function Count({ value }: { value: number }) {
   )
 }
 
-export function InboxRail({ base, params, inboxes, channels, counts, currentInboxId, showUnrouted }: Props) {
+export function InboxRail({
+  base, params, inboxes, channels, counts, currentInboxId, showUnrouted, composeHref,
+}: Props) {
   const total = Object.values(counts).reduce((a, b) => a + b, 0)
   // Changing inbox always goes back to page one and drops whichever conversation
   // was open - it belongs to the inbox being left.
@@ -40,50 +47,57 @@ export function InboxRail({ base, params, inboxes, channels, counts, currentInbo
     inboxHref(base, params, { inbox, page: null, id: null })
 
   return (
-    <nav className="uin-rail" aria-label="Inboxes">
-      <div className="uin-rail-heading">Inboxes</div>
-      {inboxes.map((inbox) => (
+    <div className="uin-railpane">
+      {composeHref && (
+        <a className="uin-compose" href={composeHref}>
+          {PenIcon} Write a message
+        </a>
+      )}
+      <nav className="uin-rail" aria-label="Inboxes">
+        <div className="uin-rail-heading">Inboxes</div>
+        {inboxes.map((inbox) => (
+          <a
+            key={inbox.id}
+            href={link(inbox.id)}
+            aria-current={currentInboxId === inbox.id ? 'page' : undefined}
+            title={inbox.address}
+          >
+            <span className="uin-rail-name">{inbox.name}</span>
+            <Count value={counts[inbox.id] ?? 0} />
+          </a>
+        ))}
         <a
-          key={inbox.id}
-          href={link(inbox.id)}
-          aria-current={currentInboxId === inbox.id ? 'page' : undefined}
-          title={inbox.address}
+          href={link(null)}
+          aria-current={currentInboxId === null ? 'page' : undefined}
         >
-          <span className="uin-rail-name">{inbox.name}</span>
-          <Count value={counts[inbox.id] ?? 0} />
+          <span className="uin-rail-name">All</span>
+          <Count value={total} />
         </a>
-      ))}
-      <a
-        href={link(null)}
-        aria-current={currentInboxId === null ? 'page' : undefined}
-      >
-        <span className="uin-rail-name">All</span>
-        <Count value={total} />
-      </a>
-      {showUnrouted && (
-        <a href={inboxHref(base, params, { inbox: 'none', page: null, id: null })}
-           aria-current={currentInboxId === 'none' ? 'page' : undefined}
-           title="Mail that reached the account but matched none of your addresses">
-          <span className="uin-rail-name">Not filed</span>
-          <Count value={counts[''] ?? 0} />
-        </a>
-      )}
+        {showUnrouted && (
+          <a href={inboxHref(base, params, { inbox: 'none', page: null, id: null })}
+             aria-current={currentInboxId === 'none' ? 'page' : undefined}
+             title="Mail that reached the account but matched none of your addresses">
+            <span className="uin-rail-name">Not filed</span>
+            <Count value={counts[''] ?? 0} />
+          </a>
+        )}
 
-      {channels.length > 0 && (
-        <>
-          <div className="uin-rail-heading">Other channels</div>
-          {channels.map((channel) => (
-            <a
-              key={channel.moduleName}
-              href={link(`m:${channel.moduleName}`)}
-              aria-current={currentInboxId === `m:${channel.moduleName}` ? 'page' : undefined}
-            >
-              <span className="uin-rail-name">{channel.label}</span>
-              <Count value={counts[`m:${channel.moduleName}`] ?? 0} />
-            </a>
-          ))}
-        </>
-      )}
-    </nav>
+        {channels.length > 0 && (
+          <>
+            <div className="uin-rail-heading">Other channels</div>
+            {channels.map((channel) => (
+              <a
+                key={channel.moduleName}
+                href={link(`m:${channel.moduleName}`)}
+                aria-current={currentInboxId === `m:${channel.moduleName}` ? 'page' : undefined}
+              >
+                <span className="uin-rail-name">{channel.label}</span>
+                <Count value={counts[`m:${channel.moduleName}`] ?? 0} />
+              </a>
+            ))}
+          </>
+        )}
+      </nav>
+    </div>
   )
 }
