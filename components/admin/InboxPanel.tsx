@@ -288,7 +288,7 @@ export async function UnifiedInboxPanel({
         listThreadMessages(thread.id),
         attachmentsForThread(thread.id),
         listThreadEvents(thread.id),
-        draftForThread(thread.id, user.id),
+        draftForThread(thread.id, user.id, sendableIds),
       ])
       const byMessage = new Map<string, AttachmentRow[]>()
       for (const file of files) {
@@ -418,7 +418,7 @@ export async function UnifiedInboxPanel({
     const editing = params.draftId
       ? await getDraft(params.draftId, user.id, visibleIds)
       : null
-    if (editing && !canEditDraft(editing, user.id)) {
+    if (editing && !canEditDraft(editing, user.id, sendableIds)) {
       // Somebody else's. Readable, because it sits on an address this person
       // can read; not editable, because finishing a colleague's sentence and
       // posting it over their name is a different favour entirely.

@@ -2,8 +2,8 @@ import { NextResponse } from 'next/server'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
-import { canOpenThread, canReplyToInbox } from '@/modules/unified-inbox/lib/access'
-import { getThreadDetail, saveDraft } from '@/modules/unified-inbox/lib/db'
+import { canOpenThread, canReplyToInbox, replyableInboxIds } from '@/modules/unified-inbox/lib/access'
+import { allInboxIds, getThreadDetail, saveDraft } from '@/modules/unified-inbox/lib/db'
 import { isWorthSaving } from '@/modules/unified-inbox/lib/drafts'
 import { visibleProviderModules } from '@/modules/unified-inbox/lib/provider-registry'
 import { DraftBody } from '@/modules/unified-inbox/lib/validation'
@@ -61,9 +61,14 @@ export async function POST(request: Request) {
     return errorResponse('You do not have permission to send from that inbox.', 403)
   }
 
+  // Finishing a colleague's draft is allowed on an address this person may send
+  // from, so the save has to know which those are. Its own id is not enough.
+  const sendableIds = await replyableInboxIds(user, await allInboxIds())
+
   const draft = await saveDraft({
     id: body.id ?? null,
     authorUserId: user.id,
+    replyableInboxIds: sendableIds,
     inboxId,
     threadId: thread?.id ?? null,
     mode: body.mode,

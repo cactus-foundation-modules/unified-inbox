@@ -124,8 +124,27 @@ describe('canReadDraft', () => {
 })
 
 describe('canEditDraft', () => {
-  it('is the author and nobody else, however much of the inbox they can read', () => {
-    expect(canEditDraft({ authorUserId: 'marcus' }, 'marcus')).toBe(true)
-    expect(canEditDraft({ authorUserId: 'marcus' }, 'chris')).toBe(false)
+  const filed = { authorUserId: 'marcus', inboxId: 'accounts' }
+  const loose = { authorUserId: 'marcus', inboxId: null }
+
+  it('lets the author finish their own, whatever they may send from', () => {
+    expect(canEditDraft(filed, 'marcus', [])).toBe(true)
+  })
+
+  it('lets anybody who may SEND as the address finish a draft filed on it', () => {
+    expect(canEditDraft(filed, 'chris', ['accounts', 'hi'])).toBe(true)
+  })
+
+  it('refuses somebody who may only read the address', () => {
+    // The list handed in is the sendable one. Reading accounts@ and being able
+    // to post as it are different rights, and only the second one is here.
+    expect(canEditDraft(filed, 'chris', ['hi'])).toBe(false)
+  })
+
+  it('keeps a draft with no address to its author, however much they may send as', () => {
+    // No inbox means no guest list to grant sending through: it is answering a
+    // conversation another module owns.
+    expect(canEditDraft(loose, 'chris', ['accounts', 'hi'])).toBe(false)
+    expect(canEditDraft(loose, 'marcus', [])).toBe(true)
   })
 })

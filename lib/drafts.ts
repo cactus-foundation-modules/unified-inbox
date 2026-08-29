@@ -137,9 +137,14 @@ export function forComposer(draft: Draft): DraftForComposer {
 // is answering a conversation another module owns, and there is no guest list to
 // grant sight through, so it stays with the person who wrote it.
 //
-// WRITING is a different question and has not moved. Editing, discarding and
-// sending stay with the author: finishing somebody else's sentence and putting
-// it in the post over their name is not the same favour as reading it.
+// WRITING now follows the same address. Editing, discarding and sending a draft
+// filed on an inbox belong to whoever may SEND from that inbox - a narrower list
+// than the one that may read it. The reply leaves as the address, not as the
+// person who typed it, so the name at the bottom is the inbox's either way; and
+// a draft nobody but its author can finish is a draft that dies with them, which
+// is exactly what happens when the person who wrote it is an agent, or on leave.
+// A draft with no address on it still stays with its author: there is no guest
+// list to grant sending through.
 // ---------------------------------------------------------------------------
 
 /** Whether this person may READ this draft. Mirrors the SQL in `draftScope`
@@ -154,7 +159,18 @@ export function canReadDraft(
   return draft.authorUserId === userId
 }
 
-/** Whether this person may change, discard or send this draft. */
-export function canEditDraft(draft: { authorUserId: string }, userId: string): boolean {
-  return draft.authorUserId === userId
+/** Whether this person may change, discard or send this draft. The SQL twin is
+ *  `editScope` (lib/db.ts) - if you change one, change the other, and the tests
+ *  below are what will tell you that you did not.
+ *
+ *  Note which list this takes: the inboxes this person may SEND from, not the
+ *  wider list they may read. Seeing what was half-written to the supplier and
+ *  being able to post it are different rights, and only the second one is here. */
+export function canEditDraft(
+  draft: { authorUserId: string; inboxId: string | null },
+  userId: string,
+  replyableInboxIds: string[],
+): boolean {
+  if (draft.authorUserId === userId) return true
+  return draft.inboxId ? replyableInboxIds.includes(draft.inboxId) : false
 }

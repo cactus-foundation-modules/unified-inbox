@@ -210,6 +210,13 @@ function mapInbox(r: Record<string, unknown>): Inbox {
   }
 }
 
+/** Just the ids, for the access helpers - they take the full list and hand back
+ *  the slice this person may read, or send from. Nothing needs the rows. */
+export async function allInboxIds(): Promise<string[]> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`SELECT "id" FROM "uin_inboxes"`
+  return rows.map((r) => r.id)
+}
+
 export async function listInboxes(): Promise<Inbox[]> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT * FROM "uin_inboxes" ORDER BY "sort_order" ASC, "name" ASC
@@ -2045,11 +2052,15 @@ export async function insertNote(data: {
 // A draft with no address on it answers a conversation another module owns.
 // There is no guest list to grant sight through, so it stays with its author.
 //
-// WRITING has not moved. saveDraft, deleteDraft and the send route all still
-// name the author in their WHERE clause, so reading somebody's draft never
-// becomes editing it or posting it over their name. The pure statement of both
-// halves, with the tests, is canReadDraft/canEditDraft in lib/drafts.ts - change
-// one and change the other.
+// WRITING follows the same address, but through the narrower list: editing,
+// discarding and sending belong to whoever may SEND from the inbox the draft is
+// filed on, not to everybody who may read it. saveDraft, deleteDraft and the
+// send route all AND that into their WHERE clause, so a draft on an address this
+// person cannot send as is never touched. Authorship is not rewritten when
+// somebody else finishes one - the row keeps the name of whoever started it, and
+// the reply leaves as the inbox regardless. The pure statement of both halves,
+// with the tests, is canReadDraft/canEditDraft in lib/drafts.ts - change one and
+// change the other.
 //
 // The visible-inbox list goes into the SQL for the same reason it does
 // everywhere else in this file (E17): the rule is ANDed into the query rather
@@ -2083,6 +2094,13 @@ function mapDraft(r: Record<string, unknown>): Draft {
 function draftScope(userId: string, inboxIds: string[]): Prisma.Sql {
   return Prisma.sql`(d."inbox_id" = ANY(${inboxIds}::text[])
       OR (d."inbox_id" IS NULL AND d."author_user_id" = ${userId}))`
+}
+
+/** Whose draft this person may CHANGE: their own, or one filed on an address
+ *  they may send from. The SQL twin of canEditDraft in lib/drafts.ts. */
+function editScope(userId: string, replyableInboxIds: string[]): Prisma.Sql {
+  return Prisma.sql`("author_user_id" = ${userId}
+      OR ("inbox_id" IS NOT NULL AND "inbox_id" = ANY(${replyableInboxIds}::text[])))`
 }
 
 export async function listDrafts(userId: string, inboxIds: string[]): Promise<Draft[]> {
@@ -2223,15 +2241,20 @@ export async function getDraft(
 /** Whatever THIS person left under this conversation, which the reply box opens
  *  on. One row at most - the unique index sees to that.
  *
- *  Deliberately still the author's own, unlike listDrafts above: this is what
- *  gets loaded into the reply box, and putting a colleague's half-written
- *  paragraph into somebody else's editor is how it ends up sent over the wrong
- *  name. Their draft is readable from the Drafts tab, which is where reading
- *  belongs. */
-export async function draftForThread(threadId: string, authorUserId: string): Promise<Draft | null> {
+ *  Their own first, and then anybody's on an address they may send from - the
+ *  reply box is where a draft gets finished, and a draft only its author can
+ *  finish is one that waits for ever when the author is an agent or on leave.
+ *  Own-first matters when two people have written on the same conversation:
+ *  nobody opens a reply box and finds their own paragraph replaced. */
+export async function draftForThread(
+  threadId: string,
+  userId: string,
+  replyableInboxIds: string[],
+): Promise<Draft | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT * FROM "uin_drafts"
-     WHERE "thread_id" = ${threadId} AND "author_user_id" = ${authorUserId}
+     WHERE "thread_id" = ${threadId} AND ${editScope(userId, replyableInboxIds)}
+     ORDER BY ("author_user_id" = ${userId}) DESC, "updated_at" DESC
      LIMIT 1
   `
   return rows[0] ? mapDraft(rows[0]) : null
@@ -2239,7 +2262,12 @@ export async function draftForThread(threadId: string, authorUserId: string): Pr
 
 export type DraftInput = {
   id?: string | null
+  /** Whoever is saving. On a brand new draft this becomes the author; on one
+   *  that already exists it is only half of who may touch it, and the row keeps
+   *  the name it was started under. */
   authorUserId: string
+  /** The inboxes this person may send from - the other half of that rule. */
+  replyableInboxIds: string[]
   inboxId: string | null
   threadId: string | null
   mode: DraftMode
@@ -2272,7 +2300,7 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
              "body"         = ${data.body},
              "attachments"  = ${JSON.stringify(data.attachments)}::jsonb,
              "updated_at"   = now()
-       WHERE "id" = ${data.id} AND "author_user_id" = ${data.authorUserId}
+       WHERE "id" = ${data.id} AND ${editScope(data.authorUserId, data.replyableInboxIds)}
       RETURNING *
     `
     if (updated[0]) return mapDraft(updated[0])
@@ -2304,9 +2332,13 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
 /** Throws one away. Returns whether there was one to throw - a Discard pressed
  *  twice is not an error, and neither is sending a message whose draft another
  *  tab has already tidied up. */
-export async function deleteDraft(id: string, authorUserId: string): Promise<boolean> {
+export async function deleteDraft(
+  id: string,
+  userId: string,
+  replyableInboxIds: string[],
+): Promise<boolean> {
   const count = await prisma.$executeRaw`
-    DELETE FROM "uin_drafts" WHERE "id" = ${id} AND "author_user_id" = ${authorUserId}
+    DELETE FROM "uin_drafts" WHERE "id" = ${id} AND ${editScope(userId, replyableInboxIds)}
   `
   return count > 0
 }
@@ -2316,11 +2348,12 @@ export async function deleteDraft(id: string, authorUserId: string): Promise<boo
  *  from the list without the browser having to remember to ask. */
 export async function discardDraftAfterSend(
   id: string | null | undefined,
-  authorUserId: string,
+  userId: string,
+  replyableInboxIds: string[],
 ): Promise<void> {
   if (!id) return
   try {
-    await deleteDraft(id, authorUserId)
+    await deleteDraft(id, userId, replyableInboxIds)
   } catch (err) {
     // The message has gone. A draft left behind is untidy; a failed send
     // reported to somebody whose email actually left is a lie.
