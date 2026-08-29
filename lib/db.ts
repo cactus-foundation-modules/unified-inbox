@@ -359,6 +359,8 @@ export async function setInboxAccess(
 const DEFAULT_SETTINGS: UnifiedInboxSettings = {
   backfillMonths: 12,
   retentionMonths: null,
+  retentionKeepLinked: true,
+  retentionLastRunAt: null,
   attachmentFetch: 'lazy',
   autoLink: true,
   defaultInboxId: null,
@@ -383,6 +385,11 @@ export async function getSettings(): Promise<UnifiedInboxSettings> {
     retentionMonths: r.retention_months === null || r.retention_months === undefined
       ? null
       : Number(r.retention_months),
+    // Defaults matter here: a site restored from a backup taken before this
+    // column existed reads undefined, and the cautious answer is the one that
+    // keeps mail rather than the one that removes it.
+    retentionKeepLinked: r.retention_keep_linked === undefined ? true : !!r.retention_keep_linked,
+    retentionLastRunAt: (r.retention_last_run_at as Date | null) ?? null,
     attachmentFetch: (r.attachment_fetch as AttachmentFetchMode) ?? 'lazy',
     autoLink: r.auto_link === undefined ? true : !!r.auto_link,
     defaultInboxId: (r.default_inbox_id as string | null) ?? null,
@@ -400,6 +407,10 @@ export async function updateSettings(data: Partial<UnifiedInboxSettings>): Promi
   const sets: Prisma.Sql[] = []
   if (data.backfillMonths !== undefined) sets.push(Prisma.sql`"backfill_months" = ${data.backfillMonths}`)
   if (data.retentionMonths !== undefined) sets.push(Prisma.sql`"retention_months" = ${data.retentionMonths}`)
+  if (data.retentionKeepLinked !== undefined) sets.push(Prisma.sql`"retention_keep_linked" = ${data.retentionKeepLinked}`)
+  // retentionLastRunAt is deliberately absent: the sweep stamps it through
+  // markRetentionRun, and a settings form that could write it would be able to
+  // tell the screen a pass happened when none did.
   if (data.attachmentFetch !== undefined) sets.push(Prisma.sql`"attachment_fetch" = ${data.attachmentFetch}`)
   if (data.autoLink !== undefined) sets.push(Prisma.sql`"auto_link" = ${data.autoLink}`)
   if (data.defaultInboxId !== undefined) sets.push(Prisma.sql`"default_inbox_id" = ${data.defaultInboxId}`)
@@ -1476,6 +1487,21 @@ function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
   else if (f.assignee) where.push(Prisma.sql`t."assignee_user_id" = ${f.assignee}`)
   const q = f.search?.trim()
   if (q) {
+    // Correlated on purpose, and measured rather than assumed: on 14,000
+    // conversations and 31,000 messages with ordinary varied text, this plans
+    // as a bitmap scan of uin_messages_search_idx feeding a semi join, and
+    // answers in 32ms. Rewriting it as an uncorrelated `t.id IN (SELECT ...)`
+    // measured the same to within noise, so the shape S5 shipped stands.
+    //
+    // A warning for whoever measures this next: a fixture where every message
+    // carries the same words makes the search term match half the table, and
+    // Postgres then correctly ignores the index and scans - which reads exactly
+    // like a missing index and is nothing of the kind. Vary the bodies, or the
+    // measurement will tell you the opposite of the truth.
+    //
+    // E17: this is ANDed with the visibility clause inside one WHERE, so a
+    // conversation in an inbox the reader cannot open is never fetched, never
+    // counted and never paged.
     where.push(Prisma.sql`EXISTS (
       SELECT 1 FROM "uin_messages" ms
        WHERE ms."thread_id" = t."id"
@@ -1485,11 +1511,31 @@ function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
   return where
 }
 
-/** The columns and the participant join every list of conversations needs,
- *  written once so the inbox list and a person's own page cannot drift apart.
- *  See ThreadListRow for why the participant comes from their newest INBOUND
- *  message rather than simply the newest. */
-const THREAD_LIST_SELECT = Prisma.sql`
+/** The order every list of conversations is drawn in. Written once because the
+ *  page and the join below both have to agree about it. */
+const THREAD_LIST_ORDER = Prisma.sql`t."last_message_at" DESC NULLS LAST, t."id" DESC`
+
+/**
+ * The columns and the participant join every list of conversations needs,
+ * written once so the inbox list and a person's own page cannot drift apart.
+ * See ThreadListRow for why the participant comes from their newest INBOUND
+ * message rather than simply the newest.
+ *
+ * The page is taken BEFORE the join, which is not decoration.
+ *
+ * Written the obvious way round - join every matching conversation to its
+ * newest message, then sort and keep 25 - the participant lookup runs once per
+ * matching row rather than once per row shown. Measured on 14,000
+ * conversations, an ordinary All view spent 86ms and read 30,000 pages to
+ * return 25 rows, and that cost grows with the size of the mailbox rather than
+ * with the size of the page: the same screen on a site with ten times the mail
+ * would take ten times as long, for ever, on every page load.
+ *
+ * So the inner query narrows to the page first - which is an index scan, since
+ * the ordering is the index's own - and only those rows are joined.
+ */
+function threadListQuery(where: Prisma.Sql[], limit: number, offset: number): Prisma.Sql {
+  return Prisma.sql`
     SELECT t."id", t."inbox_id", t."channel", t."provider_module", t."subject",
            t."preview", t."status", t."snooze_until", t."assignee_user_id",
            t."last_message_at", t."last_direction", t."unread", t."message_count",
@@ -1499,7 +1545,12 @@ const THREAD_LIST_SELECT = Prisma.sql`
            lm."to_addresses"     AS "last_to",
            lm."direction"        AS "last_direction_message",
            lm."has_attachments"  AS "last_has_attachments"
-      FROM "uin_threads" t
+      FROM (
+        SELECT t.* FROM "uin_threads" t
+         WHERE ${Prisma.join(where, ' AND ')}
+         ORDER BY ${THREAD_LIST_ORDER}
+         LIMIT ${limit} OFFSET ${offset}
+      ) t
       LEFT JOIN LATERAL (
         SELECT m."from_name", m."from_address", m."from_phone", m."to_addresses", m."direction",
                m."has_attachments"
@@ -1507,7 +1558,9 @@ const THREAD_LIST_SELECT = Prisma.sql`
          WHERE m."thread_id" = t."id" AND m."direction" <> 'note'
          ORDER BY (m."direction" = 'in') DESC, m."sent_at" DESC
          LIMIT 1
-      ) lm ON true`
+      ) lm ON true
+     ORDER BY ${THREAD_LIST_ORDER}`
+}
 
 function mapThreadListRow(r: Record<string, unknown>): ThreadListRow {
   const direction = (r.last_direction_message as string | null) ?? null
@@ -1543,12 +1596,9 @@ export async function listThreads(f: ThreadListFilters): Promise<ThreadListRow[]
   if (!visible) return []
   const where = [visible, ...filterClauses(f)]
   const offset = Math.max(0, (f.page - 1) * f.perPage)
-  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    ${THREAD_LIST_SELECT}
-     WHERE ${Prisma.join(where, ' AND ')}
-     ORDER BY t."last_message_at" DESC NULLS LAST, t."id" DESC
-     LIMIT ${f.perPage} OFFSET ${offset}
-  `
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>(
+    threadListQuery(where, f.perPage, offset),
+  )
   return rows.map(mapThreadListRow)
 }
 
@@ -2185,12 +2235,9 @@ export async function threadsForPerson(
 ): Promise<ThreadListRow[]> {
   const visible = visibilityClause(inboxIds, includeUnrouted, providerModules)
   if (!visible) return []
-  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    ${THREAD_LIST_SELECT}
-     WHERE ${visible} AND t."person_id" = ${personId}
-     ORDER BY t."last_message_at" DESC NULLS LAST
-     LIMIT 50
-  `
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>(
+    threadListQuery([visible, Prisma.sql`t."person_id" = ${personId}`], 50, 0),
+  )
   return rows.map(mapThreadListRow)
 }
 
@@ -2866,4 +2913,344 @@ export async function claimLocalOutbound(input: {
      )
   `
   return updated > 0
+}
+
+// ---------------------------------------------------------------------------
+// S8: retention, erasure and housekeeping.
+//
+// Everything below removes things, which makes it the part of this file worth
+// reading twice. Three rules hold throughout:
+//
+//   Nothing is removed without something having asked for it in so many words -
+//   a retention window the owner set, or a person somebody chose to erase.
+//   Stored attachment objects go before their rows do, so an interrupted sweep
+//   leaves an orphaned object rather than a row pointing at nothing.
+//   Every count the screens show comes from the same queries the deletes use,
+//   so a confirmation dialog cannot promise one thing and do another.
+// ---------------------------------------------------------------------------
+
+/** A conversation the retention window has caught up with. */
+export type RetentionCandidate = {
+  id: string
+  lastMessageAt: Date | null
+  /** True when it carries a link to one of the site's own records. */
+  linked: boolean
+}
+
+/** Conversations older than the cutoff, oldest first, in batches. `keepLinked`
+ *  is the setting: with it on, a conversation carrying an order, a purchase
+ *  order or a quote is left alone however old it is. */
+export async function threadsDueForRetention(
+  cutoff: Date,
+  keepLinked: boolean,
+  limit: number,
+): Promise<RetentionCandidate[]> {
+  const linkCheck = Prisma.sql`EXISTS (
+    SELECT 1 FROM "uin_record_links" rl WHERE rl."thread_id" = t."id"
+  )`
+  const where: Prisma.Sql[] = [Prisma.sql`t."last_message_at" < ${cutoff}`]
+  if (keepLinked) where.push(Prisma.sql`NOT ${linkCheck}`)
+  // With keepLinked on, every row that survives the WHERE is unlinked by
+  // definition, so asking again in the SELECT list is a second pass over the
+  // link table for an answer we already have.
+  const linked = keepLinked ? Prisma.sql`false` : linkCheck
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT t."id", t."last_message_at", ${linked} AS "linked"
+      FROM "uin_threads" t
+     WHERE ${Prisma.join(where, ' AND ')}
+     ORDER BY t."last_message_at" ASC
+     LIMIT ${limit}
+  `
+  return rows.map((r) => ({
+    id: r.id as string,
+    lastMessageAt: (r.last_message_at as Date | null) ?? null,
+    linked: !!r.linked,
+  }))
+}
+
+/** What the settings screen shows before anybody turns a window on: how many
+ *  conversations the cutoff catches, and how many of those are being kept back
+ *  only because they carry a link. Silence about the second number is how
+ *  somebody loses the correspondence behind an invoice dispute. */
+export async function retentionDueCounts(cutoff: Date): Promise<{ due: number; linked: number }> {
+  const rows = await prisma.$queryRaw<{ due: bigint; linked: bigint }[]>`
+    SELECT COUNT(*)::bigint AS "due",
+           COUNT(*) FILTER (
+             WHERE EXISTS (SELECT 1 FROM "uin_record_links" rl WHERE rl."thread_id" = t."id")
+           )::bigint AS "linked"
+      FROM "uin_threads" t
+     WHERE t."last_message_at" < ${cutoff}
+  `
+  return { due: Number(rows[0]?.due ?? 0), linked: Number(rows[0]?.linked ?? 0) }
+}
+
+/** A stored object this module owns, so the sweep can take the bytes out of
+ *  storage before it takes the row out of the database. */
+export type StoredObjectRef = { attachmentId: string; mediaKey: string; mediaProvider: string }
+
+export async function storedObjectsForThreads(threadIds: string[]): Promise<StoredObjectRef[]> {
+  if (threadIds.length === 0) return []
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT a."id", a."media_key", a."media_provider"
+      FROM "uin_attachments" a
+      JOIN "uin_messages" m ON m."id" = a."message_id"
+     WHERE m."thread_id" IN (${Prisma.join(threadIds)})
+       AND a."media_key" IS NOT NULL
+       AND a."media_provider" IS NOT NULL
+  `
+  return rows.map((r) => ({
+    attachmentId: r.id as string,
+    mediaKey: r.media_key as string,
+    mediaProvider: r.media_provider as string,
+  }))
+}
+
+/** Removes the conversations themselves. Messages, attachment rows, events and
+ *  links go with them by cascade; the location ledger keeps its row with a null
+ *  thread, which is deliberate - it is what stops the next sync collecting the
+ *  very mail the owner has just asked us to stop holding. */
+export async function deleteThreads(threadIds: string[]): Promise<number> {
+  if (threadIds.length === 0) return 0
+  return prisma.$executeRaw`
+    DELETE FROM "uin_threads" WHERE "id" IN (${Prisma.join(threadIds)})
+  `
+}
+
+/** People left holding nothing: no conversations, no links, nobody merged into
+ *  them, and never edited by hand. E8's other half - a thread that minted a
+ *  person and has since gone should not leave the person behind. A name or a
+ *  note somebody typed is their work and is never swept. */
+export async function pruneOrphanPeople(limit: number): Promise<number> {
+  return prisma.$executeRaw`
+    DELETE FROM "uin_people" p
+     WHERE p."id" IN (
+       SELECT p2."id" FROM "uin_people" p2
+        WHERE p2."display_name" IS NULL
+          AND p2."notes" IS NULL
+          AND p2."merged_into_id" IS NULL
+          AND NOT EXISTS (SELECT 1 FROM "uin_threads" t WHERE t."person_id" = p2."id")
+          AND NOT EXISTS (SELECT 1 FROM "uin_record_links" rl WHERE rl."person_id" = p2."id")
+          AND NOT EXISTS (SELECT 1 FROM "uin_people" o WHERE o."merged_into_id" = p2."id")
+          AND NOT EXISTS (SELECT 1 FROM "uin_person_merges" pm WHERE pm."loser_id" = p2."id" AND pm."undone_at" IS NULL)
+        LIMIT ${limit}
+     )
+  `
+}
+
+/** Organisations nobody belongs to any more. They hold a name and a domain and
+ *  nothing else, so there is nothing to lose and a settings screen counting
+ *  three thousand organisations for eleven people is simply wrong. */
+export async function pruneOrphanOrganisations(limit: number): Promise<number> {
+  return prisma.$executeRaw`
+    DELETE FROM "uin_organisations" o
+     WHERE o."id" IN (
+       SELECT o2."id" FROM "uin_organisations" o2
+        WHERE NOT EXISTS (SELECT 1 FROM "uin_people" p WHERE p."organisation_id" = o2."id")
+          AND NOT EXISTS (SELECT 1 FROM "uin_threads" t WHERE t."organisation_id" = o2."id")
+        LIMIT ${limit}
+     )
+  `
+}
+
+export async function markRetentionRun(): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "uin_settings" SET "retention_last_run_at" = now() WHERE "id" = 'singleton'
+  `
+}
+
+/**
+ * Messages that were written down as 'sending' and never settled. That is a
+ * crash between writing the row and the network call answering, and S4 left it
+ * for here on purpose: without this they sit in the thread for ever saying
+ * "sending", with no way for anybody to tell whether the customer got it.
+ *
+ * Marked failed rather than removed, because the row is the only evidence the
+ * attempt happened at all - and a failed message has a Retry button, which is
+ * exactly what somebody wants when they find one.
+ */
+export async function failStalledSends(olderThan: Date): Promise<number> {
+  return prisma.$executeRaw`
+    UPDATE "uin_messages"
+       SET "delivery_status" = 'failed',
+           "delivery_error" = 'This was interrupted while it was being sent, so we cannot tell whether it arrived. Check with them before sending it again.'
+     WHERE "delivery_status" = 'sending'
+       AND "created_at" < ${olderThan}
+  `
+}
+
+// ---------------------------------------------------------------------------
+// One person: everything held about them, and taking it away again (D17).
+// ---------------------------------------------------------------------------
+
+/** What an erase would remove, counted from the same tables the erase deletes
+ *  from, so the dialog and the deed cannot disagree. */
+export type PersonErasePreview = {
+  personId: string
+  name: string | null
+  conversations: number
+  messages: number
+  attachments: number
+  storedAttachments: number
+  identities: string[]
+  /** Records elsewhere on the site this person's conversations point at. These
+   *  are NOT erased - the link goes, the order does not - and the dialog says
+   *  so by name (E22). */
+  links: Array<{ moduleName: string; label: string | null }>
+  /** Automated mail core's own delivery ledger holds for their addresses. Also
+   *  not erased, and also said out loud. */
+  outboundLogRows: number
+}
+
+export async function personErasePreview(personId: string): Promise<PersonErasePreview | null> {
+  const person = await getPerson(personId)
+  if (!person) return null
+
+  const identities = await listIdentities(personId)
+  const emails = identities.filter((i) => i.kind === 'email').map((i) => i.value.toLowerCase())
+
+  const [counts] = await prisma.$queryRaw<Array<{ conversations: bigint; messages: bigint; attachments: bigint; stored: bigint }>>`
+    SELECT COUNT(DISTINCT t."id")::bigint AS "conversations",
+           COUNT(DISTINCT m."id")::bigint AS "messages",
+           COUNT(DISTINCT a."id")::bigint AS "attachments",
+           COUNT(DISTINCT a."id") FILTER (WHERE a."media_key" IS NOT NULL)::bigint AS "stored"
+      FROM "uin_threads" t
+      LEFT JOIN "uin_messages" m ON m."thread_id" = t."id"
+      LEFT JOIN "uin_attachments" a ON a."message_id" = m."id"
+     WHERE t."person_id" = ${personId}
+  `
+
+  const links = await prisma.$queryRaw<Array<{ module_name: string; label: string | null }>>`
+    SELECT DISTINCT rl."module_name", rl."label"
+      FROM "uin_record_links" rl
+      LEFT JOIN "uin_threads" t ON t."id" = rl."thread_id"
+     WHERE rl."person_id" = ${personId} OR t."person_id" = ${personId}
+     ORDER BY rl."module_name"
+  `
+
+  const outboundLogRows = emails.length > 0
+    ? await prisma.emailLog.count({ where: { toAddress: { in: emails, mode: 'insensitive' } } })
+    : 0
+
+  return {
+    personId,
+    name: person.displayName || person.primaryEmail,
+    conversations: Number(counts?.conversations ?? 0),
+    messages: Number(counts?.messages ?? 0),
+    attachments: Number(counts?.attachments ?? 0),
+    storedAttachments: Number(counts?.stored ?? 0),
+    identities: identities.map((i) => i.value),
+    links: links.map((l) => ({ moduleName: l.module_name, label: l.label })),
+    outboundLogRows,
+  }
+}
+
+/** Their conversations, for the erase to walk and for the export to read. */
+export async function threadIdsForPerson(personId: string): Promise<string[]> {
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+    SELECT "id" FROM "uin_threads" WHERE "person_id" = ${personId}
+  `
+  return rows.map((r) => r.id)
+}
+
+/** Removes the person themselves once their conversations have gone. Identities,
+ *  their links and their audit rows go by cascade; the merge ledger does not
+ *  (it holds no foreign key on purpose, so a merge survives an undo losing its
+ *  row), so it is cleared by hand. */
+export async function deletePersonRow(personId: string): Promise<void> {
+  await prisma.$executeRaw`
+    DELETE FROM "uin_person_merges" WHERE "winner_id" = ${personId} OR "loser_id" = ${personId}
+  `
+  await prisma.$executeRaw`DELETE FROM "uin_people" WHERE "id" = ${personId}`
+}
+
+/** Every message on a person's conversations, bodies and all, for the export.
+ *  This is the one place in the module that hands whole message bodies to a
+ *  caller, which is why it exists in its own function with its own name. */
+export type ExportMessageRow = {
+  id: string
+  threadId: string
+  direction: string
+  channel: string
+  subject: string | null
+  fromName: string | null
+  fromAddress: string | null
+  fromPhone: string | null
+  toAddresses: string[]
+  ccAddresses: string[]
+  sentAt: Date | null
+  bodyText: string | null
+  bodyHtml: string | null
+  attachments: Array<{ filename: string; contentType: string | null; sizeBytes: number | null }>
+}
+
+export async function exportMessagesForThreads(threadIds: string[]): Promise<ExportMessageRow[]> {
+  if (threadIds.length === 0) return []
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT m."id", m."thread_id", m."direction", m."channel", m."subject",
+           m."from_name", m."from_address", m."from_phone", m."to_addresses",
+           m."cc_addresses", m."sent_at", m."body_text", m."body_html",
+           COALESCE(
+             (SELECT json_agg(json_build_object(
+                'filename', a."filename",
+                'contentType', a."content_type",
+                'sizeBytes', a."size_bytes"
+              ) ORDER BY a."created_at")
+                FROM "uin_attachments" a WHERE a."message_id" = m."id"),
+             '[]'::json
+           ) AS "attachments"
+      FROM "uin_messages" m
+     WHERE m."thread_id" IN (${Prisma.join(threadIds)})
+     ORDER BY m."sent_at" ASC NULLS LAST, m."created_at" ASC
+  `
+  return rows.map((r) => ({
+    id: r.id as string,
+    threadId: r.thread_id as string,
+    direction: r.direction as string,
+    channel: r.channel as string,
+    subject: (r.subject as string | null) ?? null,
+    fromName: (r.from_name as string | null) ?? null,
+    fromAddress: (r.from_address as string | null) ?? null,
+    fromPhone: (r.from_phone as string | null) ?? null,
+    toAddresses: (r.to_addresses as string[] | null) ?? [],
+    ccAddresses: (r.cc_addresses as string[] | null) ?? [],
+    sentAt: (r.sent_at as Date | null) ?? null,
+    bodyText: (r.body_text as string | null) ?? null,
+    bodyHtml: (r.body_html as string | null) ?? null,
+    attachments: (r.attachments as ExportMessageRow['attachments'] | null) ?? [],
+  }))
+}
+
+/** The conversations themselves, without the access filter: the export and the
+ *  erase are both administrator-only operations about one named person, and an
+ *  export of "everything we hold about you" that quietly left out the inboxes
+ *  the administrator happens not to be on would be a false answer to a legal
+ *  question. The permission check is in the route. */
+export async function exportThreadsForPerson(personId: string): Promise<Array<{
+  id: string
+  channel: string
+  providerModule: string | null
+  subject: string | null
+  status: string
+  lastMessageAt: Date | null
+  messageCount: number
+  inboxName: string | null
+}>> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT t."id", t."channel", t."provider_module", t."subject", t."status",
+           t."last_message_at", t."message_count", i."name" AS "inbox_name"
+      FROM "uin_threads" t
+      LEFT JOIN "uin_inboxes" i ON i."id" = t."inbox_id"
+     WHERE t."person_id" = ${personId}
+     ORDER BY t."last_message_at" ASC NULLS LAST
+  `
+  return rows.map((r) => ({
+    id: r.id as string,
+    channel: r.channel as string,
+    providerModule: (r.provider_module as string | null) ?? null,
+    subject: (r.subject as string | null) ?? null,
+    status: r.status as string,
+    lastMessageAt: (r.last_message_at as Date | null) ?? null,
+    messageCount: Number(r.message_count ?? 0),
+    inboxName: (r.inbox_name as string | null) ?? null,
+  }))
 }

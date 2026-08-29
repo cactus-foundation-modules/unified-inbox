@@ -15,6 +15,19 @@ import { useRouter } from 'next/navigation'
 type Identity = { id: string; value: string; kind: string }
 type Merge = { id: string; loserName: string | null }
 
+/** What an erase would take, counted from the tables the erase deletes from -
+ *  so this panel and the deed cannot disagree. */
+type ErasePreview = {
+  name: string | null
+  conversations: number
+  messages: number
+  attachments: number
+  storedAttachments: number
+  identities: string[]
+  links: Array<{ moduleName: string; label: string | null }>
+  outboundLogRows: number
+}
+
 type Props = {
   personId: string
   displayName: string | null
@@ -25,6 +38,11 @@ type Props = {
 }
 
 type Found = { id: string; name: string | null; email: string | null; organisation: string | null; conversations: number }
+
+/** See the erase panel below: the alert's own colour does not clear AA for a
+ *  block of body text this long, and this is the one block that has to be read
+ *  rather than glanced at. */
+const ERASE_BODY = { color: 'var(--color-text)' } as const
 
 export function PersonActions({ personId, displayName, notes, identities, merges, canManage }: Props) {
   const router = useRouter()
@@ -40,6 +58,9 @@ export function PersonActions({ personId, displayName, notes, identities, merges
 
   const [splitting, setSplitting] = useState(false)
   const [chosen, setChosen] = useState<string[]>([])
+
+  const [erasing, setErasing] = useState(false)
+  const [preview, setPreview] = useState<ErasePreview | null>(null)
 
   const call = useCallback(async (url: string, init: RequestInit): Promise<boolean> => {
     setBusy(true)
@@ -108,6 +129,44 @@ export function PersonActions({ personId, displayName, notes, identities, merges
     if (ok) { setSplitting(false); setChosen([]) }
   }
 
+  // Asking what would go BEFORE offering the button that does it. The counts
+  // come from the same queries the delete runs, so this is the deed described
+  // rather than the deed guessed at.
+  async function openErase() {
+    if (erasing) { setErasing(false); return }
+    setBusy(true)
+    setError('')
+    try {
+      const response = await fetch(`/api/m/unified-inbox/people/${personId}/erase`)
+      const data = await response.json().catch(() => null)
+      if (!response.ok) {
+        setError(data?.error ?? 'That did not work.')
+        return
+      }
+      setPreview(data.preview as ErasePreview)
+      setErasing(true)
+    } catch {
+      setError('The site could not be reached, so nothing changed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function erase() {
+    if (!preview) return
+    const label = preview.name || 'this person'
+    const warning =
+      `Erase everything the inbox holds about ${label}?\n\n` +
+      `This removes ${preview.conversations} conversation${preview.conversations === 1 ? '' : 's'}, ` +
+      `${preview.messages} message${preview.messages === 1 ? '' : 's'} and ` +
+      `${preview.attachments} attached file${preview.attachments === 1 ? '' : 's'}, and cannot be undone.\n\n` +
+      'It does NOT remove their orders, invoices, quotes, purchase orders or member account. ' +
+      'Those are held elsewhere on this site and are not touched.'
+    if (!window.confirm(warning)) return
+    const ok = await call(`/api/m/unified-inbox/people/${personId}/erase`, { method: 'POST' })
+    if (ok) { setErasing(false); setPreview(null) }
+  }
+
   return (
     <div style={{ display: 'grid', gap: '0.5rem' }}>
       <div className="uin-thread-actions">
@@ -127,6 +186,15 @@ export function PersonActions({ personId, displayName, notes, identities, merges
                 Split them apart
               </button>
             )}
+            {/* Both of these answer a request from the person themselves, which
+                is why they sit together and behind the strongest permission. */}
+            <a className="btn btn-secondary btn-sm" href={`/api/m/unified-inbox/people/${personId}/export`}>
+              Download everything we hold
+            </a>
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                    onClick={openErase} aria-expanded={erasing}>
+              Erase them
+            </button>
           </>
         )}
       </div>
@@ -211,6 +279,56 @@ export function PersonActions({ personId, displayName, notes, identities, merges
               Move them out
             </button>
             <button type="button" className="uin-chip" disabled={busy} onClick={() => setSplitting(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {canManage && erasing && preview && (
+        // The alert is the right container - this is the most serious thing on
+        // the screen - but the body text is set back to the ordinary text
+        // colour rather than inheriting the alert's own red. Measured on the
+        // rendered page, that red on its tinted ground is 4.4:1 at this size,
+        // which is under AA, and this is precisely the block somebody must be
+        // able to read carefully before they take a customer's history away.
+        // The headings went the same way for the same reason - 15px at weight
+        // 600 is not "large text" by the rule, so the red does not clear AA
+        // there either. The alert's own tint, its border and the red button
+        // carry the seriousness; the words only have to be readable.
+        <div className="alert alert-danger" style={ERASE_BODY}>
+          <p style={{ marginTop: 0, fontWeight: 600 }}>
+            Erasing {preview.name || 'this person'} removes, from this inbox only:
+          </p>
+          <ul style={{ margin: '0 0 0.75rem 1.25rem', padding: 0 }}>
+            <li>{preview.conversations} conversation{preview.conversations === 1 ? '' : 's'}, with {preview.messages} message{preview.messages === 1 ? '' : 's'}</li>
+            <li>{preview.attachments} attached file{preview.attachments === 1 ? '' : 's'}{preview.storedAttachments > 0 ? `, ${preview.storedAttachments} of which we are storing a copy of` : ''}</li>
+            <li>{preview.identities.length} address{preview.identities.length === 1 ? '' : 'es'}: {preview.identities.join(', ') || 'none on record'}</li>
+            <li>Everything we worked out about them - their name, their notes and their organisation</li>
+          </ul>
+          <p style={{ marginTop: 0, fontWeight: 600 }}>It does NOT remove:</p>
+          <ul style={{ margin: '0 0 0.75rem 1.25rem', padding: 0 }}>
+            {preview.links.length > 0 && (
+              <li>
+                {preview.links.length} record{preview.links.length === 1 ? '' : 's'} attached to their
+                conversations ({[...new Set(preview.links.map((l) => l.moduleName))].join(', ')}). The
+                attachment goes; the record stays where it is.
+              </li>
+            )}
+            <li>Their orders, invoices, quotes, purchase orders or member account. Those belong to the other parts of this site and have their own rules about keeping them.</li>
+            {preview.outboundLogRows > 0 && (
+              <li>
+                The site&rsquo;s record that {preview.outboundLogRows} automated email{preview.outboundLogRows === 1 ? ' was' : 's were'} sent
+                to them. That record holds the address and the subject and has never held a copy of what was said.
+              </li>
+            )}
+          </ul>
+          <p style={{ marginTop: 0 }}>This cannot be undone.</p>
+          <div className="uin-thread-actions">
+            <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={erase}>
+              Erase them for good
+            </button>
+            <button type="button" className="uin-chip" disabled={busy} onClick={() => { setErasing(false); setPreview(null) }}>
+              Leave it
+            </button>
           </div>
         </div>
       )}

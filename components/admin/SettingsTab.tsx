@@ -52,6 +52,8 @@ type AccessRow = { inboxId: string; userId: string; canReply: boolean }
 type Settings = {
   backfillMonths: number
   retentionMonths: number | null
+  retentionKeepLinked: boolean
+  retentionLastRunAt: string | null
   attachmentFetch: 'lazy' | 'always' | 'never'
   autoLink: boolean
   defaultInboxId: string | null
@@ -85,6 +87,10 @@ type Payload = {
    *  about it. One per mail account, never more. */
   warnings: Array<{ connectionId: string; message: string }>
   people: { people: number; organisations: number }
+  /** What the window would remove on its next pass, and what is being held back
+   *  only because it is attached to one of the site's own records. Null when no
+   *  window is set, which is where every site starts. */
+  retention: { cutoff: string; due: number; keptForLinks: number } | null
   users: StaffMember[]
   encryptionReady: boolean
 }
@@ -217,6 +223,7 @@ export function UnifiedInboxSettingsTab() {
       <ModuleSettingsSection
         settings={data.settings}
         inboxes={data.inboxes}
+        retention={data.retention ?? null}
         busy={busy}
         call={call}
       />
@@ -720,9 +727,10 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
 // Module settings
 // ---------------------------------------------------------------------------
 
-function ModuleSettingsSection({ settings, inboxes, busy, call }: {
+function ModuleSettingsSection({ settings, inboxes, retention, busy, call }: {
   settings: Settings
   inboxes: Inbox[]
+  retention: { cutoff: string; due: number; keptForLinks: number } | null
   busy: boolean
   call: Caller
 }) {
@@ -742,6 +750,7 @@ function ModuleSettingsSection({ settings, inboxes, busy, call }: {
       body: JSON.stringify({
         backfillMonths: Number(draft.backfillMonths) || 12,
         retentionMonths: draft.retentionMonths === null ? null : Number(draft.retentionMonths) || null,
+        retentionKeepLinked: draft.retentionKeepLinked,
         attachmentFetch: draft.attachmentFetch,
         autoLink: draft.autoLink,
         defaultInboxId: draft.defaultInboxId || null,
@@ -773,7 +782,45 @@ function ModuleSettingsSection({ settings, inboxes, busy, call }: {
           value={draft.retentionMonths ?? ''}
           onChange={(e) => setDraft({ ...draft, retentionMonths: e.target.value === '' ? null : Number(e.target.value) })}
         />
+        <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.375rem 0 0' }}>
+          Blank means keep everything, which is how every site starts. Set a number and the
+          conversations older than that are removed for good, a few hundred a night, along with any
+          files attached to them. There is no way to get them back afterwards.
+        </p>
       </div>
+      <div className="field">
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontWeight: 400 }}>
+          <input
+            type="checkbox"
+            checked={draft.retentionKeepLinked}
+            onChange={(e) => setDraft({ ...draft, retentionKeepLinked: e.target.checked })}
+          />
+          Keep a conversation for ever if it has an order, a purchase order or a quote attached
+        </label>
+        <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.375rem 0 0' }}>
+          Leave this on unless you have a reason not to. It is what stops a tidy-up aimed at old
+          mailing lists taking the correspondence behind a disputed invoice with it.
+        </p>
+      </div>
+      {retention && (
+        <div className="alert alert-info">
+          <p style={{ margin: 0 }}>
+            As things stand, the next tidy-up would remove <strong>{retention.due}</strong>{' '}
+            conversation{retention.due === 1 ? '' : 's'} last written to before{' '}
+            {new Date(retention.cutoff).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}.
+            {retention.keptForLinks > 0 && (
+              <> Another <strong>{retention.keptForLinks}</strong> {retention.keptForLinks === 1 ? 'is' : 'are'} old
+              enough but {retention.keptForLinks === 1 ? 'is' : 'are'} being kept because something is attached to{' '}
+              {retention.keptForLinks === 1 ? 'it' : 'them'}.</>
+            )}
+          </p>
+          {settings.retentionLastRunAt && (
+            <p style={{ margin: '0.375rem 0 0', fontSize: '0.8125rem' }}>
+              Last tidy-up: {new Date(settings.retentionLastRunAt).toLocaleString('en-GB')}.
+            </p>
+          )}
+        </div>
+      )}
       <div className="field">
         <label>Attachments</label>
         <select

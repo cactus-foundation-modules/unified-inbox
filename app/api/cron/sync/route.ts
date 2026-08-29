@@ -4,6 +4,7 @@ import { syncAllConnections } from '@/modules/unified-inbox/lib/sync'
 import { CRON_BUDGET_MS, CRON_PEOPLE_DEADLINE_MS } from '@/modules/unified-inbox/lib/sync-plan'
 import { runPeoplePass } from '@/modules/unified-inbox/lib/identity'
 import { syncAllProviders, PROVIDER_BUDGET_MS } from '@/modules/unified-inbox/lib/provider-sync'
+import { sweepStalledSends } from '@/modules/unified-inbox/lib/retention'
 
 // The scheduled mail check.
 //
@@ -31,6 +32,14 @@ export async function GET(request: NextRequest) {
   if (auth !== `Bearer ${secret}`) return errorResponse('Unauthorized', 401)
 
   const started = Date.now()
+
+  // First, and cheaply: anything left saying "sending" from a run that crashed
+  // between writing the row and the send answering. One update against a
+  // partial index that on any ordinary site holds no rows at all, and it means
+  // nobody stares at a message stuck mid-flight for longer than an hour. The
+  // rest of the tidying is a daily job of its own - see cron/housekeeping.
+  const stalledSends = await sweepStalledSends()
+
   const outcomes = await syncAllConnections({ budgetMs: CRON_BUDGET_MS })
 
   // Then the channels another module owns - chat, enquiries, calls, texts.
@@ -52,6 +61,7 @@ export async function GET(request: NextRequest) {
     collected: outcomes.reduce((total, o) => total + o.stored, 0),
     channels: channels.length,
     channelMessages: channels.reduce((total, c) => total + c.messages, 0),
+    stalledSends,
     people: people.people,
     linked: people.links,
     outcomes,

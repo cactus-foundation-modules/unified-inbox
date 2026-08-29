@@ -16,6 +16,7 @@ import {
   updateSettings,
 } from '@/modules/unified-inbox/lib/db'
 import { clashMessage, mailboxClashes } from '@/modules/unified-inbox/lib/reply-catcher-guard'
+import { retentionPreview } from '@/modules/unified-inbox/lib/retention'
 
 // Everything the settings screen draws, in one request: the mail accounts, the
 // inboxes hanging off them, who may read which, the module's own settings, and
@@ -27,7 +28,7 @@ export async function GET() {
   if (!user) return errorResponse('Not authenticated', 401)
   if (!await hasPermission(user, 'unifiedinbox.manage')) return errorResponse('Forbidden', 403)
 
-  const [connections, inboxes, access, settings, collection, unrouted, people, clashes, users] = await Promise.all([
+  const [connections, inboxes, access, settings, collection, unrouted, people, clashes, retention, users] = await Promise.all([
     listConnections(),
     listInboxes(),
     listAllInboxAccess(),
@@ -36,6 +37,7 @@ export async function GET() {
     unroutedCount(),
     peopleCount(),
     mailboxClashes(),
+    retentionPreview(),
     prisma.user.findMany({
       where: { suspendedAt: null },
       select: { id: true, displayName: true, username: true, email: true },
@@ -64,6 +66,11 @@ export async function GET() {
     // and the screen has to say so, or an address that quietly never checks
     // looks exactly like an address that is broken.
     warnings: clashes.map((c) => ({ connectionId: c.connectionId, message: clashMessage(c) })),
+    // What the retention window would remove tonight, and how much is being
+    // held back only because it carries a link to one of the site's own
+    // records. Somebody setting a window deserves to see the number BEFORE the
+    // sweep runs, not to find out afterwards.
+    retention,
     users: users.map((u) => ({
       id: u.id,
       name: u.displayName || u.username,
@@ -92,6 +99,7 @@ const Domains = z.array(z.string().trim().toLowerCase().max(255)).max(100)
 const Body = z.object({
   backfillMonths: z.number().int().min(1).max(240).optional(),
   retentionMonths: z.number().int().min(1).max(240).nullable().optional(),
+  retentionKeepLinked: z.boolean().optional(),
   attachmentFetch: z.enum(['lazy', 'always', 'never']).optional(),
   autoLink: z.boolean().optional(),
   defaultInboxId: z.string().nullable().optional(),

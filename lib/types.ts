@@ -70,6 +70,13 @@ export type InboxAccess = {
 export type UnifiedInboxSettings = {
   backfillMonths: number
   retentionMonths: number | null
+  /** Whether a conversation carrying a link to one of the site's own records -
+   *  an order, a purchase order, a quote - survives the retention window. On by
+   *  default: somebody who set a twelve month window was thinking about mailing
+   *  lists, not about the invoice dispute from eighteen months ago. */
+  retentionKeepLinked: boolean
+  /** When the sweep last finished a pass. Read only - the sweep sets it. */
+  retentionLastRunAt: Date | null
   attachmentFetch: AttachmentFetchMode
   autoLink: boolean
   defaultInboxId: string | null
