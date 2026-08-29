@@ -54,6 +54,8 @@ function mapConnection(r: Record<string, unknown>): Connection {
     hasPassword: !!r.imap_password_encrypted,
     imapTls: !!r.imap_tls,
     extraFolders: (r.extra_folders as string[] | null) ?? [],
+    foldersOnly: !!r.folders_only,
+    discardUnrouted: !!r.discard_unrouted,
     lastSyncAt: (r.last_sync_at as Date | null) ?? null,
     lastSyncStatus: (r.last_sync_status as SyncStatus | null) ?? null,
     lastSyncError: (r.last_sync_error as string | null) ?? null,
@@ -93,13 +95,17 @@ export async function createConnection(data: {
   imapPassword: string
   imapTls?: boolean
   extraFolders?: string[]
+  foldersOnly?: boolean
+  discardUnrouted?: boolean
 }): Promise<Connection> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     INSERT INTO "uin_connections"
-      ("label", "imap_host", "imap_port", "imap_username", "imap_password_encrypted", "imap_tls", "extra_folders")
+      ("label", "imap_host", "imap_port", "imap_username", "imap_password_encrypted", "imap_tls", "extra_folders",
+       "folders_only", "discard_unrouted")
     VALUES (${data.label}, ${data.imapHost}, ${data.imapPort}, ${data.imapUsername},
             ${encryptSecret(data.imapPassword)}, ${data.imapTls ?? true},
-            ${data.extraFolders ?? []}::text[])
+            ${data.extraFolders ?? []}::text[],
+            ${data.foldersOnly ?? false}, ${data.discardUnrouted ?? false})
     RETURNING *
   `
   return mapConnection(rows[0]!)
@@ -113,6 +119,8 @@ export async function updateConnection(id: string, data: {
   imapPassword?: string
   imapTls?: boolean
   extraFolders?: string[]
+  foldersOnly?: boolean
+  discardUnrouted?: boolean
 }): Promise<Connection | null> {
   const sets: Prisma.Sql[] = []
   if (data.label !== undefined) sets.push(Prisma.sql`"label" = ${data.label}`)
@@ -121,6 +129,8 @@ export async function updateConnection(id: string, data: {
   if (data.imapUsername !== undefined) sets.push(Prisma.sql`"imap_username" = ${data.imapUsername}`)
   if (data.imapTls !== undefined) sets.push(Prisma.sql`"imap_tls" = ${data.imapTls}`)
   if (data.extraFolders !== undefined) sets.push(Prisma.sql`"extra_folders" = ${data.extraFolders}::text[]`)
+  if (data.foldersOnly !== undefined) sets.push(Prisma.sql`"folders_only" = ${data.foldersOnly}`)
+  if (data.discardUnrouted !== undefined) sets.push(Prisma.sql`"discard_unrouted" = ${data.discardUnrouted}`)
   const secret = optionalSecret(data.imapPassword)
   if (secret !== undefined) sets.push(Prisma.sql`"imap_password_encrypted" = ${secret}`)
   if (sets.length === 0) return getConnection(id)

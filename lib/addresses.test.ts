@@ -6,6 +6,7 @@ import {
   parseAddressList,
   routeSentToInbox,
   routeToInbox,
+  shouldDiscardUnrouted,
 } from './addresses'
 
 describe('normaliseAddress', () => {
@@ -120,5 +121,30 @@ describe('routeSentToInbox', () => {
   it('lands in the catch-all when nothing else claims it', () => {
     expect(routeSentToInbox(['personal@example.com'], { to: ['nobody@example.com'] }, inboxes))
       .toEqual({ inboxId: 'hi', matchedOn: 'catch-all' })
+  })
+})
+
+describe('shouldDiscardUnrouted', () => {
+  it('keeps everything while the account has not been told otherwise', () => {
+    // The default, and the only acceptable one for a setting about somebody's
+    // mail: an install updating into this column behaves as it did yesterday.
+    expect(shouldDiscardUnrouted({ enabled: false, inboxId: null, threadId: null })).toBe(false)
+  })
+
+  it('drops a new conversation addressed to none of our addresses', () => {
+    // The case the setting exists for: a personal account whose INBOX carries
+    // the owner's bank, doctor and credit agency alongside the shop's mail.
+    expect(shouldDiscardUnrouted({ enabled: true, inboxId: null, threadId: null })).toBe(true)
+  })
+
+  it('keeps a message that routes nowhere but joins a conversation we hold', () => {
+    // A third party brought in halfway, or an address that appears only in a
+    // Bcc. Dropping these leaves a thread reading as though somebody stopped
+    // replying.
+    expect(shouldDiscardUnrouted({ enabled: true, inboxId: null, threadId: 'thread-1' })).toBe(false)
+  })
+
+  it('never touches mail that reached one of our addresses', () => {
+    expect(shouldDiscardUnrouted({ enabled: true, inboxId: 'marcus', threadId: null })).toBe(false)
   })
 })

@@ -22,6 +22,8 @@ type Connection = {
   hasPassword: boolean
   imapTls: boolean
   extraFolders: string[]
+  foldersOnly: boolean
+  discardUnrouted: boolean
   lastSyncAt: string | null
   lastSyncStatus: 'ok' | 'error' | null
   lastSyncError: string | null
@@ -108,7 +110,10 @@ const LABEL_STYLE = {
 } as const
 
 function blankConnection() {
-  return { label: '', imapHost: '', imapPort: 993, imapUsername: '', imapPassword: '', imapTls: true, extraFolders: '' }
+  return {
+    label: '', imapHost: '', imapPort: 993, imapUsername: '', imapPassword: '', imapTls: true, extraFolders: '',
+    foldersOnly: false, discardUnrouted: false,
+  }
 }
 
 function blankInbox() {
@@ -303,6 +308,8 @@ function ConnectionsSection({ connections, collection, busy, call, setMessage, r
       imapPassword: '',
       imapTls: connection.imapTls,
       extraFolders: connection.extraFolders.join(', '),
+      foldersOnly: connection.foldersOnly,
+      discardUnrouted: connection.discardUnrouted,
     })
     setEditing(connection.id)
   }
@@ -316,6 +323,8 @@ function ConnectionsSection({ connections, collection, busy, call, setMessage, r
       imapUsername: draft.imapUsername,
       imapTls: draft.imapTls,
       extraFolders,
+      foldersOnly: draft.foldersOnly,
+      discardUnrouted: draft.discardUnrouted,
       ...(draft.imapPassword ? { imapPassword: draft.imapPassword } : {}),
     }
     const result = editing === 'new'
@@ -442,6 +451,28 @@ function ConnectionsSection({ connections, collection, busy, call, setMessage, r
           <div className="field">
             <label>Other folders to read <span style={{ ...MUTED, fontWeight: 400 }}>(optional, separated by commas)</span></label>
             <input value={draft.extraFolders} onChange={(e) => setDraft({ ...draft, extraFolders: e.target.value })} placeholder="Archive, Suppliers" />
+          </div>
+          <div className="field">
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontWeight: 400 }}>
+              <input type="checkbox" checked={draft.foldersOnly} onChange={(e) => setDraft({ ...draft, foldersOnly: e.target.checked })} />
+              Read only the folders named here and on the addresses below
+            </label>
+            <div style={{ ...MUTED, fontSize: '0.8125rem', marginTop: '0.25rem' }}>
+              Normally the main inbox, the archive and the sent folder are read as well, so nothing is missed when
+              you file something on your phone. Tick this if the account also carries post of your own: it then
+              reads the folders you have named and nothing else.
+            </div>
+          </div>
+          <div className="field">
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontWeight: 400 }}>
+              <input type="checkbox" checked={draft.discardUnrouted} onChange={(e) => setDraft({ ...draft, discardUnrouted: e.target.checked })} />
+              Ignore mail that is not addressed to one of your addresses
+            </label>
+            <div style={{ ...MUTED, fontSize: '0.8125rem', marginTop: '0.25rem' }}>
+              Normally that mail is kept out of the way under Unrouted, in case somebody writes to an address you
+              have not set up yet. Tick this and it is not kept at all. Replies to conversations already here
+              still arrive either way.
+            </div>
           </div>
           <div style={{ display: 'flex', gap: '0.75rem' }}>
             <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>Save mail account</button>

@@ -102,3 +102,28 @@ export function routeSentToInbox(
   }
   return routeToInbox(headers, inboxes)
 }
+
+/**
+ * Whether a message is dropped unread rather than filed with no inbox.
+ *
+ * A pure function with a test beside it, rather than three clauses buried in
+ * the middle of the reader, because this is the only place in the module that
+ * throws a customer's words away at the moment it reads them, and the argument
+ * for each clause needs somewhere to live.
+ *
+ * `enabled` is the account's own setting and is off unless somebody turned it
+ * on. `inboxId` null means the message is addressed to none of this site's
+ * addresses and there is no catch-all to sweep it up. `threadId` null means it
+ * starts a conversation rather than joining one - and that clause is the whole
+ * safety of the thing: a third party brought into a thread already held, or an
+ * address appearing in nothing but a Bcc, routes nowhere too, and dropping
+ * those would leave a conversation reading as though somebody stopped replying
+ * halfway through.
+ */
+export function shouldDiscardUnrouted(input: {
+  enabled: boolean
+  inboxId: string | null
+  threadId: string | null
+}): boolean {
+  return input.enabled && input.inboxId === null && input.threadId === null
+}

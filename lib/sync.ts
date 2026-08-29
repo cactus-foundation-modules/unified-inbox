@@ -2,7 +2,7 @@ import type { ImapFlow } from 'imapflow'
 import { prisma } from '@/lib/db/prisma'
 import { simpleParser, type ParsedMail } from 'mailparser'
 import { upsertAlert, clearAlert } from '@/lib/notifications/alerts'
-import { normaliseAddress, parseAddressList, routeSentToInbox, routeToInbox, type RoutableInbox } from './addresses'
+import { normaliseAddress, parseAddressList, routeSentToInbox, routeToInbox, shouldDiscardUnrouted, type RoutableInbox } from './addresses'
 import {
   acquireConnectionLock,
   candidateThreads,
@@ -85,6 +85,10 @@ export type FolderOutcome = {
   scanned: number
   stored: number
   duplicates: number
+  /** Mail dropped unread because it was addressed to none of this site's
+   *  addresses and this account is set to discard that. Counted apart from
+   *  duplicates: one is housekeeping, the other is a decision. */
+  discarded: number
   backfillComplete: boolean
   error?: string
 }
@@ -201,6 +205,7 @@ export async function syncConnection(
         ...mine.map((i) => i.imapFolder),
         ...mine.map((i) => i.sentFolder),
       ],
+      foldersOnly: connection.foldersOnly,
     })
 
     const settings = await getSettings()
@@ -229,6 +234,7 @@ export async function syncConnection(
         floor,
         routing,
         ownAddresses,
+        discardUnrouted: connection.discardUnrouted,
         siteSendingAddress,
       })
       outcome.folders.push(result)
@@ -306,6 +312,9 @@ type FolderContext = {
   floor: Date
   routing: RoutableInbox[]
   ownAddresses: Set<string>
+  /** This account is set to drop mail addressed to none of the site's own
+   *  addresses, rather than keep it out of the way in Unrouted. */
+  discardUnrouted: boolean
   /** The address the site's own automatic mail goes out as, normalised. Empty
    *  when the site has not set one. */
   siteSendingAddress: string | null
@@ -317,6 +326,7 @@ async function syncFolder(ctx: FolderContext): Promise<FolderOutcome> {
     scanned: 0,
     stored: 0,
     duplicates: 0,
+    discarded: 0,
     backfillComplete: false,
   }
 
@@ -377,6 +387,7 @@ async function syncFolder(ctx: FolderContext): Promise<FolderOutcome> {
       outcome.scanned += results.scanned
       outcome.stored += results.stored
       outcome.duplicates += results.duplicates
+      outcome.discarded += results.discarded
       collected += results.stored
       cursor = { ...cursor, lastSeenUid: Math.max(cursor.lastSeenUid, ...batch) }
       await saveSyncState(ctx.connectionId, ctx.folder.path, {
@@ -399,10 +410,11 @@ async function syncFolder(ctx: FolderContext): Promise<FolderOutcome> {
       const seen = await getProcessedUids(ctx.connectionId, ctx.folder.path, list)
       const batch = list.filter((uid) => !seen.has(uid))
 
-      const results = batch.length > 0 ? await processBatch(ctx, batch) : { scanned: 0, stored: 0, duplicates: 0, oldest: null as Date | null }
+      const results = batch.length > 0 ? await processBatch(ctx, batch) : { scanned: 0, stored: 0, duplicates: 0, discarded: 0, oldest: null as Date | null }
       outcome.scanned += results.scanned
       outcome.stored += results.stored
       outcome.duplicates += results.duplicates
+      outcome.discarded += results.discarded
       collected += results.stored
 
       // Past the owner's backfill window, or out of mailbox: either way there
@@ -430,7 +442,7 @@ async function syncFolder(ctx: FolderContext): Promise<FolderOutcome> {
   }
 }
 
-type BatchResult = { scanned: number; stored: number; duplicates: number; oldest: Date | null }
+type BatchResult = { scanned: number; stored: number; duplicates: number; discarded: number; oldest: Date | null }
 
 /**
  * Fetch a bounded batch of whole messages, then file them.
@@ -441,7 +453,7 @@ type BatchResult = { scanned: number; stored: number; duplicates: number; oldest
  * into memory first and everything else happens afterwards.
  */
 async function processBatch(ctx: FolderContext, uids: number[]): Promise<BatchResult> {
-  const result: BatchResult = { scanned: 0, stored: 0, duplicates: 0, oldest: null }
+  const result: BatchResult = { scanned: 0, stored: 0, duplicates: 0, discarded: 0, oldest: null }
   if (uids.length === 0) return result
 
   const sources: Array<{ uid: number; source: Buffer; size: number | null }> = []
@@ -455,6 +467,7 @@ async function processBatch(ctx: FolderContext, uids: number[]): Promise<BatchRe
     try {
       const filed = await fileMessage(ctx, entry)
       if (filed.stored) result.stored++
+      else if (filed.discarded) result.discarded++
       else result.duplicates++
       if (filed.sentAt && (!result.oldest || filed.sentAt < result.oldest)) result.oldest = filed.sentAt
     } catch (err) {
@@ -492,7 +505,7 @@ function addressesFrom(parsed: ParsedMail, field: 'to' | 'cc'): string[] {
 async function fileMessage(
   ctx: FolderContext,
   entry: { uid: number; source: Buffer; size: number | null }
-): Promise<{ stored: boolean; sentAt: Date | null }> {
+): Promise<{ stored: boolean; discarded?: boolean; sentAt: Date | null }> {
   const parsed = await simpleParser(entry.source)
 
   const fromAddress = parsed.from?.value?.[0]?.address
@@ -592,6 +605,28 @@ async function fileMessage(
     inboxId: routed.inboxId,
     candidates,
   })
+
+  // Mail for nobody here, starting a conversation of its own. On an account
+  // that carries the owner's own post beside the site's, that is their bank and
+  // their doctor, and filing it puts a stranger's private business in the shop
+  // database where the whole of the staff can read it.
+  //
+  // Only ever applied to mail that starts a NEW conversation. A third party
+  // brought into a thread already held, or an address that appears in nothing
+  // but a Bcc, routes nowhere as well, and dropping those would leave a
+  // conversation that reads as though somebody stopped replying halfway
+  // through. The location is recorded so the next pass walks past it rather
+  // than parsing it again for ever.
+  if (shouldDiscardUnrouted({ enabled: ctx.discardUnrouted, inboxId: routed.inboxId, threadId: match.threadId })) {
+    await markLocationProcessed({
+      connectionId: ctx.connectionId,
+      folder: ctx.folder.path,
+      uid: entry.uid,
+      messageIdHeader: identity,
+      threadId: null,
+    })
+    return { stored: false, discarded: true, sentAt }
+  }
 
   const bodyHtml = prepareInboundHtml(parsed.html || null)
   const bodyText = parsed.text ?? (bodyHtml ? htmlToText(bodyHtml) : null)

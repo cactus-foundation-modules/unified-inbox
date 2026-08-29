@@ -21,6 +21,8 @@ const Body = z.object({
   imapPassword: z.string().min(1),
   imapTls: z.boolean().default(true),
   extraFolders: z.array(z.string().min(1)).default([]),
+  foldersOnly: z.boolean().default(false),
+  discardUnrouted: z.boolean().default(false),
 })
 
 export async function POST(request: NextRequest) {

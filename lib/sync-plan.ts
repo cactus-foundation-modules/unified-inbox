@@ -37,11 +37,25 @@ export type FolderPlan = {
  * Anything the owner nominates by name is read as well, and anything an inbox
  * has been pointed at explicitly. Folders that do not exist on the server are
  * dropped rather than failing the whole run.
+ *
+ * All of which is right for a mailbox that exists to serve the site, and wrong
+ * for the other kind of account entirely: the one somebody already had, where
+ * the shop's mail is filed into a folder and INBOX is their own post. Reading
+ * that account's INBOX puts their bank and their doctor in the site's database.
+ * `foldersOnly` is the answer to that - it drops the three automatic folders
+ * and reads nothing but what the owner actually pointed this account at.
+ *
+ * It cannot return nothing by accident: a connection is only ever swept when at
+ * least one inbox belongs to it, and every inbox carries a folder of its own.
  */
 export function planFolders(input: {
   available: MailFolder[]
   /** extra_folders from the connection, plus each inbox's own folder settings. */
   requested: Array<string | null | undefined>
+  /** Read the nominated folders and nothing else - no INBOX, archive or Sent
+   *  unless the owner named them. Default false: an account that has never been
+   *  told otherwise keeps reading everything it read yesterday. */
+  foldersOnly?: boolean
 }): FolderPlan[] {
   const byPath = new Map(input.available.map((f) => [f.path.toLowerCase(), f]))
   const out: FolderPlan[] = []
@@ -56,9 +70,11 @@ export function planFolders(input: {
     out.push({ path: folder.path, kind })
   }
 
-  add(input.available.find((f) => f.role === 'inbox') ?? byPath.get('inbox'), 'inbox')
-  for (const folder of input.available.filter((f) => f.role === 'sent')) add(folder, 'sent')
-  for (const folder of input.available.filter((f) => f.role === 'archive')) add(folder, 'archive')
+  if (!input.foldersOnly) {
+    add(input.available.find((f) => f.role === 'inbox') ?? byPath.get('inbox'), 'inbox')
+    for (const folder of input.available.filter((f) => f.role === 'sent')) add(folder, 'sent')
+    for (const folder of input.available.filter((f) => f.role === 'archive')) add(folder, 'archive')
+  }
 
   for (const requested of input.requested) {
     if (!requested) continue

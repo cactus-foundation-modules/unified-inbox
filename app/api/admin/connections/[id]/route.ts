@@ -15,6 +15,8 @@ const Body = z.object({
   imapPassword: z.string().min(1).optional(),
   imapTls: z.boolean().optional(),
   extraFolders: z.array(z.string().min(1)).optional(),
+  foldersOnly: z.boolean().optional(),
+  discardUnrouted: z.boolean().optional(),
 })
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {

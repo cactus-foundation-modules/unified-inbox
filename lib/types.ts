@@ -27,6 +27,13 @@ export type Connection = {
   hasPassword: boolean
   imapTls: boolean
   extraFolders: string[]
+  /** Read the nominated folders only, rather than INBOX, the archive and Sent
+   *  as well. For an account that carries the owner's own post beside the
+   *  site's. */
+  foldersOnly: boolean
+  /** Do not file mail addressed to none of this site's addresses. Only ever
+   *  applied to mail starting a new conversation. */
+  discardUnrouted: boolean
   lastSyncAt: Date | null
   lastSyncStatus: SyncStatus | null
   lastSyncError: string | null

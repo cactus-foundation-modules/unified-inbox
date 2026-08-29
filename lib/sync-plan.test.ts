@@ -51,6 +51,33 @@ describe('planFolders', () => {
     expect(paths).not.toContain('Drafts')
   })
 
+  it('reads nothing but the nominated folders when the account is set to folders only', () => {
+    // The account somebody already had: the shop's mail is filed into one
+    // folder and INBOX is their own post. Reading INBOX there puts a bank and a
+    // doctor in the site's database.
+    const paths = planFolders({ available: AVAILABLE, requested: ['Suppliers'], foldersOnly: true }).map((f) => f.path)
+    expect(paths).toEqual(['Suppliers'])
+  })
+
+  it('still marks a nominated Sent folder as ours when reading folders only', () => {
+    const plan = planFolders({ available: AVAILABLE, requested: ['Sent Messages'], foldersOnly: true })
+    expect(plan).toEqual([{ path: 'Sent Messages', kind: 'sent' }])
+  })
+
+  it('still refuses junk, trash and drafts when reading folders only', () => {
+    const paths = planFolders({ available: AVAILABLE, requested: ['Junk', 'Drafts', 'Suppliers'], foldersOnly: true })
+      .map((f) => f.path)
+    expect(paths).toEqual(['Suppliers'])
+  })
+
+  it('reads everything as before when the account has not been told otherwise', () => {
+    // Default false, so an install updating into the column behaves exactly as
+    // it did the day before.
+    const before = planFolders({ available: AVAILABLE, requested: ['Suppliers'] })
+    expect(before).toEqual(planFolders({ available: AVAILABLE, requested: ['Suppliers'], foldersOnly: false }))
+    expect(before.map((f) => f.path)).toContain('INBOX')
+  })
+
   it('adds the folders the owner nominates', () => {
     const paths = planFolders({ available: AVAILABLE, requested: ['Suppliers'] }).map((f) => f.path)
     expect(paths).toContain('Suppliers')
