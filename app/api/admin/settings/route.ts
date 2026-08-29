@@ -15,6 +15,7 @@ import {
   unroutedCount,
   updateSettings,
 } from '@/modules/unified-inbox/lib/db'
+import { reconcileBrevoWebhooks } from '@/modules/unified-inbox/lib/brevo-webhooks'
 import { clashMessage, mailboxClashes } from '@/modules/unified-inbox/lib/reply-catcher-guard'
 import { retentionPreview } from '@/modules/unified-inbox/lib/retention'
 
@@ -110,6 +111,8 @@ const Body = z.object({
   orderNumberPattern: Pattern,
   poNumberPattern: Pattern,
   quoteNumberPattern: Pattern,
+  trackOpens: z.boolean().optional(),
+  requestReadReceipts: z.boolean().optional(),
 })
 
 export async function PATCH(request: NextRequest) {
@@ -126,5 +129,15 @@ export async function PATCH(request: NextRequest) {
   }
 
   const settings = await updateSettings(parsed.data)
-  return NextResponse.json({ settings })
+
+  // Switching delivery updates on or off is a change at Brevo's end, not only
+  // at ours, and it is done here rather than in a background job so the person
+  // who pressed Save is told whether it took. A key that has expired since it
+  // was typed in comes back as a sentence next to that account's name; it never
+  // takes the save down with it.
+  const brevoRegistrations = parsed.data.trackOpens === undefined
+    ? null
+    : await reconcileBrevoWebhooks(parsed.data.trackOpens)
+
+  return NextResponse.json({ settings, brevoRegistrations })
 }

@@ -20,6 +20,7 @@ import {
   listInboxes,
   markLocationProcessed,
   recordAuthFailure,
+  recordDeliveryEvent,
   recordConnectionSync,
   releaseConnectionLock,
   saveSyncState,
@@ -28,6 +29,7 @@ import {
   touchThread,
 } from './db'
 import { prepareInboundHtml, htmlToText } from './html'
+import { readReadReceipt } from './receipts'
 import { clashMessage, mailboxClashes } from './reply-catcher-guard'
 import { credentialsForConnection, explainImapError, listFolders, openMailbox } from './imap'
 import {
@@ -495,6 +497,27 @@ function headerValue(parsed: ParsedMail, name: string): string | null {
   return String(value)
 }
 
+/** Every part of an arriving message worth reading as a delivery report: the
+ *  human-readable half, and the machine-readable one, which mail parsers hand
+ *  back as an attachment because nothing can display it. */
+function dispositionParts(parsed: ParsedMail): string[] {
+  const parts: string[] = []
+  if (parsed.text) parts.push(parsed.text)
+  for (const attachment of parsed.attachments) {
+    const type = (attachment.contentType || '').toLowerCase()
+    if (!type.includes('disposition-notification') && !type.includes('message/')) continue
+    // Report parts are tiny by definition. Anything large is somebody attaching
+    // an email to an email, and is not what this is looking at.
+    if (attachment.size > 64 * 1024) continue
+    try {
+      parts.push(Buffer.from(attachment.content).toString('utf8'))
+    } catch {
+      // A part that will not decode is not a receipt.
+    }
+  }
+  return parts
+}
+
 function addressesFrom(parsed: ParsedMail, field: 'to' | 'cc'): string[] {
   const value = parsed[field]
   if (!value) return []
@@ -555,6 +578,43 @@ async function fileMessage(
       threadId: ours.threadId,
     })
     return { stored: false, sentAt }
+  }
+
+  // A read receipt, if that is what this is: the recipient's mail program
+  // answering the question the send path asked in a header. It belongs on the
+  // message it is about, not in the conversation as a message of its own -
+  // "Read: your quote" sitting under our own reply looks for all the world like
+  // the customer wrote back, and it says nothing.
+  const receipt = readReadReceipt({
+    contentType: headerValue(parsed, 'content-type'),
+    parts: dispositionParts(parsed),
+    inReplyTo: headerValue(parsed, 'in-reply-to'),
+    references: parseReferences(headerValue(parsed, 'references')),
+  })
+  if (receipt) {
+    const original = await findOutboundByMessageId(
+      cleanMessageId(receipt.originalMessageId) ?? receipt.originalMessageId,
+    )
+    // Only swallowed when we can actually place it. A receipt for a message
+    // this site never sent, or one the retention sweep has since removed, is
+    // filed as an ordinary email rather than quietly dropped.
+    if (original) {
+      await recordDeliveryEvent(original.id, {
+        kind: receipt.displayed ? 'receipt' : 'receipt_unread',
+        occurredAt: sentAt,
+        detail: receipt.detail,
+        bounceKind: null,
+        source: 'receipt',
+      })
+      await markLocationProcessed({
+        connectionId: ctx.connectionId,
+        folder: ctx.folder.path,
+        uid: entry.uid,
+        messageIdHeader: identity,
+        threadId: original.threadId,
+      })
+      return { stored: false, sentAt }
+    }
   }
 
   const to = addressesFrom(parsed, 'to')

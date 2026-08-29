@@ -52,6 +52,60 @@ const AUTO_LABELS: Record<string, string> = {
   'own-notification': 'Sent by your own website, not by them',
 }
 
+/**
+ * What became of a reply once it left, when the site is watching for that.
+ *
+ * The wording is fussier than it looks, and deliberately. A mail app fetching
+ * the invisible picture in a message is not a person reading it, and somebody
+ * deciding whether to ring a customer who has "read" their quote deserves to
+ * know which of the two happened. Every message on a site with receipts
+ * switched off has none of these, and this renders nothing.
+ */
+function DeliveryReceipt({ message }: { message: ThreadMessageView }) {
+  const hardBounce = message.bouncedAt
+    && ['hard', 'blocked', 'invalid', 'spam', 'error'].includes(message.bounceKind ?? '')
+  const softBounce = message.bouncedAt && !hardBounce
+
+  return (
+    <>
+      {hardBounce && (
+        <span className="uin-tag uin-tag-failed" title={message.bounceDetail ?? undefined}>
+          It did not arrive
+        </span>
+      )}
+      {softBounce && (
+        <span className="uin-tag" title={message.bounceDetail ?? undefined}>
+          Held up on the way
+        </span>
+      )}
+      {message.openedAt ? (
+        <span
+          className="uin-tag uin-tag-done"
+          title={
+            message.openSource === 'receipt'
+              ? `Their email program confirmed it: ${formatFull(message.openedAt)}`
+              : `First opened ${formatFull(message.openedAt)}`
+          }
+        >
+          {TickIcon} Opened {formatWhen(message.openedAt)}
+          {message.openCount > 1 ? ` (${message.openCount} times)` : ''}
+        </span>
+      ) : message.openSource === 'proxy' ? (
+        <span
+          className="uin-tag"
+          title="Their email program downloaded the pictures in the message, which it often does before anybody has looked at it. Not proof that it was read."
+        >
+          Their email app fetched it
+        </span>
+      ) : message.deliveredAt && !hardBounce ? (
+        <span className="uin-tag" title={`Delivered ${formatFull(message.deliveredAt)}`}>
+          Delivered {formatWhen(message.deliveredAt)}
+        </span>
+      ) : null}
+    </>
+  )
+}
+
 function MessageHeader({ message, staffById }: { message: ThreadMessageView; staffById: Record<string, string> }) {
   if (message.direction === 'note') {
     const author = message.authorUserId ? staffById[message.authorUserId] : null
@@ -135,7 +189,10 @@ function Message({ message, staffById }: { message: ThreadMessageView; staffById
             <span className="uin-tag">{ClockIcon} On its way</span>
           )}
           {message.deliveryStatus === 'sent' && (
-            <span className="uin-tag uin-tag-done">{TickIcon} Sent</span>
+            <>
+              <span className="uin-tag uin-tag-done">{TickIcon} Sent</span>
+              <DeliveryReceipt message={message} />
+            </>
           )}
           {message.deliveryStatus === 'failed' && (
             <>
