@@ -5,13 +5,13 @@ import { errorResponse } from '@/lib/utils'
 import { listInboxes, reorderInboxes } from '@/modules/unified-inbox/lib/db'
 import { InboxOrderBody } from '@/modules/unified-inbox/lib/validation'
 
-// The order of the rail, saved in one go.
+// The order of the addresses along the top of the inbox, saved in one go.
 //
-// The whole list is posted, not "move this one up", because the rail is one
+// The whole list is posted, not "move this one up", because the row is one
 // list and its order is one fact. It is also why this asks for `manage`: the
 // order is the site's, the same for everybody who opens the inbox, so the
 // person who arranges it is the person who looks after the addresses. Anybody
-// who may only read gets the rail as arranged and no drag handles at all.
+// who may only read gets the addresses as arranged and nothing draggable at all.
 export async function POST(request: NextRequest) {
   const user = await getSessionFromCookie()
   if (!user) return errorResponse('Not authenticated', 401)
@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
   if (new Set(ids).size !== ids.length) return errorResponse('That is not an order this can save.')
 
   // Every inbox, exactly once. A partial list would leave the ones left out
-  // sharing positions with the ones sent, and the rail would settle into an
+  // sharing positions with the ones sent, and the row would settle into an
   // order nobody chose the next time it was drawn.
   const existing = await listInboxes()
   const known = new Set(existing.map((i) => i.id))

@@ -5,7 +5,7 @@ import { INSTALLED_MODULE_WHERE } from '@/lib/modules/live-status'
 // for every adapter in the context rail at the same time.
 //
 // Both halves are needed and neither is enough on its own. A module row says
-// the site has installed it, which is the question the rail is really asking;
+// the site has installed it, which is the question the context panel is really asking;
 // the tables say its migrations have actually run, which a module installed
 // five minutes ago in the middle of a deploy has not. Reading a table that is
 // not there is an exception rather than an empty list, and an exception in a

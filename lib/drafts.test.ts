@@ -81,7 +81,7 @@ describe('draftHref', () => {
   const base = '/cactus-admin/inbox'
   const params = { tab: 'unified-inbox', inbox: 'drafts' }
 
-  it('sends a reply back to its conversation, with the rail still on Drafts', () => {
+  it('sends a reply back to its conversation, with Drafts still the open tab', () => {
     const href = draftHref(base, params, { id: 'dft_1', threadId: 'thr_9' })
     expect(href).toContain('id=thr_9')
     expect(href).toContain('inbox=drafts')

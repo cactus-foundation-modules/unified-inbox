@@ -31,12 +31,18 @@ the same human collapse into one story.
 - **Collecting the post.** Mail is gathered on the site's own schedule, from the
   inbox and the folders you file things into, so a message read on a phone is
   still here.
-- **Reading and replying.** One screen: your addresses down the side, the
-  conversations in the middle, and whichever one you have open beside them.
+- **Reading and replying.** One screen: your addresses along the top as tabs,
+  where each conversation stands underneath them - open, snoozed, done or the
+  lot - the conversations below, and whichever one you have open beside them.
   Reply, reply to everybody, forward, or leave a note only your colleagues see.
+  A brand new message opens in a box over the top, so the list stays where it
+  was.
+- **Sent.** One row per message that has left, newest first, across every
+  address you can read, with who it went to, which address it left as, and what
+  became of it where the site is watching. Opening one opens the conversation it
+  belongs to.
 - **Drafts.** Save a half-written reply, or a message you have not finished
-  starting, and it waits under **Drafts** in the list of addresses until you
-  come back to it. Your own only: a shared address does not mean a shared
+  starting, and it waits under the **Drafts** tab until you come back to it. Your own only: a shared address does not mean a shared
   notepad. A reply goes back under its conversation with the words still in the
   box; a new message opens where you left it. Sending one clears it away.
 - **Getting through it.** Hand a conversation to somebody, set it to come back

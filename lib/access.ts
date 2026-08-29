@@ -15,7 +15,7 @@ import type { SessionUser } from '@/lib/auth/session'
 //
 // That way an ordinary one-person site never has to configure anything, and the
 // moment somebody restricts accounts@ it is genuinely restricted rather than
-// merely hidden from the rail. Holding `unifiedinbox.manage` is the one way
+// merely hidden from the tabs. Holding `unifiedinbox.manage` is the one way
 // past a list, because the person who edits the guest lists can put themselves
 // on any of them in two clicks - pretending otherwise would be theatre, not
 // security. Search and the All view must filter with visibleInboxIds INSIDE
@@ -143,7 +143,7 @@ export async function canUserViewInbox(userId: string, inboxId: string): Promise
 //
 //   filed    - an email in one of the site's inboxes. The guest list decides.
 //   channel  - a chat, an enquiry, a call. It never had an address to be filed
-//              under, so the module that owns it decides, exactly as the rail
+//              under, so the module that owns it decides, exactly as the tabs
 //              and the send route already do.
 //   unfiled  - an email that reached the account and matched no address at all.
 //              "Nobody could place this" is an administrator's problem.

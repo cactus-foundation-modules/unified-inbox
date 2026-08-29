@@ -30,7 +30,7 @@ export const InboxBody = z.object({
 
 export const InboxPatchBody = InboxBody.partial()
 
-/** The rail's order: every inbox id, once, in the order they should appear.
+/** The order of the addresses: every inbox id, once, in the order they should appear.
  *  Capped well above any plausible number of addresses so a runaway list is a
  *  refusal rather than a very long UPDATE. */
 export const InboxOrderBody = z.object({

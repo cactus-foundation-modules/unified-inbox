@@ -73,7 +73,7 @@ export function draftPreview(body: string, limit = 140): string {
  *
  * A reply goes to its conversation, because that is where the reply box is and
  * where the customer's own words are sitting above it. A new message goes to
- * the compose screen carrying its id. Either way the rail stays on Drafts, so
+ * the compose screen carrying its id. Either way Drafts stays the open tab, so
  * finishing one and going back for the next is one click rather than a hunt.
  */
 export function draftHref(

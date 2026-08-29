@@ -59,11 +59,11 @@ export function PersonView({
   return (
     <div className="uin-thread">
       <div className="uin-thread-head">
-        <a className="uin-chip" href={inboxHref(base, params, { person: null })} style={{ justifySelf: 'start' }}>
+        <a className="uin-chip uin-back" href={inboxHref(base, params, { person: null })} style={{ justifySelf: 'start' }}>
           {BackIcon} Back to the list
         </a>
         <h2 className="uin-thread-subject">{name}</h2>
-        <div className="uin-thread-actions" style={{ color: 'var(--color-text-muted)', fontSize: '0.8125rem' }}>
+        <div className="uin-thread-meta">
           {person.organisationName && <span>{person.organisationName}</span>}
           <span>
             {threads.length} conversation{threads.length === 1 ? '' : 's'}
@@ -82,128 +82,130 @@ export function PersonView({
         )}
       </div>
 
-      <div className="uin-person">
-        <div className="uin-person-main">
-          <section className="uin-ctx-block">
-            <h3 className="uin-ctx-heading">How we reach them</h3>
-            <ul className="uin-ctx-list">
-              {identities.map((identity) => (
-                <li key={identity.id} className="uin-ctx-row">
-                  <div className="uin-ctx-main">
-                    <span>{identity.value}</span>
-                    {identity.kind !== 'email' && <span className="uin-tag">{identity.kind}</span>}
-                  </div>
-                </li>
-              ))}
-              {identities.length === 0 && (
-                <li className="uin-ctx-row"><span className="uin-ctx-sub">Nothing on record yet.</span></li>
-              )}
-            </ul>
-            {alsoHere.length > 0 && (
-              <p className="uin-ctx-sub">
-                Also at {person.organisationName}:{' '}
-                {alsoHere.map((other, index) => (
-                  <span key={other.id}>
-                    {index > 0 && ', '}
-                    <a href={inboxHref(base, params, { person: other.id })}>
-                      {other.displayName || other.primaryEmail || 'somebody'}
-                    </a>
-                  </span>
-                ))}
-              </p>
-            )}
-          </section>
-
-          {person.notes && (
+      <div className="uin-thread-body">
+        <div className="uin-person">
+          <div className="uin-person-main">
             <section className="uin-ctx-block">
-              <h3 className="uin-ctx-heading">Notes</h3>
-              <p className="uin-ctx-sub" style={{ whiteSpace: 'pre-wrap' }}>{person.notes}</p>
-            </section>
-          )}
-
-          <section className="uin-ctx-block">
-            <h3 className="uin-ctx-heading">Everything, in order</h3>
-            {timeline.length === 0 ? (
-              <p className="uin-ctx-sub">
-                Nothing to show yet. Anything they write, and anything the site sends them, will
-                appear here.
-              </p>
-            ) : (
-              <ul className="uin-timeline">
-                {timeline.map((item) =>
-                  item.kind === 'thread' ? (
-                    <li key={`t:${item.row.id}`} className="uin-timeline-row">
-                      <span className="uin-timeline-icon">
-                        {item.row.lastDirection === 'out' ? OutboundIcon : InboundIcon}
-                      </span>
-                      <div className="uin-ctx-main">
-                        <a href={inboxHref(base, params, { id: item.row.id, person: null })}>
-                          {item.row.subject || '(no subject)'}
-                        </a>
-                        <span className="uin-tag">{channelLabel(item.row.channel)}</span>
-                        {item.row.unread && <span className="uin-tag">Unread</span>}
-                      </div>
-                      <span className="uin-ctx-sub">
-                        {participantLabel(item.row)} &middot; {formatWhen(item.at, now)}
-                      </span>
-                    </li>
-                  ) : (
-                    <li key={`s:${item.row.id}`} className="uin-timeline-row">
-                      <span className="uin-timeline-icon">{OutboundIcon}</span>
-                      <div className="uin-ctx-main">
-                        <span>{item.row.subject}</span>
-                        <span className="uin-tag" title="Sent by the site rather than typed by anybody">
-                          Sent automatically
-                        </span>
-                        {item.row.status === 'failed' && (
-                          <span className="uin-tag uin-tag-failed">It did not send</span>
-                        )}
-                      </div>
-                      <span className="uin-ctx-sub">
-                        {item.row.toAddress} &middot; {formatWhen(item.at, now)}
-                      </span>
-                    </li>
-                  ),
-                )}
-              </ul>
-            )}
-            {outbound.length > 0 && (
-              <p className="uin-ctx-sub">
-                Mail the site sent on its own is listed by what it was and when it went. There is
-                no copy of what it said, which is deliberate - a record of every email ever sent
-                would grow until it had to be thrown away.
-              </p>
-            )}
-          </section>
-
-          {events.length > 0 && (
-            <details>
-              <summary className="uin-chip" style={{ cursor: 'pointer' }}>What has been done to this record</summary>
-              <ul style={{ listStyle: 'none', margin: '0.5rem 0 0', padding: 0, display: 'grid', gap: '0.25rem' }}>
-                {events.map((event) => (
-                  <li key={event.id} style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
-                    {(event.userId && staffById[event.userId]) || 'Somebody'}{' '}
-                    {event.detail?.split ? 'split them apart' : event.detail?.undone ? 'undid a merge' : 'merged somebody in'}
-                    {' - '}
-                    {formatFull(event.createdAt)}
+              <h3 className="uin-ctx-heading">How we reach them</h3>
+              <ul className="uin-ctx-list">
+                {identities.map((identity) => (
+                  <li key={identity.id} className="uin-ctx-row">
+                    <div className="uin-ctx-main">
+                      <span>{identity.value}</span>
+                      {identity.kind !== 'email' && <span className="uin-tag">{identity.kind}</span>}
+                    </div>
                   </li>
                 ))}
+                {identities.length === 0 && (
+                  <li className="uin-ctx-row"><span className="uin-ctx-sub">Nothing on record yet.</span></li>
+                )}
               </ul>
-            </details>
-          )}
-        </div>
+              {alsoHere.length > 0 && (
+                <p className="uin-ctx-sub">
+                  Also at {person.organisationName}:{' '}
+                  {alsoHere.map((other, index) => (
+                    <span key={other.id}>
+                      {index > 0 && ', '}
+                      <a href={inboxHref(base, params, { person: other.id })}>
+                        {other.displayName || other.primaryEmail || 'somebody'}
+                      </a>
+                    </span>
+                  ))}
+                </p>
+              )}
+            </section>
 
-        <ContextRail
-          adminPath={adminPath}
-          threadId={null}
-          base={base}
-          params={params}
-          person={null}
-          noPersonReason={null}
-          sections={sections}
-          links={links}
-          canEditLinks={false}
-        />
+            {person.notes && (
+              <section className="uin-ctx-block">
+                <h3 className="uin-ctx-heading">Notes</h3>
+                <p className="uin-ctx-sub" style={{ whiteSpace: 'pre-wrap' }}>{person.notes}</p>
+              </section>
+            )}
+
+            <section className="uin-ctx-block">
+              <h3 className="uin-ctx-heading">Everything, in order</h3>
+              {timeline.length === 0 ? (
+                <p className="uin-ctx-sub">
+                  Nothing to show yet. Anything they write, and anything the site sends them, will
+                  appear here.
+                </p>
+              ) : (
+                <ul className="uin-timeline">
+                  {timeline.map((item) =>
+                    item.kind === 'thread' ? (
+                      <li key={`t:${item.row.id}`} className="uin-timeline-row">
+                        <span className="uin-timeline-icon">
+                          {item.row.lastDirection === 'out' ? OutboundIcon : InboundIcon}
+                        </span>
+                        <div className="uin-ctx-main">
+                          <a href={inboxHref(base, params, { id: item.row.id, person: null })}>
+                            {item.row.subject || '(no subject)'}
+                          </a>
+                          <span className="uin-tag">{channelLabel(item.row.channel)}</span>
+                          {item.row.unread && <span className="uin-tag">Unread</span>}
+                        </div>
+                        <span className="uin-ctx-sub">
+                          {participantLabel(item.row)} &middot; {formatWhen(item.at, now)}
+                        </span>
+                      </li>
+                    ) : (
+                      <li key={`s:${item.row.id}`} className="uin-timeline-row">
+                        <span className="uin-timeline-icon">{OutboundIcon}</span>
+                        <div className="uin-ctx-main">
+                          <span>{item.row.subject}</span>
+                          <span className="uin-tag" title="Sent by the site rather than typed by anybody">
+                            Sent automatically
+                          </span>
+                          {item.row.status === 'failed' && (
+                            <span className="uin-tag uin-tag-failed">It did not send</span>
+                          )}
+                        </div>
+                        <span className="uin-ctx-sub">
+                          {item.row.toAddress} &middot; {formatWhen(item.at, now)}
+                        </span>
+                      </li>
+                    ),
+                  )}
+                </ul>
+              )}
+              {outbound.length > 0 && (
+                <p className="uin-ctx-sub">
+                  Mail the site sent on its own is listed by what it was and when it went. There is
+                  no copy of what it said, which is deliberate - a record of every email ever sent
+                  would grow until it had to be thrown away.
+                </p>
+              )}
+            </section>
+
+            {events.length > 0 && (
+              <details>
+                <summary className="uin-chip" style={{ cursor: 'pointer' }}>What has been done to this record</summary>
+                <ul style={{ listStyle: 'none', margin: '0.5rem 0 0', padding: 0, display: 'grid', gap: '0.25rem' }}>
+                  {events.map((event) => (
+                    <li key={event.id} style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+                      {(event.userId && staffById[event.userId]) || 'Somebody'}{' '}
+                      {event.detail?.split ? 'split them apart' : event.detail?.undone ? 'undid a merge' : 'merged somebody in'}
+                      {' - '}
+                      {formatFull(event.createdAt)}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+
+          <ContextRail
+            adminPath={adminPath}
+            threadId={null}
+            base={base}
+            params={params}
+            person={null}
+            noPersonReason={null}
+            sections={sections}
+            links={links}
+            canEditLinks={false}
+          />
+        </div>
       </div>
     </div>
   )

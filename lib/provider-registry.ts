@@ -120,7 +120,7 @@ export type ProviderChannel = {
 /**
  * The channels this reader may see, with the names to call them by.
  *
- * The rail, the access check and the composer all want the same three facts,
+ * The tabs, the access check and the composer all want the same three facts,
  * and resolving them once means the manifest is read once. Same permission rule
  * as `visibleProviderModules`, and the label comes from the provider rather
  * than from a list kept here, so a channel is called whatever its own module

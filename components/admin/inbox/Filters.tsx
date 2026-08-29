@@ -1,64 +1,55 @@
-import { inboxHref, type StatusFilter } from '@/modules/unified-inbox/lib/list'
-import { SearchIcon } from './icons'
+import { inboxHref } from '@/modules/unified-inbox/lib/list'
 
-// Filters and search, as links and a plain form.
+// The narrower cuts across whatever the tabs above have already chosen: only the
+// ones nobody has read, only the ones that are mine, only the ones handed to a
+// particular colleague. Where a conversation stands is a tab (see StatusTabs);
+// these are the questions you ask of any of those.
 //
-// Every one of them is a change of address rather than a piece of client state:
-// the panel is rendered on the server from the query string, so a filter held
-// in the browser would describe a list the server had not drawn. It also means
-// the view somebody is looking at can be sent to a colleague, and the back
-// button does what a back button should.
+// Links and a plain form rather than client state, for the same reason as the
+// tabs: this panel is drawn on the server from the query string, so a filter
+// held in the browser would describe a list the server had not drawn.
 
 type Props = {
   base: string
   params: Record<string, string>
-  status: StatusFilter
   unreadOnly: boolean
   assignee: string | null
   search: string | null
   staff: Array<{ id: string; name: string }>
   currentUserId: string
+  /** How many conversations the whole set of choices comes to, said out loud so
+   *  a filter that quietly matches nothing is obvious rather than mysterious. */
+  total: number
 }
 
-const STATUS_TABS: Array<{ value: StatusFilter; label: string }> = [
-  { value: 'open', label: 'Open' },
-  { value: 'snoozed', label: 'Snoozed' },
-  { value: 'done', label: 'Done' },
-  { value: 'all', label: 'Everything' },
-]
-
-export function Filters({ base, params, status, unreadOnly, assignee, search, staff, currentUserId }: Props) {
+export function Filters({
+  base, params, unreadOnly, assignee, search, staff, currentUserId, total,
+}: Props) {
   // Any filter change starts again at page one and closes whatever was open,
   // since the conversation on screen may not survive the new filter.
   const reset = { page: null, id: null }
+
   return (
-    <div className="uin-filters">
-      {STATUS_TABS.map((tab) => (
-        <a
-          key={tab.value}
-          className="uin-chip"
-          aria-current={status === tab.value ? "true" : undefined}
-          href={inboxHref(base, params, { status: tab.value, ...reset })}
-        >
-          {tab.label}
-        </a>
-      ))}
+    <div className="uin-toolbar">
       <a
         className="uin-chip"
-        aria-current={unreadOnly ? "true" : undefined}
+        aria-current={unreadOnly ? 'true' : undefined}
         href={inboxHref(base, params, { unread: unreadOnly ? null : '1', ...reset })}
       >
         Unread only
       </a>
       <a
         className="uin-chip"
-        aria-current={assignee === currentUserId ? "true" : undefined}
-        href={inboxHref(base, params, { assignee: assignee === currentUserId ? null : currentUserId, ...reset })}
+        aria-current={assignee === currentUserId ? 'true' : undefined}
+        href={inboxHref(base, params, {
+          assignee: assignee === currentUserId ? null : currentUserId,
+          ...reset,
+        })}
       >
         Mine
       </a>
       {staff.length > 0 && (
-        <form method="get" action={base} className="uin-search" style={{ flex: '0 0 auto' }}>
+        <form method="get" action={base} className="uin-toolbar-form">
           {Object.entries({ ...params, ...reset }).map(([k, v]) =>
             v && k !== 'assignee' ? <input key={k} type="hidden" name={k} value={v} /> : null,
           )}
@@ -71,22 +62,14 @@ export function Filters({ base, params, status, unreadOnly, assignee, search, st
           <button type="submit" className="btn btn-secondary btn-sm">Filter</button>
         </form>
       )}
-      <form method="get" action={base} className="uin-search">
-        {Object.entries({ ...params, ...reset }).map(([k, v]) =>
-          v && k !== 'q' ? <input key={k} type="hidden" name={k} value={v} /> : null,
-        )}
-        <label className="sr-only" htmlFor="uin-search">Search conversations</label>
-        <input
-          id="uin-search"
-          name="q"
-          type="search"
-          defaultValue={search ?? ''}
-          placeholder="Search everything you can see"
-        />
-        <button type="submit" className="btn btn-secondary btn-sm">
-          {SearchIcon}<span className="sr-only">Search</span>
-        </button>
-      </form>
+      {search && (
+        <a className="uin-chip uin-chip-clear" href={inboxHref(base, params, { q: null, ...reset })}>
+          Searching for &ldquo;{search}&rdquo; &times;<span className="sr-only">Clear the search</span>
+        </a>
+      )}
+      <span className="uin-toolbar-count">
+        {total === 1 ? '1 conversation' : `${total.toLocaleString('en-GB')} conversations`}
+      </span>
     </div>
   )
 }

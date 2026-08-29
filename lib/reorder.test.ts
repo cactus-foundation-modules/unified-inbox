@@ -5,32 +5,32 @@ import { moveInOrder } from './list'
 // makes hard work of proving and a test settles in a line each.
 
 describe('moveInOrder', () => {
-  const rail = ['hi', 'accounts', 'sales', 'orders']
+  const tabs = ['hi', 'accounts', 'sales', 'orders']
 
   it('moves an address up', () => {
-    expect(moveInOrder(rail, 2, 0)).toEqual(['sales', 'hi', 'accounts', 'orders'])
+    expect(moveInOrder(tabs, 2, 0)).toEqual(['sales', 'hi', 'accounts', 'orders'])
   })
 
   it('moves an address down', () => {
-    expect(moveInOrder(rail, 0, 2)).toEqual(['accounts', 'sales', 'hi', 'orders'])
+    expect(moveInOrder(tabs, 0, 2)).toEqual(['accounts', 'sales', 'hi', 'orders'])
   })
 
   it('moves an address to the end', () => {
-    expect(moveInOrder(rail, 0, 3)).toEqual(['accounts', 'sales', 'orders', 'hi'])
+    expect(moveInOrder(tabs, 0, 3)).toEqual(['accounts', 'sales', 'orders', 'hi'])
   })
 
   it('leaves the list alone when it is dropped where it already was', () => {
-    expect(moveInOrder(rail, 1, 1)).toEqual(rail)
+    expect(moveInOrder(tabs, 1, 1)).toEqual(tabs)
   })
 
   it('leaves the list alone when the move is off the end of it', () => {
-    expect(moveInOrder(rail, 0, 9)).toEqual(rail)
-    expect(moveInOrder(rail, -1, 0)).toEqual(rail)
+    expect(moveInOrder(tabs, 0, 9)).toEqual(tabs)
+    expect(moveInOrder(tabs, -1, 0)).toEqual(tabs)
   })
 
   it('does not modify the list it was given', () => {
-    const before = [...rail]
-    moveInOrder(rail, 3, 0)
-    expect(rail).toEqual(before)
+    const before = [...tabs]
+    moveInOrder(tabs, 3, 0)
+    expect(tabs).toEqual(before)
   })
 })

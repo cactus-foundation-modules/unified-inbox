@@ -20,10 +20,13 @@ import {
   listPersonEvents,
   listThreadEvents,
   listThreadMessages,
+  listSentMessages,
+  countSentMessages,
   listThreads,
   outboundLogForAddresses,
   peopleInOrganisation,
   setThreadRead,
+  statusCounts,
   threadsForPerson,
   undoableMerges,
   unreadCounts,
@@ -39,15 +42,17 @@ import { replyRecipients } from '@/modules/unified-inbox/lib/compose'
 import { chooseSendingInbox, inboxHref, parseInboxParams, PER_PAGE } from '@/modules/unified-inbox/lib/list'
 import { visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
 import { InboxStyles } from './inbox/styles'
-import { InboxRail } from './inbox/InboxRail'
+import { InboxTabs } from './inbox/InboxTabs'
+import { StatusTabs } from './inbox/StatusTabs'
 import { Filters } from './inbox/Filters'
 import { ThreadListView } from './inbox/ThreadListView'
 import { DraftListView } from './inbox/DraftListView'
+import { SentListView } from './inbox/SentListView'
 import { ThreadPane, type ThreadMessageView } from './inbox/ThreadPane'
 import { ComposeView } from './inbox/ComposeView'
 
-// The hub's tab on core's Inbox page: the rail of addresses, the list of
-// conversations, and whichever one is open.
+// The hub's tab on core's Inbox page: the addresses along the top, where each
+// conversation stands under them, the list, and whichever one is open.
 //
 // Every piece of state on this screen is in the URL. The core Inbox host
 // renders only the tab the address asks for and hands the query string straight
@@ -125,6 +130,7 @@ export async function UnifiedInboxPanel({
   const staffById = Object.fromEntries(staff.map((s) => [s.id, s.name]))
 
   const counts = await unreadCounts(visibleIds, canManage, channelModules)
+  const allUnread = Object.values(counts).reduce((a, b) => a + b, 0)
 
   // Writing a new one is a different grant from reading (D16), so the From menu
   // and the button that opens it are both built from the inboxes this person may
@@ -138,10 +144,19 @@ export async function UnifiedInboxPanel({
     : null
 
   // Drafts are one person's own, and the query says so rather than the caller
-  // (see lib/db.ts). The count is what the rail shows; the list is only fetched
-  // when the rail is actually on Drafts.
+  // (see lib/db.ts). The count is what the Drafts tab shows; the list itself is
+  // only fetched when that tab is the one open.
   const draftCount = await countDrafts(user.id, visibleIds)
   const drafts = params.draftsOnly ? await listDrafts(user.id, visibleIds) : []
+
+  // Everything that has left, across every address this person may read. Only
+  // fetched when that is the list being looked at.
+  const [sent, sentTotal] = params.sentOnly
+    ? await Promise.all([
+        listSentMessages(visibleIds, canManage, channelModules, params.page, PER_PAGE),
+        countSentMessages(visibleIds, canManage, channelModules),
+      ])
+    : [[] as Awaited<ReturnType<typeof listSentMessages>>, 0]
 
   const filters = {
     inboxIds: visibleIds,
@@ -161,9 +176,12 @@ export async function UnifiedInboxPanel({
   // Drafts take the list pane's place, so the conversation queries are not run
   // at all rather than run and thrown away.
   const connections = await listConnections()
-  const [rows, total] = params.draftsOnly
-    ? [[] as Awaited<ReturnType<typeof listThreads>>, 0]
-    : await Promise.all([listThreads(filters), countThreads(filters)])
+  // The status tabs count what is behind them given everything else already
+  // chosen, so they come from the same filters with the status left out.
+  const listing = params.draftsOnly || params.sentOnly
+  const [rows, total, statuses] = listing
+    ? [[] as Awaited<ReturnType<typeof listThreads>>, 0, {} as Record<string, number>]
+    : await Promise.all([listThreads(filters), countThreads(filters), statusCounts(filters)])
   const neverSynced = connections.length === 0 || connections.every((c) => !c.lastSyncAt)
 
   // ---- one person's own page, if the address asks for one ----------------
@@ -379,48 +397,97 @@ export async function UnifiedInboxPanel({
         draft={editing ? forComposer(editing) : null}
       />
     ) : (
-      <div className="uin-empty">
-        <strong>There is no address you can write from</strong>
-        You can read what arrives, but sending needs an inbox shared with you to write from.
-        Whoever looks after the site can put you on one.
+      // Only reachable by typing the address in, since the button that opens
+      // this is not offered without somewhere to send from. It still answers in
+      // the same place the writing box would have been.
+      <div className="uin-modal">
+        <div className="uin-modal-card" role="dialog" aria-modal="true">
+          <div className="uin-modal-body">
+            <div className="uin-empty">
+              <strong>There is no address you can write from</strong>
+              You can read what arrives, but sending needs an inbox shared with you to write from.
+              Whoever looks after the site can put you on one.
+            </div>
+            <p style={{ margin: 0, textAlign: 'center' }}>
+              <a className="uin-chip" href={inboxHref(base, carried, { compose: null, draft: null })}>
+                Back to the inbox
+              </a>
+            </p>
+          </div>
+        </div>
       </div>
     )
   }
 
+  const currentTab = params.draftsOnly
+    ? 'drafts'
+    : params.sentOnly
+      ? 'sent'
+      : params.unroutedOnly
+        ? 'none'
+        : params.providerModule
+          ? `m:${params.providerModule}`
+          : params.inboxId
+
   return (
     <>
       <InboxStyles />
+      <InboxTabs
+        base={base}
+        params={carried}
+        inboxes={inboxes.map((i) => ({
+          id: i.id,
+          name: i.name,
+          address: i.address,
+          count: counts[i.id] ?? 0,
+        }))}
+        channels={channels.map((c) => ({
+          moduleName: c.moduleName,
+          label: c.label,
+          count: counts[`m:${c.moduleName}`] ?? 0,
+        }))}
+        allCount={allUnread}
+        current={currentTab}
+        showUnrouted={canManage}
+        unroutedCount={counts[''] ?? 0}
+        showDrafts={sendable.length > 0 || draftCount > 0}
+        draftCount={draftCount}
+        composeHref={composeHref}
+        canReorder={canManage}
+      />
+
+      {/* Nothing above Drafts or Sent: where a conversation stands, and who it
+          is assigned to, are questions about messages that have arrived. A
+          message nobody has sent yet, or one already gone, has neither. */}
+      {!listing && (
+        <>
+          <StatusTabs
+            base={base}
+            params={carried}
+            status={params.status}
+            counts={statuses}
+            search={params.search}
+          />
+          <Filters
+            base={base}
+            params={carried}
+            unreadOnly={params.unreadOnly}
+            assignee={params.assignee}
+            search={params.search}
+            staff={staff}
+            currentUserId={user.id}
+            total={total}
+          />
+        </>
+      )}
+
       <div
         className="uin"
-        data-thread={params.composing || params.personId || params.threadId ? 'open' : 'closed'}
+        data-thread={params.personId || params.threadId ? 'open' : 'closed'}
         data-context={contextRail ? 'on' : 'off'}
       >
-        <InboxRail
-          base={base}
-          params={carried}
-          inboxes={inboxes.map((i) => ({ id: i.id, name: i.name, address: i.address }))}
-          channels={channels.map((c) => ({ moduleName: c.moduleName, label: c.label }))}
-          counts={counts}
-          currentInboxId={
-            params.draftsOnly
-              ? 'drafts'
-              : params.unroutedOnly
-                ? 'none'
-                : params.providerModule
-                  ? `m:${params.providerModule}`
-                  : params.inboxId
-          }
-          showUnrouted={canManage}
-          showDrafts={sendable.length > 0 || draftCount > 0}
-          draftCount={draftCount}
-          composeHref={composeHref}
-          canReorder={canManage}
-        />
-
         <div className="uin-listpane">
           {params.draftsOnly ? (
-            // No filters above the drafts: a status filter over messages that
-            // have no status would be furniture rather than a control.
             <DraftListView
               base={base}
               params={carried}
@@ -430,37 +497,42 @@ export async function UnifiedInboxPanel({
               openDraftId={params.draftId}
               now={new Date()}
             />
+          ) : params.sentOnly ? (
+            <SentListView
+              base={base}
+              params={carried}
+              rows={sent}
+              total={sentTotal}
+              page={params.page}
+              openThreadId={params.threadId}
+              inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
+              staffById={staffById}
+              now={new Date()}
+            />
           ) : (
-            <>
-              <Filters
-                base={base}
-                params={carried}
-                status={params.status}
-                unreadOnly={params.unreadOnly}
-                assignee={params.assignee}
-                search={params.search}
-                staff={staff}
-                currentUserId={user.id}
-              />
-              <ThreadListView
-                base={base}
-                params={carried}
-                rows={rows}
-                total={total}
-                page={params.page}
-                openThreadId={params.threadId}
-                staffById={staffById}
-                neverSynced={neverSynced}
-                searching={!!params.search}
-                now={new Date()}
-              />
-            </>
+            <ThreadListView
+              base={base}
+              params={carried}
+              rows={rows}
+              total={total}
+              page={params.page}
+              openThreadId={params.threadId}
+              staffById={staffById}
+              neverSynced={neverSynced}
+              searching={!!params.search}
+              now={new Date()}
+            />
           )}
         </div>
 
-        {composePane ?? personPane ?? threadPane}
+        {personPane ?? threadPane}
         {contextRail}
       </div>
+
+      {/* Over the inbox rather than in place of it: starting a message is
+          something somebody does while looking at the list, and the list is
+          still there underneath when it closes. */}
+      {composePane}
     </>
   )
 }

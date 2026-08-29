@@ -1,21 +1,25 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { inboxHref } from '@/modules/unified-inbox/lib/list'
 import { isWorthSaving, splitAddresses, type DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
 import { AttachmentChips, AttachmentPicker, toHtml, type Attachment } from './AttachmentPicker'
-import { BackIcon } from './icons'
+import { CloseIcon } from './icons'
 
 // Writing a brand new message, rather than answering one somebody else started.
 //
-// It takes the same place on the screen as a conversation, because that is the
-// place this screen puts one conversation's worth of writing - and once it has
-// gone, what you are looking at IS a conversation, so the browser is sent
-// straight to it.
+// It opens over the inbox rather than in place of it: starting a message is
+// something you do while looking at the list, not somewhere you go instead of
+// it, and the conversations stay where they were for when it closes. A reply is
+// the other case entirely and stays under the conversation it answers, where the
+// message being answered is on screen above it.
+//
+// Once the message has gone, what you are looking at IS a conversation, so the
+// browser is sent straight to it.
 //
 // The address it goes out as is a menu rather than a fixed value. It opens on
-// whichever inbox the rail is showing, which is what somebody means by "write a
+// whichever inbox the list is showing, which is what somebody means by "write a
 // new one" from inside accounts@, but a note to a supplier that ought to come
 // from marcus@ is one click away rather than a trip through the settings. Only
 // inboxes this person may actually send from are in the menu: offering an
@@ -23,7 +27,7 @@ import { BackIcon } from './icons'
 // it (D16).
 //
 // Save rather than Send puts the whole screenful down as a draft and leaves it
-// in the rail under Drafts. What is stored is what was typed, not the HTML it
+// under the Drafts tab. What is stored is what was typed, not the HTML it
 // would have become, so opening it again gives back the same box with the same
 // line breaks in it.
 
@@ -33,7 +37,7 @@ type Props = {
   base: string
   params: Record<string, string>
   inboxes: ComposeInbox[]
-  /** Which one the menu opens on, worked out on the server from the rail. */
+  /** Which one the menu opens on, worked out on the server from the open tab. */
   defaultInboxId: string | null
   /** The draft being finished, when the address named one. */
   draft: DraftForComposer | null
@@ -66,6 +70,32 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
 
   const closeHref = inboxHref(base, params, {})
   const chosen = inboxes.find((i) => i.id === inboxId) ?? null
+
+  const card = useRef<HTMLDivElement>(null)
+
+  // A dialog is a dialog: Escape shuts it, the page behind it does not scroll
+  // under it, and the keyboard starts in the box rather than back at the top of
+  // the admin. Nothing shuts it by accident though - the backdrop is deaf on
+  // purpose, because a stray click that loses a half-written email is a worse
+  // bargain than one more click on Cancel.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') router.push(closeHref)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    // Whoever it is going to, which is the first thing anybody types. A fresh
+    // message opens there; one being finished opens on what it says instead.
+    const first = card.current?.querySelector<HTMLElement>(
+      draft?.id ? '#uin-new-text' : '#uin-new-to',
+    )
+    first?.focus()
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = previous
+    }
+  }, [closeHref, draft?.id, router])
 
   const submit = useCallback(async () => {
     if (!inboxId) {
@@ -111,7 +141,7 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
         return
       }
       // It is a conversation now, so go and stand in it - and in the inbox it
-      // was filed into, which is not necessarily the one the rail was showing
+      // was filed into, which is not necessarily the one the list was showing
       // when the menu was changed.
       router.push(inboxHref(base, params, {
         id: data?.threadId ?? null,
@@ -160,7 +190,7 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
       }
       if (data?.id) setDraftId(data.id as string)
       setNote('Saved. It is waiting under Drafts.')
-      // The rail counts drafts, and it is drawn on the server.
+      // The Drafts tab carries a count, and it is drawn on the server.
       router.refresh()
     } catch {
       setError('The site could not be reached. Nothing was saved.')
@@ -188,130 +218,155 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
   }, [closeHref, draftId, router])
 
   return (
-    <div className="uin-thread">
-      <div className="uin-thread-head">
-        <a className="uin-chip" href={closeHref} style={{ justifySelf: 'start' }}>
-          {BackIcon} Back to the list
-        </a>
-        <h2 className="uin-thread-subject">{draftId ? 'A message you started' : 'A new message'}</h2>
-      </div>
-
-      <div className="uin-composer">
-        <div className="field">
-          <label htmlFor="uin-new-from">From</label>
-          <select
-            id="uin-new-from"
-            value={inboxId}
-            onChange={(e) => { setInboxId(e.target.value); setError(''); setNote('') }}
-          >
-            {inboxes.map((inbox) => (
-              <option key={inbox.id} value={inbox.id}>
-                {inbox.name} ({inbox.address})
-              </option>
-            ))}
-          </select>
-          {chosen && (
-            <p className="uin-recipients">
-              They will see it come from {chosen.address}, and their reply lands back in {chosen.name}.
-            </p>
-          )}
+    <div className="uin-modal">
+      <div
+        className="uin-modal-card uin-modal-card-compose"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="uin-compose-title"
+        ref={card}
+      >
+        <div className="uin-modal-head">
+          <h2 className="uin-modal-title" id="uin-compose-title">
+            {draftId ? 'A message you started' : 'A new message'}
+          </h2>
+          <a className="uin-modal-close" href={closeHref} aria-label="Close without sending">
+            {CloseIcon}
+          </a>
         </div>
 
-        <div className="field">
-          <label htmlFor="uin-new-to">To</label>
-          <input
-            id="uin-new-to"
-            type="text"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-            placeholder="name@example.com"
-            autoComplete="off"
-          />
-          <p className="uin-recipients">Separate several addresses with a comma.</p>
-        </div>
+        <div className="uin-modal-body">
+          <div className="uin-composer">
+            {/* Who it is from, who it is to and what it is about are four short
+                answers, so they are four short lines with the label beside the
+                box rather than above it. Stacked, they ate half the box before
+                anybody had written a word, and the message is what the message
+                is for. */}
+            <div className="uin-fields">
+              <div className="uin-field-row">
+                <label htmlFor="uin-new-from">From</label>
+                <div className="uin-field-control">
+                  <select
+                    id="uin-new-from"
+                    value={inboxId}
+                    onChange={(e) => { setInboxId(e.target.value); setError(''); setNote('') }}
+                  >
+                    {inboxes.map((inbox) => (
+                      <option key={inbox.id} value={inbox.id}>
+                        {inbox.name} ({inbox.address})
+                      </option>
+                    ))}
+                  </select>
+                  {chosen && (
+                    <span className="uin-field-hint">
+                      replies land back in {chosen.name}
+                    </span>
+                  )}
+                </div>
+              </div>
 
-        {showCc ? (
-          <div className="field">
-            <label htmlFor="uin-new-cc">Cc</label>
-            <input
-              id="uin-new-cc"
-              type="text"
-              value={cc}
-              onChange={(e) => setCc(e.target.value)}
-              placeholder="somebody.else@example.com"
-              autoComplete="off"
-            />
+              <div className="uin-field-row">
+                <label htmlFor="uin-new-to">To</label>
+                <div className="uin-field-control">
+                  <input
+                    id="uin-new-to"
+                    type="text"
+                    value={to}
+                    onChange={(e) => setTo(e.target.value)}
+                    placeholder="name@example.com, somebody.else@example.com"
+                    autoComplete="off"
+                  />
+                  {!showCc && (
+                    <button type="button" className="uin-field-add" onClick={() => setShowCc(true)}>
+                      Cc
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {showCc && (
+                <div className="uin-field-row">
+                  <label htmlFor="uin-new-cc">Cc</label>
+                  <div className="uin-field-control">
+                    <input
+                      id="uin-new-cc"
+                      type="text"
+                      value={cc}
+                      onChange={(e) => setCc(e.target.value)}
+                      placeholder="somebody.else@example.com"
+                      autoComplete="off"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="uin-field-row">
+                <label htmlFor="uin-new-subject">Subject</label>
+                <div className="uin-field-control">
+                  <input
+                    id="uin-new-subject"
+                    type="text"
+                    value={subject}
+                    onChange={(e) => setSubject(e.target.value)}
+                    placeholder="What it is about"
+                    autoComplete="off"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="uin-compose-message">
+              <label className="sr-only" htmlFor="uin-new-text">Your message</label>
+              <textarea
+                id="uin-new-text"
+                value={text}
+                onChange={(e) => { setText(e.target.value); setNote('') }}
+                placeholder="Write your message"
+              />
+            </div>
+
+            <div className="uin-composer-row">
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPicking(true)}>
+                Attach a file
+              </button>
+              <AttachmentChips
+                attachments={attachments}
+                onRemove={(key) => setAttachments((prev) => prev.filter((p) => p.key !== key))}
+              />
+            </div>
+
+            {error && <div className="alert alert-danger">{error}</div>}
+            {note && !error && <div className="alert alert-success">{note}</div>}
+
+            <div className="uin-composer-row">
+              <button type="button" className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
+                {busy ? 'Sending...' : 'Send'}
+              </button>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={save} disabled={busy}>
+                Save as a draft
+              </button>
+              {draftId ? (
+                <button type="button" className="uin-chip" onClick={discard} disabled={busy}>
+                  Throw the draft away
+                </button>
+              ) : (
+                <a className="uin-chip" href={closeHref}>Cancel</a>
+              )}
+            </div>
+
+            {picking && (
+              <AttachmentPicker
+                onClose={() => setPicking(false)}
+                onPick={(item) => {
+                  setAttachments((prev) =>
+                    prev.some((a) => a.key === item.key) ? prev : [...prev, item],
+                  )
+                  setPicking(false)
+                }}
+              />
+            )}
           </div>
-        ) : (
-          <div className="uin-composer-row">
-            <button type="button" className="uin-chip" onClick={() => setShowCc(true)}>
-              Add a Cc
-            </button>
-          </div>
-        )}
-
-        <div className="field">
-          <label htmlFor="uin-new-subject">Subject</label>
-          <input
-            id="uin-new-subject"
-            type="text"
-            value={subject}
-            onChange={(e) => setSubject(e.target.value)}
-            placeholder="What it is about"
-            autoComplete="off"
-          />
         </div>
-
-        <div className="field">
-          <label htmlFor="uin-new-text">Your message</label>
-          <textarea
-            id="uin-new-text"
-            value={text}
-            onChange={(e) => { setText(e.target.value); setNote('') }}
-            placeholder="Write your message"
-          />
-        </div>
-
-        <div className="uin-composer-row">
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPicking(true)}>
-            Attach a file
-          </button>
-          <AttachmentChips
-            attachments={attachments}
-            onRemove={(key) => setAttachments((prev) => prev.filter((p) => p.key !== key))}
-          />
-        </div>
-
-        {error && <div className="alert alert-danger">{error}</div>}
-        {note && !error && <div className="alert alert-success">{note}</div>}
-
-        <div className="uin-composer-row">
-          <button type="button" className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
-            {busy ? 'Sending...' : 'Send'}
-          </button>
-          <button type="button" className="btn btn-secondary btn-sm" onClick={save} disabled={busy}>
-            Save as a draft
-          </button>
-          {draftId ? (
-            <button type="button" className="uin-chip" onClick={discard} disabled={busy}>
-              Throw the draft away
-            </button>
-          ) : (
-            <a className="uin-chip" href={closeHref}>Cancel</a>
-          )}
-        </div>
-
-        {picking && (
-          <AttachmentPicker
-            onClose={() => setPicking(false)}
-            onPick={(item) => {
-              setAttachments((prev) =>
-                prev.some((a) => a.key === item.key) ? prev : [...prev, item],
-              )
-              setPicking(false)
-            }}
-          />
-        )}
       </div>
     </div>
   )

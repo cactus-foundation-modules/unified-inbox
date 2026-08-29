@@ -239,14 +239,14 @@ export function ThreadPane({
     <div className="uin-thread">
       <div className="uin-thread-head">
         <a
-          className="uin-chip"
+          className="uin-chip uin-back"
           href={inboxHref(base, params, { id: null })}
           style={{ justifySelf: 'start' }}
         >
           {BackIcon} Back to the list
         </a>
         <h2 className="uin-thread-subject">{thread.subject || '(no subject)'}</h2>
-        <div className="uin-thread-actions" style={{ color: 'var(--color-text-muted)', fontSize: '0.8125rem' }}>
+        <div className="uin-thread-meta">
           <span>{channelLabel(thread.channel)}</span>
           {inboxName && <span>&middot; {inboxName}</span>}
           <span>&middot; {messages.length} message{messages.length === 1 ? '' : 's'}</span>
@@ -265,45 +265,47 @@ export function ThreadPane({
         />
       </div>
 
-      {thread.providerModule && messages.length === 0 && (
-        <div className="alert alert-info">
-          This conversation came from somewhere else on the site, and whatever used to serve it is
-          not installed at the moment. What we already hold is still searchable.
+      <div className="uin-thread-body">
+        {thread.providerModule && messages.length === 0 && (
+          <div className="alert alert-info">
+            This conversation came from somewhere else on the site, and whatever used to serve it is
+            not installed at the moment. What we already hold is still searchable.
+          </div>
+        )}
+
+        <div className="uin-messages">
+          {messages.map((message) => (
+            <Message key={message.id} message={message} staffById={staffById} />
+          ))}
         </div>
-      )}
 
-      <div className="uin-messages">
-        {messages.map((message) => (
-          <Message key={message.id} message={message} staffById={staffById} />
-        ))}
+        <Composer
+          threadId={thread.id}
+          replyTo={replyTo}
+          replyAllTo={replyAllTo}
+          canReply={canReply}
+          canForward={canReply}
+          staff={staff}
+          cannotReplyReason={cannotReplyReason}
+          draft={draft}
+        />
+
+        {events.length > 0 && (
+          <details>
+            <summary className="uin-chip" style={{ cursor: 'pointer' }}>What has been done to this</summary>
+            <ul style={{ listStyle: 'none', margin: '0.5rem 0 0', padding: 0, display: 'grid', gap: '0.25rem' }}>
+              {events.map((event) => (
+                <li key={event.id} style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+                  {(event.userId && staffById[event.userId]) || 'Somebody'}{' '}
+                  {EVENT_WORDS[event.kind] ?? 'changed something'}
+                  {' - '}
+                  {formatFull(event.createdAt)}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
       </div>
-
-      <Composer
-        threadId={thread.id}
-        replyTo={replyTo}
-        replyAllTo={replyAllTo}
-        canReply={canReply}
-        canForward={canReply}
-        staff={staff}
-        cannotReplyReason={cannotReplyReason}
-        draft={draft}
-      />
-
-      {events.length > 0 && (
-        <details>
-          <summary className="uin-chip" style={{ cursor: 'pointer' }}>What has been done to this</summary>
-          <ul style={{ listStyle: 'none', margin: '0.5rem 0 0', padding: 0, display: 'grid', gap: '0.25rem' }}>
-            {events.map((event) => (
-              <li key={event.id} style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
-                {(event.userId && staffById[event.userId]) || 'Somebody'}{' '}
-                {EVENT_WORDS[event.kind] ?? 'changed something'}
-                {' - '}
-                {formatFull(event.createdAt)}
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
     </div>
   )
 }

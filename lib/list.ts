@@ -3,7 +3,7 @@
 // where a quoted reply stops being new writing and starts being history.
 //
 // All of it is here rather than in a component for two reasons. It is the part
-// worth testing, and the panel is a server component - the list, the rail and
+// worth testing, and the panel is a server component - the tabs, the list and
 // the thread are all rendered from the query string, because the core Inbox
 // host renders only the tab the URL asks for and hands the params straight
 // through. Anything held in client state would describe a screen the server had
@@ -15,20 +15,23 @@ export const PER_PAGE = 25
 export type StatusFilter = 'open' | 'snoozed' | 'done' | 'all'
 
 export type InboxParams = {
-  /** The inbox chosen in the rail, or null for everything this person may see. */
+  /** The inbox chosen in the tabs, or null for everything this person may see. */
   inboxId: string | null
-  /** A channel another module owns, chosen in the rail. Written `m:<module>` in
+  /** A channel another module owns, chosen in the tabs. Written `m:<module>` in
    *  the address, because it takes the same place as an inbox and there is no
    *  sense in two params that cannot both be true. */
   providerModule: string | null
-  /** The rail's "Not filed" entry: mail that reached the account and matched
+  /** The "Not filed" tab: mail that reached the account and matched
    *  none of the site's addresses. Only somebody who administers the whole
    *  thing sees it at all. */
   unroutedOnly: boolean
-  /** The rail's "Drafts" entry: this person's own half-written messages,
+  /** The "Drafts" tab: this person's own half-written messages,
    *  across every address they can write from. It takes the same slot as an
    *  inbox because it is the same choice - what the list is a list of. */
   draftsOnly: boolean
+  /** The "Sent" tab: everything that has left, across every address this person
+   *  may read. Takes the same slot for the same reason. */
+  sentOnly: boolean
   status: StatusFilter
   unreadOnly: boolean
   /** A user id, the literal 'unassigned', or null for no filter. */
@@ -65,11 +68,13 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
   return {
     inboxId:
       !isChannel && inbox && inbox !== 'all' && inbox !== 'none' && inbox !== 'drafts'
+        && inbox !== 'sent'
         ? inbox
         : null,
     providerModule: channel.length > 0 ? channel : null,
     unroutedOnly: inbox === 'none',
     draftsOnly: inbox === 'drafts',
+    sentOnly: inbox === 'sent',
     status: rawStatus && STATUSES.includes(rawStatus) ? rawStatus : 'open',
     unreadOnly: sp.unread === '1',
     assignee: sp.assignee ? sp.assignee : null,
@@ -102,7 +107,7 @@ export function inboxHref(
 /**
  * Which address a brand new message should go out as.
  *
- * Whichever inbox the rail is showing, when that is one this person may send
+ * Whichever inbox the list is showing, when that is one this person may send
  * from - "write a new one" from inside accounts@ means writing as accounts@,
  * and having to pick it again from a menu is the sort of thing that gets
  * forgotten and sends the supplier a note from hi@. Everything else - the All
@@ -286,7 +291,7 @@ export function quotedHtmlIndex(html: string): number {
 }
 
 /**
- * The rail's addresses with one of them moved to a different place.
+ * The addresses along the top with one of them moved to a different place.
  *
  * Pure, and out here rather than inside the component, because "dropped on the
  * one below it" and "dropped on the one it already was" are exactly the cases

@@ -310,9 +310,9 @@ export async function deleteInbox(id: string): Promise<void> {
  * Put the inboxes in the order somebody dragged them into.
  *
  * The whole list arrives at once and is written as positions 0..n-1, rather
- * than one inbox being nudged up by a place: two people rearranging the rail at
+ * than one inbox being nudged up by a place: two people rearranging them at
  * the same time then end up with one of the two orders, not a shuffle of both.
- * One statement, so the rail is never briefly half-sorted.
+ * One statement, so the order is never briefly half-sorted.
  */
 export async function reorderInboxes(ids: string[]): Promise<void> {
   if (ids.length === 0) return
@@ -377,7 +377,7 @@ export async function listInboxAccess(inboxId: string): Promise<InboxAccess[]> {
   }))
 }
 
-/** Every access row on the site, for resolving one user's view of the rail in
+/** Every access row on the site, for resolving one user's view of the addresses in
  *  a single query rather than one per inbox. */
 export async function listAllInboxAccess(): Promise<InboxAccess[]> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
@@ -1436,7 +1436,7 @@ export async function createOutboundThread(data: {
 }
 
 // ---------------------------------------------------------------------------
-// Reading it (S5): the rail, the list, one conversation, and search.
+// Reading it (S5): the tabs, the list, one conversation, and search.
 //
 // Two rules run through every query below and neither is negotiable:
 //
@@ -1471,11 +1471,11 @@ export type ThreadListFilters = {
    *  A chat or an enquiry is in no inbox, so the inbox guest lists say nothing
    *  about it - the owning module's own permission does. */
   providerModules?: string[]
-  /** One inbox chosen in the rail, or null for everything they may see. */
+  /** One inbox chosen in the tabs, or null for everything they may see. */
   inboxId?: string | null
   /** Only the conversations that landed in no inbox at all. */
   unroutedOnly?: boolean
-  /** One channel chosen in the rail, by the module that owns it. */
+  /** One channel chosen in the tabs, by the module that owns it. */
   providerModule?: string | null
   status?: ThreadStatusFilter
   unreadOnly?: boolean
@@ -1679,7 +1679,7 @@ export async function countThreads(f: ThreadListFilters): Promise<number> {
   return Number(rows[0]?.count ?? 0)
 }
 
-/** Unread conversations per inbox, for the numbers beside the rail. Keyed by
+/** Unread conversations per inbox, for the numbers on the tabs. Keyed by
  *  inbox id, with the empty string standing for "landed in no inbox". */
 export async function unreadCounts(
   inboxIds: string[],
@@ -1697,6 +1697,36 @@ export async function unreadCounts(
   `
   const out: Record<string, number> = {}
   for (const r of rows) out[r.key ?? ''] = Number(r.count)
+  return out
+}
+
+/**
+ * How many conversations sit under each status, for the numbers on the status
+ * tabs.
+ *
+ * Everything the reader has already chosen counts - the inbox, the search, who
+ * it is assigned to - and only the status itself is left out of the WHERE,
+ * because the whole point of the numbers is to say what is waiting behind the
+ * tabs somebody is NOT looking at. One grouped query rather than one per tab,
+ * so a fourth status later costs nothing.
+ */
+export async function statusCounts(f: ThreadListFilters): Promise<Record<string, number>> {
+  const visible = visibilityClause(f.inboxIds, f.includeUnrouted, f.providerModules ?? [])
+  if (!visible) return {}
+  const where = [visible, ...filterClauses({ ...f, status: 'all' })]
+  const rows = await prisma.$queryRaw<{ status: string; count: bigint }[]>`
+    SELECT t."status" AS "status", COUNT(*)::bigint AS "count"
+      FROM "uin_threads" t
+     WHERE ${Prisma.join(where, ' AND ')}
+     GROUP BY t."status"
+  `
+  const out: Record<string, number> = {}
+  let all = 0
+  for (const r of rows) {
+    out[r.status] = Number(r.count)
+    all += Number(r.count)
+  }
+  out.all = all
   return out
 }
 
@@ -2013,7 +2043,7 @@ export async function insertNote(data: {
 // The visible-inbox list goes into the SQL for the same reason it does
 // everywhere else in this file (E17): a draft written from an address somebody
 // has since been taken off is not theirs to pick up again, and dropping the row
-// afterwards would still have counted it in the rail.
+// afterwards would still have counted it on the tabs.
 // ---------------------------------------------------------------------------
 
 function mapDraft(r: Record<string, unknown>): Draft {
@@ -2053,11 +2083,109 @@ export async function listDrafts(authorUserId: string, inboxIds: string[]): Prom
   return rows.map(mapDraft)
 }
 
-/** How many are waiting, for the number beside Drafts in the rail. */
+/** How many are waiting, for the number on the Drafts tab. */
 export async function countDrafts(authorUserId: string, inboxIds: string[]): Promise<number> {
   const rows = await prisma.$queryRaw<{ count: bigint }[]>`
     SELECT COUNT(*)::bigint AS "count" FROM "uin_drafts" d
      WHERE ${draftScope(authorUserId, inboxIds)}
+  `
+  return Number(rows[0]?.count ?? 0)
+}
+
+// ---------------------------------------------------------------------------
+// Sent.
+//
+// One row per message that left, across every address - which is what a Sent
+// folder has meant since before any of this existed, and the answer to "did that
+// quote actually go, and when". Messages rather than conversations, because a
+// long thread somebody has answered four times is four things sent, and a list
+// that showed it once would be a list of conversations wearing a Sent label.
+//
+// Internal notes are not sent to anybody, so they are not here. The access rule
+// is the same one the conversation list runs (E17): the visibility clause is
+// ANDed into the query rather than applied to the rows afterwards, so a reply
+// somebody sent from an address this reader cannot open is never fetched.
+// ---------------------------------------------------------------------------
+
+export type SentMessageRow = {
+  id: string
+  threadId: string
+  /** Which address it went out as. The message carries its own, and falls back
+   *  to the conversation's for anything sent before that was recorded. */
+  inboxId: string | null
+  subject: string | null
+  preview: string | null
+  toAddresses: string[]
+  sentAt: Date
+  hasAttachments: boolean
+  deliveryStatus: string | null
+  openedAt: Date | null
+  bouncedAt: Date | null
+  bounceKind: string | null
+  authorUserId: string | null
+}
+
+function sentWhere(
+  inboxIds: string[],
+  includeUnrouted: boolean,
+  providerModules: string[],
+): Prisma.Sql | null {
+  const visible = visibilityClause(inboxIds, includeUnrouted, providerModules)
+  if (!visible) return null
+  return Prisma.sql`m."direction" = 'out' AND ${visible}`
+}
+
+export async function listSentMessages(
+  inboxIds: string[],
+  includeUnrouted: boolean,
+  providerModules: string[],
+  page: number,
+  perPage: number,
+): Promise<SentMessageRow[]> {
+  const where = sentWhere(inboxIds, includeUnrouted, providerModules)
+  if (!where) return []
+  const offset = Math.max(0, (page - 1) * perPage)
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT m."id", m."thread_id", COALESCE(m."inbox_id", t."inbox_id") AS "inbox_id",
+           COALESCE(m."subject", t."subject") AS "subject",
+           COALESCE(m."snippet", LEFT(m."body_text", 200)) AS "preview",
+           m."to_addresses", m."sent_at", m."has_attachments", m."delivery_status",
+           m."opened_at", m."bounced_at", m."bounce_kind", m."author_user_id"
+      FROM "uin_messages" m
+      JOIN "uin_threads" t ON t."id" = m."thread_id"
+     WHERE ${where}
+     ORDER BY m."sent_at" DESC, m."id" DESC
+     LIMIT ${perPage} OFFSET ${offset}
+  `
+  return rows.map((r) => ({
+    id: r.id as string,
+    threadId: r.thread_id as string,
+    inboxId: (r.inbox_id as string | null) ?? null,
+    subject: (r.subject as string | null) ?? null,
+    preview: (r.preview as string | null) ?? null,
+    toAddresses: (r.to_addresses as string[] | null) ?? [],
+    sentAt: r.sent_at as Date,
+    hasAttachments: !!r.has_attachments,
+    deliveryStatus: (r.delivery_status as string | null) ?? null,
+    openedAt: (r.opened_at as Date | null) ?? null,
+    bouncedAt: (r.bounced_at as Date | null) ?? null,
+    bounceKind: (r.bounce_kind as string | null) ?? null,
+    authorUserId: (r.author_user_id as string | null) ?? null,
+  }))
+}
+
+export async function countSentMessages(
+  inboxIds: string[],
+  includeUnrouted: boolean,
+  providerModules: string[],
+): Promise<number> {
+  const where = sentWhere(inboxIds, includeUnrouted, providerModules)
+  if (!where) return 0
+  const rows = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(*)::bigint AS "count"
+      FROM "uin_messages" m
+      JOIN "uin_threads" t ON t."id" = m."thread_id"
+     WHERE ${where}
   `
   return Number(rows[0]?.count ?? 0)
 }

@@ -33,13 +33,13 @@ describe('parseInboxParams', () => {
     expect(parseInboxParams({ status: 'done' }).status).toBe('done')
   })
 
-  it('reads the rail: an id, everything, or the ones that matched nothing', () => {
+  it('reads the chosen tab: an id, everything, or the ones that matched nothing', () => {
     expect(parseInboxParams({ inbox: 'abc' })).toMatchObject({ inboxId: 'abc', unroutedOnly: false })
     expect(parseInboxParams({ inbox: 'all' })).toMatchObject({ inboxId: null, unroutedOnly: false })
     expect(parseInboxParams({ inbox: 'none' })).toMatchObject({ inboxId: null, unroutedOnly: true })
   })
 
-  it('reads a channel another module owns, which takes the rail’s other slot', () => {
+  it('reads a channel another module owns, which takes the same slot as an address', () => {
     expect(parseInboxParams({ inbox: 'm:live-chat' })).toMatchObject({
       inboxId: null,
       providerModule: 'live-chat',
@@ -50,7 +50,7 @@ describe('parseInboxParams', () => {
     expect(parseInboxParams({ inbox: 'm:' })).toMatchObject({ inboxId: null, providerModule: null })
   })
 
-  it('reads the rail’s Drafts entry, which is not an inbox id', () => {
+  it('reads the Drafts tab, which is not an inbox id', () => {
     expect(parseInboxParams({ inbox: 'drafts' })).toMatchObject({
       inboxId: null,
       draftsOnly: true,
@@ -58,9 +58,21 @@ describe('parseInboxParams', () => {
       providerModule: null,
     })
     // An address genuinely called "drafts" would be a channel or an id; neither
-    // of those is the rail entry.
+    // of those is the tab.
     expect(parseInboxParams({ inbox: 'abc' }).draftsOnly).toBe(false)
     expect(parseInboxParams({}).draftsOnly).toBe(false)
+  })
+
+  it('reads the Sent tab, which is not an inbox id either', () => {
+    expect(parseInboxParams({ inbox: 'sent' })).toMatchObject({
+      inboxId: null,
+      sentOnly: true,
+      draftsOnly: false,
+      unroutedOnly: false,
+      providerModule: null,
+    })
+    expect(parseInboxParams({ inbox: 'abc' }).sentOnly).toBe(false)
+    expect(parseInboxParams({}).sentOnly).toBe(false)
   })
 
   it('reads which draft is being finished', () => {
@@ -88,7 +100,7 @@ describe('chooseSendingInbox', () => {
     expect(chooseSendingInbox(['a', 'b'], 'b')).toBe('b')
   })
 
-  it('falls back to the first when the rail is showing everything', () => {
+  it('falls back to the first when the list is showing everything', () => {
     expect(chooseSendingInbox(['a', 'b'], null)).toBe('a')
   })
 

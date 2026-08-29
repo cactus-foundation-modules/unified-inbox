@@ -44,7 +44,7 @@ export function DraftListView({
   }
 
   return (
-    <ul className="uin-list" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+    <ul className="uin-list">
       {drafts.map((draft) => {
         const who = draftRecipientLabel(draft)
         const open = draft.threadId
@@ -58,19 +58,20 @@ export function DraftListView({
               href={draftHref(base, params, draft)}
               aria-current={open ? 'true' : undefined}
             >
-              <span className="uin-avatar" aria-hidden="true">{initialsFor(who)}</span>
+              <span className="uin-avatar-wrap">
+                <span className="uin-avatar" aria-hidden="true">{initialsFor(who)}</span>
+              </span>
               <span className="uin-row-main">
                 <span className="uin-row-who">
                   <span className="uin-row-name">{who}</span>
                 </span>
                 <span className="uin-row-subject">{draftSubjectLabel(draft)}</span>
-                {draft.body.trim() && (
-                  <span className="uin-row-preview">{draftPreview(draft.body)}</span>
-                )}
+                <span className="uin-row-preview">
+                  {draft.body.trim() ? draftPreview(draft.body) : ''}
+                </span>
               </span>
               <span className="uin-row-meta">
-                <span>{formatWhen(draft.updatedAt, now)}</span>
-                <span style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                <span className="uin-row-tags">
                   {draft.attachments.length > 0 && (
                     <span className="uin-tag" title="Has an attachment">
                       {PaperclipIcon}<span className="sr-only">Has an attachment</span>
@@ -79,6 +80,7 @@ export function DraftListView({
                   {draft.threadId && <span className="uin-tag">Reply</span>}
                   {inboxName && <span className="uin-tag">{inboxName}</span>}
                 </span>
+                <span>{formatWhen(draft.updatedAt, now)}</span>
               </span>
             </a>
           </li>

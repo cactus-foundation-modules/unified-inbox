@@ -412,7 +412,7 @@ export async function backfillOrganisation(personId: string): Promise<void> {
 /**
  * Everything the context rail's adapters match on, for one person.
  *
- * Built here rather than in the panel so that the person page and the rail
+ * Built here rather than in the panel so that the person page and the context panel
  * beside a conversation ask the adapters exactly the same question. The
  * addresses are the matching keys rather than what the sender wrote, because a
  * plus tag is how somebody sorts their own mail and not part of who they are.
