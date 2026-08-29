@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { headers } from 'next/headers'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
@@ -105,7 +106,7 @@ export async function UnifiedInboxPanel({
         {canManage ? (
           <>
             No inboxes yet. Add the addresses your customers and suppliers write to in{' '}
-            <a href={`/${adminPath}/config?tab=unified-inbox`}>Settings &rsaquo; Unified Inbox</a>.
+            <Link href={`/${adminPath}/config?tab=unified-inbox`}>Settings &rsaquo; Unified Inbox</Link>.
           </>
         ) : (
           <>No inboxes have been shared with you yet. Whoever looks after the site can put you on one.</>
@@ -431,7 +432,7 @@ export async function UnifiedInboxPanel({
           <strong>There is no address you can write from</strong>
           You can read what arrives, but sending needs an inbox shared with you to write from.
           Whoever looks after the site can put you on one.{' '}
-          <a href={inboxHref(base, carried, { compose: null, draft: null })}>Back to the inbox</a>
+          <Link href={inboxHref(base, carried, { compose: null, draft: null })}>Back to the inbox</Link>
         </div>
       )
     }
@@ -472,6 +473,7 @@ export async function UnifiedInboxPanel({
         draftCount={draftCount}
         composeHref={composeHref}
         canReorder={canManage}
+        canCheckNow={canManage && connections.length > 0}
       />
 
       {/* Nothing above Drafts or Sent: where a conversation stands, and who it

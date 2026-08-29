@@ -112,6 +112,39 @@ const CSS = `
   .uin-compose-words { display: none; }
 }
 
+/* ---- fetching new mail, at the head of the addresses -------------------- */
+/* The button sits beside core's tab strip rather than inside it, because the
+   strip takes tabs and one trailing slot and this is neither. It carries the
+   strip's own bottom border and bottom margin, so the line under the addresses
+   runs unbroken across it - which is the whole of what makes it read as part of
+   the row rather than as something parked in front of it. */
+.uin-tabrow { display: flex; align-items: stretch; }
+.uin-tabrow-strip { flex: 1; min-width: 0; }
+.uin-refresh {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.6rem;
+  margin-bottom: 0.5rem;
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-text-muted);
+  font-family: inherit;
+  cursor: pointer;
+}
+.uin-refresh:hover:not(:disabled) { color: var(--color-primary); }
+.uin-refresh:disabled { cursor: default; opacity: 0.55; }
+.uin-refresh svg { display: block; }
+.uin-refresh[data-busy="1"] svg { animation: uin-spin 0.9s linear infinite; }
+@keyframes uin-spin { to { transform: rotate(360deg); } }
+/* A spinner is decoration, and decoration that moves is a problem for some
+   readers. The button still says it is busy, in words, to a screen reader. */
+@media (prefers-reduced-motion: reduce) {
+  .uin-refresh[data-busy="1"] svg { animation: none; }
+}
+
 /* ---- the search box, at the end of the status tabs ---------------------- */
 .uin-search { display: flex; gap: 0.375rem; align-items: center; }
 .uin-search input { min-width: 0; width: 9rem; }

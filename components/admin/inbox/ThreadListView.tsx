@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import type { ThreadListRow } from '@/modules/unified-inbox/lib/db'
 import {
   channelLabel,
@@ -108,7 +109,7 @@ export function ThreadListView({
           const assignee = row.assigneeUserId ? staffById[row.assigneeUserId] : null
           return (
             <li key={row.id}>
-              <a
+              <Link
                 className={`uin-row${row.unread ? ' uin-row-unread' : ''}`}
                 href={inboxHref(base, params, { id: row.id })}
                 aria-current={open ? 'true' : undefined}
@@ -151,7 +152,7 @@ export function ThreadListView({
                   </span>
                   <span>{formatWhen(row.lastMessageAt, now)}</span>
                 </span>
-              </a>
+              </Link>
             </li>
           )
         })}
@@ -160,15 +161,15 @@ export function ThreadListView({
       {pages > 1 && (
         <div className="uin-pager">
           {page > 1 ? (
-            <a className="btn btn-secondary btn-sm" href={inboxHref(base, params, { page: String(page - 1), id: null })}>
+            <Link className="btn btn-secondary btn-sm" href={inboxHref(base, params, { page: String(page - 1), id: null })}>
               Newer
-            </a>
+            </Link>
           ) : <span />}
           <span>Page {page} of {pages}</span>
           {page < pages ? (
-            <a className="btn btn-secondary btn-sm" href={inboxHref(base, params, { page: String(page + 1), id: null })}>
+            <Link className="btn btn-secondary btn-sm" href={inboxHref(base, params, { page: String(page + 1), id: null })}>
               Older
-            </a>
+            </Link>
           ) : <span />}
         </div>
       )}

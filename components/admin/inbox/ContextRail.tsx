@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import type { ContextSection } from '@/modules/unified-inbox/lib/adapters'
 import type { LinkKind } from '@/modules/unified-inbox/lib/linking'
 import type { Person, RecordLink } from '@/modules/unified-inbox/lib/types'
@@ -61,7 +62,7 @@ function LinkedRecord({
     <li className="uin-ctx-row">
       <div className="uin-ctx-main">
         {href ? (
-          <a href={`/${adminPath}/${href}`}>{label}</a>
+          <Link href={`/${adminPath}/${href}`}>{label}</Link>
         ) : (
           <span>{label}</span>
         )}
@@ -118,9 +119,9 @@ export function ContextRail({
         <section className="uin-ctx-block">
           <h3 className="uin-ctx-heading">Who this is</h3>
           <p className="uin-ctx-name">
-            <a href={inboxHref(base, params, { person: person.id, id: null })}>
+            <Link href={inboxHref(base, params, { person: person.id, id: null })}>
               {person.displayName || person.primaryEmail || 'Somebody'}
-            </a>
+            </Link>
           </p>
           {person.primaryEmail && person.displayName && (
             <p className="uin-ctx-sub">{person.primaryEmail}</p>
@@ -169,7 +170,7 @@ export function ContextRail({
             {section.items.map((item) => (
               <li key={item.id} className="uin-ctx-row">
                 <div className="uin-ctx-main">
-                  <a href={`/${adminPath}/${item.href}`}>{item.title}</a>
+                  <Link href={`/${adminPath}/${item.href}`}>{item.title}</Link>
                   {item.status && <span className="uin-tag">{item.status}</span>}
                 </div>
                 {item.detail && <span className="uin-ctx-sub">{item.detail}</span>}
@@ -178,9 +179,9 @@ export function ContextRail({
           </ul>
           {section.moreHref && section.total > section.items.length && (
             <p className="uin-ctx-sub">
-              <a href={`/${adminPath}/${section.moreHref}`}>
+              <Link href={`/${adminPath}/${section.moreHref}`}>
                 See all {section.total}
-              </a>
+              </Link>
             </p>
           )}
         </section>

@@ -1,10 +1,12 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { TabStrip } from '@/components/admin/TabStrip'
 import { inboxHref, moveInOrder } from '@/modules/unified-inbox/lib/list'
 import { PenIcon } from './icons'
+import { CheckNowButton, type CheckNowNotice } from './CheckNowButton'
 
 // What the list is a list of, along the top: everything at once, then each
 // address people write to, then the channels another module owns, then Sent and
@@ -16,6 +18,12 @@ import { PenIcon } from './icons'
 // overflow on a narrow window instead of eating a column of the reading area.
 // Unread counts ride in the labels, because "is there anything new in
 // accounts@" is the question this row is answering.
+//
+// Fetching new mail sits at the head of the row, to the left of All, because
+// "has anything come in" is asked of the whole screen rather than of one
+// address. It is outside core's strip rather than in it: the strip takes tabs
+// and one trailing slot, and this is neither. See .uin-tabrow in styles.tsx for
+// how the line under the addresses is made to run unbroken across it.
 //
 // The addresses can still be dragged into the order somebody wants them in.
 // The strip belongs to core, so the drag lives on the label inside each tab -
@@ -51,6 +59,11 @@ type Props = {
   /** Whether this person may drag the addresses into a different order. The
    *  order is the site's rather than one person's, so it takes `manage`. */
   canReorder: boolean
+  /** Whether to offer fetching new mail on the spot. Asked as its own question
+   *  rather than read off canReorder: collecting mail takes `manage` AND a mail
+   *  account to collect from, and a site whose only channels are a chat and an
+   *  enquiry form has nothing for the button to do. */
+  canCheckNow: boolean
 }
 
 function Count({ value, word = 'unread' }: { value: number; word?: string }) {
@@ -67,9 +80,10 @@ function Count({ value, word = 'unread' }: { value: number; word?: string }) {
 
 export function InboxTabs({
   base, params, inboxes, channels, allCount, current, showUnrouted, unroutedCount,
-  showDrafts, draftCount, composeHref, canReorder,
+  showDrafts, draftCount, composeHref, canReorder, canCheckNow,
 }: Props) {
   const router = useRouter()
+  const [notice, setNotice] = useState<CheckNowNotice | null>(null)
   const [order, setOrder] = useState(inboxes)
   const [dragId, setDragId] = useState<string | null>(null)
   const [overId, setOverId] = useState<string | null>(null)
@@ -266,16 +280,29 @@ export function InboxTabs({
 
   return (
     <div onKeyDown={onStripKeyDown}>
-      <TabStrip
-        style={{ marginBottom: '0.5rem' }}
-        items={items}
-        trailing={composeHref ? (
-          <a className="uin-compose" href={composeHref} aria-label="Write a message">
-            {PenIcon}
-            <span className="uin-compose-words">Write a message</span>
-          </a>
-        ) : undefined}
-      />
+      <div className="uin-tabrow">
+        {canCheckNow && <CheckNowButton onResult={setNotice} />}
+        <div className="uin-tabrow-strip">
+          <TabStrip
+            style={{ marginBottom: '0.5rem' }}
+            items={items}
+            trailing={composeHref ? (
+              <Link className="uin-compose" href={composeHref} aria-label="Write a message">
+                {PenIcon}
+                <span className="uin-compose-words">Write a message</span>
+              </Link>
+            ) : undefined}
+          />
+        </div>
+      </div>
+      {notice && (
+        <div
+          className={`alert ${notice.tone === 'ok' ? 'alert-info' : 'alert-danger'}`}
+          role="status"
+        >
+          {notice.text}
+        </div>
+      )}
       {error && <div className="alert alert-danger" role="alert">{error}</div>}
     </div>
   )

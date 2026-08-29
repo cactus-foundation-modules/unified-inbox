@@ -1,4 +1,5 @@
 import { TabStrip } from '@/components/admin/TabStrip'
+import { QueryForm } from './QueryForm'
 import { inboxHref, type StatusFilter } from '@/modules/unified-inbox/lib/list'
 import { SearchIcon } from './icons'
 
@@ -41,6 +42,14 @@ export function StatusTabs({ base, params, status, counts, search }: Props) {
   // had changed underneath it.
   const reset = { page: null, id: null, person: null }
 
+  // What the search carries with it: everything already chosen, less the search
+  // itself and less the three the reset above clears.
+  const hidden = Object.fromEntries(
+    Object.entries(params).filter(
+      ([key, value]) => value && !['q', 'page', 'id', 'person'].includes(key),
+    ),
+  )
+
   return (
     <TabStrip
       style={{ marginBottom: '0.75rem' }}
@@ -66,10 +75,7 @@ export function StatusTabs({ base, params, status, counts, search }: Props) {
         }
       })}
       trailing={
-        <form method="get" action={base} className="uin-search">
-          {Object.entries({ ...params, ...reset }).map(([k, v]) =>
-            v && k !== 'q' ? <input key={k} type="hidden" name={k} value={v} /> : null,
-          )}
+        <QueryForm base={base} hidden={hidden} className="uin-search">
           <label className="sr-only" htmlFor="uin-search">Search conversations you can see</label>
           <input
             id="uin-search"
@@ -81,7 +87,7 @@ export function StatusTabs({ base, params, status, counts, search }: Props) {
           <button type="submit" className="btn btn-secondary btn-sm" aria-label="Search">
             {SearchIcon}
           </button>
-        </form>
+        </QueryForm>
       }
     />
   )

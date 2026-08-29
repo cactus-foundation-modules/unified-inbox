@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import type { AttachmentRow, ThreadDetail, ThreadEventRow, ThreadMessageRow } from '@/modules/unified-inbox/lib/db'
 import type { DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
 import { channelLabel, formatFull, formatWhen, inboxHref, splitQuotedText } from '@/modules/unified-inbox/lib/list'
@@ -269,13 +270,13 @@ export function ThreadPane({
   return (
     <div className="uin-thread">
       <div className="uin-thread-head">
-        <a
+        <Link
           className="uin-chip uin-back"
           href={inboxHref(base, params, { id: null })}
           style={{ justifySelf: 'start' }}
         >
           {BackIcon} Back to the list
-        </a>
+        </Link>
         <h2 className="uin-thread-subject">{thread.subject || '(no subject)'}</h2>
         <div className="uin-thread-meta">
           <span>{channelLabel(thread.channel)}</span>

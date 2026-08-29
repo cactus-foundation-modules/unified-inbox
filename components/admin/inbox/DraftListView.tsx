@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import type { Draft } from '@/modules/unified-inbox/lib/types'
 import { formatWhen, initialsFor } from '@/modules/unified-inbox/lib/list'
 import {
@@ -57,7 +58,7 @@ export function DraftListView({
         const inboxName = draft.inboxId ? inboxNames[draft.inboxId] : null
         return (
           <li key={draft.id}>
-            <a
+            <Link
               className="uin-row"
               href={draftHref(base, params, draft)}
               aria-current={open ? 'true' : undefined}
@@ -94,7 +95,7 @@ export function DraftListView({
                 </span>
                 <span>{formatWhen(draft.updatedAt, now)}</span>
               </span>
-            </a>
+            </Link>
           </li>
         )
       })}

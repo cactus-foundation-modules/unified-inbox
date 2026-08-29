@@ -15,6 +15,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 // scrollbar. Until that message arrives it stands at a sensible height, so a
 // blocked script or a slow load costs a slightly wrong size and nothing else.
 //
+// MIN_HEIGHT is a FLOOR and a starting point, never a fixed size - it is both
+// the height the frame opens at and the smallest the reported height is allowed
+// to settle to. It was 120px, which is about four lines: every message opened in
+// a letterbox and grew a moment later, and any message whose frame never
+// reported stayed in the letterbox for good. A reading height to begin with
+// costs nothing when the real height arrives and is the difference between a
+// message and a peephole when it does not.
+//
 // If the height never arrives, something may have gone wrong with the frame -
 // or nothing may have, since a browser extension can stop the script that
 // reports it. Nothing can be read out of the frame from here to tell the two
@@ -24,7 +32,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 // open. A blank rectangle with no explanation is the one outcome worth ruling
 // out: it reads as an empty message rather than as a message that did not come.
 
-const MIN_HEIGHT = 120
+const MIN_HEIGHT = 400
 const MAX_HEIGHT = 4000
 /** How long to let the frame stay silent before asking whether it was ever
  *  going to say anything. Long enough for a large message on a slow line. */

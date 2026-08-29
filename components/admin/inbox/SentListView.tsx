@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import type { SentMessageRow } from '@/modules/unified-inbox/lib/db'
 import {
   formatWhen,
@@ -76,7 +77,7 @@ export function SentListView({
             && ['hard', 'blocked', 'invalid', 'spam', 'error'].includes(row.bounceKind ?? '')
           return (
             <li key={row.id}>
-              <a
+              <Link
                 className="uin-row"
                 href={inboxHref(base, params, { id: row.threadId })}
                 aria-current={row.threadId === openThreadId ? 'true' : undefined}
@@ -134,7 +135,7 @@ export function SentListView({
                   </span>
                   <span>{formatWhen(row.sentAt, now)}</span>
                 </span>
-              </a>
+              </Link>
             </li>
           )
         })}
@@ -143,15 +144,15 @@ export function SentListView({
       {pages > 1 && (
         <div className="uin-pager">
           {page > 1 ? (
-            <a className="btn btn-secondary btn-sm" href={inboxHref(base, params, { page: String(page - 1), id: null })}>
+            <Link className="btn btn-secondary btn-sm" href={inboxHref(base, params, { page: String(page - 1), id: null })}>
               Newer
-            </a>
+            </Link>
           ) : <span />}
           <span>Page {page} of {pages}</span>
           {page < pages ? (
-            <a className="btn btn-secondary btn-sm" href={inboxHref(base, params, { page: String(page + 1), id: null })}>
+            <Link className="btn btn-secondary btn-sm" href={inboxHref(base, params, { page: String(page + 1), id: null })}>
               Older
-            </a>
+            </Link>
           ) : <span />}
         </div>
       )}

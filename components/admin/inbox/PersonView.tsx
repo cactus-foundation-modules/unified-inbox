@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import type { ContextSection } from '@/modules/unified-inbox/lib/adapters'
 import type { OutboundLogRow, ThreadListRow, PersonEventRow, MergeRow } from '@/modules/unified-inbox/lib/db'
 import type { Person, PersonIdentity, RecordLink } from '@/modules/unified-inbox/lib/types'
@@ -103,9 +104,9 @@ export function PersonView({
     >
       <div className="uin-thread">
         <div className="uin-thread-head">
-          <a className="uin-chip uin-back" href={inboxHref(base, params, { person: null })} style={{ justifySelf: 'start' }}>
+          <Link className="uin-chip uin-back" href={inboxHref(base, params, { person: null })} style={{ justifySelf: 'start' }}>
             {BackIcon} Back to the list
-          </a>
+          </Link>
           <h2 className="uin-thread-subject">{name}</h2>
           <div className="uin-thread-meta">
             {person.organisationName && <span>{person.organisationName}</span>}
@@ -149,9 +150,9 @@ export function PersonView({
                     {alsoHere.map((other, index) => (
                       <span key={other.id}>
                         {index > 0 && ', '}
-                        <a href={inboxHref(base, params, { person: other.id })}>
+                        <Link href={inboxHref(base, params, { person: other.id })}>
                           {other.displayName || other.primaryEmail || 'Somebody'}
-                        </a>
+                        </Link>
                       </span>
                     ))}
                   </p>
@@ -181,9 +182,9 @@ export function PersonView({
                             {item.row.lastDirection === 'out' ? OutboundIcon : InboundIcon}
                           </span>
                           <div className="uin-ctx-main">
-                            <a href={inboxHref(base, params, { id: item.row.id, person: null })}>
+                            <Link href={inboxHref(base, params, { id: item.row.id, person: null })}>
                               {item.row.subject || '(no subject)'}
-                            </a>
+                            </Link>
                             <span className="uin-tag">{channelLabel(item.row.channel)}</span>
                             {item.row.unread && <span className="uin-tag">Unread</span>}
                           </div>

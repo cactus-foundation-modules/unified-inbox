@@ -29,4 +29,5 @@ export const ChatIcon = <svg {...ICON}><path d="M4 5h16v11H9l-5 3z" /></svg>
 export const PhoneIcon = <svg {...ICON}><path d="M6 4h3l1.5 4-2 1.5a11 11 0 0 0 5 5L15 12l4 1.5V17a2 2 0 0 1-2.2 2A15 15 0 0 1 4 6.2 2 2 0 0 1 6 4" /></svg>
 export const FormIcon = <svg {...ICON}><path d="M5 4h14v16H5z" /><path d="M8.5 9h7" /><path d="M8.5 13h7" /><path d="M8.5 17h3.5" /></svg>
 export const InboxIcon = <svg {...ICON}><path d="M4 13 6 5h12l2 8v6H4z" /><path d="M4 13h4l1 2.5h6L16 13h4" /></svg>
+export const RefreshIcon = <svg {...ICON}><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" /><path d="M19.5 3.5V9H14" /></svg>
 export const CloseIcon = <svg {...ICON}><path d="m6 6 12 12" /><path d="m18 6-12 12" /></svg>

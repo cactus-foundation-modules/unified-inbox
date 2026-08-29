@@ -5,6 +5,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { inboxHref } from '@/modules/unified-inbox/lib/list'
 import { isWorthSaving, splitAddresses, type DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
@@ -360,7 +361,7 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
           <h2 className="uin-modal-title" id="uin-compose-title">
             {draftId ? 'A message you started' : 'A new message'}
           </h2>
-          <a
+          <Link
             className="uin-modal-close"
             href={closeHref}
             aria-label="Close without sending"
@@ -371,7 +372,7 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
             }}
           >
             {CloseIcon}
-          </a>
+          </Link>
         </div>
 
         <div className="uin-modal-body">
@@ -519,7 +520,7 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
                   {busyWith === 'discard' ? 'Throwing it away...' : 'Throw the draft away'}
                 </button>
               ) : (
-                <a
+                <Link
                   className="uin-chip"
                   href={closeHref}
                   onClick={(event) => {
@@ -529,7 +530,7 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
                   }}
                 >
                   Cancel
-                </a>
+                </Link>
               )}
             </div>
 
