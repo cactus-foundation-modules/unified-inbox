@@ -36,8 +36,10 @@ const STATUS_TABS: Array<{ value: StatusFilter; label: string; countKey: string 
 
 export function StatusTabs({ base, params, status, counts, search }: Props) {
   // Any change starts again at page one and closes whatever was open, since the
-  // conversation on screen may not survive the new filter.
-  const reset = { page: null, id: null }
+  // conversation on screen may not survive the new filter. A person's page goes
+  // with it: searching used to leave somebody's page pinned beside a list that
+  // had changed underneath it.
+  const reset = { page: null, id: null, person: null }
 
   return (
     <TabStrip
@@ -53,6 +55,8 @@ export function StatusTabs({ base, params, status, counts, search }: Props) {
               <span className="uin-tab-name">{tab.label}</span>
               {count > 0 && (
                 <span className="uin-tab-count uin-tab-count-quiet">
+                  {/* Same ceiling as the counts on the addresses above. Two
+                      thresholds on one visual chip is one too many. */}
                   {count > 999 ? '999+' : count}
                   <span className="sr-only"> conversations</span>
                 </span>
@@ -66,13 +70,13 @@ export function StatusTabs({ base, params, status, counts, search }: Props) {
           {Object.entries({ ...params, ...reset }).map(([k, v]) =>
             v && k !== 'q' ? <input key={k} type="hidden" name={k} value={v} /> : null,
           )}
-          <label className="sr-only" htmlFor="uin-search">Search conversations</label>
+          <label className="sr-only" htmlFor="uin-search">Search conversations you can see</label>
           <input
             id="uin-search"
             name="q"
             type="search"
             defaultValue={search ?? ''}
-            placeholder="Search everything you can see"
+            placeholder="Search conversations you can see"
           />
           <button type="submit" className="btn btn-secondary btn-sm" aria-label="Search">
             {SearchIcon}

@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { usePathname } from 'next/navigation'
 
 // ---------------------------------------------------------------------------
 // The box another module's settings tab shows: which of your inboxes that
@@ -47,6 +48,17 @@ export function ModuleSenderPanel({ moduleName, what }: ModuleSenderPanelProps) 
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
+  // What was chosen before this attempt, so a save that does not land can put
+  // the box back rather than leaving it showing an address it did not save.
+  const savedInboxId = useRef<string>('')
+  // "Saved." is about one moment, so it goes away again on its own.
+  const clearStatus = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // The admin lives under a path the site chooses, and this panel is rendered on
+  // a page inside it, so the first segment of where we are is that path. Falling
+  // back to core's own default when there is no first segment, because an empty
+  // one would start the link below with two slashes, and a browser reads that as
+  // a different site rather than a different page.
+  const adminPath = usePathname().split('/')[1] || 'cactus-admin'
   // Nothing at all is drawn when the person looking may not manage the inbox,
   // or when this module's tables are not there yet. A box that only ever says
   // "forbidden" on somebody else's settings page is pure noise.
@@ -61,16 +73,21 @@ export function ModuleSenderPanel({ moduleName, what }: ModuleSenderPanelProps) 
         const data = await res.json()
         setInboxes(data.inboxes ?? [])
         setInboxId(data.inboxId ?? '')
+        savedInboxId.current = data.inboxId ?? ''
       })
       .catch(() => { if (live) setHidden(true) })
     return () => { live = false }
   }, [moduleName])
 
+  useEffect(() => () => { if (clearStatus.current) clearTimeout(clearStatus.current) }, [])
+
   async function choose(next: string) {
+    const previous = savedInboxId.current
     setInboxId(next)
     setSaving(true)
     setStatus('')
     setError('')
+    if (clearStatus.current) clearTimeout(clearStatus.current)
     try {
       const res = await fetch(API, {
         method: 'PUT',
@@ -78,19 +95,34 @@ export function ModuleSenderPanel({ moduleName, what }: ModuleSenderPanelProps) 
         body: JSON.stringify({ module: moduleName, inboxId: next || null }),
       })
       if (res.ok) {
+        savedInboxId.current = next
         setStatus('Saved.')
+        clearStatus.current = setTimeout(() => setStatus(''), 4000)
       } else {
         const data = await res.json().catch(() => null)
         setError(data?.error ?? 'That did not save. Try again.')
+        setInboxId(previous)
       }
     } catch {
-      setError('Could not reach the server. Check your connection and try again.')
+      setError('Could not reach the site. Check your connection and try again.')
+      setInboxId(previous)
     } finally {
       setSaving(false)
     }
   }
 
-  if (hidden || !inboxes) return null
+  if (hidden) return null
+
+  // The card is drawn while the addresses are still on their way, so it does not
+  // appear out of nowhere and shove the rest of the page down.
+  if (!inboxes) {
+    return (
+      <div style={CARD}>
+        <h3 style={{ margin: '0 0 0.75rem', fontSize: 'var(--text-base)' }}>Which inbox this comes from</h3>
+        <p style={{ ...MUTED, margin: 0 }}>Fetching your addresses&hellip;</p>
+      </div>
+    )
+  }
 
   return (
     <div style={CARD}>
@@ -98,7 +130,8 @@ export function ModuleSenderPanel({ moduleName, what }: ModuleSenderPanelProps) 
 
       {inboxes.length === 0 ? (
         <p style={{ ...MUTED, margin: 0 }}>
-          You have not set up any inboxes yet. Add one under Settings, Unified Inbox, and this address can be
+          You have not set up any inboxes yet. Add one under{' '}
+          <a href={`/${adminPath}/config?tab=unified-inbox`}>Settings, Unified Inbox</a>, and this address can be
           the one {what} go out as.
         </p>
       ) : (
@@ -124,8 +157,10 @@ export function ModuleSenderPanel({ moduleName, what }: ModuleSenderPanelProps) 
               site&rsquo;s usual address, nothing changes.
             </span>
           </div>
-          {status && <p style={{ ...MUTED, margin: 0, color: 'var(--color-success)' }}>{status}</p>}
-          {error && <p style={{ margin: 0, color: 'var(--color-danger)', fontSize: 'var(--text-sm)' }}>{error}</p>}
+          {status && <p role="status" style={{ ...MUTED, margin: 0, color: 'var(--color-success)' }}>{status}</p>}
+          {/* Destructive-hover rather than danger: danger on text this small does
+              not clear AA on a pale ground. */}
+          {error && <p role="alert" style={{ margin: 0, color: 'var(--color-destructive-hover)', fontSize: 'var(--text-sm)' }}>{error}</p>}
         </>
       )}
     </div>

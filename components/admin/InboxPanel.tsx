@@ -184,7 +184,14 @@ export async function UnifiedInboxPanel({
   const [rows, total, statuses] = listing
     ? [[] as Awaited<ReturnType<typeof listThreads>>, 0, {} as Record<string, number>]
     : await Promise.all([listThreads(filters), countThreads(filters), statusCounts(filters)])
-  const neverSynced = connections.length === 0 || connections.every((c) => !c.lastSyncAt)
+  // "Nothing has been collected yet" is a story about collecting mail, so it is
+  // only told where collecting mail is what fills the list. A site whose
+  // channels are a live chat and an enquiry form has no mail connection to have
+  // run, and was being told its inbox had never collected anything - which is
+  // true, and beside the point, and points at a screen most readers cannot open.
+  const neverSynced = !params.providerModule
+    && inboxes.length > 0
+    && (connections.length === 0 || connections.every((c) => !c.lastSyncAt))
 
   // ---- one person's own page, if the address asks for one ----------------
   //
@@ -396,40 +403,38 @@ export async function UnifiedInboxPanel({
 
   // ---- writing a brand new one, if the address asks for it ---------------
   let composePane: React.ReactNode = null
+  // Said in the reading pane rather than in a dialog of its own. It was a box
+  // dressed as a dialog with no Escape, no focus moved into it and nothing
+  // labelling it, which is a dialog in looks only - and there is nothing here to
+  // answer, only something to be told.
+  let cannotComposePane: React.ReactNode = null
   if (params.composing) {
     // Only ever this person's own, and only ever one they may still write from:
     // getDraft takes the author as part of the question rather than as an
     // afterthought, so a guessed id in the address finds nothing.
     const editing = params.draftId ? await getDraft(params.draftId, user.id) : null
-    composePane = sendable.length > 0 ? (
-      <ComposeView
-        base={base}
-        params={carried}
-        inboxes={sendable.map((i) => ({ id: i.id, name: i.name, address: i.address }))}
-        defaultInboxId={chooseSendingInbox(sendableIds, editing?.inboxId ?? params.inboxId)}
-        draft={editing ? forComposer(editing) : null}
-      />
-    ) : (
+    if (sendable.length > 0) {
+      composePane = (
+        <ComposeView
+          base={base}
+          params={carried}
+          inboxes={sendable.map((i) => ({ id: i.id, name: i.name, address: i.address }))}
+          defaultInboxId={chooseSendingInbox(sendableIds, editing?.inboxId ?? params.inboxId)}
+          draft={editing ? forComposer(editing) : null}
+        />
+      )
+    } else {
       // Only reachable by typing the address in, since the button that opens
-      // this is not offered without somewhere to send from. It still answers in
-      // the same place the writing box would have been.
-      <div className="uin-modal">
-        <div className="uin-modal-card" role="dialog" aria-modal="true">
-          <div className="uin-modal-body">
-            <div className="uin-empty">
-              <strong>There is no address you can write from</strong>
-              You can read what arrives, but sending needs an inbox shared with you to write from.
-              Whoever looks after the site can put you on one.
-            </div>
-            <p style={{ margin: 0, textAlign: 'center' }}>
-              <a className="uin-chip" href={inboxHref(base, carried, { compose: null, draft: null })}>
-                Back to the inbox
-              </a>
-            </p>
-          </div>
+      // this is not offered without somewhere to send from.
+      cannotComposePane = (
+        <div className="uin-empty">
+          <strong>There is no address you can write from</strong>
+          You can read what arrives, but sending needs an inbox shared with you to write from.
+          Whoever looks after the site can put you on one.{' '}
+          <a href={inboxHref(base, carried, { compose: null, draft: null })}>Back to the inbox</a>
         </div>
-      </div>
-    )
+      )
+    }
   }
 
   const currentTab = params.draftsOnly
@@ -532,13 +537,14 @@ export async function UnifiedInboxPanel({
               openThreadId={params.threadId}
               staffById={staffById}
               neverSynced={neverSynced}
+              canManage={canManage}
               searching={!!params.search}
               now={new Date()}
             />
           )}
         </div>
 
-        {personPane ?? threadPane}
+        {cannotComposePane ?? personPane ?? threadPane}
         {contextRail}
       </div>
 

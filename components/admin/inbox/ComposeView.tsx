@@ -1,10 +1,15 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  useCallback, useEffect, useRef, useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import { useRouter } from 'next/navigation'
 import { inboxHref } from '@/modules/unified-inbox/lib/list'
 import { isWorthSaving, splitAddresses, type DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
-import { AttachmentChips, AttachmentPicker, toHtml, type Attachment } from './AttachmentPicker'
+import { AttachmentChips, AttachmentPicker, plainReason, toHtml, type Attachment } from './AttachmentPicker'
+import { ConfirmDialog } from './ConfirmDialog'
 import { CloseIcon } from './icons'
 
 // Writing a brand new message, rather than answering one somebody else started.
@@ -33,6 +38,26 @@ import { CloseIcon } from './icons'
 
 export type ComposeInbox = { id: string; name: string; address: string }
 
+/** Everything the keyboard can land on inside the card. Used to work out where
+ *  the ends of the dialog are, so Tab goes round in a circle rather than out of
+ *  it and into the inbox underneath. */
+const FOCUSABLE = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',')
+
+/** A click that was always going to open somewhere else: a new tab, a new
+ *  window, a download. Nothing is lost by letting one through, and asking "are
+ *  you sure" about a click that never closed anything is the sort of question
+ *  that teaches people to click straight past the ones that matter. */
+function opensElsewhere(event: ReactMouseEvent<HTMLAnchorElement>): boolean {
+  return event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey
+}
+
 type Props = {
   base: string
   params: Record<string, string>
@@ -55,12 +80,21 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
     (draft?.attachments ?? []).map((file) => ({ ...file, sizeBytes: file.sizeBytes ?? null })),
   )
   const [picking, setPicking] = useState(false)
-  const [busy, setBusy] = useState(false)
+  // Which job is in flight, rather than merely that one is: a button that says
+  // "Saving..." while somebody is sending is a button telling a small lie.
+  const [busyWith, setBusyWith] = useState<'send' | 'save' | 'discard' | null>(null)
+  const busy = busyWith !== null
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
+  // Which question is on screen: leaving with something unsaved, or throwing a
+  // saved draft away. Two different losses, two different sentences.
+  const [asking, setAsking] = useState<'leave' | 'discard' | null>(null)
   // Held rather than read from the address, because the first save mints it and
   // the second must land on the same row - four presses of Save are one draft.
   const [draftId, setDraftId] = useState<string | null>(draft?.id ?? null)
+  // Typed since the last time any of it was put down somewhere. Deliberately
+  // not "is there text": text that has just been saved is not at risk.
+  const [dirty, setDirty] = useState(false)
 
   // One token per screenful, exactly as the reply composer carries: a double
   // press, or a retry after a timeout that may or may not have arrived, is one
@@ -68,21 +102,46 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
   // that has genuinely gone leaves this screen altogether.
   const token = useRef(crypto.randomUUID())
 
+  // The token stops the SERVER acting twice. This stops the browser asking
+  // twice: state has not come back round by the time a second click lands in
+  // the same frame, so the disabled button is not on its own enough.
+  const inFlight = useRef(false)
+
   const closeHref = inboxHref(base, params, {})
   const chosen = inboxes.find((i) => i.id === inboxId) ?? null
 
   const card = useRef<HTMLDivElement>(null)
 
+  const hasUnsaved = dirty && (
+    to.trim().length > 0
+    || cc.trim().length > 0
+    || subject.trim().length > 0
+    || text.trim().length > 0
+    || attachments.length > 0
+  )
+
+  const leave = useCallback(() => { router.push(closeHref) }, [closeHref, router])
+
+  /** Every way out that is not Send: Escape, the cross, Cancel. Half a written
+   *  message is not something to lose to one keystroke, so when there is
+   *  something to lose the question is asked first. */
+  const askToLeave = useCallback(() => {
+    if (hasUnsaved) setAsking('leave')
+    else leave()
+  }, [hasUnsaved, leave])
+
+  // Read out of a box so the listener below can be put on the page once and
+  // left there, rather than being torn down and rebuilt on every keystroke.
+  const leaveRef = useRef(askToLeave)
+  useEffect(() => { leaveRef.current = askToLeave })
+
   // A dialog is a dialog: Escape shuts it, the page behind it does not scroll
   // under it, and the keyboard starts in the box rather than back at the top of
   // the admin. Nothing shuts it by accident though - the backdrop is deaf on
   // purpose, because a stray click that loses a half-written email is a worse
-  // bargain than one more click on Cancel.
+  // bargain than one more click on Cancel. Escape is the same bargain and gets
+  // the same answer: it asks first whenever there is anything to lose.
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') router.push(closeHref)
-    }
-    document.addEventListener('keydown', onKeyDown)
     const previous = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     // Whoever it is going to, which is the first thing anybody types. A fresh
@@ -91,11 +150,67 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
       draft?.id ? '#uin-new-text' : '#uin-new-to',
     )
     first?.focus()
-    return () => {
-      document.removeEventListener('keydown', onKeyDown)
-      document.body.style.overflow = previous
+    return () => { document.body.style.overflow = previous }
+  }, [draft?.id])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      // Whatever is on top of this owns the keyboard. The confirm dialog stops
+      // Escape reaching here itself; Tab it leaves alone, so it is stopped here.
+      if (asking) return
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        leaveRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const inside = card.current
+      if (!inside) return
+      const items = Array.from(inside.querySelectorAll<HTMLElement>(FOCUSABLE))
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (!first || !last) return
+      const active = document.activeElement
+      if (!inside.contains(active)) {
+        event.preventDefault()
+        first.focus()
+        return
+      }
+      if (event.shiftKey && active === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault()
+        first.focus()
+      }
     }
-  }, [closeHref, draft?.id, router])
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [asking])
+
+  // Closing the tab on half a message is the one loss nothing in here can undo,
+  // so the browser is asked to check. It only fires when there is something to
+  // lose: a guard that fires on an empty box is a guard people learn to ignore.
+  useEffect(() => {
+    if (!hasUnsaved) return
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [hasUnsaved])
+
+  /** Return in one of the short lines at the top moves on to the next one,
+   *  which is what every mail program does and what fingers expect. It never
+   *  sends: Send is a button, and a message posted by a stray Return in the To
+   *  box is not a message anybody meant to send. */
+  const onLineKeyDown = useCallback((nextId: string) =>
+    (event: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (event.key !== 'Enter') return
+      event.preventDefault()
+      card.current?.querySelector<HTMLElement>(`#${nextId}`)?.focus()
+    }, [])
 
   const submit = useCallback(async () => {
     if (!inboxId) {
@@ -115,7 +230,9 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
       setError('There is nothing to send yet.')
       return
     }
-    setBusy(true)
+    if (inFlight.current) return
+    inFlight.current = true
+    setBusyWith('send')
     setError('')
     try {
       const response = await fetch('/api/m/unified-inbox/send', {
@@ -137,9 +254,12 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
       })
       const data = await response.json().catch(() => null)
       if (!response.ok) {
-        setError(data?.error ?? 'That message could not be sent.')
+        setError(plainReason(data?.error, 'That message could not be sent.'))
         return
       }
+      // Nothing left to lose, and the guards above must not stop the screen
+      // going where it is about to go.
+      setDirty(false)
       // It is a conversation now, so go and stand in it - and in the inbox it
       // was filed into, which is not necessarily the one the list was showing
       // when the menu was changed.
@@ -153,7 +273,8 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
     } catch {
       setError('The site could not be reached. Nothing was sent.')
     } finally {
-      setBusy(false)
+      inFlight.current = false
+      setBusyWith(null)
     }
   }, [attachments, base, cc, draftId, inboxId, params, router, subject, text, to])
 
@@ -174,7 +295,9 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
       setError('There is nothing to save yet.')
       return
     }
-    setBusy(true)
+    if (inFlight.current) return
+    inFlight.current = true
+    setBusyWith('save')
     setError('')
     setNote('')
     try {
@@ -185,35 +308,42 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
       })
       const data = await response.json().catch(() => null)
       if (!response.ok) {
-        setError(data?.error ?? 'That draft could not be saved.')
+        setError(plainReason(data?.error, 'That draft could not be saved.'))
         return
       }
       if (data?.id) setDraftId(data.id as string)
+      setDirty(false)
       setNote('Saved. It is waiting under Drafts.')
       // The Drafts tab carries a count, and it is drawn on the server.
       router.refresh()
     } catch {
       setError('The site could not be reached. Nothing was saved.')
     } finally {
-      setBusy(false)
+      inFlight.current = false
+      setBusyWith(null)
     }
   }, [attachments, cc, draftId, inboxId, router, subject, text, to])
 
   const discard = useCallback(async () => {
     if (!draftId) {
+      setDirty(false)
       router.push(closeHref)
       return
     }
-    setBusy(true)
+    if (inFlight.current) return
+    inFlight.current = true
+    setBusyWith('discard')
     setError('')
     try {
       await fetch(`/api/m/unified-inbox/drafts/${draftId}`, { method: 'DELETE' })
+      setDirty(false)
       router.push(closeHref)
       router.refresh()
     } catch {
       setError('The site could not be reached. Nothing was thrown away.')
     } finally {
-      setBusy(false)
+      inFlight.current = false
+      setBusyWith(null)
     }
   }, [closeHref, draftId, router])
 
@@ -230,7 +360,16 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
           <h2 className="uin-modal-title" id="uin-compose-title">
             {draftId ? 'A message you started' : 'A new message'}
           </h2>
-          <a className="uin-modal-close" href={closeHref} aria-label="Close without sending">
+          <a
+            className="uin-modal-close"
+            href={closeHref}
+            aria-label="Close without sending"
+            onClick={(event) => {
+              if (!hasUnsaved || opensElsewhere(event)) return
+              event.preventDefault()
+              setAsking('leave')
+            }}
+          >
             {CloseIcon}
           </a>
         </div>
@@ -249,7 +388,7 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
                   <select
                     id="uin-new-from"
                     value={inboxId}
-                    onChange={(e) => { setInboxId(e.target.value); setError(''); setNote('') }}
+                    onChange={(e) => { setInboxId(e.target.value); setDirty(true); setError(''); setNote('') }}
                   >
                     {inboxes.map((inbox) => (
                       <option key={inbox.id} value={inbox.id}>
@@ -259,7 +398,7 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
                   </select>
                   {chosen && (
                     <span className="uin-field-hint">
-                      replies land back in {chosen.name}
+                      Replies land back in {chosen.name}.
                     </span>
                   )}
                 </div>
@@ -272,7 +411,8 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
                     id="uin-new-to"
                     type="text"
                     value={to}
-                    onChange={(e) => setTo(e.target.value)}
+                    onChange={(e) => { setTo(e.target.value); setDirty(true) }}
+                    onKeyDown={onLineKeyDown(showCc ? 'uin-new-cc' : 'uin-new-subject')}
                     placeholder="name@example.com, somebody.else@example.com"
                     autoComplete="off"
                   />
@@ -292,10 +432,24 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
                       id="uin-new-cc"
                       type="text"
                       value={cc}
-                      onChange={(e) => setCc(e.target.value)}
+                      onChange={(e) => { setCc(e.target.value); setDirty(true) }}
+                      onKeyDown={onLineKeyDown('uin-new-subject')}
                       placeholder="somebody.else@example.com"
                       autoComplete="off"
                     />
+                    {/* Only while it is empty: a line with an address on it is
+                        taken away by clearing it, and a button that quietly
+                        dropped somebody off the message would be worse. */}
+                    {!cc.trim() && (
+                      <button
+                        type="button"
+                        className="uin-field-add"
+                        onClick={() => setShowCc(false)}
+                        aria-label="Take the Cc line off"
+                      >
+                        Remove
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -307,7 +461,8 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
                     id="uin-new-subject"
                     type="text"
                     value={subject}
-                    onChange={(e) => setSubject(e.target.value)}
+                    onChange={(e) => { setSubject(e.target.value); setDirty(true) }}
+                    onKeyDown={onLineKeyDown('uin-new-text')}
                     placeholder="What it is about"
                     autoComplete="off"
                   />
@@ -320,37 +475,61 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
               <textarea
                 id="uin-new-text"
                 value={text}
-                onChange={(e) => { setText(e.target.value); setNote('') }}
+                onChange={(e) => { setText(e.target.value); setDirty(true); setNote('') }}
                 placeholder="Write your message"
               />
             </div>
 
             <div className="uin-composer-row">
-              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPicking(true)}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setPicking(true)}
+                disabled={busy}
+              >
                 Attach a file
               </button>
               <AttachmentChips
                 attachments={attachments}
-                onRemove={(key) => setAttachments((prev) => prev.filter((p) => p.key !== key))}
+                disabled={busy}
+                onRemove={(key) => {
+                  setAttachments((prev) => prev.filter((p) => p.key !== key))
+                  setDirty(true)
+                }}
               />
             </div>
 
-            {error && <div className="alert alert-danger">{error}</div>}
-            {note && !error && <div className="alert alert-success">{note}</div>}
+            {error && <div className="alert alert-danger" role="alert">{error}</div>}
+            {note && !error && <div className="alert alert-success" role="status">{note}</div>}
 
             <div className="uin-composer-row">
               <button type="button" className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
-                {busy ? 'Sending...' : 'Send'}
+                {busyWith === 'send' ? 'Sending...' : 'Send'}
               </button>
               <button type="button" className="btn btn-secondary btn-sm" onClick={save} disabled={busy}>
-                Save as a draft
+                {busyWith === 'save' ? 'Saving...' : 'Save as a draft'}
               </button>
               {draftId ? (
-                <button type="button" className="uin-chip" onClick={discard} disabled={busy}>
-                  Throw the draft away
+                <button
+                  type="button"
+                  className="uin-chip"
+                  onClick={() => setAsking('discard')}
+                  disabled={busy}
+                >
+                  {busyWith === 'discard' ? 'Throwing it away...' : 'Throw the draft away'}
                 </button>
               ) : (
-                <a className="uin-chip" href={closeHref}>Cancel</a>
+                <a
+                  className="uin-chip"
+                  href={closeHref}
+                  onClick={(event) => {
+                    if (!hasUnsaved || opensElsewhere(event)) return
+                    event.preventDefault()
+                    setAsking('leave')
+                  }}
+                >
+                  Cancel
+                </a>
               )}
             </div>
 
@@ -361,6 +540,7 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
                   setAttachments((prev) =>
                     prev.some((a) => a.key === item.key) ? prev : [...prev, item],
                   )
+                  setDirty(true)
                   setPicking(false)
                 }}
               />
@@ -368,6 +548,30 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={asking === 'leave'}
+        title="Leave this message?"
+        body="What you have written is not saved anywhere yet, and closing loses it. Save it as a draft first if you want it back."
+        confirmLabel="Leave it"
+        cancelLabel="Keep writing"
+        destructive
+        onCancel={() => setAsking(null)}
+        onConfirm={() => { setAsking(null); leave() }}
+      />
+
+      <ConfirmDialog
+        open={asking === 'discard'}
+        title="Throw this draft away?"
+        body="What you have written goes with it, and there is no getting it back."
+        confirmLabel="Throw it away"
+        destructive
+        busy={busyWith === 'discard'}
+        // Held open while the request is in flight, so the answer and the
+        // waiting are in the same place. On its way it takes the screen with it.
+        onCancel={() => { if (busyWith !== 'discard') setAsking(null) }}
+        onConfirm={() => { void discard().then(() => setAsking(null)) }}
+      />
     </div>
   )
 }

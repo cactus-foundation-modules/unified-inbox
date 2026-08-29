@@ -35,17 +35,35 @@ type Props = {
   defaultLinkKind?: LinkKind | null
 }
 
+/** What a kind of record is called in front of somebody who does not build
+ *  websites. Only ever the fallback: an adapter that gives a link a label of
+ *  its own is the better answer every time, because "Order SO-1042" says more
+ *  than "Order". Same shape and the same reason as channelLabel in lib/list.ts,
+ *  and here for the same reason: without it a stored link with no label put the
+ *  raw kind on the screen, so somebody reading their own inbox was shown
+ *  "purchase-order". */
+const RECORD_TYPE_LABELS: Record<string, string> = {
+  order: 'Order',
+  'purchase-order': 'Purchase order',
+  quote: 'Quote',
+}
+
+function recordLabel(link: RecordLink): string {
+  return link.label || RECORD_TYPE_LABELS[link.recordType] || 'Record'
+}
+
 function LinkedRecord({
-  link, adminPath, canEdit,
-}: { link: RecordLink; adminPath: string; canEdit: boolean }) {
+  link, adminPath, canEdit, onThread,
+}: { link: RecordLink; adminPath: string; canEdit: boolean; onThread: boolean }) {
   const href = linkHref(link)
+  const label = recordLabel(link)
   return (
     <li className="uin-ctx-row">
       <div className="uin-ctx-main">
         {href ? (
-          <a href={`/${adminPath}/${href}`}>{link.label || link.recordType}</a>
+          <a href={`/${adminPath}/${href}`}>{label}</a>
         ) : (
-          <span>{link.label || link.recordType}</span>
+          <span>{label}</span>
         )}
         {link.linkedBy === 'auto' && (
           <span className="uin-tag" title="We spotted this reference in the message. Take it off if it is wrong.">
@@ -53,7 +71,7 @@ function LinkedRecord({
           </span>
         )}
       </div>
-      {canEdit && <LinkActions linkId={link.id} label={link.label || link.recordType} />}
+      {canEdit && <LinkActions linkId={link.id} label={label} onThread={onThread} />}
     </li>
   )
 }
@@ -82,10 +100,20 @@ export function ContextRail({
   // stand on a conversation offering an attach button on a site that keeps no
   // records anybody could attach.
   const showAttached = links.length > 0 || canAttach || (canEditLinks && !threadId)
-  const nothing = !person && sections.length === 0 && links.length === 0
+  // Only when the rail has said nothing at all - which means no block above
+  // this one, not merely no records. A conversation with nobody attached to it
+  // gets a block saying so, and a person's page gets an "Attached to them /
+  // nothing attached yet" block whether or not anything is attached; following
+  // either with "nothing else mentions this person" is a second sentence about
+  // the nothing the first sentence has just described.
+  const nothing = !person
+    && !noPersonReason
+    && !showAttached
+    && sections.length === 0
+    && links.length === 0
 
   return (
-    <aside className="uin-ctx" aria-label="About this conversation">
+    <aside className="uin-ctx" aria-label={threadId ? 'About this conversation' : 'About this person'}>
       {person ? (
         <section className="uin-ctx-block">
           <h3 className="uin-ctx-heading">Who this is</h3>
@@ -116,7 +144,13 @@ export function ContextRail({
           {links.length > 0 ? (
             <ul className="uin-ctx-list">
               {links.map((link) => (
-                <LinkedRecord key={link.id} link={link} adminPath={adminPath} canEdit={canEditLinks} />
+                <LinkedRecord
+                  key={link.id}
+                  link={link}
+                  adminPath={adminPath}
+                  canEdit={canEditLinks}
+                  onThread={!!threadId}
+                />
               ))}
             </ul>
           ) : (

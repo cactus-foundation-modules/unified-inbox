@@ -164,5 +164,11 @@ export function explainSendError(err: unknown): string {
   if (lower.includes('etimedout') || lower.includes('econnreset') || lower.includes('fetch failed')) {
     return 'The email service could not be reached. It may be a passing wobble - press retry.'
   }
-  return `The message could not be sent. ${raw.slice(0, 300)}`
+  // Everything else. Whatever the service actually said goes to the log, where
+  // somebody who can act on it will see it, and never to the page: it is written
+  // for whoever runs the mail service, and the person pressing Send is not them.
+  // The same bargain lib/imap.ts strikes with a mail server's own words.
+  console.error('[unified-inbox] a send failure with no plain-English form:', raw)
+  return 'The message could not be sent, and what the email service said back will not help you. '
+    + 'Press retry, and if it keeps happening ask whoever looks after the site to check the email settings.'
 }

@@ -1,12 +1,16 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useId, useState } from 'react'
+import { ConfirmDialog } from './inbox/ConfirmDialog'
 
 // "When something arrives, tell this address about it."
 //
 // Written for somebody who has been handed a URL by whatever they want to
 // connect the inbox to, not for somebody who knows what a webhook is. The word
 // appears once, in the heading, and everything after it is in plain English.
+// Nothing the other end says back is repeated here as it said it: a number or a
+// line of its own diagnostics is meaningless to the person reading this screen,
+// so it is turned into a sentence first.
 //
 // Deliberately self-contained: it loads and saves its own data rather than
 // taking it through the settings payload, so adding it to the settings tab is
@@ -15,10 +19,20 @@ import { useCallback, useEffect, useState } from 'react'
 const API = '/api/m/unified-inbox/admin'
 
 const MUTED = { color: 'var(--color-text-muted)' } as const
-const LABEL_STYLE = {
-  fontWeight: 600,
-  fontSize: '1.0625rem',
-  marginBottom: '0.75rem',
+
+/** The look of a section heading on the Unified Inbox settings screen.
+ *
+ *  It lives here rather than in SettingsTab because SettingsTab already imports
+ *  this file, and the other way round would be a circle. Both files use this one
+ *  constant: they render as headings on the same page, and the two of them used
+ *  to disagree, so the Webhooks heading looked nothing like the five above it. */
+export const SETTINGS_SECTION_HEADING = {
+  fontSize: '0.75rem',
+  fontWeight: 400,
+  color: 'var(--color-text-muted)',
+  textTransform: 'uppercase',
+  letterSpacing: '0.05em',
+  margin: '0 0 0.75rem',
 } as const
 
 type Webhook = {
@@ -63,6 +77,10 @@ type Draft = {
   headersText: string
 }
 
+/** What is on the screen and whether it is good news. Success and failure used
+ *  to be told apart by reading them. */
+type Note = { tone: 'ok' | 'bad'; text: string }
+
 function blank(): Draft {
   return {
     id: null,
@@ -92,41 +110,70 @@ function parseHeaders(text: string): Record<string, string> | null {
   return out
 }
 
+/** What became of one attempt, said rather than reported. The other end's own
+ *  numbers and messages stay out of the page: they are written for whoever
+ *  built it, and the person reading this did not. */
+function deliveryLine(row: Delivery): string {
+  const when = new Date(row.createdAt).toLocaleString('en-GB')
+  const tries = `${row.attempts} ${row.attempts === 1 ? 'try' : 'tries'}`
+  if (row.status === 'sent') return `${when} · Sent, and the address took it.`
+  if (row.status === 'pending') return `${when} · Waiting to go.`
+  if (row.status === 'failed') return `${when} · Not through yet, after ${tries}. It will keep trying.`
+  return `${when} · Given up after ${tries}.`
+}
+
 export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: string }[] }) {
   const [webhooks, setWebhooks] = useState<Webhook[] | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
-  const [message, setMessage] = useState<string | null>(null)
+  const [note, setNote] = useState<Note | null>(null)
   const [busy, setBusy] = useState(false)
   const [history, setHistory] = useState<{ id: string; rows: Delivery[] } | null>(null)
+  const [historyBusy, setHistoryBusy] = useState<string | null>(null)
+  // Which one the Remove question is about. Null when nothing is being asked.
+  const [removing, setRemoving] = useState<Webhook | null>(null)
+  const fieldId = useId()
 
   const load = useCallback(async () => {
-    const res = await fetch(`${API}/webhooks`)
-    if (!res.ok) {
-      setMessage('Could not load what the inbox is set to tell.')
-      return
+    try {
+      const res = await fetch(`${API}/webhooks`)
+      if (!res.ok) {
+        setNote({ tone: 'bad', text: 'Could not load what the inbox is set to tell.' })
+        return
+      }
+      const body = await res.json()
+      setWebhooks(body.webhooks ?? [])
+    } catch {
+      setNote({ tone: 'bad', text: 'Could not reach the site to load what the inbox is set to tell. Check your connection and try again.' })
     }
-    const body = await res.json()
-    setWebhooks(body.webhooks ?? [])
   }, [])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- delegating to an async loader; every setState runs after an await
   useEffect(() => { void load() }, [load])
 
-  const call = useCallback(async (path: string, init: RequestInit): Promise<unknown | null> => {
+  const call = useCallback(async (path: string, init: RequestInit, okText?: string): Promise<unknown | null> => {
     setBusy(true)
-    setMessage(null)
-    const res = await fetch(`${API}${path}`, {
-      ...init,
-      headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
-    })
-    const body = await res.json().catch(() => ({}))
-    setBusy(false)
-    if (!res.ok) {
-      setMessage((body as { error?: string }).error ?? 'That did not work.')
+    setNote(null)
+    try {
+      const res = await fetch(`${API}${path}`, {
+        ...init,
+        headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setNote({ tone: 'bad', text: (body as { error?: string }).error ?? 'That did not work.' })
+        return null
+      }
+      await load()
+      if (okText) setNote({ tone: 'ok', text: okText })
+      return body
+    } catch {
+      // A request that never arrived. Without this the button stays greyed out
+      // for the rest of the visit and nothing on the screen says why.
+      setNote({ tone: 'bad', text: 'Could not reach the site. Check your connection and try again.' })
       return null
+    } finally {
+      setBusy(false)
     }
-    await load()
-    return body
   }, [load])
 
   function startNew() {
@@ -157,7 +204,7 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
 
     const headers = draft.headersText.trim() ? parseHeaders(draft.headersText) : undefined
     if (headers === null) {
-      setMessage('Each extra header goes on its own line, written as Name: value.')
+      setNote({ tone: 'bad', text: 'Each extra header goes on its own line, written as Name: value.' })
       return
     }
 
@@ -177,46 +224,79 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
     if (headers !== undefined) body.headers = headers
 
     const saved = draft.id
-      ? await call(`/webhooks/${draft.id}`, { method: 'PATCH', body: JSON.stringify(body) })
-      : await call('/webhooks', { method: 'POST', body: JSON.stringify(body) })
+      ? await call(`/webhooks/${draft.id}`, { method: 'PATCH', body: JSON.stringify(body) }, 'Saved.')
+      : await call('/webhooks', { method: 'POST', body: JSON.stringify(body) }, 'Saved.')
     if (saved) setDraft(null)
   }
 
   async function remove(id: string) {
-    if (!confirm('Stop telling this address about new messages?')) return
-    await call(`/webhooks/${id}`, { method: 'DELETE' })
-    setDraft(null)
+    const gone = await call(`/webhooks/${id}`, { method: 'DELETE' }, 'Removed.')
+    if (gone) setDraft(null)
   }
 
   async function test(id: string) {
     const result = await call(`/webhooks/${id}/test`, { method: 'POST' }) as
       { ok?: boolean; status?: number; error?: string } | null
     if (!result) return
-    setMessage(result.ok
-      ? `That worked - the address answered ${result.status}.`
-      : `No luck: ${result.error ?? 'it did not answer.'}`)
+    setNote(result.ok
+      ? { tone: 'ok', text: 'That worked. The address answered, and it was happy with what it got.' }
+      : { tone: 'bad', text: 'No luck. The address either did not answer or was not happy with what it got - worth checking it with whoever gave it to you.' })
   }
 
   async function showHistory(id: string) {
     if (history?.id === id) { setHistory(null); return }
-    const res = await fetch(`${API}/webhooks/${id}/deliveries`)
-    if (!res.ok) { setMessage('Could not load what has been sent.'); return }
-    const body = await res.json()
-    setHistory({ id, rows: body.deliveries ?? [] })
+    setHistoryBusy(id)
+    setNote(null)
+    try {
+      const res = await fetch(`${API}/webhooks/${id}/deliveries`)
+      if (!res.ok) { setNote({ tone: 'bad', text: 'Could not load what has been sent.' }); return }
+      const body = await res.json()
+      setHistory({ id, rows: body.deliveries ?? [] })
+    } catch {
+      setNote({ tone: 'bad', text: 'Could not reach the site to load what has been sent. Check your connection and try again.' })
+    } finally {
+      setHistoryBusy(null)
+    }
   }
 
-  if (webhooks === null) return null
+  const noteBlock = note && (
+    <div
+      className={note.tone === 'ok' ? 'alert alert-success' : 'alert alert-danger'}
+      role={note.tone === 'ok' ? 'status' : 'alert'}
+      style={{ marginBottom: '1rem' }}
+    >
+      {note.text}
+    </div>
+  )
+
+  // A section that could not load says so. It used to disappear altogether,
+  // taking the explanation with it.
+  if (webhooks === null) {
+    return (
+      <section className="card" style={{ marginTop: '1.5rem' }}>
+        <h3 style={SETTINGS_SECTION_HEADING}>Telling something else when the post arrives</h3>
+        {note ? (
+          <>
+            {noteBlock}
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => void load()}>Try again</button>
+          </>
+        ) : (
+          <p style={{ ...MUTED, fontSize: '0.875rem', margin: 0 }}>Loading&hellip;</p>
+        )}
+      </section>
+    )
+  }
 
   return (
     <section className="card" style={{ marginTop: '1.5rem' }}>
-      <div style={LABEL_STYLE}>Telling something else when the post arrives</div>
+      <h3 style={SETTINGS_SECTION_HEADING}>Telling something else when the post arrives</h3>
       <p style={{ ...MUTED, fontSize: '0.875rem', marginTop: 0 }}>
         Every time a message lands, this can send a note about it to a web address you choose -
         useful for setting something else going on its own. Nothing here changes what happens in
         the inbox itself, and switching it all off breaks nothing.
       </p>
 
-      {message && <div className="alert alert-info" style={{ marginBottom: '1rem' }}>{message}</div>}
+      {noteBlock}
 
       {webhooks.length === 0 && !draft && (
         <p style={{ ...MUTED, fontSize: '0.875rem' }}>
@@ -239,11 +319,13 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
               <strong>{hook.name}</strong>
               {!hook.enabled && <span style={{ ...MUTED, marginLeft: '0.5rem' }}>(switched off)</span>}
               {hook.autoDisabledAt && (
-                <span style={{ marginLeft: '0.5rem', color: 'var(--color-danger)' }}>
+                // Destructive-hover rather than danger: danger on text this small
+                // measures under AA on a pale ground.
+                <span style={{ marginLeft: '0.5rem', color: 'var(--color-destructive-hover)' }}>
                   (stopped by itself after too many failures)
                 </span>
               )}
-              <div style={{ ...MUTED, fontSize: '0.8125rem', wordBreak: 'break-all' }}>{hook.url}</div>
+              <div style={{ ...MUTED, fontSize: '0.8125rem', overflowWrap: 'anywhere' }}>{hook.url}</div>
               <div style={{ ...MUTED, fontSize: '0.8125rem' }}>
                 {hook.inboxId
                   ? inboxes.find((i) => i.id === hook.inboxId)?.name ?? 'One inbox'
@@ -253,17 +335,17 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
               </div>
               {hook.lastAttemptAt && (
                 <div style={{ ...MUTED, fontSize: '0.8125rem' }}>
-                  Last tried {new Date(hook.lastAttemptAt).toLocaleString('en-GB')} - {hook.lastError ? `no luck: ${hook.lastError}` : `answered ${hook.lastStatus}`}
+                  Last tried {new Date(hook.lastAttemptAt).toLocaleString('en-GB')} - {hook.lastError ? 'no luck.' : 'the address took it.'}
                 </div>
               )}
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
-              <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void test(hook.id)}>Send a test</button>
-              <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void showHistory(hook.id)}>
-                {history?.id === hook.id ? 'Hide' : 'History'}
+              <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void test(hook.id)}>Send a test</button>
+              <button type="button" className="btn btn-secondary btn-sm" disabled={busy || historyBusy === hook.id} onClick={() => void showHistory(hook.id)}>
+                {historyBusy === hook.id ? 'Fetching…' : history?.id === hook.id ? 'Hide' : 'History'}
               </button>
-              <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => startEdit(hook)}>Edit</button>
-              <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => void remove(hook.id)}>Remove</button>
+              <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => startEdit(hook)}>Edit</button>
+              <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={() => setRemoving(hook)}>Remove</button>
             </div>
           </div>
 
@@ -274,11 +356,7 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
               )}
               {history.rows.map((row) => (
                 <div key={row.id} style={{ ...MUTED, fontSize: '0.8125rem' }}>
-                  {new Date(row.createdAt).toLocaleString('en-GB')} ·{' '}
-                  {row.status === 'sent' ? `sent, answered ${row.responseCode}`
-                    : row.status === 'pending' ? 'waiting to go'
-                    : row.status === 'failed' ? `no luck so far (${row.attempts} tries) - ${row.error ?? ''}`
-                    : `given up after ${row.attempts} tries - ${row.error ?? ''}`}
+                  {deliveryLine(row)}
                 </div>
               ))}
             </div>
@@ -287,7 +365,7 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
       ))}
 
       {!draft && (
-        <button className="btn btn-secondary btn-sm" onClick={startNew} disabled={busy}>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={startNew} disabled={busy}>
           Tell something about new messages
         </button>
       )}
@@ -295,8 +373,9 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
       {draft && (
         <div style={{ borderTop: '1px solid var(--color-border)', marginTop: '1rem', paddingTop: '1rem' }}>
           <div className="field">
-            <label>What is it for</label>
+            <label htmlFor={`${fieldId}-name`}>What is it for</label>
             <input
+              id={`${fieldId}-name`}
               value={draft.name}
               placeholder="Marcus reads the post"
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
@@ -304,8 +383,9 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
           </div>
 
           <div className="field">
-            <label>Web address to tell</label>
+            <label htmlFor={`${fieldId}-url`}>Web address to tell</label>
             <input
+              id={`${fieldId}-url`}
               value={draft.url}
               placeholder="https://example.com/something"
               onChange={(e) => setDraft({ ...draft, url: e.target.value })}
@@ -316,8 +396,9 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
           </div>
 
           <div className="field">
-            <label>Which inbox</label>
+            <label htmlFor={`${fieldId}-inbox`}>Which inbox</label>
             <select
+              id={`${fieldId}-inbox`}
               value={draft.inboxId}
               onChange={(e) => setDraft({ ...draft, inboxId: e.target.value })}
             >
@@ -329,8 +410,9 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
           </div>
 
           <div className="field">
-            <label>What to send</label>
+            <label htmlFor={`${fieldId}-style`}>What to send</label>
             <select
+              id={`${fieldId}-style`}
               value={draft.payloadStyle}
               onChange={(e) => setDraft({ ...draft, payloadStyle: e.target.value as 'event' | 'literal' })}
             >
@@ -345,13 +427,18 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
 
           {draft.payloadStyle === 'literal' && (
             <div className="field">
-              <label>What to send every time</label>
+              <label htmlFor={`${fieldId}-literal`}>What to send every time</label>
               <textarea
+                id={`${fieldId}-literal`}
                 rows={4}
                 value={draft.literalBody}
-                placeholder={'{"skill": "marcus"}'}
+                placeholder={'{"text": "Something has arrived in the inbox"}'}
                 onChange={(e) => setDraft({ ...draft, literalBody: e.target.value })}
               />
+              <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.375rem 0 0' }}>
+                Whatever the other end asked you to send it, word for word. If they have not given
+                you anything to put here, the other choice above is the one you want.
+              </p>
             </div>
           )}
 
@@ -373,8 +460,9 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
           )}
 
           <div className="field">
-            <label>Signing password <span style={{ ...MUTED, fontWeight: 400 }}>(optional)</span></label>
+            <label htmlFor={`${fieldId}-secret`}>Signing password <span style={{ ...MUTED, fontWeight: 400 }}>(optional)</span></label>
             <input
+              id={`${fieldId}-secret`}
               type="password"
               value={draft.secret}
               placeholder={draft.id ? 'Leave blank to keep the one you have' : ''}
@@ -387,11 +475,12 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
           </div>
 
           <div className="field">
-            <label>Extra headers <span style={{ ...MUTED, fontWeight: 400 }}>(optional, one per line)</span></label>
+            <label htmlFor={`${fieldId}-headers`}>Extra headers <span style={{ ...MUTED, fontWeight: 400 }}>(optional, one per line)</span></label>
             <textarea
+              id={`${fieldId}-headers`}
               rows={3}
               value={draft.headersText}
-              placeholder={draft.id ? 'Leave blank to keep the ones you have' : 'CF-Access-Client-Id: ...'}
+              placeholder={draft.id ? 'Leave blank to keep the ones you have' : 'X-Api-Key: the key they gave you'}
               onChange={(e) => setDraft({ ...draft, headersText: e.target.value })}
             />
             <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.375rem 0 0' }}>
@@ -412,11 +501,30 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
           </div>
 
           <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => void save()}>Save</button>
-            <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => setDraft(null)}>Cancel</button>
+            <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void save()}>Save</button>
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => setDraft(null)}>Cancel</button>
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={removing !== null}
+        title="Stop telling this address about new messages?"
+        body={removing
+          ? `Nothing more will be sent to ${removing.url}. The inbox itself carries on exactly as it is.`
+          : ''}
+        confirmLabel="Stop telling it"
+        destructive
+        busy={busy}
+        onCancel={() => { if (!busy) setRemoving(null) }}
+        // Left open while the removal is in flight: the dialog greys its own two
+        // answers out, and closes once the work is finished either way, so the
+        // outcome is read on the screen behind it.
+        onConfirm={() => {
+          const hook = removing
+          if (hook) void remove(hook.id).finally(() => setRemoving(null))
+        }}
+      />
     </section>
   )
 }

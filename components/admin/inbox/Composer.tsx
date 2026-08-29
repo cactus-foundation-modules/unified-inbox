@@ -1,9 +1,10 @@
 'use client'
 
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { isWorthSaving, splitAddresses, type DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
-import { AttachmentChips, AttachmentPicker, toHtml, type Attachment } from './AttachmentPicker'
+import { AttachmentChips, AttachmentPicker, plainReason, toHtml, type Attachment } from './AttachmentPicker'
+import { ConfirmDialog } from './ConfirmDialog'
 
 // The composer: reply, reply to everybody, forward, and an internal note.
 //
@@ -17,6 +18,11 @@ import { AttachmentChips, AttachmentPicker, toHtml, type Attachment } from './At
 type Mode = 'reply' | 'reply-all' | 'forward' | 'note'
 
 type StaffMember = { id: string; name: string }
+
+/** How many colleagues are offered as chips before the list gets a box to
+ *  narrow it with. Twenty names wrapped across the composer is a wall, not a
+ *  menu. */
+const MENTION_CHIPS = 8
 
 type Props = {
   threadId: string
@@ -39,27 +45,51 @@ export function Composer({
 }: Props) {
   const router = useRouter()
   // A saved draft says which of the three it was, and opening the conversation
-  // on the wrong one puts a forward's recipients in front of a reply.
-  const [mode, setMode] = useState<Mode>(
-    draft && draft.mode !== 'new' ? draft.mode : canReply ? 'reply' : 'note',
-  )
+  // on the wrong one puts a forward's recipients in front of a reply. A draft
+  // written before the right to send was taken away is the awkward case: the
+  // mode it remembers is not on the menu any more, so no chip would read as
+  // pressed and Send would be refused by the server. It falls back to a note,
+  // and the explanation above the chips says why.
+  const [mode, setMode] = useState<Mode>(() => {
+    const wanted: Mode = draft && draft.mode !== 'new' ? draft.mode : canReply ? 'reply' : 'note'
+    if ((wanted === 'reply' || wanted === 'reply-all') && !canReply) return 'note'
+    if (wanted === 'reply-all' && replyAllTo.length <= replyTo.length) return 'reply'
+    if (wanted === 'forward' && !canForward) return canReply ? 'reply' : 'note'
+    return wanted
+  })
   const [text, setText] = useState(draft?.body ?? '')
   const [forwardTo, setForwardTo] = useState((draft?.to ?? []).join(', '))
   const [mentions, setMentions] = useState<string[]>([])
+  const [mentionQuery, setMentionQuery] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>(
     (draft?.attachments ?? []).map((file) => ({ ...file, sizeBytes: file.sizeBytes ?? null })),
   )
-  const [busy, setBusy] = useState(false)
+  // Which job is in flight, rather than merely that one is: a button that says
+  // "Saving..." while somebody is sending is a button telling a small lie.
+  const [busyWith, setBusyWith] = useState<'send' | 'save' | 'discard' | null>(null)
+  const busy = busyWith !== null
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
   const [picking, setPicking] = useState(false)
+  const [asking, setAsking] = useState(false)
+  // Where a click was headed when it was caught, or null when nothing was.
+  const [leavingTo, setLeavingTo] = useState<string | null>(null)
   const [draftId, setDraftId] = useState<string | null>(draft?.id ?? null)
+  // Typed since the last time any of it was put down somewhere. What the
+  // beforeunload guard below is asking about, and it is deliberately not "is
+  // there text", because text that has just been saved is not at risk.
+  const [dirty, setDirty] = useState(false)
 
   // One token per composer session, deliberately NOT regenerated per click: it
   // is what makes a double press, or a retry after a timeout that may or may not
   // have arrived, one message rather than two. It changes when a message has
   // genuinely been sent and the box is empty again.
   const token = useRef(crypto.randomUUID())
+
+  // The token stops the SERVER acting twice. This stops the browser asking
+  // twice: state has not come back round by the time a second click lands in
+  // the same frame, so the disabled button is not on its own enough.
+  const inFlight = useRef(false)
 
   const modes = useMemo(() => {
     const list: Array<{ id: Mode; label: string }> = []
@@ -72,12 +102,78 @@ export function Composer({
     return list
   }, [canReply, canForward, replyTo.length, replyAllTo.length])
 
+  const recipients = mode === 'reply' ? replyTo : mode === 'reply-all' ? replyAllTo : []
+  const nobodyToReplyTo = (mode === 'reply' || mode === 'reply-all') && recipients.length === 0
+
+  const hasUnsaved = dirty && (text.trim().length > 0 || forwardTo.trim().length > 0 || attachments.length > 0)
+
+  // Closing the tab on half an answer is the one loss nothing in here can undo,
+  // so the browser is asked to check. It only fires when there is something to
+  // lose: a guard that fires on an empty box is a guard people learn to ignore.
+  useEffect(() => {
+    if (!hasUnsaved) return
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [hasUnsaved])
+
+  // Read out of a box so the listener below can be put on the page once and
+  // left there, rather than being rebuilt on every keystroke.
+  const unsavedRef = useRef(hasUnsaved)
+  useEffect(() => { unsavedRef.current = hasUnsaved })
+
+  // The guard above only fires when the document itself is unloaded, which is
+  // half of how people actually leave. The tabs along the top of the inbox are
+  // links drawn by core's tab strip, so switching inbox or status is a
+  // navigation the browser never unloads for: the composer is simply taken off
+  // the screen, with whatever was typed in it. Nothing here saves as you go, so
+  // that was the whole of it, gone, with no question asked.
+  //
+  // So a click on any link that would take the screen somewhere else is caught
+  // first and the question asked, which is the same bargain the new-message
+  // dialog strikes with its own Cancel. The tests a link has to pass to count
+  // are core's, from components/admin/useUnsavedChanges: a plain left click, an
+  // ordinary in-app address, and somewhere other than where we already are.
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      if (!unsavedRef.current || event.defaultPrevented) return
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+      const target = event.target
+      if (!(target instanceof Element)) return
+      const anchor = target.closest('a')
+      if (!anchor) return
+      // Anything drawn over the inbox owns its own way out and has already been
+      // asked about: the new-message dialog guards its Cancel and its cross
+      // itself, and two questions about one click is one too many.
+      if (anchor.closest('.uin-modal')) return
+      const href = anchor.getAttribute('href')
+      if (!href || href.startsWith('#') || anchor.target === '_blank') return
+      const url = new URL(anchor.href, window.location.href)
+      if (url.origin !== window.location.origin) return
+      if (url.pathname === window.location.pathname && url.search === window.location.search) return
+      event.preventDefault()
+      setLeavingTo(url.pathname + url.search + url.hash)
+    }
+    document.addEventListener('click', onClick, true)
+    return () => document.removeEventListener('click', onClick, true)
+  }, [])
+
   const submit = useCallback(async () => {
     if (!text.trim()) {
       setError('There is nothing to send yet.')
       return
     }
-    setBusy(true)
+    if ((mode === 'reply' || mode === 'reply-all')
+      && (mode === 'reply' ? replyTo : replyAllTo).length === 0) {
+      setError('There is nobody to reply to on this conversation.')
+      return
+    }
+    if (inFlight.current) return
+    inFlight.current = true
+    setBusyWith('send')
     setError('')
     try {
       if (mode === 'note') {
@@ -87,7 +183,10 @@ export function Composer({
           body: JSON.stringify({ text, mentions }),
         })
         if (!response.ok) {
-          setError((await response.json().catch(() => null))?.error ?? 'That note could not be saved.')
+          setError(plainReason(
+            (await response.json().catch(() => null))?.error,
+            'That note could not be saved.',
+          ))
           return
         }
       } else {
@@ -115,7 +214,10 @@ export function Composer({
           }),
         })
         if (!response.ok) {
-          setError((await response.json().catch(() => null))?.error ?? 'That message could not be sent.')
+          setError(plainReason(
+            (await response.json().catch(() => null))?.error,
+            'That message could not be sent.',
+          ))
           return
         }
       }
@@ -123,7 +225,11 @@ export function Composer({
       setForwardTo('')
       setAttachments([])
       setMentions([])
-      setNote('')
+      setMentionQuery('')
+      setDirty(false)
+      // Said out loud, because the box emptying could as easily mean something
+      // went wrong as mean it went.
+      setNote(mode === 'note' ? 'Your note is on the conversation.' : 'Sent. It is on the conversation above.')
       // The message has gone, so the draft behind it went with it - server
       // side, in the send route, rather than as a second request from here
       // that a closed tab could swallow.
@@ -133,9 +239,10 @@ export function Composer({
     } catch {
       setError('The site could not be reached. Nothing was sent.')
     } finally {
-      setBusy(false)
+      inFlight.current = false
+      setBusyWith(null)
     }
-  }, [attachments, draftId, forwardTo, mentions, mode, router, text, threadId])
+  }, [attachments, draftId, forwardTo, mentions, mode, replyAllTo, replyTo, router, text, threadId])
 
   const save = useCallback(async () => {
     const payload = {
@@ -154,7 +261,9 @@ export function Composer({
       setError('There is nothing to save yet.')
       return
     }
-    setBusy(true)
+    if (inFlight.current) return
+    inFlight.current = true
+    setBusyWith('save')
     setError('')
     setNote('')
     try {
@@ -165,22 +274,26 @@ export function Composer({
       })
       const data = await response.json().catch(() => null)
       if (!response.ok) {
-        setError(data?.error ?? 'That draft could not be saved.')
+        setError(plainReason(data?.error, 'That draft could not be saved.'))
         return
       }
       if (data?.id) setDraftId(data.id as string)
+      setDirty(false)
       setNote('Saved. It is waiting under Drafts, and here.')
       router.refresh()
     } catch {
       setError('The site could not be reached. Nothing was saved.')
     } finally {
-      setBusy(false)
+      inFlight.current = false
+      setBusyWith(null)
     }
   }, [attachments, draftId, forwardTo, mode, router, text, threadId])
 
   const discard = useCallback(async () => {
     if (!draftId) return
-    setBusy(true)
+    if (inFlight.current) return
+    inFlight.current = true
+    setBusyWith('discard')
     setError('')
     try {
       await fetch(`/api/m/unified-inbox/drafts/${draftId}`, { method: 'DELETE' })
@@ -188,19 +301,42 @@ export function Composer({
       setText('')
       setForwardTo('')
       setAttachments([])
+      setDirty(false)
       setNote('')
       router.refresh()
     } catch {
       setError('The site could not be reached. Nothing was thrown away.')
     } finally {
-      setBusy(false)
+      inFlight.current = false
+      setBusyWith(null)
     }
   }, [draftId, router])
 
-  const recipients = mode === 'reply' ? replyTo : mode === 'reply-all' ? replyAllTo : []
+  // Whoever is already picked stays on screen whatever is typed, so a name
+  // cannot be taken off by a search that hides the chip it was on.
+  const mentionable = useMemo(() => {
+    const wanted = mentionQuery.trim().toLowerCase()
+    const matches = wanted
+      ? staff.filter((person) => person.name.toLowerCase().includes(wanted))
+      : staff
+    const shown = matches.slice(0, MENTION_CHIPS)
+    const picked = staff.filter(
+      (person) => mentions.includes(person.id) && !shown.some((one) => one.id === person.id),
+    )
+    return { shown: [...picked, ...shown], hidden: Math.max(0, matches.length - shown.length) }
+  }, [mentionQuery, mentions, staff])
 
   return (
     <div className="uin-composer">
+      {/* Above the chips, and shown whenever there is a reason at all. It used
+          to be tied to the mode, which meant it appeared only on modes that are
+          not offered when it applies - so the one person who needed it, the one
+          left with nothing but Internal note, was the one person who never saw
+          it. */}
+      {cannotReplyReason && (
+        <div className="alert alert-info">{cannotReplyReason}</div>
+      )}
+
       <div className="uin-composer-modes" role="group" aria-label="What to send">
         {modes.map((m) => (
           <button
@@ -215,10 +351,6 @@ export function Composer({
         ))}
       </div>
 
-      {cannotReplyReason && mode !== 'note' && (
-        <div className="alert alert-info">{cannotReplyReason}</div>
-      )}
-
       {mode === 'forward' ? (
         <div className="field">
           <label htmlFor="uin-forward-to">Forward to</label>
@@ -226,7 +358,7 @@ export function Composer({
             id="uin-forward-to"
             type="text"
             value={forwardTo}
-            onChange={(e) => setForwardTo(e.target.value)}
+            onChange={(e) => { setForwardTo(e.target.value); setDirty(true) }}
             placeholder="name@example.com"
             autoComplete="off"
           />
@@ -248,57 +380,100 @@ export function Composer({
         <textarea
           id="uin-composer-text"
           value={text}
-          onChange={(e) => { setText(e.target.value); setNote('') }}
+          onChange={(e) => { setText(e.target.value); setDirty(true); setNote('') }}
           placeholder={mode === 'note' ? 'Something for the others to see' : 'Write your reply'}
         />
       </div>
 
       {mode === 'note' && staff.length > 0 && (
-        <div className="uin-composer-row">
-          <span className="uin-recipients">Let somebody know</span>
-          {staff.map((person) => (
-            <button
-              key={person.id}
-              type="button"
-              className="uin-chip"
-              aria-pressed={mentions.includes(person.id)}
-              onClick={() => setMentions((prev) =>
-                prev.includes(person.id) ? prev.filter((id) => id !== person.id) : [...prev, person.id],
-              )}
-            >
-              {person.name}
-            </button>
-          ))}
+        <div className="uin-actions">
+          {staff.length > MENTION_CHIPS && (
+            <div className="field">
+              <label htmlFor="uin-mention-search">Let somebody know</label>
+              <input
+                id="uin-mention-search"
+                type="search"
+                value={mentionQuery}
+                placeholder="Start typing a name"
+                autoComplete="off"
+                onChange={(e) => setMentionQuery(e.target.value)}
+              />
+            </div>
+          )}
+          <div className="uin-composer-row">
+            {staff.length <= MENTION_CHIPS && <span className="uin-recipients">Let somebody know</span>}
+            {mentionable.shown.map((person) => (
+              <button
+                key={person.id}
+                type="button"
+                className="uin-chip"
+                aria-pressed={mentions.includes(person.id)}
+                onClick={() => setMentions((prev) =>
+                  prev.includes(person.id) ? prev.filter((id) => id !== person.id) : [...prev, person.id],
+                )}
+              >
+                {person.name}
+              </button>
+            ))}
+            {mentionable.shown.length === 0 && (
+              <span className="uin-recipients">Nobody here goes by that.</span>
+            )}
+            {mentionable.hidden > 0 && (
+              <span className="uin-recipients">
+                {mentionable.hidden === 1
+                  ? 'One more. Keep typing to find them.'
+                  : `${mentionable.hidden} more. Keep typing to find them.`}
+              </span>
+            )}
+          </div>
         </div>
       )}
 
       {mode !== 'note' && (
         <div className="uin-composer-row">
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPicking(true)}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => setPicking(true)}
+            disabled={busy}
+          >
             Attach a file
           </button>
           <AttachmentChips
             attachments={attachments}
-            onRemove={(key) => setAttachments((prev) => prev.filter((p) => p.key !== key))}
+            disabled={busy}
+            onRemove={(key) => {
+              setAttachments((prev) => prev.filter((p) => p.key !== key))
+              setDirty(true)
+            }}
           />
         </div>
       )}
 
-      {error && <div className="alert alert-danger">{error}</div>}
-      {note && !error && <div className="alert alert-success">{note}</div>}
+      {error && <div className="alert alert-danger" role="alert">{error}</div>}
+      {note && !error && <div className="alert alert-success" role="status">{note}</div>}
 
       <div className="uin-composer-row">
-        <button type="button" className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
-          {busy ? 'Sending...' : mode === 'note' ? 'Save note' : 'Send'}
+        <button
+          type="button"
+          className="btn btn-primary btn-sm"
+          onClick={submit}
+          // Nothing to reply to means the server would refuse it anyway, and
+          // finding that out by pressing Send is finding it out too late.
+          disabled={busy || nobodyToReplyTo}
+        >
+          {busyWith === 'send'
+            ? (mode === 'note' ? 'Saving...' : 'Sending...')
+            : mode === 'note' ? 'Save note' : 'Send'}
         </button>
         {mode !== 'note' && (
           <button type="button" className="btn btn-secondary btn-sm" onClick={save} disabled={busy}>
-            Save as a draft
+            {busyWith === 'save' ? 'Saving...' : 'Save as a draft'}
           </button>
         )}
         {mode !== 'note' && draftId && (
-          <button type="button" className="uin-chip" onClick={discard} disabled={busy}>
-            Throw the draft away
+          <button type="button" className="uin-chip" onClick={() => setAsking(true)} disabled={busy}>
+            {busyWith === 'discard' ? 'Throwing it away...' : 'Throw the draft away'}
           </button>
         )}
       </div>
@@ -310,10 +485,39 @@ export function Composer({
             setAttachments((prev) =>
               prev.some((a) => a.key === item.key) ? prev : [...prev, item],
             )
+            setDirty(true)
             setPicking(false)
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={leavingTo !== null}
+        title="Leave this reply?"
+        body="What you have written is not saved anywhere yet, and moving on loses it. Save it as a draft first if you want it back."
+        confirmLabel="Leave it"
+        cancelLabel="Keep writing"
+        destructive
+        onCancel={() => setLeavingTo(null)}
+        onConfirm={() => {
+          const going = leavingTo
+          setLeavingTo(null)
+          if (going) router.push(going)
+        }}
+      />
+
+      <ConfirmDialog
+        open={asking}
+        title="Throw this draft away?"
+        body="What you have written goes with it, and there is no getting it back."
+        confirmLabel="Throw it away"
+        destructive
+        busy={busyWith === 'discard'}
+        // Held open while the request is in flight, so the answer and the
+        // waiting are in the same place, and shut once it has come back.
+        onCancel={() => { if (busyWith !== 'discard') setAsking(false) }}
+        onConfirm={() => { void discard().then(() => setAsking(false)) }}
+      />
     </div>
   )
 }

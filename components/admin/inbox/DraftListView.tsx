@@ -6,7 +6,7 @@ import {
   draftRecipientLabel,
   draftSubjectLabel,
 } from '@/modules/unified-inbox/lib/drafts'
-import { PaperclipIcon } from './icons'
+import { PaperclipIcon, PenIcon } from './icons'
 
 // The Drafts list: what this person started and has not sent.
 //
@@ -47,6 +47,10 @@ export function DraftListView({
     <ul className="uin-list">
       {drafts.map((draft) => {
         const who = draftRecipientLabel(draft)
+        // "No recipient yet" and "A reply" are sentences standing in for an
+        // address nobody has typed yet. Initials taken off the first of them put
+        // NR in a circle, which reads as a draft to somebody of that name.
+        const addressed = draft.to.length > 0
         const open = draft.threadId
           ? draft.threadId === openThreadId
           : draft.id === openDraftId
@@ -59,16 +63,20 @@ export function DraftListView({
               aria-current={open ? 'true' : undefined}
             >
               <span className="uin-avatar-wrap">
-                <span className="uin-avatar" aria-hidden="true">{initialsFor(who)}</span>
+                <span className="uin-avatar" aria-hidden="true">
+                  {addressed ? initialsFor(who) : PenIcon}
+                </span>
               </span>
               <span className="uin-row-main">
                 <span className="uin-row-who">
                   <span className="uin-row-name">{who}</span>
                 </span>
                 <span className="uin-row-subject">{draftSubjectLabel(draft)}</span>
-                <span className="uin-row-preview">
-                  {draft.body.trim() ? draftPreview(draft.body) : ''}
-                </span>
+                {/* Nothing rather than an empty line: a blank preview left a gap
+                    under every draft that has none. */}
+                {draft.body.trim() && (
+                  <span className="uin-row-preview">{draftPreview(draft.body)}</span>
+                )}
               </span>
               <span className="uin-row-meta">
                 <span className="uin-row-tags">
@@ -77,8 +85,12 @@ export function DraftListView({
                       {PaperclipIcon}<span className="sr-only">Has an attachment</span>
                     </span>
                   )}
-                  {draft.threadId && <span className="uin-tag">Reply</span>}
-                  {inboxName && <span className="uin-tag">{inboxName}</span>}
+                  {/* The words go in a span of their own so a long name ends in an
+                      ellipsis rather than being cut off mid-letter. */}
+                  {draft.threadId && <span className="uin-tag"><span className="uin-tag-text">Reply</span></span>}
+                  {inboxName && (
+                    <span className="uin-tag"><span className="uin-tag-text">{inboxName}</span></span>
+                  )}
                 </span>
                 <span>{formatWhen(draft.updatedAt, now)}</span>
               </span>

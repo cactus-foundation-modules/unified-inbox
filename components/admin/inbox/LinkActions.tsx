@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { ConfirmDialog } from './ConfirmDialog'
 
 // Taking a link off, and putting one on by hand.
 //
@@ -10,31 +11,75 @@ import { useRouter } from 'next/navigation'
 // A guess nobody can see and nobody can undo is not a guess worth making on
 // somebody else's behalf.
 
-export function LinkActions({ linkId, label }: { linkId: string; label: string }) {
+/** Small text that has to be read as a failure. The plain danger colour is
+ *  under AA at this size on a subtle ground, which is why the failed-send tag
+ *  in styles.tsx uses the darker end of the ramp; the same applies here. */
+const ERROR_TEXT = { color: 'var(--color-destructive-hover)' } as const
+
+export function LinkActions({
+  linkId, label, onThread,
+}: {
+  linkId: string
+  label: string
+  /** Whether this rail is beside a conversation or on a person's page, so the
+   *  question asked before taking a link off names the right thing. */
+  onThread: boolean
+}) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
+  const [asking, setAsking] = useState(false)
+  const [error, setError] = useState('')
+  const where = onThread ? 'conversation' : 'person'
 
   async function remove() {
     setBusy(true)
+    setError('')
     try {
-      await fetch(`/api/m/unified-inbox/links/${linkId}`, { method: 'DELETE' })
+      const response = await fetch(`/api/m/unified-inbox/links/${linkId}`, { method: 'DELETE' })
+      if (!response.ok) {
+        // Told apart on purpose. Silence here used to mean both "you are not
+        // allowed to" and "it went wrong", which reads as the button being
+        // broken in one case and as nothing at all in the other.
+        setError(response.status === 401 || response.status === 403
+          ? 'You are not allowed to change what is attached here.'
+          : 'That would not come off. Try again in a moment.')
+        return
+      }
       router.refresh()
+    } catch {
+      setError('The site could not be reached, so nothing changed.')
     } finally {
+      // The question closes either way: the answer to it is underneath.
+      setAsking(false)
       setBusy(false)
     }
   }
 
   return (
-    <button
-      type="button"
-      className="uin-ctx-remove"
-      disabled={busy}
-      onClick={remove}
-      aria-label={`Take ${label} off this conversation`}
-      title="Take this off"
-    >
-      Remove
-    </button>
+    <>
+      <button
+        type="button"
+        className="uin-ctx-remove"
+        disabled={busy}
+        onClick={() => { setError(''); setAsking(true) }}
+        // The visible word starts the spoken one, so somebody driving the page
+        // by voice can say "Remove" and be understood.
+        aria-label={`Remove ${label} from this ${where}`}
+      >
+        Remove
+      </button>
+      {error && <span className="uin-ctx-sub" role="alert" style={ERROR_TEXT}>{error}</span>}
+      <ConfirmDialog
+        open={asking}
+        title="Take this off?"
+        body={`${label} stops being attached to this ${where}. The record itself stays exactly where it is, and you can attach it again afterwards.`}
+        confirmLabel="Take it off"
+        destructive
+        busy={busy}
+        onCancel={() => { if (!busy) setAsking(false) }}
+        onConfirm={() => { void remove() }}
+      />
+    </>
   )
 }
 
@@ -45,6 +90,12 @@ type Suggestion = {
   label: string
   detail: string | null
   status: string | null
+}
+
+/** Long enough to recognise an order number, short enough not to push the rail
+ *  wider than the conversation beside it. */
+function shorten(value: string, max = 24): string {
+  return value.length > max ? `${value.slice(0, max)}...` : value
 }
 
 /**
@@ -144,6 +195,7 @@ export function AddLink({
   }
 
   const typed = term.trim()
+  const first = results[0]
 
   return (
     <div className="uin-ctx-add">
@@ -170,8 +222,25 @@ export function AddLink({
         disabled={busy}
         placeholder="Number, name or address"
         onChange={(e) => { setTerm(e.target.value); setSearching(true) }}
-        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void attach(typed) } }}
+        // Return takes the record at the top of the list, because that is the
+        // one somebody typing "12" is looking at. Attaching the raw "12" is
+        // still there, on the button that says so in as many words.
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter') return
+          e.preventDefault()
+          void attach(first ? first.reference : typed)
+        }}
       />
+
+      {/* The list appears and disappears under the box as somebody types, which
+          is silent unless it is said out loud. */}
+      <p className="sr-only" aria-live="polite">
+        {searching
+          ? ''
+          : results.length > 0
+            ? `${results.length} to choose from.`
+            : typed ? 'Nothing matches that.' : ''}
+      </p>
 
       {results.length > 0 ? (
         <ul className="uin-ctx-picker">
@@ -201,7 +270,9 @@ export function AddLink({
         {typed && (
           <button type="button" className="btn btn-primary btn-sm" disabled={busy}
                   onClick={() => attach(typed)}>
-            Attach {typed}
+            {/* Whatever was pasted in there is not allowed to set how wide the
+                rail is. */}
+            Attach {shorten(typed)}
           </button>
         )}
         <button type="button" className="uin-chip" disabled={busy}
@@ -209,7 +280,7 @@ export function AddLink({
           Cancel
         </button>
       </div>
-      {error && <div className="alert alert-danger">{error}</div>}
+      {error && <div className="alert alert-danger" role="alert">{error}</div>}
     </div>
   )
 }

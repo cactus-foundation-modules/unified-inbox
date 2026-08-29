@@ -26,8 +26,10 @@ export function Filters({
   base, params, unreadOnly, assignee, search, staff, currentUserId, total,
 }: Props) {
   // Any filter change starts again at page one and closes whatever was open,
-  // since the conversation on screen may not survive the new filter.
-  const reset = { page: null, id: null }
+  // since the conversation on screen may not survive the new filter. A person's
+  // page goes with it, for the same reason and because it was pinned open beside
+  // a list that had changed underneath it.
+  const reset = { page: null, id: null, person: null }
 
   return (
     <div className="uin-toolbar">
@@ -63,8 +65,13 @@ export function Filters({
         </form>
       )}
       {search && (
+        // Two halves on purpose. The chip is only so wide, and with the cross
+        // inside the same run of text a long search ellipsised away the one
+        // thing that takes the search off again.
         <a className="uin-chip uin-chip-clear" href={inboxHref(base, params, { q: null, ...reset })}>
-          Searching for &ldquo;{search}&rdquo; &times;<span className="sr-only">Clear the search</span>
+          <span className="uin-chip-clear-text">Searching for &ldquo;{search}&rdquo;</span>
+          <span className="uin-chip-clear-x" aria-hidden="true">&times;</span>
+          <span className="sr-only">Clear the search</span>
         </a>
       )}
       <span className="uin-toolbar-count">

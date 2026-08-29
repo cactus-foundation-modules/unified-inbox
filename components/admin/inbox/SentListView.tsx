@@ -6,7 +6,7 @@ import {
   pageCount,
   PER_PAGE,
 } from '@/modules/unified-inbox/lib/list'
-import { PaperclipIcon, TickIcon } from './icons'
+import { OutboundIcon, PaperclipIcon, TickIcon } from './icons'
 
 // Everything that has left, newest first, across every address this person can
 // read.
@@ -35,10 +35,17 @@ type Props = {
   now: Date
 }
 
-/** Who it went to, in as few characters as tell the truth. */
-function recipientLabel(row: SentMessageRow): string {
+/** Who it went to, in as few characters as tell the truth, or nothing at all
+ *  when there was never an address for it to go to.
+ *
+ *  A reply typed into a live chat or against an enquiry has no email recipient
+ *  and never had one. The row used to fill that gap with "Nobody recorded" and
+ *  then take initials off it, so most of the list wore a circle marked NR and
+ *  read as a list of messages sent to a person of that name. Nothing is missing
+ *  in that case, so nothing is reported missing. */
+function recipientLabel(row: SentMessageRow): string | null {
   const first = row.toAddresses[0]?.trim()
-  if (!first) return 'Nobody recorded'
+  if (!first) return null
   if (row.toAddresses.length > 1) return `${first} and ${row.toAddresses.length - 1} more`
   return first
 }
@@ -75,14 +82,20 @@ export function SentListView({
                 aria-current={row.threadId === openThreadId ? 'true' : undefined}
               >
                 <span className="uin-avatar-wrap">
-                  <span className="uin-avatar" aria-hidden="true">{initialsFor(who)}</span>
+                  <span className="uin-avatar" aria-hidden="true">
+                    {who ? initialsFor(who) : OutboundIcon}
+                  </span>
                 </span>
                 <span className="uin-row-main">
                   <span className="uin-row-who">
-                    <span className="uin-row-name">To {who}</span>
+                    <span className="uin-row-name">
+                      {who ? `To ${who}` : 'Answered in the conversation'}
+                    </span>
                   </span>
                   <span className="uin-row-subject">{row.subject || '(no subject)'}</span>
-                  <span className="uin-row-preview">{row.preview || ''}</span>
+                  {/* Nothing rather than an empty line: a blank preview left a
+                      gap under every subject that has none. */}
+                  {row.preview && <span className="uin-row-preview">{row.preview}</span>}
                 </span>
                 <span className="uin-row-meta">
                   <span className="uin-row-tags">
@@ -91,18 +104,33 @@ export function SentListView({
                         {PaperclipIcon}<span className="sr-only">Has an attachment</span>
                       </span>
                     )}
-                    {row.deliveryStatus === 'sending' && <span className="uin-tag">On its way</span>}
-                    {row.deliveryStatus === 'failed' && (
-                      <span className="uin-tag uin-tag-failed">It did not send</span>
+                    {row.deliveryStatus === 'sending' && (
+                      <span className="uin-tag"><span className="uin-tag-text">On its way</span></span>
                     )}
-                    {hardBounce && <span className="uin-tag uin-tag-failed">It did not arrive</span>}
-                    {!hardBounce && row.openedAt && (
-                      <span className="uin-tag uin-tag-done">
-                        {TickIcon} Opened
+                    {/* Trying again is offered where the message itself is, since
+                        the row is one link and a button inside a link is not a
+                        thing a browser can make sense of. Where to go is said in
+                        the words rather than in a tooltip, which says it to
+                        nobody on a phone and nobody on a keyboard. */}
+                    {row.deliveryStatus === 'failed' && (
+                      <span className="uin-tag uin-tag-failed">
+                        <span className="uin-tag-text">It did not send - open it to try again</span>
                       </span>
                     )}
-                    {author && <span className="uin-tag">{author}</span>}
-                    {inboxName && <span className="uin-tag">{inboxName}</span>}
+                    {hardBounce && (
+                      <span className="uin-tag uin-tag-failed">
+                        <span className="uin-tag-text">It did not arrive</span>
+                      </span>
+                    )}
+                    {!hardBounce && row.openedAt && (
+                      <span className="uin-tag uin-tag-done">
+                        {TickIcon}<span className="uin-tag-text">Opened</span>
+                      </span>
+                    )}
+                    {author && <span className="uin-tag"><span className="uin-tag-text">{author}</span></span>}
+                    {inboxName && (
+                      <span className="uin-tag"><span className="uin-tag-text">{inboxName}</span></span>
+                    )}
                   </span>
                   <span>{formatWhen(row.sentAt, now)}</span>
                 </span>

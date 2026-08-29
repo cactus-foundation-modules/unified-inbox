@@ -22,9 +22,16 @@ export function ThreadActions({ threadId, status, unread, assigneeUserId, staff 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [snoozing, setSnoozing] = useState(false)
+  const [assigning, setAssigning] = useState(false)
+  // Which button is waiting, not merely that something is: every one of them
+  // greys out together, so a shared "in flight" would put the busy words on all
+  // four at once and none of them would be the one that was pressed.
+  const [pending, setPending] = useState<string | null>(null)
+  const assignedTo = staff.find((person) => person.id === assigneeUserId)?.name ?? null
 
-  const patch = useCallback(async (body: Record<string, unknown>) => {
+  const patch = useCallback(async (body: Record<string, unknown>, what: string | null = null) => {
     setBusy(true)
+    setPending(what)
     setError('')
     try {
       const response = await fetch(`/api/m/unified-inbox/threads/${threadId}`, {
@@ -37,55 +44,92 @@ export function ThreadActions({ threadId, status, unread, assigneeUserId, staff 
         return
       }
       setSnoozing(false)
+      setAssigning(false)
       router.refresh()
     } catch {
       setError('The site could not be reached, so nothing changed.')
     } finally {
       setBusy(false)
+      setPending(null)
     }
   }, [router, threadId])
 
   return (
-    <div style={{ display: 'grid', gap: '0.5rem' }}>
+    <div className="uin-actions">
+      {/* Four buttons of the same build. Whose desk it is on was a bare native
+          menu in among them, a different height with a different border and its
+          own arrow, which read as something left half-finished rather than as
+          one of the four. It opens the same kind of row the reminder does.
+          None of them is filled in: the one filled button on this screen is
+          Send, at the bottom of the writing box, and two competing filled
+          buttons say neither is the thing to do. */}
       <div className="uin-thread-actions">
-        <label className="sr-only" htmlFor="uin-assign">Assign to</label>
-        <select
-          id="uin-assign"
-          value={assigneeUserId ?? ''}
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
           disabled={busy}
-          onChange={(e) => patch({ assigneeUserId: e.target.value || null })}
+          onClick={() => setAssigning((v) => !v)}
+          aria-expanded={assigning}
+          aria-controls="uin-assign-panel"
         >
-          <option value="">Nobody yet</option>
-          {staff.map((person) => (
-            <option key={person.id} value={person.id}>{person.name}</option>
-          ))}
-        </select>
+          {assignedTo ? `With ${assignedTo}` : 'With nobody yet'}
+        </button>
 
         {status === 'done' ? (
           <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                  onClick={() => patch({ status: 'open' })}>
-            Open it again
+                  onClick={() => patch({ status: 'open' }, 'open')}>
+            {pending === 'open' ? 'Opening it...' : 'Open it again'}
           </button>
         ) : (
-          <button type="button" className="btn btn-primary btn-sm" disabled={busy}
-                  onClick={() => patch({ status: 'done' })}>
-            Mark as done
+          <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                  onClick={() => patch({ status: 'done' }, 'done')}>
+            {pending === 'done' ? 'Marking it...' : 'Mark as done'}
           </button>
         )}
 
         <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                onClick={() => setSnoozing((v) => !v)} aria-expanded={snoozing}>
+                onClick={() => setSnoozing((v) => !v)} aria-expanded={snoozing}
+                aria-controls="uin-snooze-panel">
           {status === 'snoozed' ? 'Change when it comes back' : 'Remind me later'}
         </button>
 
         <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                onClick={() => patch({ unread: !unread })}>
-          {unread ? 'Mark as read' : 'Mark as unread'}
+                onClick={() => patch({ unread: !unread }, 'read')}>
+          {pending === 'read'
+            ? 'Changing it...'
+            : unread ? 'Mark as read' : 'Mark as unread'}
         </button>
       </div>
 
+      {assigning && (
+        <div className="uin-thread-actions" id="uin-assign-panel">
+          <span className="uin-recipients">Hand it to</span>
+          <button
+            type="button"
+            className="uin-chip"
+            disabled={busy}
+            aria-pressed={!assigneeUserId}
+            onClick={() => patch({ assigneeUserId: null })}
+          >
+            Nobody
+          </button>
+          {staff.map((person) => (
+            <button
+              key={person.id}
+              type="button"
+              className="uin-chip"
+              disabled={busy}
+              aria-pressed={person.id === assigneeUserId}
+              onClick={() => patch({ assigneeUserId: person.id })}
+            >
+              {person.name}
+            </button>
+          ))}
+        </div>
+      )}
+
       {snoozing && (
-        <div className="uin-thread-actions">
+        <div className="uin-thread-actions" id="uin-snooze-panel">
           {snoozeOptions(new Date()).map((option) => (
             <button
               key={option.id}
@@ -105,7 +149,7 @@ export function ThreadActions({ threadId, status, unread, assigneeUserId, staff 
         </div>
       )}
 
-      {error && <div className="alert alert-danger">{error}</div>}
+      {error && <div className="alert alert-danger" role="alert">{error}</div>}
     </div>
   )
 }

@@ -65,7 +65,7 @@ const AUTO_LABELS: Record<string, string> = {
  * know which of the two happened. Every message on a site with receipts
  * switched off has none of these, and this renders nothing.
  */
-function DeliveryReceipt({ message }: { message: ThreadMessageView }) {
+function DeliveryReceipt({ message, now }: { message: ThreadMessageView; now: Date }) {
   const hardBounce = message.bouncedAt
     && ['hard', 'blocked', 'invalid', 'spam', 'error'].includes(message.bounceKind ?? '')
   const softBounce = message.bouncedAt && !hardBounce
@@ -73,12 +73,21 @@ function DeliveryReceipt({ message }: { message: ThreadMessageView }) {
   return (
     <>
       {hardBounce && (
-        <span className="uin-tag uin-tag-failed" title={message.bounceDetail ?? undefined}>
+        // Whatever the far end said about it is kept off the page on purpose.
+        // It is written for whoever runs a mail server, and a site owner reading
+        // it learns nothing except that something technical went wrong.
+        <span
+          className="uin-tag uin-tag-failed"
+          title="The address turned it away. It is worth checking it is spelt right, or reaching them another way."
+        >
           It did not arrive
         </span>
       )}
       {softBounce && (
-        <span className="uin-tag" title={message.bounceDetail ?? undefined}>
+        <span
+          className="uin-tag"
+          title="Something at the other end is holding it up. It may still get through on its own."
+        >
           Held up on the way
         </span>
       )}
@@ -91,7 +100,7 @@ function DeliveryReceipt({ message }: { message: ThreadMessageView }) {
               : `First opened ${formatFull(message.openedAt)}`
           }
         >
-          {TickIcon} Opened {formatWhen(message.openedAt)}
+          {TickIcon} Opened {formatWhen(message.openedAt, now)}
           {message.openCount > 1 ? ` (${message.openCount} times)` : ''}
         </span>
       ) : message.openSource === 'proxy' ? (
@@ -103,21 +112,33 @@ function DeliveryReceipt({ message }: { message: ThreadMessageView }) {
         </span>
       ) : message.deliveredAt && !hardBounce ? (
         <span className="uin-tag" title={`Delivered ${formatFull(message.deliveredAt)}`}>
-          Delivered {formatWhen(message.deliveredAt)}
+          Delivered {formatWhen(message.deliveredAt, now)}
         </span>
       ) : null}
     </>
   )
 }
 
-function MessageHeader({ message, staffById }: { message: ThreadMessageView; staffById: Record<string, string> }) {
+/** When a message happened, written the way the list beside it writes the same
+ *  thing - a time today, a weekday this week, a date after that - with the full
+ *  date in the tooltip for anybody working out exactly when. The two used to
+ *  disagree: the list said "Fri" and the conversation said the whole date. */
+function MessageWhen({ at, now }: { at: Date | string | null; now: Date }) {
+  return <span className="uin-msg-when" title={formatFull(at)}>{formatWhen(at, now)}</span>
+}
+
+function MessageHeader({ message, staffById, now }: {
+  message: ThreadMessageView
+  staffById: Record<string, string>
+  now: Date
+}) {
   if (message.direction === 'note') {
     const author = message.authorUserId ? staffById[message.authorUserId] : null
     return (
       <div className="uin-msg-head">
         <span className="uin-msg-who">{author ?? 'Somebody here'}</span>
         <span className="uin-msg-dir">{NoteIcon} Internal note, not sent</span>
-        <span className="uin-msg-when" title={formatFull(message.sentAt)}>{formatFull(message.sentAt)}</span>
+        <MessageWhen at={message.sentAt} now={now} />
       </div>
     )
   }
@@ -127,9 +148,13 @@ function MessageHeader({ message, staffById }: { message: ThreadMessageView; sta
       <div className="uin-msg-head">
         <span className="uin-msg-who">{author ? `${author} replied` : 'Sent from here'}</span>
         <span className="uin-msg-dir">
-          {OutboundIcon} Sent to {message.toAddresses.join(', ') || 'nobody recorded'}
+          {/* A live chat or a web form has no email address to have been sent to,
+              so there is nothing missing to report. Saying "nobody recorded"
+              there invented an absence, and read as a fault. */}
+          {OutboundIcon}
+          {message.toAddresses.length > 0 ? ` Sent to ${message.toAddresses.join(', ')}` : ' Sent'}
         </span>
-        <span className="uin-msg-when" title={formatFull(message.sentAt)}>{formatFull(message.sentAt)}</span>
+        <MessageWhen at={message.sentAt} now={now} />
       </div>
     )
   }
@@ -139,7 +164,7 @@ function MessageHeader({ message, staffById }: { message: ThreadMessageView; sta
       <span className="uin-msg-dir">
         {InboundIcon} Received{message.fromName && message.fromAddress ? ` from ${message.fromAddress}` : ''}
       </span>
-      <span className="uin-msg-when" title={formatFull(message.sentAt)}>{formatFull(message.sentAt)}</span>
+      <MessageWhen at={message.sentAt} now={now} />
     </div>
   )
 }
@@ -151,7 +176,7 @@ function MessageText({ text }: { text: string }) {
       <pre className="uin-msg-text">{body}</pre>
       {quoted && (
         <details style={{ marginTop: '0.75rem' }}>
-          <summary className="uin-chip" style={{ cursor: 'pointer' }}>Show the earlier messages</summary>
+          <summary className="uin-chip uin-summary">Show the earlier messages</summary>
           <pre className="uin-msg-text" style={{ marginTop: '0.5rem', color: 'var(--color-text-secondary)' }}>{quoted}</pre>
         </details>
       )}
@@ -159,13 +184,17 @@ function MessageText({ text }: { text: string }) {
   )
 }
 
-function Message({ message, staffById }: { message: ThreadMessageView; staffById: Record<string, string> }) {
+function Message({ message, staffById, now }: {
+  message: ThreadMessageView
+  staffById: Record<string, string>
+  now: Date
+}) {
   const kind = message.direction === 'note' ? 'note' : message.direction === 'out' ? 'out' : 'in'
   return (
     <article className={`uin-msg uin-msg-${kind}`}>
-      <MessageHeader message={message} staffById={staffById} />
+      <MessageHeader message={message} staffById={staffById} now={now} />
       {message.autoKind && (
-        <div className="uin-msg-foot" style={{ borderTop: 0, borderBottom: '1px solid var(--color-border)' }}>
+        <div className="uin-msg-foot uin-msg-flag">
           <span className="uin-tag uin-tag-snoozed">{AUTO_LABELS[message.autoKind] ?? 'Sent automatically'}</span>
         </div>
       )}
@@ -195,17 +224,19 @@ function Message({ message, staffById }: { message: ThreadMessageView; staffById
           {message.deliveryStatus === 'sent' && (
             <>
               <span className="uin-tag uin-tag-done">{TickIcon} Sent</span>
-              <DeliveryReceipt message={message} />
+              <DeliveryReceipt message={message} now={now} />
             </>
           )}
           {message.deliveryStatus === 'failed' && (
             <>
               <span className="uin-tag uin-tag-failed">It did not send</span>
-              {message.deliveryError && (
-                <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>
-                  {message.deliveryError}
-                </span>
-              )}
+              {/* What the mail server said about it is never put on the page. It
+                  is written for whoever runs one, it can carry the whole message
+                  back with it, and it tells a site owner nothing they can act
+                  on. This sentence is the whole of what there is to do. */}
+              <span style={{ color: 'var(--color-text-secondary)' }}>
+                It would not go. Try again, and check the address is right if it will not.
+              </span>
               <RetryButton messageId={message.id} />
             </>
           )}
@@ -250,7 +281,12 @@ export function ThreadPane({
           <span>{channelLabel(thread.channel)}</span>
           {inboxName && <span>&middot; {inboxName}</span>}
           <span>&middot; {messages.length} message{messages.length === 1 ? '' : 's'}</span>
-          <span>&middot; last {formatWhen(thread.lastMessageAt, now)}</span>
+          {/* Said as a label with a date after it. "last Fri" on its own reads as
+              the Friday before this one, and disagreed with the row in the list
+              beside it, which says the same date as plainly "Fri". */}
+          <span title={formatFull(thread.lastMessageAt)}>
+            &middot; last message {formatWhen(thread.lastMessageAt, now)}
+          </span>
           {thread.status === 'snoozed' && thread.snoozeUntil && (
             <span className="uin-tag uin-tag-snoozed">Back {formatWhen(thread.snoozeUntil, now)}</span>
           )}
@@ -273,11 +309,25 @@ export function ThreadPane({
           </div>
         )}
 
-        <div className="uin-messages">
-          {messages.map((message) => (
-            <Message key={message.id} message={message} staffById={staffById} />
-          ))}
-        </div>
+        {/* The messages come first and the writing box after them, because the
+            conversation is what somebody opened this to read. An empty list used
+            to render as nothing at all, which put the writing box directly under
+            the subject and left no sign that anything was missing. */}
+        {messages.length === 0 ? (
+          !thread.providerModule && (
+            <div className="uin-empty">
+              <strong>There is nothing to read in this one</strong>
+              No messages are being kept against this conversation. It may have been cleared
+              out, or it may go back further than this inbox does.
+            </div>
+          )
+        ) : (
+          <div className="uin-messages">
+            {messages.map((message) => (
+              <Message key={message.id} message={message} staffById={staffById} now={now} />
+            ))}
+          </div>
+        )}
 
         <Composer
           threadId={thread.id}
@@ -292,10 +342,10 @@ export function ThreadPane({
 
         {events.length > 0 && (
           <details>
-            <summary className="uin-chip" style={{ cursor: 'pointer' }}>What has been done to this</summary>
-            <ul style={{ listStyle: 'none', margin: '0.5rem 0 0', padding: 0, display: 'grid', gap: '0.25rem' }}>
+            <summary className="uin-chip uin-summary">What has been done to this</summary>
+            <ul className="uin-log">
               {events.map((event) => (
-                <li key={event.id} style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+                <li key={event.id}>
                   {(event.userId && staffById[event.userId]) || 'Somebody'}{' '}
                   {EVENT_WORDS[event.kind] ?? 'changed something'}
                   {' - '}

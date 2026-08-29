@@ -57,7 +57,9 @@ function Count({ value, word = 'unread' }: { value: number; word?: string }) {
   if (!value) return null
   return (
     <span className="uin-tab-count">
-      {value > 99 ? '99+' : value}
+      {/* Same ceiling as the status counts below. Two thresholds on one visual
+          chip is one too many. */}
+      {value > 999 ? '999+' : value}
       <span className="sr-only"> {word}</span>
     </span>
   )
@@ -143,7 +145,6 @@ export function InboxTabs({
           data-uin-drag={draggable ? '1' : undefined}
           data-uin-dragging={dragId === inbox.id ? '1' : undefined}
           data-uin-over={overId === inbox.id && dragId !== inbox.id ? '1' : undefined}
-          aria-describedby={draggable ? 'uin-tabs-reorder-hint' : undefined}
           draggable={draggable}
           onDragStart={(event: React.DragEvent<HTMLSpanElement>) => {
             if (!draggable) return
@@ -173,6 +174,18 @@ export function InboxTabs({
         >
           <span className="uin-tab-name">{inbox.name}</span>
           <Count value={inbox.count} />
+          {/* How to move an address without a mouse has to reach the thing that
+              takes the keystroke, which is core's link around this span rather
+              than the span itself. Said as words inside it: a link takes its name
+              from what is in it, so this reaches the keyboard everywhere, where a
+              description hung on the span reached nobody and an aria-label on a
+              span with no role of its own is not something every browser honours
+              either. */}
+          {draggable && (
+            <span className="sr-only">
+              . Hold Alt and press the left or right arrow keys to move it along the row.
+            </span>
+          )}
         </span>
       ),
     })),
@@ -188,6 +201,9 @@ export function InboxTabs({
       ),
     })),
     {
+      // No count beside it, unlike every other tab in the row: the counts are of
+      // conversations nobody has read yet, and nothing you sent yourself is
+      // waiting to be read by you.
       key: 'sent',
       href: link('sent'),
       active: current === 'sent',
@@ -250,12 +266,6 @@ export function InboxTabs({
 
   return (
     <div onKeyDown={onStripKeyDown}>
-      {draggable && (
-        <p className="sr-only" id="uin-tabs-reorder-hint">
-          Drag an address along the row to put it in the order you want it, or hold Alt and press
-          the left and right arrow keys.
-        </p>
-      )}
       <TabStrip
         style={{ marginBottom: '0.5rem' }}
         items={items}

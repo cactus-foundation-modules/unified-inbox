@@ -141,5 +141,9 @@ export function explainImapError(err: unknown): string {
   if (lower.includes('certificate') || lower.includes('ssl') || lower.includes('tls')) {
     return 'The secure connection could not be established. Check the port and that the server supports SSL on it.'
   }
-  return `The mail server said: ${raw}`
+  // Everything else. Whatever the server actually said goes to the log, where
+  // somebody who can act on it will see it, and never to the page: it is written
+  // for whoever runs the mail server, and the person setting this up is not them.
+  console.error('[unified-inbox] a mail server failure with no plain-English form:', raw)
+  return 'Something went wrong talking to the mail server, and what it said back will not help you. Check the server address, the port, the username and the password, then try again.'
 }

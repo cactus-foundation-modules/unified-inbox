@@ -1,10 +1,12 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
 import type { Data } from '@puckeditor/core'
 import MarkdownEditor from './MarkdownEditor'
-import { WebhooksSection } from './WebhooksSection'
+import { WebhooksSection, SETTINGS_SECTION_HEADING } from './WebhooksSection'
+import { ConfirmDialog } from './inbox/ConfirmDialog'
+import { InboxStyles } from './inbox/styles'
 
 // Puck and its stylesheet are a large import for a screen most people open to
 // change a folder name, so the signature builder only arrives if they ask for
@@ -64,6 +66,8 @@ type Inbox = {
   signatureHtml: string | null
   signaturePuck: unknown
   appendToSent: boolean
+  /** Reserved. Stored and validated, but nothing on any screen sets it yet -
+   *  it is here for the day inboxes are colour-coded in the list. */
   colour: string | null
   sortOrder: number
 }
@@ -135,13 +139,48 @@ type Payload = {
 type MailFolder = { path: string; name: string; role: string | null }
 
 const MUTED = { color: 'var(--color-text-muted)' } as const
-const LABEL_STYLE = {
-  fontSize: '0.75rem',
-  color: 'var(--color-text-muted)',
-  textTransform: 'uppercase',
-  letterSpacing: '0.05em',
-  marginBottom: '0.75rem',
+
+// One heading style for every section on this screen, including the Webhooks
+// one below. It is defined in that file rather than this one only because this
+// file already imports it and the other way round would be a circle; the two of
+// them used to disagree, and the last heading looked nothing like the five
+// above it.
+const LABEL_STYLE = SETTINGS_SECTION_HEADING
+
+/** The look of a `.field` label, for the two places where the thing being named
+ *  is a group of controls rather than one of them. A `<label>` there would have
+ *  nothing to point at, which is how a screen reader ends up announcing a row of
+ *  unnamed tickboxes. */
+const GROUP_LABEL = {
+  display: 'block',
+  fontSize: 'var(--text-sm)',
+  fontWeight: 'var(--font-medium)',
+  color: 'var(--color-text)',
+  lineHeight: 'var(--leading-sm)',
 } as const
+
+/** Something to tell the person at the screen, and whether it is good news.
+ *  Success and failure used to be the same grey box, so "Connected. Found 5
+ *  folders." and "That did not work." looked identical. */
+type Note = { tone: 'ok' | 'bad'; text: string }
+
+function NoteAlert({ note }: { note: Note | null }) {
+  if (!note) return null
+  return (
+    <div
+      className={note.tone === 'ok' ? 'alert alert-success' : 'alert alert-danger'}
+      role={note.tone === 'ok' ? 'status' : 'alert'}
+      style={{ marginBottom: '1rem' }}
+    >
+      {note.text}
+    </div>
+  )
+}
+
+/** What to say when the request never arrived at all. Every caller in here says
+ *  the same thing, because from the screen's point of view it is the same
+ *  thing. */
+const OFFLINE = 'Could not reach the site. Check your connection and try again.'
 
 function blankConnection() {
   return {
@@ -179,49 +218,82 @@ type InboxDraft = ReturnType<typeof blankInbox>
 
 export function UnifiedInboxSettingsTab() {
   const [data, setData] = useState<Payload | null>(null)
-  const [message, setMessage] = useState<string | null>(null)
+  const [message, setMessage] = useState<Note | null>(null)
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(async () => {
-    const res = await fetch(`${API}/settings`)
-    if (!res.ok) {
-      setMessage('Could not load the inbox settings.')
-      return
+    try {
+      const res = await fetch(`${API}/settings`)
+      if (!res.ok) {
+        setMessage({ tone: 'bad', text: 'Could not load the inbox settings.' })
+        return
+      }
+      setData(await res.json())
+    } catch {
+      setMessage({ tone: 'bad', text: OFFLINE })
     }
-    setData(await res.json())
   }, [])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- delegating to an async loader; every setState runs after an await
   useEffect(() => { void load() }, [load])
 
-  const call = useCallback(async (path: string, init: RequestInit): Promise<unknown | null> => {
+  const call = useCallback(async (path: string, init: RequestInit, okText?: string | null): Promise<unknown | null> => {
     setBusy(true)
     setMessage(null)
-    const res = await fetch(`${API}${path}`, {
-      ...init,
-      headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
-    })
-    const body = await res.json().catch(() => ({}))
-    setBusy(false)
-    if (!res.ok) {
-      setMessage((body as { error?: string }).error ?? 'That did not work.')
+    try {
+      const res = await fetch(`${API}${path}`, {
+        ...init,
+        headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setMessage({ tone: 'bad', text: (body as { error?: string }).error ?? 'That did not work.' })
+        return null
+      }
+      // Said before the reload, so that if the reload is the thing that fails,
+      // its own bad news is what stays on the screen.
+      if (okText) setMessage({ tone: 'ok', text: okText })
+      await load()
+      return body
+    } catch {
+      // Without this the request that never landed would leave every Save button
+      // on the screen greyed out until the page was loaded again, and nothing
+      // would say why.
+      setMessage({ tone: 'bad', text: OFFLINE })
       return null
+    } finally {
+      setBusy(false)
     }
-    await load()
-    return body
   }, [load])
 
-  if (!data) return null
+  // A screen that could not load says so and offers to try again. It used to
+  // render as nothing at all, message and all.
+  if (!data) {
+    return (
+      <div>
+        {message ? (
+          <>
+            <NoteAlert note={message} />
+            <button type="button" className="btn btn-secondary" onClick={() => void load()}>Try again</button>
+          </>
+        ) : (
+          <p style={MUTED}>Loading&hellip;</p>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div>
+      {/* The module's own stylesheet, for the are-you-sure dialogs below. */}
+      <InboxStyles />
       <p style={{ ...MUTED, marginBottom: '1.5rem' }}>
         One place for every conversation with a customer or a supplier. Point it at the mail account
         you already use, tell it which addresses people write to, and decide who is allowed to read
         which of them.
       </p>
 
-      {message && <div className="card" style={{ marginBottom: '1rem' }}>{message}</div>}
+      <NoteAlert note={message} />
 
       {!data.encryptionReady && (
         <div className="alert alert-danger" style={{ marginBottom: '1.5rem' }}>
@@ -317,14 +389,14 @@ function CollectionProgress({ stat }: { stat?: CollectionStat }) {
   )
 }
 
-type Caller = (path: string, init: RequestInit) => Promise<unknown | null>
+type Caller = (path: string, init: RequestInit, okText?: string | null) => Promise<unknown | null>
 
 function ConnectionsSection({ connections, collection, busy, call, setMessage, reload }: {
   connections: Connection[]
   collection: CollectionStat[]
   busy: boolean
   call: Caller
-  setMessage: (m: string | null) => void
+  setMessage: (n: Note | null) => void
   reload: () => Promise<void>
 }) {
   const [editing, setEditing] = useState<string | null>(null)
@@ -332,6 +404,9 @@ function ConnectionsSection({ connections, collection, busy, call, setMessage, r
   const [folders, setFolders] = useState<Record<string, MailFolder[]>>({})
   const [testing, setTesting] = useState<string | null>(null)
   const [checking, setChecking] = useState<string | null>(null)
+  // Which mail account the Remove question is about. Null when nothing is asked.
+  const [removing, setRemoving] = useState<Connection | null>(null)
+  const fid = useId()
   const stats = useMemo(
     () => new Map(collection.map((c) => [c.connectionId, c])),
     [collection]
@@ -371,27 +446,36 @@ function ConnectionsSection({ connections, collection, busy, call, setMessage, r
       ...(draft.imapPassword ? { imapPassword: draft.imapPassword } : {}),
     }
     const result = editing === 'new'
-      ? await call('/connections', { method: 'POST', body: JSON.stringify(body) })
-      : await call(`/connections/${editing}`, { method: 'PATCH', body: JSON.stringify(body) })
+      ? await call('/connections', { method: 'POST', body: JSON.stringify(body) }, 'Mail account saved.')
+      : await call(`/connections/${editing}`, { method: 'PATCH', body: JSON.stringify(body) }, 'Mail account saved.')
     if (result) setEditing(null)
   }
 
   async function remove(id: string) {
-    if (!window.confirm('Remove this mail account? Conversations already collected are kept.')) return
-    await call(`/connections/${id}`, { method: 'DELETE' })
+    await call(`/connections/${id}`, { method: 'DELETE' }, 'Mail account removed.')
   }
 
   async function test(id: string) {
     setTesting(id)
     setMessage(null)
-    const res = await fetch(`${API}/connections/${id}/test`, { method: 'POST' })
-    const body = await res.json().catch(() => ({}))
-    setTesting(null)
-    if (body.ok) {
-      setFolders((f) => ({ ...f, [id]: body.folders }))
-      setMessage(`Connected. Found ${body.folders.length} folder${body.folders.length === 1 ? '' : 's'}.`)
-    } else {
-      setMessage(body.error ?? 'That did not work.')
+    try {
+      const res = await fetch(`${API}/connections/${id}/test`, { method: 'POST' })
+      const body = await res.json().catch(() => ({}))
+      // Both: the request has to have been answered at all, and the answer has
+      // to say the mailbox opened. Reading only the second one meant a refusal
+      // was told apart from a bad password by luck rather than by asking.
+      if (res.ok && body.ok) {
+        setFolders((f) => ({ ...f, [id]: body.folders }))
+        setMessage({ tone: 'ok', text: `Connected. Found ${body.folders.length} folder${body.folders.length === 1 ? '' : 's'}.` })
+      } else {
+        setMessage({ tone: 'bad', text: body.error ?? 'That did not work.' })
+      }
+    } catch {
+      setMessage({ tone: 'bad', text: OFFLINE })
+    } finally {
+      // In a finally, so a test that never comes back does not leave the button
+      // greyed out and reading "Testing..." for the rest of the visit.
+      setTesting(null)
     }
   }
 
@@ -401,20 +485,27 @@ function ConnectionsSection({ connections, collection, busy, call, setMessage, r
   async function checkNow(id: string) {
     setChecking(id)
     setMessage(null)
-    const res = await fetch(`${API}/check-now`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ connectionId: id }),
-    })
-    const body = await res.json().catch(() => ({}))
-    setChecking(null)
-    setMessage(res.ok ? (body.message ?? 'Checked.') : (body.error ?? 'That did not work.'))
-    await reload()
+    try {
+      const res = await fetch(`${API}/check-now`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId: id }),
+      })
+      const body = await res.json().catch(() => ({}))
+      setMessage(res.ok
+        ? { tone: 'ok', text: body.message ?? 'Checked.' }
+        : { tone: 'bad', text: body.error ?? 'That did not work.' })
+      await reload()
+    } catch {
+      setMessage({ tone: 'bad', text: OFFLINE })
+    } finally {
+      setChecking(null)
+    }
   }
 
   return (
     <section className="card" style={{ marginBottom: '1.5rem' }}>
-      <div style={LABEL_STYLE}>Mail accounts</div>
+      <h3 style={LABEL_STYLE}>Mail accounts</h3>
       <p style={{ ...MUTED, fontSize: '0.875rem', marginTop: 0 }}>
         The mailbox this reads from. One account can serve several addresses - most sites need one.
         If this is an iCloud, Google or Outlook account you will need an app password rather than the
@@ -433,30 +524,35 @@ function ConnectionsSection({ connections, collection, busy, call, setMessage, r
             <strong>{connection.label}</strong>
             <span style={{ ...MUTED, fontSize: '0.875rem' }}>{connection.imapUsername}</span>
             {!connection.hasPassword && (
-              <span style={{ color: 'var(--color-danger)', fontSize: '0.875rem' }}>no password saved</span>
+              // Destructive-hover rather than danger: danger on text this small
+              // does not clear AA on a pale ground.
+              <span style={{ color: 'var(--color-destructive-hover)', fontSize: '0.875rem' }}>No password saved</span>
             )}
           </div>
           <div style={{ ...MUTED, fontSize: '0.8125rem', marginTop: '0.25rem' }}>
             {connection.lastSyncAt
+              // Whatever the mail server said is deliberately not repeated here:
+              // it is written for whoever runs the mail server, and Test
+              // connection is the button that gets to the bottom of it.
               ? `Last checked ${new Date(connection.lastSyncAt).toLocaleString('en-GB')}${
-                  connection.lastSyncStatus === 'error' ? ` - ${connection.lastSyncError ?? 'it did not work'}` : ''
+                  connection.lastSyncStatus === 'error' ? ' - it did not work. Try Test connection.' : ''
                 }`
               : 'Never checked yet.'}
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => startEdit(connection)}>Edit</button>
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => startEdit(connection)}>Edit</button>
             <button type="button" className="btn btn-secondary btn-sm" disabled={testing === connection.id} onClick={() => test(connection.id)}>
               {testing === connection.id ? 'Testing…' : 'Test connection'}
             </button>
             <button type="button" className="btn btn-secondary btn-sm" disabled={checking === connection.id} onClick={() => checkNow(connection.id)}>
               {checking === connection.id ? 'Checking…' : 'Check now'}
             </button>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => remove(connection.id)}>Remove</button>
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => setRemoving(connection)}>Remove</button>
           </div>
           <CollectionProgress stat={stats.get(connection.id)} />
           {folders[connection.id] && (
             <div style={{ ...MUTED, fontSize: '0.8125rem', marginTop: '0.5rem' }}>
-              Folders: {folders[connection.id]!.map((f) => f.path).join(', ')}
+              Folders found: {folders[connection.id]!.map((f) => f.path).join(', ')}
             </div>
           )}
         </div>
@@ -469,31 +565,31 @@ function ConnectionsSection({ connections, collection, busy, call, setMessage, r
       ) : (
         <div style={{ borderTop: '1px solid var(--color-border)', marginTop: '1rem', paddingTop: '1rem' }}>
           <div className="field">
-            <label>What to call it</label>
-            <input value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} placeholder="Office mail" />
+            <label htmlFor={`${fid}-label`}>What to call it</label>
+            <input id={`${fid}-label`} value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} placeholder="Office mail" />
           </div>
           <div className="field">
-            <label>Mail server</label>
-            <input value={draft.imapHost} onChange={(e) => setDraft({ ...draft, imapHost: e.target.value })} placeholder="imap.mail.me.com" />
+            <label htmlFor={`${fid}-host`}>Mail server</label>
+            <input id={`${fid}-host`} value={draft.imapHost} onChange={(e) => setDraft({ ...draft, imapHost: e.target.value })} placeholder="imap.mail.me.com" />
           </div>
           <div className="field">
-            <label>Port</label>
-            <input type="number" value={draft.imapPort} onChange={(e) => setDraft({ ...draft, imapPort: Number(e.target.value) })} />
+            <label htmlFor={`${fid}-port`}>Port</label>
+            <input id={`${fid}-port`} type="number" value={draft.imapPort} onChange={(e) => setDraft({ ...draft, imapPort: Number(e.target.value) })} />
           </div>
           <div className="field">
-            <label>Username</label>
-            <input value={draft.imapUsername} onChange={(e) => setDraft({ ...draft, imapUsername: e.target.value })} placeholder="you@yourcompany.co.uk" />
+            <label htmlFor={`${fid}-user`}>Username</label>
+            <input id={`${fid}-user`} value={draft.imapUsername} onChange={(e) => setDraft({ ...draft, imapUsername: e.target.value })} placeholder="you@yourcompany.co.uk" />
           </div>
           <div className="field">
-            <label>
+            <label htmlFor={`${fid}-pass`}>
               Password{' '}
               {editing !== 'new' && <span style={{ ...MUTED, fontWeight: 400 }}>(leave blank to keep the one saved)</span>}
             </label>
-            <input type="password" value={draft.imapPassword} onChange={(e) => setDraft({ ...draft, imapPassword: e.target.value })} />
+            <input id={`${fid}-pass`} type="password" value={draft.imapPassword} onChange={(e) => setDraft({ ...draft, imapPassword: e.target.value })} />
           </div>
           <div className="field">
-            <label>Other folders to read <span style={{ ...MUTED, fontWeight: 400 }}>(optional, separated by commas)</span></label>
-            <input value={draft.extraFolders} onChange={(e) => setDraft({ ...draft, extraFolders: e.target.value })} placeholder="Archive, Suppliers" />
+            <label htmlFor={`${fid}-extra`}>Other folders to read <span style={{ ...MUTED, fontWeight: 400 }}>(optional, separated by commas)</span></label>
+            <input id={`${fid}-extra`} value={draft.extraFolders} onChange={(e) => setDraft({ ...draft, extraFolders: e.target.value })} placeholder="Archive, Suppliers" />
           </div>
           <div className="field">
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontWeight: 400 }}>
@@ -519,10 +615,29 @@ function ConnectionsSection({ connections, collection, busy, call, setMessage, r
           </div>
           <div style={{ display: 'flex', gap: '0.75rem' }}>
             <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>Save mail account</button>
-            <button type="button" className="btn btn-secondary" onClick={() => setEditing(null)}>Cancel</button>
+            <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={removing !== null}
+        title="Remove this mail account?"
+        body={removing
+          ? `Nothing more will be collected from ${removing.label}. Everything already gathered stays exactly where it is.`
+          : ''}
+        confirmLabel="Remove it"
+        destructive
+        busy={busy}
+        onCancel={() => { if (!busy) setRemoving(null) }}
+        // Left open while the removal is in flight: the dialog greys its own two
+        // answers out, and closes once the work is finished either way, so the
+        // outcome is read on the screen behind it.
+        onConfirm={() => {
+          const connection = removing
+          if (connection) void remove(connection.id).finally(() => setRemoving(null))
+        }}
+      />
     </section>
   )
 }
@@ -543,6 +658,9 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState<InboxDraft>(blankInbox())
   const [staff, setStaff] = useState<AccessRow[]>([])
+  // Which inbox the Remove question is about. Null when nothing is asked.
+  const [removing, setRemoving] = useState<Inbox | null>(null)
+  const fid = useId()
 
   const accessByInbox = useMemo(() => {
     const map = new Map<string, AccessRow[]>()
@@ -615,10 +733,14 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
       ? await call('/inboxes', { method: 'POST', body: JSON.stringify(body) }) as Saved | null
       : await call(`/inboxes/${editing}`, { method: 'PATCH', body: JSON.stringify(body) }) as Saved | null
     if (!saved?.inbox) return
-    await call(`/inboxes/${saved.inbox.id}/access`, {
+    // Who may read it goes up separately. The form stays open if that half does
+    // not land, because closing on it left the staff list silently unapplied
+    // with a cheerful message on the screen.
+    const access = await call(`/inboxes/${saved.inbox.id}/access`, {
       method: 'PUT',
       body: JSON.stringify({ entries: staff.map((s) => ({ userId: s.userId, canReply: s.canReply })) }),
-    })
+    }, 'Inbox saved.')
+    if (!access) return
     // Saved either way. This only says whether replies will actually leave the
     // building yet, which is a different question and one worth answering while
     // the person who can fix it is still here (E15).
@@ -627,8 +749,7 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
   }
 
   async function remove(id: string) {
-    if (!window.confirm('Remove this inbox? Conversations already collected are kept, but nothing new will be filed here.')) return
-    await call(`/inboxes/${id}`, { method: 'DELETE' })
+    await call(`/inboxes/${id}`, { method: 'DELETE' }, 'Inbox removed.')
   }
 
   function toggleStaff(userId: string) {
@@ -643,7 +764,7 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
 
   return (
     <section className="card" style={{ marginBottom: '1.5rem' }}>
-      <div style={LABEL_STYLE}>Inboxes</div>
+      <h3 style={LABEL_STYLE}>Inboxes</h3>
       <p style={{ ...MUTED, fontSize: '0.875rem', marginTop: 0 }}>
         An address people write to. Each one can have its own staff, its own signature and its own
         name on the replies, even when they all arrive in the same mail account.
@@ -668,7 +789,7 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
             <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'baseline', flexWrap: 'wrap' }}>
               <strong>{inbox.name}</strong>
               <span style={{ ...MUTED, fontSize: '0.875rem' }}>{inbox.address}</span>
-              {inbox.isCatchAll && <span style={{ ...MUTED, fontSize: '0.75rem' }}>catch-all</span>}
+              {inbox.isCatchAll && <span style={{ ...MUTED, fontSize: '0.75rem' }}>Catch-all</span>}
             </div>
             <div style={{ ...MUTED, fontSize: '0.8125rem', marginTop: '0.25rem' }}>
               {rows.length === 0
@@ -676,8 +797,8 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
                 : `Restricted to ${rows.length} ${rows.length === 1 ? 'person' : 'people'}.`}
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-              <button type="button" className="btn btn-secondary btn-sm" onClick={() => startEdit(inbox)}>Edit</button>
-              <button type="button" className="btn btn-secondary btn-sm" onClick={() => remove(inbox.id)}>Remove</button>
+              <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => startEdit(inbox)}>Edit</button>
+              <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => setRemoving(inbox)}>Remove</button>
             </div>
           </div>
         )
@@ -690,27 +811,27 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
       ) : (
         <div style={{ borderTop: '1px solid var(--color-border)', marginTop: '1rem', paddingTop: '1rem' }}>
           <div className="field">
-            <label>What to call it</label>
-            <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Customer enquiries" />
+            <label htmlFor={`${fid}-name`}>What to call it</label>
+            <input id={`${fid}-name`} value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Customer enquiries" />
           </div>
           <div className="field">
-            <label>Address</label>
-            <input value={draft.address} onChange={(e) => setDraft({ ...draft, address: e.target.value })} placeholder="hi@yourcompany.co.uk" />
+            <label htmlFor={`${fid}-address`}>Address</label>
+            <input id={`${fid}-address`} value={draft.address} onChange={(e) => setDraft({ ...draft, address: e.target.value })} placeholder="hi@yourcompany.co.uk" />
           </div>
           <div className="field">
-            <label>Mail account</label>
-            <select value={draft.connectionId} onChange={(e) => setDraft({ ...draft, connectionId: e.target.value })}>
+            <label htmlFor={`${fid}-conn`}>Mail account</label>
+            <select id={`${fid}-conn`} value={draft.connectionId} onChange={(e) => setDraft({ ...draft, connectionId: e.target.value })}>
               <option value="">Not collected from a mailbox</option>
               {connections.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
             </select>
           </div>
           <div className="field">
-            <label>Folder to read</label>
-            <input value={draft.imapFolder} onChange={(e) => setDraft({ ...draft, imapFolder: e.target.value })} placeholder="INBOX" />
+            <label htmlFor={`${fid}-folder`}>Folder to read</label>
+            <input id={`${fid}-folder`} value={draft.imapFolder} onChange={(e) => setDraft({ ...draft, imapFolder: e.target.value })} placeholder="INBOX" />
           </div>
           <div className="field">
-            <label>Sent folder <span style={{ ...MUTED, fontWeight: 400 }}>(optional)</span></label>
-            <input value={draft.sentFolder} onChange={(e) => setDraft({ ...draft, sentFolder: e.target.value })} placeholder="Sent Messages" />
+            <label htmlFor={`${fid}-sent`}>Sent folder <span style={{ ...MUTED, fontWeight: 400 }}>(optional)</span></label>
+            <input id={`${fid}-sent`} value={draft.sentFolder} onChange={(e) => setDraft({ ...draft, sentFolder: e.target.value })} placeholder="Sent Messages" />
           </div>
           <div className="field">
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontWeight: 400 }}>
@@ -729,12 +850,13 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
             </span>
           </div>
           <div className="field">
-            <label>Name on replies</label>
-            <input value={draft.fromName} onChange={(e) => setDraft({ ...draft, fromName: e.target.value })} placeholder="Deskwell" />
+            <label htmlFor={`${fid}-fromname`}>Name on replies</label>
+            <input id={`${fid}-fromname`} value={draft.fromName} onChange={(e) => setDraft({ ...draft, fromName: e.target.value })} placeholder="Your company" />
           </div>
           <div className="field">
-            <label>How replies are sent</label>
+            <label htmlFor={`${fid}-transport`}>How replies are sent</label>
             <select
+              id={`${fid}-transport`}
               value={draft.sendTransport}
               onChange={(e) => setDraft({ ...draft, sendTransport: e.target.value as 'brevo' | 'smtp' })}
             >
@@ -749,27 +871,29 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
           {draft.sendTransport === 'smtp' && (
             <>
               <div className="field">
-                <label>Outgoing server</label>
-                <input value={draft.smtpHost} onChange={(e) => setDraft({ ...draft, smtpHost: e.target.value })} />
+                <label htmlFor={`${fid}-smtphost`}>Outgoing server</label>
+                <input id={`${fid}-smtphost`} value={draft.smtpHost} onChange={(e) => setDraft({ ...draft, smtpHost: e.target.value })} />
               </div>
               <div className="field">
-                <label>Port</label>
-                <input value={draft.smtpPort} onChange={(e) => setDraft({ ...draft, smtpPort: e.target.value })} placeholder="587" />
+                {/* Same kind of box as the incoming port above it, which used to
+                    be a number field while this one was not. */}
+                <label htmlFor={`${fid}-smtpport`}>Port</label>
+                <input id={`${fid}-smtpport`} type="number" value={draft.smtpPort} onChange={(e) => setDraft({ ...draft, smtpPort: e.target.value })} placeholder="587" />
               </div>
               <div className="field">
-                <label>Username</label>
-                <input value={draft.smtpUsername} onChange={(e) => setDraft({ ...draft, smtpUsername: e.target.value })} />
+                <label htmlFor={`${fid}-smtpuser`}>Username</label>
+                <input id={`${fid}-smtpuser`} value={draft.smtpUsername} onChange={(e) => setDraft({ ...draft, smtpUsername: e.target.value })} />
               </div>
               <div className="field">
-                <label>Password <span style={{ ...MUTED, fontWeight: 400 }}>(leave blank to keep the one saved)</span></label>
-                <input type="password" value={draft.smtpPassword} onChange={(e) => setDraft({ ...draft, smtpPassword: e.target.value })} />
+                <label htmlFor={`${fid}-smtppass`}>Password <span style={{ ...MUTED, fontWeight: 400 }}>(leave blank to keep the one saved)</span></label>
+                <input id={`${fid}-smtppass`} type="password" value={draft.smtpPassword} onChange={(e) => setDraft({ ...draft, smtpPassword: e.target.value })} />
               </div>
             </>
           )}
           <SignatureEditor draft={draft} setDraft={setDraft} />
 
-          <div className="field">
-            <label>Who can read this inbox</label>
+          <div className="field" role="group" aria-labelledby={`${fid}-access-label`}>
+            <span id={`${fid}-access-label`} style={GROUP_LABEL}>Who can read this inbox</span>
             <span style={{ ...MUTED, fontSize: '0.8125rem', display: 'block', marginBottom: '0.5rem' }}>
               Tick nobody and it is open to everyone who can see the inbox at all. Tick anybody and it
               becomes theirs alone - which is how the accounts address stays away from the rest of the team.
@@ -786,7 +910,7 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
                     {row && (
                       <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontWeight: 400, ...MUTED, fontSize: '0.8125rem' }}>
                         <input type="checkbox" checked={row.canReply} onChange={() => toggleReply(u.id)} />
-                        can reply
+                        Can reply
                       </label>
                     )}
                   </div>
@@ -797,10 +921,27 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
 
           <div style={{ display: 'flex', gap: '0.75rem' }}>
             <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>Save inbox</button>
-            <button type="button" className="btn btn-secondary" onClick={() => setEditing(null)}>Cancel</button>
+            <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={removing !== null}
+        title="Remove this inbox?"
+        body={removing
+          ? `Conversations already collected for ${removing.address} are kept, but nothing new will be filed here.`
+          : ''}
+        confirmLabel="Remove it"
+        destructive
+        busy={busy}
+        onCancel={() => { if (!busy) setRemoving(null) }}
+        // Left open while the removal is in flight; see the mail account above.
+        onConfirm={() => {
+          const inbox = removing
+          if (inbox) void remove(inbox.id).finally(() => setRemoving(null))
+        }}
+      />
     </section>
   )
 }
@@ -824,6 +965,11 @@ function SignatureEditor({ draft, setDraft }: {
   const [preview, setPreview] = useState<string | null>(null)
   const [previewShown, setPreviewShown] = useState(false)
   const [previewBusy, setPreviewBusy] = useState(false)
+  // Whether the last attempt got an answer at all. Without this, a preview that
+  // could not be drawn was reported as an empty signature, which is a lie about
+  // somebody's own data.
+  const [previewFailed, setPreviewFailed] = useState(false)
+  const fid = useId()
 
   const handlePuckChange = useCallback(
     (data: Data) => setDraft((d) => ({ ...d, signaturePuck: data })),
@@ -832,6 +978,7 @@ function SignatureEditor({ draft, setDraft }: {
 
   async function refreshPreview() {
     setPreviewBusy(true)
+    setPreviewFailed(false)
     try {
       const res = await fetch(`${API}/signature-preview`, {
         method: 'POST',
@@ -846,18 +993,27 @@ function SignatureEditor({ draft, setDraft }: {
           fromName: draft.fromName || null,
         }),
       })
-      const body = res.ok ? (await res.json()) as { html: string | null } : { html: null }
-      setPreview(body.html)
+      if (!res.ok) {
+        setPreview(null)
+        setPreviewFailed(true)
+      } else {
+        const body = (await res.json()) as { html: string | null }
+        setPreview(body.html)
+      }
     } catch {
       setPreview(null)
+      setPreviewFailed(true)
+    } finally {
+      setPreviewShown(true)
+      setPreviewBusy(false)
     }
-    setPreviewShown(true)
-    setPreviewBusy(false)
   }
 
   return (
-    <div className="field">
-      <label>Signature <span style={{ ...MUTED, fontWeight: 400 }}>(optional)</span></label>
+    <div className="field" role="group" aria-labelledby={`${fid}-sig-label`}>
+      {/* A group rather than one box: what it names is the row of choices below
+          and whichever editor they open. */}
+      <span id={`${fid}-sig-label`} style={GROUP_LABEL}>Signature <span style={{ ...MUTED, fontWeight: 400 }}>(optional)</span></span>
       <span style={{ ...MUTED, fontSize: '0.8125rem', display: 'block', marginBottom: '0.5rem' }}>
         Goes below a dividing line at the foot of every reply sent from this address, whoever sends it.
       </span>
@@ -872,8 +1028,11 @@ function SignatureEditor({ draft, setDraft }: {
             style={{
               flex: '1 1 12rem', textAlign: 'left', cursor: 'pointer',
               padding: '0.75rem', borderRadius: 6,
-              border: `1px solid ${draft.signatureKind === option.value ? 'var(--color-accent)' : 'var(--color-border)'}`,
-              background: draft.signatureKind === option.value ? 'var(--color-bg-subtle)' : 'var(--color-bg)',
+              // --color-primary, not --color-accent: the latter is not a token
+              // this site has, and an unresolved variable takes the whole border
+              // with it - so the chosen one was the only one without an edge.
+              border: `1px solid ${draft.signatureKind === option.value ? 'var(--color-primary)' : 'var(--color-border)'}`,
+              background: draft.signatureKind === option.value ? 'var(--color-primary-subtle)' : 'var(--color-bg)',
               color: 'var(--color-text)',
             }}
           >
@@ -890,13 +1049,16 @@ function SignatureEditor({ draft, setDraft }: {
           value={draft.signature}
           onChange={(value) => setDraft((d) => ({ ...d, signature: value }))}
           rows={6}
-          placeholder={'Kind regards,\nThe Sales Team\n\nDeskwell'}
+          ariaLabel="Signature"
+          placeholder={'Kind regards,\nThe Sales Team\n\nYour company'}
         />
       )}
 
       {draft.signatureKind === 'html' && (
         <>
+          <label htmlFor={`${fid}-sig-html`} className="sr-only">The signature markup</label>
           <textarea
+            id={`${fid}-sig-html`}
             rows={12}
             spellCheck={false}
             maxLength={50000}
@@ -943,10 +1105,19 @@ function SignatureEditor({ draft, setDraft }: {
             style={{
               marginTop: '0.75rem', padding: '1rem', borderRadius: 6,
               border: '1px solid var(--color-border)',
+              // The one hex in the module, and it has to stay one. This is a
+              // picture of what an email will look like where it lands, and an
+              // inbox has a white page whichever theme the admin is wearing. A
+              // token here would repaint the preview and stop it being a preview.
               background: '#ffffff', colorScheme: 'light', overflowX: 'auto',
             }}
             dangerouslySetInnerHTML={{ __html: preview }}
           />
+        ) : previewFailed ? (
+          <span role="alert" style={{ color: 'var(--color-destructive-hover)', fontSize: '0.8125rem', display: 'block', marginTop: '0.75rem' }}>
+            The preview could not be drawn just now, so this is not a picture of an empty signature - it is
+            no picture at all. Try it again in a moment.
+          </span>
         ) : (
           <span style={{ ...MUTED, fontSize: '0.8125rem', display: 'block', marginTop: '0.75rem' }}>
             Nothing to show - this signature is empty, so replies go out without one.
@@ -973,10 +1144,16 @@ function ModuleSettingsSection({ settings, inboxes, retention, busy, call }: {
   // during render rather than in an effect: React re-runs this component
   // immediately with the new value instead of painting the stale one first.
   const [seeded, setSeeded] = useState(settings)
+  const fid = useId()
   if (seeded !== settings) {
     setSeeded(settings)
     setDraft(settings)
   }
+
+  // The count below is worked out from what is saved, not from what is being
+  // typed above it, so while the two differ it is answering an old question.
+  const windowEdited = draft.retentionMonths !== settings.retentionMonths
+    || draft.retentionKeepLinked !== settings.retentionKeepLinked
 
   async function save() {
     await call('/settings', {
@@ -989,12 +1166,12 @@ function ModuleSettingsSection({ settings, inboxes, retention, busy, call }: {
         autoLink: draft.autoLink,
         defaultInboxId: draft.defaultInboxId || null,
       }),
-    })
+    }, 'Settings saved.')
   }
 
   return (
     <section className="card" style={{ marginBottom: '1.5rem' }}>
-      <div style={LABEL_STYLE}>How much mail to keep</div>
+      <h3 style={LABEL_STYLE}>How much mail to keep</h3>
       <p style={{ ...MUTED, fontSize: '0.875rem', marginTop: 0 }}>
         Mail is collected on a schedule rather than the second it arrives - about once an hour on a
         paid hosting plan, and once a day on the free one. There is a Check now button for when you
@@ -1002,16 +1179,18 @@ function ModuleSettingsSection({ settings, inboxes, retention, busy, call }: {
       </p>
 
       <div className="field">
-        <label>How far back to go when starting out <span style={{ ...MUTED, fontWeight: 400 }}>(months)</span></label>
+        <label htmlFor={`${fid}-backfill`}>How far back to go when starting out <span style={{ ...MUTED, fontWeight: 400 }}>(months)</span></label>
         <input
+          id={`${fid}-backfill`}
           type="number"
           value={draft.backfillMonths}
           onChange={(e) => setDraft({ ...draft, backfillMonths: Number(e.target.value) })}
         />
       </div>
       <div className="field">
-        <label>Delete conversations older than <span style={{ ...MUTED, fontWeight: 400 }}>(months, blank to keep everything)</span></label>
+        <label htmlFor={`${fid}-retention`}>Delete conversations older than <span style={{ ...MUTED, fontWeight: 400 }}>(months, blank to keep everything)</span></label>
         <input
+          id={`${fid}-retention`}
           type="number"
           value={draft.retentionMonths ?? ''}
           onChange={(e) => setDraft({ ...draft, retentionMonths: e.target.value === '' ? null : Number(e.target.value) })}
@@ -1036,7 +1215,15 @@ function ModuleSettingsSection({ settings, inboxes, retention, busy, call }: {
           mailing lists taking the correspondence behind a disputed invoice with it.
         </p>
       </div>
-      {retention && (
+      {retention && windowEdited && (
+        <div className="alert alert-info">
+          <p style={{ margin: 0 }}>
+            Save to see what this would remove. The count below the box is worked out from the setting
+            as it stands, not from what you have just typed.
+          </p>
+        </div>
+      )}
+      {retention && !windowEdited && (
         <div className="alert alert-info">
           <p style={{ margin: 0 }}>
             As things stand, the next tidy-up would remove <strong>{retention.due}</strong>{' '}
@@ -1056,8 +1243,9 @@ function ModuleSettingsSection({ settings, inboxes, retention, busy, call }: {
         </div>
       )}
       <div className="field">
-        <label>Attachments</label>
+        <label htmlFor={`${fid}-attach`}>Attachments</label>
         <select
+          id={`${fid}-attach`}
           value={draft.attachmentFetch}
           onChange={(e) => setDraft({ ...draft, attachmentFetch: e.target.value as Settings['attachmentFetch'] })}
         >
@@ -1073,8 +1261,9 @@ function ModuleSettingsSection({ settings, inboxes, retention, busy, call }: {
         </label>
       </div>
       <div className="field">
-        <label>Which inbox opens first</label>
+        <label htmlFor={`${fid}-default`}>Which inbox opens first</label>
         <select
+          id={`${fid}-default`}
           value={draft.defaultInboxId ?? ''}
           onChange={(e) => setDraft({ ...draft, defaultInboxId: e.target.value || null })}
         >
@@ -1123,13 +1312,13 @@ function DeliveryReceiptsSection({ settings, busy, call }: {
         trackOpens: draft.trackOpens,
         requestReadReceipts: draft.requestReadReceipts,
       }),
-    })
+    }, 'Settings saved.')
     setAccounts((body as { brevoRegistrations?: AccountRegistration[] | null })?.brevoRegistrations ?? null)
   }
 
   return (
     <section className="card" style={{ marginBottom: '1.5rem' }}>
-      <div style={LABEL_STYLE}>What happened to a reply after you sent it</div>
+      <h3 style={LABEL_STYLE}>What happened to a reply after you sent it</h3>
       <p style={{ ...MUTED, fontSize: '0.875rem', marginTop: 0 }}>
         On its own, &ldquo;Sent&rdquo; only means the email service took the message off your hands.
         Switch these on and a reply can also tell you it arrived, that somebody opened it, or that it
@@ -1222,6 +1411,10 @@ function PeopleSettingsSection({ settings, inboxes, counts, busy, call }: {
   const [order, setOrder] = useState(settings.orderNumberPattern ?? '')
   const [po, setPo] = useState(settings.poNumberPattern ?? '')
   const [quote, setQuote] = useState(settings.quoteNumberPattern ?? '')
+  // A pattern that cannot be searched for used to be accepted here and only fall
+  // over later, out of sight.
+  const [patternError, setPatternError] = useState<string | null>(null)
+  const fid = useId()
   if (seeded !== settings) {
     setSeeded(settings)
     setOwn((settings.ownDomains ?? []).join('\n'))
@@ -1241,6 +1434,22 @@ function PeopleSettingsSection({ settings, inboxes, counts, busy, call }: {
   )]
 
   async function save() {
+    const patterns: Array<[string, string]> = [
+      ['Order numbers look like', order],
+      ['Purchase order numbers look like', po],
+      ['Quote references look like', quote],
+    ]
+    for (const [label, value] of patterns) {
+      if (value.trim() === '') continue
+      try {
+        // Built only to find out whether it can be.
+        new RegExp(value)
+      } catch {
+        setPatternError(`"${label}" is not something we can search for. Digits are written [0-9]+, so a number like ABC-1024 is ABC-[0-9]+. Leave the box empty to use the usual one.`)
+        return
+      }
+    }
+    setPatternError(null)
     await call('/settings', {
       method: 'PATCH',
       body: JSON.stringify({
@@ -1250,12 +1459,12 @@ function PeopleSettingsSection({ settings, inboxes, counts, busy, call }: {
         poNumberPattern: po.trim() === '' ? null : po,
         quoteNumberPattern: quote.trim() === '' ? null : quote,
       }),
-    })
+    }, 'People settings saved.')
   }
 
   return (
     <section className="card">
-      <div style={LABEL_STYLE}>People</div>
+      <h3 style={LABEL_STYLE}>People</h3>
       <p style={{ ...MUTED, fontSize: '0.875rem', marginTop: 0 }}>
         Messages from the same person are gathered together so you can see everything they have
         ever said in one place. It is deliberately simple: who somebody is, how to reach them, and
@@ -1287,8 +1496,8 @@ function PeopleSettingsSection({ settings, inboxes, counts, busy, call }: {
 
       {overrideOwn && (
         <div className="field">
-          <label>Your own domains <span style={{ ...MUTED, fontWeight: 400 }}>(one per line)</span></label>
-          <textarea rows={3} value={own} onChange={(e) => setOwn(e.target.value)} />
+          <label htmlFor={`${fid}-own`}>Your own domains <span style={{ ...MUTED, fontWeight: 400 }}>(one per line)</span></label>
+          <textarea id={`${fid}-own`} rows={3} value={own} onChange={(e) => setOwn(e.target.value)} />
           <p style={{ ...MUTED, fontSize: '0.8125rem' }}>
             Anybody writing from one of these is a colleague, not a customer, and no record is kept
             of them.
@@ -1297,32 +1506,39 @@ function PeopleSettingsSection({ settings, inboxes, counts, busy, call }: {
       )}
 
       <div className="field">
-        <label>Other free email providers <span style={{ ...MUTED, fontWeight: 400 }}>(one per line)</span></label>
-        <textarea rows={2} value={personal} onChange={(e) => setPersonal(e.target.value)} />
+        <label htmlFor={`${fid}-personal`}>Other free email providers <span style={{ ...MUTED, fontWeight: 400 }}>(one per line)</span></label>
+        <textarea id={`${fid}-personal`} rows={2} value={personal} onChange={(e) => setPersonal(e.target.value)} />
         <p style={{ ...MUTED, fontSize: '0.8125rem' }}>
           The usual ones are already known. Add any others your customers use, so their email
           provider does not get mistaken for the company they work for.
         </p>
       </div>
 
-      <div style={{ ...LABEL_STYLE, marginTop: '1rem' }}>Spotting references</div>
+      <h3 style={{ ...LABEL_STYLE, marginTop: '1rem' }}>Spotting references</h3>
       <p style={{ ...MUTED, fontSize: '0.875rem', marginTop: 0 }}>
         When somebody quotes an order or purchase order number, it gets attached to the
         conversation. Nothing is attached until we have checked the number really exists, and
         anything attached this way says so and comes off in one click. Leave a box empty unless
         your numbers look unusual.
       </p>
+      <p style={{ ...MUTED, fontSize: '0.8125rem', marginTop: 0 }}>
+        If you do fill one in, write it the way it is printed with the digits shown as{' '}
+        <code>[0-9]+</code>. A number like ABC-1024 is <code>ABC-[0-9]+</code>.
+      </p>
+      {patternError && (
+        <div className="alert alert-danger" role="alert" style={{ marginBottom: '1rem' }}>{patternError}</div>
+      )}
       <div className="field">
-        <label>Order numbers look like</label>
-        <input value={order} placeholder="the usual pattern" onChange={(e) => setOrder(e.target.value)} />
+        <label htmlFor={`${fid}-order`}>Order numbers look like</label>
+        <input id={`${fid}-order`} value={order} placeholder="ABC-[0-9]+" onChange={(e) => setOrder(e.target.value)} />
       </div>
       <div className="field">
-        <label>Purchase order numbers look like</label>
-        <input value={po} placeholder="the usual pattern" onChange={(e) => setPo(e.target.value)} />
+        <label htmlFor={`${fid}-po`}>Purchase order numbers look like</label>
+        <input id={`${fid}-po`} value={po} placeholder="PO-[0-9]+" onChange={(e) => setPo(e.target.value)} />
       </div>
       <div className="field">
-        <label>Quote references look like</label>
-        <input value={quote} placeholder="the usual pattern" onChange={(e) => setQuote(e.target.value)} />
+        <label htmlFor={`${fid}-quote`}>Quote references look like</label>
+        <input id={`${fid}-quote`} value={quote} placeholder="Q-[0-9]+" onChange={(e) => setQuote(e.target.value)} />
       </div>
 
       <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>Save people settings</button>

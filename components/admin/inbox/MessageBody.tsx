@@ -14,9 +14,21 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 // turned out to be rather than a fixed box with a scrollbar inside the page's
 // scrollbar. Until that message arrives it stands at a sensible height, so a
 // blocked script or a slow load costs a slightly wrong size and nothing else.
+//
+// If the height never arrives, something may have gone wrong with the frame -
+// or nothing may have, since a browser extension can stop the script that
+// reports it. Nothing can be read out of the frame from here to tell the two
+// apart, since it deliberately has an origin of its own. So after a few seconds
+// of silence the page asks for the same message itself, and only then, and only
+// if the answer is a refusal, does it say out loud that the message would not
+// open. A blank rectangle with no explanation is the one outcome worth ruling
+// out: it reads as an empty message rather than as a message that did not come.
 
 const MIN_HEIGHT = 120
 const MAX_HEIGHT = 4000
+/** How long to let the frame stay silent before asking whether it was ever
+ *  going to say anything. Long enough for a large message on a slow line. */
+const SILENCE_MS = 5000
 
 type Props = {
   messageId: string
@@ -29,6 +41,12 @@ export function MessageBody({ messageId, hasRemoteImages }: Props) {
   const frame = useRef<HTMLIFrameElement | null>(null)
   const [height, setHeight] = useState(MIN_HEIGHT)
   const [showImages, setShowImages] = useState(false)
+  // Which message would not open, rather than a plain yes or no: showing the
+  // pictures loads a different address, and the answer for one is not the answer
+  // for the other. Held this way round so that changing address clears it
+  // without a second render to do the clearing.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null)
+  const heard = useRef(false)
 
   const onMessage = useCallback((event: MessageEvent) => {
     // The frame has no origin of its own to check - being sandboxed without
@@ -37,6 +55,7 @@ export function MessageBody({ messageId, hasRemoteImages }: Props) {
     if (!frame.current || event.source !== frame.current.contentWindow) return
     const value = (event.data as { uinFrameHeight?: unknown } | null)?.uinFrameHeight
     if (typeof value !== 'number' || !Number.isFinite(value)) return
+    heard.current = true
     setHeight(Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.ceil(value))))
   }, [])
 
@@ -46,6 +65,22 @@ export function MessageBody({ messageId, hasRemoteImages }: Props) {
   }, [onMessage])
 
   const src = `/api/m/unified-inbox/messages/${encodeURIComponent(messageId)}/body${showImages ? '?images=1' : ''}`
+
+  const failed = failedSrc === src
+
+  useEffect(() => {
+    heard.current = false
+    const stop = new AbortController()
+    const timer = setTimeout(() => {
+      if (heard.current) return
+      fetch(src, { method: 'HEAD', signal: stop.signal })
+        .then((response) => { if (!response.ok) setFailedSrc(src) })
+        // A request that never came back says nothing either way, and a guess
+        // in front of somebody reading their post is worse than no guess.
+        .catch(() => {})
+    }, SILENCE_MS)
+    return () => { clearTimeout(timer); stop.abort() }
+  }, [src])
 
   return (
     <div>
@@ -63,6 +98,15 @@ export function MessageBody({ messageId, hasRemoteImages }: Props) {
           </button>
         </div>
       )}
+      {failed && (
+        <div className="alert alert-info" role="alert">
+          This message would not open. It may have been cleared out since it arrived. What is
+          written about it above still stands.
+        </div>
+      )}
+      {/* Taken off the page rather than hidden: .uin-frame sets display and an
+          author rule beats the browser's own for a hidden element. */}
+      {!failed && (
       <iframe
         ref={frame}
         className="uin-frame"
@@ -76,6 +120,7 @@ export function MessageBody({ messageId, hasRemoteImages }: Props) {
         sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="no-referrer"
       />
+      )}
     </div>
   )
 }
