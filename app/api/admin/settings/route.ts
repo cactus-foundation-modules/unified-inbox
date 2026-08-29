@@ -103,6 +103,7 @@ const Body = z.object({
   retentionKeepLinked: z.boolean().optional(),
   attachmentFetch: z.enum(['lazy', 'always', 'never']).optional(),
   autoLink: z.boolean().optional(),
+  newestFirst: z.boolean().optional(),
   defaultInboxId: z.string().nullable().optional(),
   // NULL means "work the domains out from the addresses you collect mail on".
   // An empty array is a different answer and is kept as one.

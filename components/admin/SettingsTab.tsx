@@ -95,6 +95,7 @@ type Settings = {
   retentionLastRunAt: string | null
   attachmentFetch: 'lazy' | 'always' | 'never'
   autoLink: boolean
+  newestFirst: boolean
   defaultInboxId: string | null
   ownDomains: string[] | null
   personalDomains: string[]
@@ -1164,6 +1165,7 @@ function ModuleSettingsSection({ settings, inboxes, retention, busy, call }: {
         retentionKeepLinked: draft.retentionKeepLinked,
         attachmentFetch: draft.attachmentFetch,
         autoLink: draft.autoLink,
+        newestFirst: draft.newestFirst,
         defaultInboxId: draft.defaultInboxId || null,
       }),
     }, 'Settings saved.')
@@ -1259,6 +1261,21 @@ function ModuleSettingsSection({ settings, inboxes, retention, busy, call }: {
           <input type="checkbox" checked={draft.autoLink} onChange={(e) => setDraft({ ...draft, autoLink: e.target.checked })} />
           Attach an order or a purchase order to a conversation when the message mentions one
         </label>
+      </div>
+      <div className="field">
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontWeight: 400 }}>
+          <input
+            type="checkbox"
+            checked={draft.newestFirst}
+            onChange={(e) => setDraft({ ...draft, newestFirst: e.target.checked })}
+          />
+          Show the newest message at the top of a conversation
+        </label>
+        <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.375rem 0 0' }}>
+          Off, a conversation reads top to bottom the way it happened. On, the latest message is
+          the first thing you see and the writing box sits with it, which saves scrolling past a
+          long back and forth to find out what was last said.
+        </p>
       </div>
       <div className="field">
         <label htmlFor={`${fid}-default`}>Which inbox opens first</label>

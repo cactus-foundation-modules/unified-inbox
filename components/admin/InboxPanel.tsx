@@ -11,6 +11,7 @@ import {
   draftForThread,
   getDraft,
   getPerson,
+  getSettings,
   getThreadDetail,
   linksForPerson,
   linksForThread,
@@ -284,11 +285,12 @@ export async function UnifiedInboxPanel({
       // means by opening one.
       if (thread.unread) await setThreadRead(thread.id, false)
 
-      const [messages, files, events, ownDraft] = await Promise.all([
+      const [messages, files, events, ownDraft, settings] = await Promise.all([
         listThreadMessages(thread.id),
         attachmentsForThread(thread.id),
         listThreadEvents(thread.id),
         draftForThread(thread.id, user.id, sendableIds),
+        getSettings(),
       ])
       const byMessage = new Map<string, AttachmentRow[]>()
       for (const file of files) {
@@ -363,6 +365,7 @@ export async function UnifiedInboxPanel({
           replyTo={[...reply.to, ...reply.cc]}
           replyAllTo={[...replyAll.to, ...replyAll.cc]}
           draft={ownDraft ? forComposer(ownDraft) : null}
+          newestFirst={settings.newestFirst}
           now={new Date()}
         />
       )

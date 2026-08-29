@@ -37,6 +37,9 @@ type Props = {
   /** What this reader left half-written under this conversation, if anything.
    *  Nobody else's, ever - a shared inbox is not a shared notepad. */
   draft: DraftForComposer | null
+  /** Newest message at the top, with the writing box above the messages to
+   *  match. A site setting, not a per-reader one. */
+  newestFirst: boolean
   now: Date
 }
 
@@ -265,8 +268,12 @@ const EVENT_WORDS: Record<string, string> = {
 
 export function ThreadPane({
   base, params, thread, inboxName, messages, events, staff, staffById,
-  canReply, cannotReplyReason, replyTo, replyAllTo, draft, now,
+  canReply, cannotReplyReason, replyTo, replyAllTo, draft, newestFirst, now,
 }: Props) {
+  // The list arrives oldest first. Reversing a copy rather than sorting again:
+  // the query already decided the order, and this only says which end to read
+  // it from.
+  const ordered = newestFirst ? [...messages].reverse() : messages
   return (
     <div className="uin-thread">
       <div className="uin-thread-head">
@@ -313,7 +320,23 @@ export function ThreadPane({
         {/* The messages come first and the writing box after them, because the
             conversation is what somebody opened this to read. An empty list used
             to render as nothing at all, which put the writing box directly under
-            the subject and left no sign that anything was missing. */}
+            the subject and left no sign that anything was missing.
+
+            Reading newest first, the writing box goes above the messages, since
+            the reply belongs beside the thing being replied to. */}
+        {newestFirst && (
+          <Composer
+            threadId={thread.id}
+            replyTo={replyTo}
+            replyAllTo={replyAllTo}
+            canReply={canReply}
+            canForward={canReply}
+            staff={staff}
+            cannotReplyReason={cannotReplyReason}
+            draft={draft}
+          />
+        )}
+
         {messages.length === 0 ? (
           !thread.providerModule && (
             <div className="uin-empty">
@@ -324,22 +347,24 @@ export function ThreadPane({
           )
         ) : (
           <div className="uin-messages">
-            {messages.map((message) => (
+            {ordered.map((message) => (
               <Message key={message.id} message={message} staffById={staffById} now={now} />
             ))}
           </div>
         )}
 
-        <Composer
-          threadId={thread.id}
-          replyTo={replyTo}
-          replyAllTo={replyAllTo}
-          canReply={canReply}
-          canForward={canReply}
-          staff={staff}
-          cannotReplyReason={cannotReplyReason}
-          draft={draft}
-        />
+        {!newestFirst && (
+          <Composer
+            threadId={thread.id}
+            replyTo={replyTo}
+            replyAllTo={replyAllTo}
+            canReply={canReply}
+            canForward={canReply}
+            staff={staff}
+            cannotReplyReason={cannotReplyReason}
+            draft={draft}
+          />
+        )}
 
         {events.length > 0 && (
           <details>

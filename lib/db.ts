@@ -427,6 +427,7 @@ const DEFAULT_SETTINGS: UnifiedInboxSettings = {
   retentionLastRunAt: null,
   attachmentFetch: 'lazy',
   autoLink: true,
+  newestFirst: false,
   defaultInboxId: null,
   ownDomains: null,
   personalDomains: [],
@@ -458,6 +459,9 @@ export async function getSettings(): Promise<UnifiedInboxSettings> {
     retentionLastRunAt: (r.retention_last_run_at as Date | null) ?? null,
     attachmentFetch: (r.attachment_fetch as AttachmentFetchMode) ?? 'lazy',
     autoLink: r.auto_link === undefined ? true : !!r.auto_link,
+    // Off for a row written before the column existed, which is the order that
+    // install has been reading in all along.
+    newestFirst: !!r.newest_first,
     defaultInboxId: (r.default_inbox_id as string | null) ?? null,
     // NULL and an empty array mean different things here and both are real
     // answers: nothing set at all, versus somebody who has cleared the box.
@@ -484,6 +488,7 @@ export async function updateSettings(data: Partial<UnifiedInboxSettings>): Promi
   // tell the screen a pass happened when none did.
   if (data.attachmentFetch !== undefined) sets.push(Prisma.sql`"attachment_fetch" = ${data.attachmentFetch}`)
   if (data.autoLink !== undefined) sets.push(Prisma.sql`"auto_link" = ${data.autoLink}`)
+  if (data.newestFirst !== undefined) sets.push(Prisma.sql`"newest_first" = ${data.newestFirst}`)
   if (data.defaultInboxId !== undefined) sets.push(Prisma.sql`"default_inbox_id" = ${data.defaultInboxId}`)
   if (data.ownDomains !== undefined) sets.push(Prisma.sql`"own_domains" = ${data.ownDomains}::text[]`)
   if (data.personalDomains !== undefined) sets.push(Prisma.sql`"personal_domains" = ${data.personalDomains}::text[]`)

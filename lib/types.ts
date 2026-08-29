@@ -146,6 +146,10 @@ export type UnifiedInboxSettings = {
   retentionLastRunAt: Date | null
   attachmentFetch: AttachmentFetchMode
   autoLink: boolean
+  /** Which end of a conversation opens first. Off - oldest at the top, the way
+   *  it happened - unless somebody would rather read the last thing said
+   *  without scrolling past everything before it. */
+  newestFirst: boolean
   defaultInboxId: string | null
   /** Domains whose senders are colleagues rather than customers (E18). NULL
    *  means "work it out from the addresses this site collects mail on", which
