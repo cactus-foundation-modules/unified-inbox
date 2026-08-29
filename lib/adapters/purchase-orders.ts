@@ -70,7 +70,7 @@ export const purchaseOrdersAdapter: ContextAdapter = {
         detail: 'Supplier on file',
         status: null,
         at: null,
-        href: 'purchase-orders/suppliers',
+        href: 'm/purchase-orders/suppliers',
       })),
       ...orders.map((r) => ({
         id: `order:${r.id as string}`,
@@ -81,7 +81,7 @@ export const purchaseOrdersAdapter: ContextAdapter = {
         ),
         status: humanStatus(r.status),
         at: toDate(r.raised_date),
-        href: `purchase-orders/orders/${r.id as string}`,
+        href: `m/purchase-orders/orders/${r.id as string}`,
       })),
       ...bills.map((r) => ({
         id: `bill:${r.id as string}`,
@@ -92,7 +92,7 @@ export const purchaseOrdersAdapter: ContextAdapter = {
         ),
         status: humanStatus(r.status),
         at: toDate(r.due_date),
-        href: `purchase-orders/bills/${r.id as string}`,
+        href: `m/purchase-orders/bills/${r.id as string}`,
       })),
     ]
 
@@ -101,7 +101,7 @@ export const purchaseOrdersAdapter: ContextAdapter = {
       label: 'Purchasing',
       items,
       total: items.length,
-      moreHref: 'purchase-orders/orders',
+      moreHref: 'm/purchase-orders/orders',
     }
   },
 
@@ -119,7 +119,7 @@ export const purchaseOrdersAdapter: ContextAdapter = {
       recordType: 'purchase-order',
       recordId: row.id,
       label: `Purchase order ${row.number}`,
-      href: `purchase-orders/orders/${row.id}`,
+      href: `m/purchase-orders/orders/${row.id}`,
     }
   },
 
@@ -161,7 +161,7 @@ export const purchaseOrdersAdapter: ContextAdapter = {
       recordId: r.id as string,
       reference: (r.number as string) || '',
       label: `Purchase order ${(r.number as string) || ''}`.trim(),
-      href: `purchase-orders/orders/${r.id as string}`,
+      href: `m/purchase-orders/orders/${r.id as string}`,
       detail: detailLine(
         (r.supplier_name as string) || null,
         money(r.total, r.currency as string),

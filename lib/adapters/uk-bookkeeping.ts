@@ -61,7 +61,7 @@ export const bookkeepingAdapter: ContextAdapter = {
       ),
       status: humanStatus(r.status),
       at: toDate(r.tax_point_date),
-      href: `uk-bookkeeping/transactions/${r.id as string}`,
+      href: `m/uk-bookkeeping/transactions/${r.id as string}`,
     }))
 
     return {
@@ -69,7 +69,7 @@ export const bookkeepingAdapter: ContextAdapter = {
       label: 'Outstanding on the books',
       items,
       total,
-      moreHref: total > items.length ? 'uk-bookkeeping/transactions' : null,
+      moreHref: total > items.length ? 'm/uk-bookkeeping/transactions' : null,
     }
   },
 }

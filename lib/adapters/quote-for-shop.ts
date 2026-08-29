@@ -48,7 +48,7 @@ export const quotesAdapter: ContextAdapter = {
       ),
       status: humanStatus(r.status),
       at: toDate(r.created_at),
-      href: `quote-for-shop/quotes/${r.id as string}`,
+      href: `m/quote-for-shop/quotes/${r.id as string}`,
     }))
 
     return {
@@ -56,7 +56,7 @@ export const quotesAdapter: ContextAdapter = {
       label: 'Open quotes',
       items,
       total,
-      moreHref: total > items.length ? 'quote-for-shop/quotes' : null,
+      moreHref: total > items.length ? 'm/quote-for-shop/quotes' : null,
     }
   },
 
@@ -74,7 +74,7 @@ export const quotesAdapter: ContextAdapter = {
       recordType: 'quote',
       recordId: row.id,
       label: `Quote ${row.quote_number}`,
-      href: `quote-for-shop/quotes/${row.id}`,
+      href: `m/quote-for-shop/quotes/${row.id}`,
     }
   },
 
@@ -107,7 +107,7 @@ export const quotesAdapter: ContextAdapter = {
       recordId: r.id as string,
       reference: (r.quote_number as string) || '',
       label: `Quote ${(r.quote_number as string) || ''}`.trim(),
-      href: `quote-for-shop/quotes/${r.id as string}`,
+      href: `m/quote-for-shop/quotes/${r.id as string}`,
       detail: detailLine((r.customer_name as string) || null, shortDate(r.created_at)),
       status: humanStatus(r.status),
     })).filter((row) => row.reference.length > 0)

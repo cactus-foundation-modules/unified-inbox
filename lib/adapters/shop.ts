@@ -45,7 +45,7 @@ export const shopAdapter: ContextAdapter = {
       detail: detailLine(money(r.total, r.currency as string), shortDate(r.created_at)),
       status: paymentAwareStatus(r.status, r.payment_status),
       at: toDate(r.created_at),
-      href: `shop/orders/${r.id as string}`,
+      href: `m/shop/orders/${r.id as string}`,
     }))
 
     return {
@@ -53,7 +53,7 @@ export const shopAdapter: ContextAdapter = {
       label: total === 1 ? 'Their order' : 'Their orders',
       items,
       total,
-      moreHref: total > items.length ? 'shop/orders' : null,
+      moreHref: total > items.length ? 'm/shop/orders' : null,
     }
   },
 
@@ -71,7 +71,7 @@ export const shopAdapter: ContextAdapter = {
       recordType: 'order',
       recordId: row.id,
       label: `Order ${row.order_number}`,
-      href: `shop/orders/${row.id}`,
+      href: `m/shop/orders/${row.id}`,
     }
   },
   /**
@@ -109,7 +109,7 @@ export const shopAdapter: ContextAdapter = {
       recordId: r.id as string,
       reference: (r.order_number as string) || '',
       label: `Order ${(r.order_number as string) || ''}`.trim(),
-      href: `shop/orders/${r.id as string}`,
+      href: `m/shop/orders/${r.id as string}`,
       detail: detailLine(
         (r.customer_name as string) || null,
         money(r.total, r.currency as string),

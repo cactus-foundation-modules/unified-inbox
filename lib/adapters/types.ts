@@ -35,7 +35,7 @@ export type ContextItem = {
   /** For ordering, newest first. Null sorts last. */
   at: Date | null
   /**
-   * ADMIN-ROOT RELATIVE, with no leading slash: `shop/orders/abc123`.
+   * ADMIN-ROOT RELATIVE, with no leading slash: `m/shop/orders/abc123`.
    * The admin path is per site and only the rendering page knows it, which is
    * the same rule core's own conversation summaries follow.
    */

@@ -62,12 +62,12 @@ function LinkedRecord({
  *  the link holds, so a module that changes its own page addresses does not
  *  leave every conversation on the site pointing at a page that has moved. */
 function linkHref(link: RecordLink): string | null {
-  if (link.moduleName === 'shop' && link.recordType === 'order') return `shop/orders/${link.recordId}`
+  if (link.moduleName === 'shop' && link.recordType === 'order') return `m/shop/orders/${link.recordId}`
   if (link.moduleName === 'purchase-orders' && link.recordType === 'purchase-order') {
-    return `purchase-orders/orders/${link.recordId}`
+    return `m/purchase-orders/orders/${link.recordId}`
   }
   if (link.moduleName === 'quote-for-shop' && link.recordType === 'quote') {
-    return `quote-for-shop/quotes/${link.recordId}`
+    return `m/quote-for-shop/quotes/${link.recordId}`
   }
   return null
 }
