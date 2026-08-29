@@ -55,6 +55,7 @@ import {
   type AutomatedKind,
 } from './threading'
 import type { Inbox } from './types'
+import { queueMessageWebhooks } from './webhooks'
 
 // ---------------------------------------------------------------------------
 // The engine. Reads mail, files it, and stops when the clock says so.
@@ -678,6 +679,11 @@ async function fileMessage(
     messageIdHeader: identity,
     threadId,
   })
+
+  // Last, and only once the message is safely filed and its location recorded:
+  // note down anybody who asked to be told. Queueing only - the sending happens
+  // on the tick, so a slow endpoint cannot cost this run its remaining slice.
+  await queueMessageWebhooks(messageId)
 
   return { stored: true, sentAt }
 }

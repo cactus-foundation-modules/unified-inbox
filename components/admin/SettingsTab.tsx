@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { WebhooksSection } from './WebhooksSection'
 
 // Settings for the Unified Inbox: the mail accounts it reads, the addresses
 // people write to, who may read which of them, and how far back to go.
@@ -235,6 +236,8 @@ export function UnifiedInboxSettingsTab() {
         busy={busy}
         call={call}
       />
+
+      <WebhooksSection inboxes={data.inboxes} />
     </div>
   )
 }

@@ -7,6 +7,7 @@ import { syncAllConnections, syncConnection } from '@/modules/unified-inbox/lib/
 import { MANUAL_BUDGET_MS, MANUAL_PEOPLE_DEADLINE_MS, MANUAL_TICK_DEADLINE_MS } from '@/modules/unified-inbox/lib/sync-plan'
 import { runPeoplePass } from '@/modules/unified-inbox/lib/identity'
 import { syncAllProviders, PROVIDER_BUDGET_MS } from '@/modules/unified-inbox/lib/provider-sync'
+import { deliverPending, WEBHOOK_BUDGET_MS } from '@/modules/unified-inbox/lib/webhooks'
 
 // Check now. Same engine as the hourly job, a bigger slice of clock (E9): this
 // runs in a module route with a 60 second ceiling of its own rather than inside
@@ -59,6 +60,10 @@ export async function POST(request: Request) {
 
   // Same people pass the hourly job runs, with the bigger slice this route has.
   await runPeoplePass({ deadline: started + MANUAL_PEOPLE_DEADLINE_MS })
+
+  // Somebody pressed the button and is watching the screen, so anything this
+  // check queued goes out now rather than waiting for the next scheduled tick.
+  await deliverPending({ deadline: Date.now() + WEBHOOK_BUDGET_MS })
 
   const failed = outcomes.find((o) => !o.ok)
   const collected =

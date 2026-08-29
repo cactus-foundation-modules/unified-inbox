@@ -63,6 +63,24 @@ hour on a paid hosting plan, and once a day on the free one.
 | `unifiedinbox.reply` | Reply to them |
 | `unifiedinbox.manage` | Set up mail accounts, inboxes and who can read them |
 
+## Telling something else when the post arrives
+
+Each inbox can notify a web address whenever a message lands - handy for setting
+something else going on its own. Set them up under **Settings -> Unified Inbox**.
+
+Either the details of the message that arrived, or a fixed message of your own
+every time, for an address that expects its own wording. What the message
+actually said is only included if you tick the box for it: a web address you
+notify is a copy of your post going somewhere else.
+
+If the other end expects a signing password, put it in and every note is stamped
+with it, so it can tell the message really came from your site. Extra headers go
+in the same place, for an address that wants a key.
+
+Notes go out on the same schedule as the mail check rather than the instant a
+message lands, and an address that does not answer is tried again a few times
+over the next twelve hours before it is left alone.
+
 ## Tables
 
 All prefixed `uin_`. Nothing outside this module is altered, and nothing here

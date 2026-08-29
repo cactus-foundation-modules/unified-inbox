@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { errorResponse } from '@/lib/utils'
 import { sweepRetention, sweepStalledSends } from '@/modules/unified-inbox/lib/retention'
+import { pruneDeliveries } from '@/modules/unified-inbox/lib/webhooks-db'
 
 // The daily tidy: the retention window, and the people it leaves holding
 // nothing.
@@ -37,5 +38,9 @@ export async function GET(request: NextRequest) {
   const stalledSends = await sweepStalledSends()
   const retention = await sweepRetention({ deadline: Date.now() + BUDGET_MS })
 
-  return NextResponse.json({ ok: true, stalledSends, ...retention })
+  // What was sent, or given up on, a month ago is a log rather than a queue,
+  // and a log nobody prunes is a table nobody meant to create.
+  const webhookAttempts = await pruneDeliveries(30)
+
+  return NextResponse.json({ ok: true, stalledSends, webhookAttempts, ...retention })
 }

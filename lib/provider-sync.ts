@@ -3,6 +3,7 @@ import type {
   ConversationSummary,
   ResolvedConversationProvider,
 } from '@/lib/conversations/types'
+import { queueMessageWebhooks } from './webhooks'
 import {
   claimLocalOutbound,
   insertProviderMessage,
@@ -220,7 +221,10 @@ export async function syncProvider(
         snippet: snippetOf(text),
         sentAt,
       })
-      if (id) stored += 1
+      if (id) {
+        stored += 1
+        await queueMessageWebhooks(id)
+      }
     }
 
     if (stored > 0) {

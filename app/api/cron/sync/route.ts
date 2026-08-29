@@ -5,6 +5,7 @@ import { CRON_BUDGET_MS, CRON_PEOPLE_DEADLINE_MS, CRON_TICK_DEADLINE_MS } from '
 import { runPeoplePass } from '@/modules/unified-inbox/lib/identity'
 import { syncAllProviders, PROVIDER_BUDGET_MS } from '@/modules/unified-inbox/lib/provider-sync'
 import { sweepStalledSends } from '@/modules/unified-inbox/lib/retention'
+import { deliverPending, WEBHOOK_BUDGET_MS } from '@/modules/unified-inbox/lib/webhooks'
 
 // The scheduled mail check.
 //
@@ -56,6 +57,11 @@ export async function GET(request: NextRequest) {
   // already committed, so this stopping early costs a conversation one more
   // tick before it has a name - never a message.
   const people = await runPeoplePass({ deadline: started + CRON_PEOPLE_DEADLINE_MS })
+
+  // Last of all: tell whatever asked to be told. Nothing above depends on it,
+  // an endpoint that hangs costs only the small slice below, and a delivery
+  // that does not get away this tick is picked up by the next one.
+  const webhooks = await deliverPending({ deadline: Date.now() + WEBHOOK_BUDGET_MS })
 
   return NextResponse.json({
     ok: outcomes.every((o) => o.ok) && channels.every((c) => c.ok),
