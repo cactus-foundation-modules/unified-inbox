@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import Link from 'next/link'
 import type { AttachmentRow, ThreadDetail, ThreadEventRow, ThreadMessageRow } from '@/modules/unified-inbox/lib/db'
 import type { DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
@@ -188,15 +189,52 @@ function MessageText({ text }: { text: string }) {
   )
 }
 
-function Message({ message, staffById, now }: {
+function Message({ message, staffById, now, onDelete }: {
   message: ThreadMessageView
   staffById: Record<string, string>
   now: Date
+  onDelete?: (messageId: string) => void
 }) {
+  const [deleting, setDeleting] = useState(false)
   const kind = message.direction === 'note' ? 'note' : message.direction === 'out' ? 'out' : 'in'
+  
+  // Only provider messages can be deleted (and only if their provider supports it)
+  const canDelete = message.source === 'provider' && onDelete
+  
+  async function handleDelete() {
+    if (!confirm('Delete this message? This cannot be undone.')) return
+    setDeleting(true)
+    try {
+      const res = await fetch(`/api/m/unified-inbox/messages/${message.id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        alert(data.error || 'Failed to delete message')
+        setDeleting(false)
+        return
+      }
+      onDelete?.(message.id)
+    } catch (err) {
+      alert('Failed to delete message')
+      setDeleting(false)
+    }
+  }
+  
   return (
     <article className={`uin-msg uin-msg-${kind}`}>
       <MessageHeader message={message} staffById={staffById} now={now} />
+      {canDelete && (
+        <div style={{ float: 'right', marginTop: '0.5rem' }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={handleDelete}
+            disabled={deleting}
+            style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+          >
+            {deleting ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      )}
       {message.autoKind && (
         <div className="uin-msg-foot uin-msg-flag">
           <span className="uin-tag uin-tag-snoozed">{AUTO_LABELS[message.autoKind] ?? 'Sent automatically'}</span>
@@ -298,10 +336,19 @@ export function ThreadPane({
   base, params, thread, inboxName, messages, events, staff, staffById,
   canReply, cannotReplyReason, replyTo, replyAllTo, draft, newestFirst, now,
 }: Props) {
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set())
+  
   // The list arrives oldest first. Reversing a copy rather than sorting again:
   // the query already decided the order, and this only says which end to read
   // it from.
-  const ordered = newestFirst ? [...messages].reverse() : messages
+  const ordered = (newestFirst ? [...messages].reverse() : messages).filter(
+    (m) => !deletedIds.has(m.id)
+  )
+  
+  function handleDelete(messageId: string) {
+    setDeletedIds((prev) => new Set(prev).add(messageId))
+  }
+  
   return (
     <div className="uin-thread">
       <div className="uin-thread-head">
@@ -376,7 +423,7 @@ export function ThreadPane({
         ) : (
           <div className="uin-messages">
             {ordered.map((message) => (
-              <Message key={message.id} message={message} staffById={staffById} now={now} />
+              <Message key={message.id} message={message} staffById={staffById} now={now} onDelete={handleDelete} />
             ))}
           </div>
         )}
