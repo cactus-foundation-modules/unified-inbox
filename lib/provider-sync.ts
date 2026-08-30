@@ -220,6 +220,11 @@ export async function syncProvider(
         bodyHtml: typeof message.html === 'string' && message.html.trim() ? message.html : null,
         snippet: snippetOf(text),
         sentAt,
+        attachments: message.attachments?.map((att) => ({
+          filename: att.filename,
+          url: att.url,
+          contentType: att.contentType ?? null,
+        })),
       })
       if (id) {
         stored += 1

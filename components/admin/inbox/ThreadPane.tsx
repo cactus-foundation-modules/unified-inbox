@@ -211,17 +211,45 @@ function Message({ message, staffById, now }: {
       </div>
       {(message.attachments.length > 0 || message.deliveryStatus) && (
         <div className="uin-msg-foot">
-          {message.attachments.map((file) => (
-            <a
-              key={file.id}
-              className="uin-attachment"
-              href={`/api/m/unified-inbox/attachments/${file.id}`}
-            >
-              {PaperclipIcon}
-              {file.filename}
-              {file.sizeBytes ? <span style={{ color: 'var(--color-text-muted)' }}>{formatBytes(file.sizeBytes)}</span> : null}
-            </a>
-          ))}
+          {message.attachments.map((file) => {
+            // Provider attachments with external URLs (like Twilio voicemails) 
+            // are rendered as audio players or download links
+            const isAudio = file.contentType?.startsWith('audio/') || file.filename.match(/\.(mp3|wav|ogg|m4a)$/i)
+            const externalUrl = file.externalUrl
+            
+            if (isAudio && externalUrl) {
+              return (
+                <div key={file.id} style={{ margin: '0.5rem 0' }}>
+                  <audio controls style={{ maxWidth: '100%' }}>
+                    <source src={externalUrl} type={file.contentType || 'audio/mpeg'} />
+                    Your browser does not support the audio element.
+                  </audio>
+                  <a
+                    className="uin-attachment"
+                    href={externalUrl}
+                    download={file.filename}
+                    style={{ fontSize: '0.875rem', marginTop: '0.25rem', display: 'inline-block' }}
+                  >
+                    {PaperclipIcon}
+                    {file.filename}
+                  </a>
+                </div>
+              )
+            }
+            
+            return (
+              <a
+                key={file.id}
+                className="uin-attachment"
+                href={externalUrl || `/api/m/unified-inbox/attachments/${file.id}`}
+                download={file.filename}
+              >
+                {PaperclipIcon}
+                {file.filename}
+                {file.sizeBytes ? <span style={{ color: 'var(--color-text-muted)' }}>{formatBytes(file.sizeBytes)}</span> : null}
+              </a>
+            )
+          })}
           {message.deliveryStatus === 'sending' && (
             <span className="uin-tag">{ClockIcon} On its way</span>
           )}

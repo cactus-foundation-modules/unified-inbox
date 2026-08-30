@@ -968,6 +968,8 @@ export type AttachmentRow = {
   imapUid: number | null
   threadId: string
   inboxId: string | null
+  /** External URL for provider attachments (e.g. Twilio voicemail recordings). */
+  externalUrl: string | null
 }
 
 function mapAttachment(r: Record<string, unknown>): AttachmentRow {
@@ -984,9 +986,10 @@ function mapAttachment(r: Record<string, unknown>): AttachmentRow {
     fetchedAt: (r.fetched_at as Date | null) ?? null,
     connectionId: (r.connection_id as string | null) ?? null,
     imapFolder: (r.imap_folder as string | null) ?? null,
-    imapUid: bigintToNumber(r.imap_uid),
+    imapUid: r.imap_uid === null || r.imap_uid === undefined ? null : Number(r.imap_uid),
     threadId: r.thread_id as string,
     inboxId: (r.inbox_id as string | null) ?? null,
+    externalUrl: (r.external_url as string | null) ?? null,
   }
 }
 
@@ -3221,6 +3224,11 @@ export type ProviderMessageInput = {
   bodyHtml: string | null
   snippet: string | null
   sentAt: Date
+  attachments?: Array<{
+    filename: string
+    url: string
+    contentType: string | null
+  }>
 }
 
 /** Files one of the provider's messages. Returns null when we already hold it,
@@ -3240,7 +3248,22 @@ export async function insertProviderMessage(data: ProviderMessageInput): Promise
       DO NOTHING
     RETURNING "id"
   `
-  return rows[0]?.id ?? null
+  const messageId = rows[0]?.id
+  if (!messageId) return null
+  
+  // Insert attachments if provided
+  if (data.attachments && data.attachments.length > 0) {
+    for (const att of data.attachments) {
+      await prisma.$executeRaw`
+        INSERT INTO "uin_attachments"
+          ("message_id", "filename", "content_type", "external_url")
+        VALUES (${messageId}, ${att.filename}, ${att.contentType}, ${att.url})
+        ON CONFLICT DO NOTHING
+      `
+    }
+  }
+  
+  return messageId
 }
 
 /** Rolls a provider conversation's counters forward after messages land. */
