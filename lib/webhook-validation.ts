@@ -1,10 +1,17 @@
 import { z } from 'zod'
-import { WEBHOOK_EVENTS } from './webhook-types'
+import { CREDENTIAL_SOURCES, WEBHOOK_EVENTS } from './webhook-types'
+import type { CredentialSource } from './webhook-types'
 
 // Shared between the create and the edit route, so a subscription cannot be
 // saved through one of them carrying a field the other would have refused.
 
 const HeaderName = z.string().regex(/^[A-Za-z0-9-]{1,64}$/, 'That header name is not allowed.')
+
+const CredentialSource = z.enum(CREDENTIAL_SOURCES as [CredentialSource, ...CredentialSource[]])
+
+/** Extra request headers. Capped, and the names are constrained, so this cannot
+ *  be used to set a Host or smuggle a second request. */
+const Headers = z.record(HeaderName, z.string().max(2000))
 
 export const WebhookBody = z.object({
   name: z.string().min(1).max(120),
@@ -17,9 +24,16 @@ export const WebhookBody = z.object({
   includeBody: z.boolean().optional(),
   /** Empty string clears it, absent leaves it alone. */
   secret: z.string().max(500).nullable().optional(),
-  /** Extra request headers. Capped, and the names are constrained, so this
-   *  cannot be used to set a Host or smuggle a second request. */
-  headers: z.record(HeaderName, z.string().max(2000)).nullable().optional(),
+  headers: Headers.nullable().optional(),
+  secretSource: CredentialSource.optional(),
+  headersSource: CredentialSource.optional(),
+})
+
+/** The site-wide pair. Same three-way meaning as the fields above: absent
+ *  leaves one alone, an empty string clears it. */
+export const SharedWebhookBody = z.object({
+  secret: z.string().max(500).nullable().optional(),
+  headers: Headers.nullable().optional(),
 })
 
 export const WebhookPatchBody = WebhookBody.partial()

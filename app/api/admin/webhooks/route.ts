@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
-import { createWebhook, listWebhooks } from '@/modules/unified-inbox/lib/webhooks-db'
+import { createWebhook, getSharedWebhookState, listWebhooks } from '@/modules/unified-inbox/lib/webhooks-db'
 import { checkDestination } from '@/modules/unified-inbox/lib/webhooks'
 import {
   WebhookBody,
@@ -15,8 +15,11 @@ export async function GET() {
   const user = await getSessionFromCookie()
   if (!user) return errorResponse('Not authenticated', 401)
   if (!await hasPermission(user, 'unifiedinbox.manage')) return errorResponse('Forbidden', 403)
+  // The shared pair rides along, so the screen can say "use the shared one" and
+  // know whether there is one to use in a single request.
+  const [webhooks, shared] = await Promise.all([listWebhooks(), getSharedWebhookState()])
   return NextResponse.json(
-    { webhooks: await listWebhooks() },
+    { webhooks, shared },
     { headers: { 'Cache-Control': 'no-store' } },
   )
 }

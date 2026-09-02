@@ -7,6 +7,15 @@ export type WebhookEvent = 'message.received'
 
 export const WEBHOOK_EVENTS: WebhookEvent[] = ['message.received']
 
+/** Where a subscription's signing password, or its extra headers, come from.
+ *
+ *  'shared' is the site-wide pair, read at the moment of each delivery, so
+ *  rotating a key is one edit rather than one per subscription. 'own' is the
+ *  subscription's own. 'none' is neither. */
+export type CredentialSource = 'shared' | 'own' | 'none'
+
+export const CREDENTIAL_SOURCES: CredentialSource[] = ['shared', 'own', 'none']
+
 export type Webhook = {
   id: string
   name: string
@@ -18,8 +27,12 @@ export type Webhook = {
   payloadStyle: 'event' | 'literal'
   literalBody: string | null
   includeBody: boolean
+  /** Whether this subscription has one of its OWN stored - which is a different
+   *  question from whether a delivery will carry one. See the source below. */
   hasSecret: boolean
   hasHeaders: boolean
+  secretSource: CredentialSource
+  headersSource: CredentialSource
   lastStatus: string | null
   lastAttemptAt: Date | null
   lastError: string | null
@@ -39,9 +52,27 @@ export type WebhookInput = {
   includeBody?: boolean
   secret?: string | null
   headers?: Record<string, string> | null
+  secretSource?: CredentialSource
+  headersSource?: CredentialSource
 }
 
 export type WebhookPatch = Partial<WebhookInput>
+
+/** What the settings screen may know about the shared pair: whether each is
+ *  set. Never the values - a signing password that reaches the browser is a
+ *  signing password that reaches anybody who can read a network tab. */
+export type SharedWebhookState = {
+  hasSecret: boolean
+  hasHeaders: boolean
+}
+
+/** Setting the shared pair. Absent leaves one alone, an empty string clears it,
+ *  anything else replaces it - the same three-way shape the per-subscription
+ *  fields have always had. */
+export type SharedWebhookInput = {
+  secret?: string | null
+  headers?: Record<string, string> | null
+}
 
 export type WebhookSecrets = {
   secret: string | null

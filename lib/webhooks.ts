@@ -4,12 +4,12 @@ import { prisma } from '@/lib/db/prisma'
 import {
   claimDueDeliveries,
   enqueueDeliveries,
-  getWebhookSecrets,
+  getEffectiveWebhookSecrets,
   recordWebhookOutcome,
   settleDelivery,
   webhooksForInbox,
 } from './webhooks-db'
-import type { MessageReceivedPayload, Webhook, WebhookEvent } from './webhook-types'
+import type { CredentialSource, MessageReceivedPayload, Webhook, WebhookEvent } from './webhook-types'
 
 // ---------------------------------------------------------------------------
 // Telling something else when the post arrives.
@@ -278,7 +278,10 @@ export async function deliverOnce(
   const destination = await checkDestination(webhook.url)
   if (!destination.ok) return { ok: false, status: null, error: destination.why }
 
-  const { secret, headers: extra } = await getWebhookSecrets(webhook.id)
+  // Its own, the site's shared pair, or neither - whichever this subscription
+  // says. Read now rather than when it was saved, so a rotated shared key is
+  // live on the next delivery without touching a single subscription.
+  const { secret, headers: extra } = await getEffectiveWebhookSecrets(webhook)
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -367,6 +370,8 @@ export async function deliverPending(options: { deadline: number }): Promise<{
       includeBody: !!row.include_body,
       hasSecret: !!row.secret_encrypted,
       hasHeaders: !!row.headers_encrypted,
+      secretSource: (row.secret_source as CredentialSource | null) ?? 'none',
+      headersSource: (row.headers_source as CredentialSource | null) ?? 'none',
       lastStatus: null,
       lastAttemptAt: null,
       lastError: null,

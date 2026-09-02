@@ -309,6 +309,73 @@ const CSS = `
   container: uin-list / inline-size;
 }
 .uin-list { display: block; list-style: none; margin: 0; padding: 0; }
+/* A row and its tick box. The box sits beside the link rather than inside it -
+   one inside would be a box that cannot be pressed without opening the
+   conversation - so the two share a line and the line carries the rule between
+   rows on both halves, or the list would look combed. */
+.uin-list-item { display: flex; align-items: stretch; }
+.uin-list-item > .uin-row { flex: 1 1 auto; min-width: 0; }
+.uin-pick {
+  display: flex;
+  align-items: flex-start;
+  padding: 0.65rem 0.1rem 0 0.7rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  flex: none;
+  cursor: pointer;
+}
+.uin-list > li:last-child .uin-pick { border-bottom: 0; }
+.uin-list-item:has(.uin-row:hover) .uin-pick,
+.uin-pick:hover { background: var(--color-surface-raised); }
+.uin-list-item[data-selected="true"] > .uin-row,
+.uin-list-item[data-selected="true"] > .uin-pick { background: var(--color-primary-subtle); }
+/* What is ticked, and what can be done with the lot of them. Sits above the
+   list rather than floating over it: a bar that covers the first row hides the
+   thing somebody is deciding about. */
+.uin-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-subtle);
+}
+.uin-bulk-count { font-size: 0.8125rem; font-weight: 600; }
+.uin-bulk-all { padding: 0.4rem 0.75rem; }
+.uin-pick-all {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+/* The row that picks a time of your own choosing, under the three ready-made
+   ones. Kept on its own line: a date box is not a chip and lining it up with
+   them makes both look wrong. */
+.uin-snooze-custom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  width: 100%;
+}
+.uin-snooze-custom input {
+  height: 32px;
+  padding: 0 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 0.8125rem;
+}
+.uin-snooze-custom input:focus {
+  outline: none;
+  border-color: var(--color-border-focus);
+  box-shadow: 0 0 0 3px var(--color-primary-glow);
+}
 /* Three tracks: who it is beside, what it says, and the trimmings. The last one
    is capped rather than left to size itself, because "auto" means "as wide as
    the widest badge in it" and a badge would happily take three hundred pixels
@@ -551,10 +618,15 @@ const CSS = `
   min-width: 0;
   container: uin-body / inline-size;
 }
-/* Back to the list is for the phone, where the list is not on the screen at all.
-   Beside an open list it would be a button that says "look left". */
+/* Two words for one link. On a phone the list is not on the screen at all, so
+   this is "Back to the list". Beside an open list that would be a button saying
+   "look left" - but it still has a job there, because the list is a third of the
+   width while a conversation is open and there was no way at all to shut one and
+   have the list back whole. So it becomes Close. */
+.uin-back-wide { display: none; }
 @media (min-width: 900px) {
-  .uin-back { display: none; }
+  .uin-back-phone { display: none; }
+  .uin-back-wide { display: inline-flex; align-items: center; gap: 0.35rem; }
 }
 
 .uin-messages { display: grid; gap: 0.75rem; }

@@ -338,12 +338,19 @@ export function ThreadPane({
   return (
     <div className="uin-thread">
       <div className="uin-thread-head">
+        {/* On a phone this is the way back to a list that is not on the screen.
+            On anything wider it is how you shut a conversation and have the
+            list whole again, which there was previously no way at all to do. */}
         <Link
           className="uin-chip uin-back"
           href={inboxHref(base, params, { id: null })}
           style={{ justifySelf: 'start' }}
         >
-          {BackIcon} Back to the list
+          <span className="uin-back-phone" aria-hidden="true">{BackIcon} Back to the list</span>
+          <span className="uin-back-wide" aria-hidden="true">&times; Close</span>
+          {/* One name for it whichever of the two is showing, so the link is not
+              announced twice on a phone. */}
+          <span className="sr-only">Close this conversation and go back to the list</span>
         </Link>
         <h2 className="uin-thread-subject">{thread.subject || '(no subject)'}</h2>
         <div className="uin-thread-meta">

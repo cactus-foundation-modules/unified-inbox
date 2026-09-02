@@ -58,25 +58,33 @@ export function BlockParticipant({ threadId, blocked, channelLabel }: Props) {
 
   // Unblocking gives nothing away and undoes itself, so it just happens.
   // Blocking is the one that changes what the next caller hears, so it asks.
+  // Wrapped in the same row the other thread buttons sit in. Bare, it was a
+  // direct child of a one-column grid and came out stretched across the whole
+  // head - a full-width button for the one action on the screen nobody presses
+  // by accident twice.
   if (blocked) {
     return (
-      <>
+      <div className="uin-thread-actions">
         <button
           type="button"
-          className="uin-chip"
+          className="btn btn-secondary btn-sm"
           disabled={busy}
           onClick={() => void set(false)}
         >
           {busy ? 'Unblocking...' : 'Unblock them'}
         </button>
         {error && <span style={{ color: 'var(--color-destructive-hover)' }} role="alert">{error}</span>}
-      </>
+      </div>
     )
   }
 
   return (
-    <>
-      <button type="button" className="uin-chip" disabled={busy} onClick={() => setAsking(true)}>
+    <div className="uin-thread-actions">
+      {/* Red, because it is the one button here that changes what a stranger
+          gets when they next try to reach you. Same size and shape as the rest
+          of them, so it reads as one of the row rather than as a warning
+          banner. */}
+      <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={() => setAsking(true)}>
         Block them
       </button>
       {error && <span style={{ color: 'var(--color-destructive-hover)' }} role="alert">{error}</span>}
@@ -90,6 +98,6 @@ export function BlockParticipant({ threadId, blocked, channelLabel }: Props) {
         onCancel={() => { if (!busy) { setAsking(false); setError('') } }}
         onConfirm={() => void set(true)}
       />
-    </>
+    </div>
   )
 }

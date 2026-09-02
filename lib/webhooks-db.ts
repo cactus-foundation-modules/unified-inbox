@@ -1,6 +1,9 @@
 import { prisma } from '@/lib/db/prisma'
 import { encryptSecret, tryDecryptSecret } from '@/lib/crypto/secrets'
 import type {
+  CredentialSource,
+  SharedWebhookInput,
+  SharedWebhookState,
   Webhook,
   WebhookDelivery,
   WebhookEvent,
@@ -33,6 +36,8 @@ function mapWebhook(r: Record<string, unknown>): Webhook {
     includeBody: !!r.include_body,
     hasSecret: !!r.secret_encrypted,
     hasHeaders: !!r.headers_encrypted,
+    secretSource: (r.secret_source as CredentialSource | null) ?? 'none',
+    headersSource: (r.headers_source as CredentialSource | null) ?? 'none',
     lastStatus: (r.last_status as string | null) ?? null,
     lastAttemptAt: (r.last_attempt_at as Date | null) ?? null,
     lastError: (r.last_error as string | null) ?? null,
@@ -85,8 +90,30 @@ export async function getWebhook(id: string): Promise<Webhook | null> {
   return rows[0] ? mapWebhook(rows[0]) : null
 }
 
-/** The plaintext secret and headers, for the sender only. Never routed to a
- *  response: nothing that calls this returns its result to a browser. */
+/** A stored header blob, back into an object.
+ *
+ *  Anything that will not parse, or that holds something other than strings, is
+ *  treated as no headers at all. A delivery going out without an API key gets a
+ *  clean 401 from the far end, which is a far better thing to read on the screen
+ *  than a crash during a mail sync. */
+function parseHeaderBlob(raw: string | null): Record<string, string> {
+  if (!raw) return {}
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>)
+        .filter(([, v]) => typeof v === 'string')
+        .map(([k, v]) => [k, v as string]),
+    )
+  } catch {
+    return {}
+  }
+}
+
+/** The plaintext secret and headers a subscription holds of its own, for the
+ *  sender only. Never routed to a response: nothing that calls this returns its
+ *  result to a browser. */
 export async function getWebhookSecrets(id: string): Promise<WebhookSecrets> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT "secret_encrypted", "headers_encrypted" FROM "uin_webhooks" WHERE "id" = ${id} LIMIT 1
@@ -94,42 +121,103 @@ export async function getWebhookSecrets(id: string): Promise<WebhookSecrets> {
   const row = rows[0]
   if (!row) return { secret: null, headers: {} }
 
-  const secret = tryDecryptSecret(row.secret_encrypted as string | null)
-  const rawHeaders = tryDecryptSecret(row.headers_encrypted as string | null)
-
-  let headers: Record<string, string> = {}
-  if (rawHeaders) {
-    try {
-      const parsed: unknown = JSON.parse(rawHeaders)
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        headers = Object.fromEntries(
-          Object.entries(parsed as Record<string, unknown>)
-            .filter(([, v]) => typeof v === 'string')
-            .map(([k, v]) => [k, v as string]),
-        )
-      }
-    } catch {
-      // Stored headers that will not parse are treated as none at all. A
-      // delivery going out without an API key gets a clean 401 from the far
-      // end, which is a far better thing to read on the screen than a crash
-      // during a mail sync.
-      headers = {}
-    }
+  return {
+    secret: tryDecryptSecret(row.secret_encrypted as string | null),
+    headers: parseHeaderBlob(tryDecryptSecret(row.headers_encrypted as string | null)),
   }
+}
 
-  return { secret, headers }
+/** The site-wide pair, same rules. Read at the moment of each delivery rather
+ *  than copied onto a subscription when it is saved, which is the whole point:
+ *  rotating the key is one edit and every subscription using it follows. */
+export async function getSharedWebhookSecrets(): Promise<WebhookSecrets> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "webhook_secret_encrypted", "webhook_headers_encrypted"
+    FROM "uin_settings" WHERE "id" = 'singleton' LIMIT 1
+  `
+  const row = rows[0]
+  if (!row) return { secret: null, headers: {} }
+
+  return {
+    secret: tryDecryptSecret(row.webhook_secret_encrypted as string | null),
+    headers: parseHeaderBlob(tryDecryptSecret(row.webhook_headers_encrypted as string | null)),
+  }
+}
+
+/** Whether each half of the shared pair is set. This is the one the screen gets. */
+export async function getSharedWebhookState(): Promise<SharedWebhookState> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "webhook_secret_encrypted" IS NOT NULL  AS "has_secret",
+           "webhook_headers_encrypted" IS NOT NULL AS "has_headers"
+    FROM "uin_settings" WHERE "id" = 'singleton' LIMIT 1
+  `
+  const row = rows[0]
+  return { hasSecret: !!row?.has_secret, hasHeaders: !!row?.has_headers }
+}
+
+export async function setSharedWebhookCredentials(data: SharedWebhookInput): Promise<SharedWebhookState> {
+  const secret = optionalSecret(data.secret)
+  const headers = data.headers === undefined
+    ? undefined
+    : optionalSecret(data.headers === null ? '' : JSON.stringify(data.headers))
+
+  await prisma.$executeRaw`
+    UPDATE "uin_settings" SET
+      "webhook_secret_encrypted"  = CASE WHEN ${secret !== undefined} THEN ${secret ?? null} ELSE "webhook_secret_encrypted" END,
+      "webhook_headers_encrypted" = CASE WHEN ${headers !== undefined} THEN ${headers ?? null} ELSE "webhook_headers_encrypted" END
+    WHERE "id" = 'singleton'
+  `
+  return getSharedWebhookState()
+}
+
+const NO_CREDENTIALS: WebhookSecrets = { secret: null, headers: {} }
+
+/**
+ * Which of the two pairs each half of a delivery takes.
+ *
+ * Pure, and exported so it can be tested without a database: getting this wrong
+ * is silent both ways round - a subscription signed with the wrong password
+ * fails at the far end, and one signed when it should not be leaks a password
+ * to an endpoint that was never given it.
+ */
+export function chooseCredentials(
+  sources: { secretSource: CredentialSource; headersSource: CredentialSource },
+  own: WebhookSecrets,
+  shared: WebhookSecrets,
+): WebhookSecrets {
+  const from = (source: CredentialSource): WebhookSecrets =>
+    source === 'own' ? own : source === 'shared' ? shared : NO_CREDENTIALS
+  return {
+    secret: from(sources.secretSource).secret,
+    headers: from(sources.headersSource).headers,
+  }
+}
+
+/**
+ * What a delivery will actually carry, once the subscription's choice of source
+ * has been honoured.
+ *
+ * Only the sources in play are read: a subscription signing with the shared
+ * password and carrying no headers at all costs one query, not two.
+ */
+export async function getEffectiveWebhookSecrets(webhook: Webhook): Promise<WebhookSecrets> {
+  const sources = [webhook.secretSource, webhook.headersSource]
+  const own = sources.includes('own') ? await getWebhookSecrets(webhook.id) : NO_CREDENTIALS
+  const shared = sources.includes('shared') ? await getSharedWebhookSecrets() : NO_CREDENTIALS
+  return chooseCredentials(webhook, own, shared)
 }
 
 export async function createWebhook(data: WebhookInput): Promise<Webhook> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     INSERT INTO "uin_webhooks"
       ("name", "inbox_id", "url", "enabled", "events", "payload_style", "literal_body",
-       "include_body", "secret_encrypted", "headers_encrypted")
+       "include_body", "secret_encrypted", "headers_encrypted", "secret_source", "headers_source")
     VALUES (${data.name}, ${data.inboxId ?? null}, ${data.url}, ${data.enabled ?? true},
             ${data.events}::text[], ${data.payloadStyle}, ${data.literalBody ?? null},
             ${data.includeBody ?? false},
             ${optionalSecret(data.secret) ?? null},
-            ${data.headers === undefined ? null : optionalSecret(JSON.stringify(data.headers)) ?? null})
+            ${data.headers === undefined ? null : optionalSecret(JSON.stringify(data.headers)) ?? null},
+            ${data.secretSource ?? 'shared'}, ${data.headersSource ?? 'shared'})
     RETURNING *
   `
   const row = rows[0]
@@ -155,6 +243,8 @@ export async function updateWebhook(id: string, data: WebhookPatch): Promise<Web
       "include_body"      = COALESCE(${data.includeBody ?? null}, "include_body"),
       "secret_encrypted"  = CASE WHEN ${secret !== undefined} THEN ${secret ?? null} ELSE "secret_encrypted" END,
       "headers_encrypted" = CASE WHEN ${headers !== undefined} THEN ${headers ?? null} ELSE "headers_encrypted" END,
+      "secret_source"     = COALESCE(${data.secretSource ?? null}, "secret_source"),
+      "headers_source"    = COALESCE(${data.headersSource ?? null}, "headers_source"),
       -- Any edit is somebody saying "try it again": the failure count and the
       -- automatic switch-off both clear, or a fixed URL would stay dark.
       "consecutive_failures" = 0,

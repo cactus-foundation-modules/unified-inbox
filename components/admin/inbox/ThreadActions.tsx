@@ -17,11 +17,26 @@ type Props = {
   staff: Array<{ id: string; name: string }>
 }
 
+/** Now, written the way a datetime-local box writes it: local time, minutes,
+ *  no zone. `toISOString` would hand it UTC and the box would read that as
+ *  local, which in a British summer is an hour in the past. */
+function localNow(): string {
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`
+}
+
 export function ThreadActions({ threadId, status, unread, assigneeUserId, staff }: Props) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [snoozing, setSnoozing] = useState(false)
+  // A time of somebody's own choosing, as the browser's own date-and-time box
+  // spells it: "2026-09-04T14:30", local, no zone. Three ready-made answers
+  // cover most of it and none of them covers "the morning they said they would
+  // ring back".
+  const [customWhen, setCustomWhen] = useState('')
+  const [customError, setCustomError] = useState('')
   const [assigning, setAssigning] = useState(false)
   // Which button is waiting, not merely that something is: every one of them
   // greys out together, so a shared "in flight" would put the busy words on all
@@ -146,6 +161,46 @@ export function ThreadActions({ threadId, status, unread, assigneeUserId, staff 
               Bring it back now
             </button>
           )}
+
+          <div className="uin-snooze-custom">
+            <label htmlFor="uin-snooze-when">Or pick a day and time</label>
+            <input
+              id="uin-snooze-when"
+              type="datetime-local"
+              value={customWhen}
+              // The browser's own box will not offer a moment that has already
+              // been. Checked again below, because the attribute is a courtesy
+              // rather than a guarantee.
+              min={localNow()}
+              disabled={busy}
+              onChange={(e) => { setCustomWhen(e.target.value); setCustomError('') }}
+            />
+            <button
+              type="button"
+              className="uin-chip"
+              disabled={busy || !customWhen}
+              onClick={() => {
+                const when = new Date(customWhen)
+                if (Number.isNaN(when.getTime())) {
+                  setCustomError('That is not a date this can read.')
+                  return
+                }
+                if (when.getTime() <= Date.now()) {
+                  setCustomError('Pick a time that has not happened yet.')
+                  return
+                }
+                setCustomError('')
+                void patch({ status: 'snoozed', snoozeUntil: when.toISOString() })
+              }}
+            >
+              Remind me then
+            </button>
+            {customError && (
+              <span role="alert" style={{ color: 'var(--color-destructive-hover)', fontSize: '0.8125rem' }}>
+                {customError}
+              </span>
+            )}
+          </div>
         </div>
       )}
 

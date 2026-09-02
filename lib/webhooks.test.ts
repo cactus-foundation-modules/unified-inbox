@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import crypto from 'node:crypto'
 import { isPrivateAddress, signBody, bodyFor } from './webhooks'
 import { headerProblem, literalProblem } from './webhook-validation'
+import { chooseCredentials } from './webhooks-db'
 import type { Webhook } from './webhook-types'
 
 // The three things here that are worth a test are the three that fail quietly:
@@ -21,6 +22,8 @@ function hook(over: Partial<Webhook> = {}): Webhook {
     includeBody: false,
     hasSecret: false,
     hasHeaders: false,
+    secretSource: 'none',
+    headersSource: 'none',
     lastStatus: null,
     lastAttemptAt: null,
     lastError: null,
@@ -107,5 +110,49 @@ describe('validation helpers', () => {
     expect(literalProblem('literal', 'not json')).toBeTruthy()
     expect(literalProblem('literal', '{"skill":"marcus"}')).toBeNull()
     expect(literalProblem('event', null)).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Which password and which headers a delivery actually goes out with.
+//
+// Worth a test of its own because both mistakes are silent. Reaching for the
+// shared password where the subscription has its own gets a rejection at the
+// far end that reads like a network fault; reaching for it where the answer was
+// meant to be "none" hands a password to an endpoint nobody gave it to.
+// ---------------------------------------------------------------------------
+
+describe('chooseCredentials', () => {
+  const own = { secret: 'its-own', headers: { 'X-Own': 'yes' } }
+  const shared = { secret: 'the-shared-one', headers: { 'X-Shared': 'yes' } }
+
+  it('takes the subscription’s own when it says own', () => {
+    const got = chooseCredentials({ secretSource: 'own', headersSource: 'own' }, own, shared)
+    expect(got).toEqual(own)
+  })
+
+  it('takes the site’s shared pair when it says shared', () => {
+    const got = chooseCredentials({ secretSource: 'shared', headersSource: 'shared' }, own, shared)
+    expect(got).toEqual(shared)
+  })
+
+  it('takes neither when it says none, even with both to hand', () => {
+    const got = chooseCredentials({ secretSource: 'none', headersSource: 'none' }, own, shared)
+    expect(got).toEqual({ secret: null, headers: {} })
+  })
+
+  it('settles the two halves separately', () => {
+    const got = chooseCredentials({ secretSource: 'shared', headersSource: 'own' }, own, shared)
+    expect(got.secret).toBe('the-shared-one')
+    expect(got.headers).toEqual({ 'X-Own': 'yes' })
+  })
+
+  it('signs with nothing when the shared password is not set', () => {
+    const got = chooseCredentials(
+      { secretSource: 'shared', headersSource: 'none' },
+      own,
+      { secret: null, headers: {} },
+    )
+    expect(got.secret).toBeNull()
   })
 })
