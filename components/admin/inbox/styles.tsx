@@ -604,6 +604,10 @@ const CSS = `
 /* The same strip turned the other way up: used above a message to say how it
    came to be sent rather than below it to say what came with it. */
 .uin-msg-flag { border-top: 0; border-bottom: 1px solid var(--color-border); }
+/* Anything that acts on the message rather than describing it, pushed to the
+   trailing end of the foot. margin-left:auto rather than a float: the foot is
+   already a flex row, so this stays inside it and out of the message body. */
+.uin-msg-actions { display: flex; gap: 0.5rem; align-items: center; margin-left: auto; }
 .uin-attachment:hover { border-color: var(--color-border-strong); color: var(--color-text); text-decoration: none; }
 
 /* ---- small blocks the whole screen shares ------------------------------- */

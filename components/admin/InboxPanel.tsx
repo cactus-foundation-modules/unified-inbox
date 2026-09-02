@@ -44,7 +44,7 @@ import { ContextRail } from './inbox/ContextRail'
 import { PersonView } from './inbox/PersonView'
 import { replyRecipients } from '@/modules/unified-inbox/lib/compose'
 import { chooseSendingInbox, inboxHref, parseInboxParams, PER_PAGE } from '@/modules/unified-inbox/lib/list'
-import { visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
+import { providerForModule, visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
 import { InboxStyles } from './inbox/styles'
 import { InboxTabs } from './inbox/InboxTabs'
 import { StatusTabs } from './inbox/StatusTabs'
@@ -340,6 +340,30 @@ export async function UnifiedInboxPanel({
         : thread.inboxId
           ? await canReplyToInbox(user, thread.inboxId)
           : false
+      // Deleting takes the same two halves as replying: the channel has to offer
+      // it, and this reader has to be allowed on that channel. Note it is the
+      // channel's OWN permission that was already checked to build `channels`,
+      // so a channel this person cannot see never gets this far.
+      const canDeleteMessages = thread.providerModule ? (channel?.canDelete ?? false) : false
+
+      // Blocking asks the channel who it is dealing with, which is a round trip,
+      // so it is only asked where the channel can actually refuse somebody and
+      // this reader may act on it.
+      let blockState: { blocked: boolean; channelLabel: string } | null = null
+      if (thread.providerModule && channel?.canBlock && (await hasPermission(user, 'unifiedinbox.reply'))) {
+        const resolved = await providerForModule(thread.providerModule)
+        const ask = resolved?.provider.isParticipantBlocked
+        if (ask && thread.externalId) {
+          try {
+            blockState = { blocked: await ask(thread.externalId), channelLabel: channel.label }
+          } catch {
+            // A channel that cannot say is not a reason to take the conversation
+            // off somebody. Offer the block and let the press be the answer.
+            blockState = { blocked: false, channelLabel: channel.label }
+          }
+        }
+      }
+
       const cannotReplyReason = canReply
         ? null
         : thread.providerModule
@@ -366,6 +390,8 @@ export async function UnifiedInboxPanel({
           replyAllTo={[...replyAll.to, ...replyAll.cc]}
           draft={ownDraft ? forComposer(ownDraft) : null}
           newestFirst={settings.newestFirst}
+          canDeleteMessages={canDeleteMessages}
+          blockState={blockState}
           now={new Date()}
         />
       )

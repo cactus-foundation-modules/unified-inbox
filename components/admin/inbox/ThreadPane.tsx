@@ -1,6 +1,3 @@
-'use client'
-
-import { useState } from 'react'
 import Link from 'next/link'
 import type { AttachmentRow, ThreadDetail, ThreadEventRow, ThreadMessageRow } from '@/modules/unified-inbox/lib/db'
 import type { DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
@@ -9,6 +6,8 @@ import { BackIcon, ClockIcon, InboundIcon, NoteIcon, OutboundIcon, PaperclipIcon
 import { MessageBody } from './MessageBody'
 import { RetryButton } from './RetryButton'
 import { ThreadActions } from './ThreadActions'
+import { DeleteMessageButton } from './MessageActions'
+import { BlockParticipant } from './BlockParticipant'
 import { Composer } from './Composer'
 
 // One conversation, oldest message first - the order the story happened in.
@@ -43,6 +42,13 @@ type Props = {
   /** Newest message at the top, with the writing box above the messages to
    *  match. A site setting, not a per-reader one. */
   newestFirst: boolean
+  /** Whether this reader may get rid of a message this channel owns. The
+   *  channel has to offer it AND the reader has to be allowed on that channel,
+   *  and both halves are settled on the server. */
+  canDeleteMessages: boolean
+  /** Whether the other party on this conversation can be refused from here.
+   *  Null when the channel cannot refuse anybody, which is most of them. */
+  blockState: { blocked: boolean; channelLabel: string } | null
   now: Date
 }
 
@@ -191,52 +197,24 @@ function MessageText({ text }: { text: string }) {
   )
 }
 
-function Message({ message, staffById, now, onDelete }: {
+function Message({ message, staffById, now, canDelete }: {
   message: ThreadMessageView
   staffById: Record<string, string>
   now: Date
-  onDelete?: (messageId: string) => void
+  /** Whether this reader may get rid of a message the channel owns. Decided on
+   *  the server, per channel and per person - see InboxPanel. */
+  canDelete: boolean
 }) {
-  const [deleting, setDeleting] = useState(false)
   const kind = message.direction === 'note' ? 'note' : message.direction === 'out' ? 'out' : 'in'
-  
-  // Only provider messages can be deleted (and only if their provider supports it)
-  const canDelete = message.source === 'provider' && onDelete
-  
-  async function handleDelete() {
-    if (!confirm('Delete this message? This cannot be undone.')) return
-    setDeleting(true)
-    try {
-      const res = await fetch(`/api/m/unified-inbox/messages/${message.id}`, { method: 'DELETE' })
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        alert(data.error || 'Failed to delete message')
-        setDeleting(false)
-        return
-      }
-      onDelete?.(message.id)
-    } catch (err) {
-      alert('Failed to delete message')
-      setDeleting(false)
-    }
-  }
-  
+
+  // Only a message a channel owns can be deleted at the far end, and only where
+  // that channel says it can. Everything else in a thread lives here and
+  // nowhere else.
+  const offerDelete = canDelete && message.source === 'provider'
+
   return (
     <article className={`uin-msg uin-msg-${kind}`}>
       <MessageHeader message={message} staffById={staffById} now={now} />
-      {canDelete && (
-        <div style={{ float: 'right', marginTop: '0.5rem' }}>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={handleDelete}
-            disabled={deleting}
-            style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
-          >
-            {deleting ? 'Deleting…' : 'Delete'}
-          </button>
-        </div>
-      )}
       {message.autoKind && (
         <div className="uin-msg-foot uin-msg-flag">
           <span className="uin-tag uin-tag-snoozed">{AUTO_LABELS[message.autoKind] ?? 'Sent automatically'}</span>
@@ -249,7 +227,7 @@ function Message({ message, staffById, now, onDelete }: {
           <MessageText text={message.bodyText ?? '(this message had nothing in it)'} />
         )}
       </div>
-      {(message.attachments.length > 0 || message.deliveryStatus) && (
+      {(message.attachments.length > 0 || message.deliveryStatus || offerDelete) && (
         <div className="uin-msg-foot">
           {message.attachments.map((file) => {
             // Provider attachments with external URLs (like Twilio voicemails) 
@@ -317,6 +295,15 @@ function Message({ message, staffById, now, onDelete }: {
               Not copied to your Sent folder
             </span>
           )}
+          {/* Pushed to the far end of the foot rather than floated over the
+              message body, which is where it used to sit: a button hanging over
+              somebody's words is in the way of reading them, and it moved
+              depending on how long the message was. */}
+          {offerDelete && (
+            <div className="uin-msg-actions">
+              <DeleteMessageButton messageId={message.id} />
+            </div>
+          )}
         </div>
       )}
     </article>
@@ -336,21 +323,18 @@ const EVENT_WORDS: Record<string, string> = {
 
 export function ThreadPane({
   base, params, thread, inboxName, messages, events, staff, staffById,
-  canReply, cannotReplyReason, replyTo, replyAllTo, draft, newestFirst, now,
+  canReply, cannotReplyReason, replyTo, replyAllTo, draft, newestFirst,
+  canDeleteMessages, blockState, now,
 }: Props) {
-  const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set())
-  
   // The list arrives oldest first. Reversing a copy rather than sorting again:
   // the query already decided the order, and this only says which end to read
   // it from.
-  const ordered = (newestFirst ? [...messages].reverse() : messages).filter(
-    (m) => !deletedIds.has(m.id)
-  )
-  
-  function handleDelete(messageId: string) {
-    setDeletedIds((prev) => new Set(prev).add(messageId))
-  }
-  
+  //
+  // A deleted message used to be hidden from this list by client-side state,
+  // which is why the count under the subject went on disagreeing with it. The
+  // delete button refreshes instead, so this is server truth again.
+  const ordered = newestFirst ? [...messages].reverse() : messages
+
   return (
     <div className="uin-thread">
       <div className="uin-thread-head">
@@ -384,6 +368,15 @@ export function ThreadPane({
           assigneeUserId={thread.assigneeUserId}
           staff={staff}
         />
+        {/* Beside what is done TO the conversation, because that is what this
+            is: it changes what happens next, not what is in the thread. */}
+        {blockState && (
+          <BlockParticipant
+            threadId={thread.id}
+            blocked={blockState.blocked}
+            channelLabel={blockState.channelLabel}
+          />
+        )}
       </div>
 
       <div className="uin-thread-body">
@@ -425,7 +418,7 @@ export function ThreadPane({
         ) : (
           <div className="uin-messages">
             {ordered.map((message) => (
-              <Message key={message.id} message={message} staffById={staffById} now={now} onDelete={handleDelete} />
+              <Message key={message.id} message={message} staffById={staffById} now={now} canDelete={canDeleteMessages} />
             ))}
           </div>
         )}

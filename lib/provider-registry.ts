@@ -115,6 +115,12 @@ export type ProviderChannel = {
   /** Whether it can be answered from here at all. A channel that only reports
    *  what happened - a call log, say - is read here and answered elsewhere. */
   canReply: boolean
+  /** Whether a single message can be got rid of at the far end as well as here.
+   *  A voicemail can; a call that happened cannot be made not to have happened. */
+  canDelete: boolean
+  /** Whether the other party can be refused from here on. Telephony's sense of
+   *  the word: what already happened stays, this is about what happens next. */
+  canBlock: boolean
 }
 
 /**
@@ -142,7 +148,13 @@ export async function visibleProviderChannels(user: SessionUser): Promise<Provid
     channels.push({
       moduleName: entry.moduleName,
       label: typeof provider.label === 'string' && provider.label.trim() ? provider.label : entry.moduleName,
+      // Flag AND method, all three of them, which is the same test canReply has
+      // always used. A capability flag with nothing behind it is a button that
+      // fails when pressed, and a method with the flag off is a channel that
+      // never asked to offer it.
       canReply: provider.capabilities?.reply === true && typeof provider.send === 'function',
+      canDelete: provider.capabilities?.delete === true && typeof provider.deleteMessage === 'function',
+      canBlock: provider.capabilities?.block === true && typeof provider.blockParticipant === 'function',
     })
   }
   return channels
