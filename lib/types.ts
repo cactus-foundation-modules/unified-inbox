@@ -199,6 +199,12 @@ export type UnifiedInboxSettings = {
    *  customer opened an email is tracking, and tracking does not arrive with an
    *  update. */
   trackOpens: boolean
+  /** How many seconds to leave between checks for new mail while somebody has
+   *  an inbox page open and in front of them. NULL is off, which is the way
+   *  every install collects today: the scheduled round, and the button. Never
+   *  below the route's own minute of cooldown, because a check that arrives
+   *  sooner is turned away rather than served. */
+  autoCheckSeconds: number | null
   /** Whether outgoing replies ask the recipient's own mail program for a read
    *  receipt. Most ignore it; the ones that do not ask the reader first, which
    *  is the honest version of the same question. */

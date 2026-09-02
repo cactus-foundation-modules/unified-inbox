@@ -78,6 +78,7 @@ export type Settings = {
   quoteNumberPattern: string | null
   trackOpens: boolean
   requestReadReceipts: boolean
+  autoCheckSeconds: number | null
 }
 
 export type StaffMember = { id: string; name: string; email: string }

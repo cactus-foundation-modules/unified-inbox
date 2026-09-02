@@ -545,6 +545,7 @@ const DEFAULT_SETTINGS: UnifiedInboxSettings = {
   quoteNumberPattern: null,
   trackOpens: false,
   requestReadReceipts: false,
+  autoCheckSeconds: null,
 }
 
 export async function getSettings(): Promise<UnifiedInboxSettings> {
@@ -584,6 +585,12 @@ export async function getSettings(): Promise<UnifiedInboxSettings> {
     // tracked by a restore.
     trackOpens: !!r.track_opens,
     requestReadReceipts: !!r.request_read_receipts,
+    // Off for a row written before the column existed, and off on a fresh
+    // install: checking every minute is a decision about somebody's hosting
+    // bill, and it is theirs to make rather than ours to assume.
+    autoCheckSeconds: r.auto_check_seconds === null || r.auto_check_seconds === undefined
+      ? null
+      : Number(r.auto_check_seconds),
   }
 }
 
@@ -606,6 +613,7 @@ export async function updateSettings(data: Partial<UnifiedInboxSettings>): Promi
   if (data.quoteNumberPattern !== undefined) sets.push(Prisma.sql`"quote_number_pattern" = ${data.quoteNumberPattern}`)
   if (data.trackOpens !== undefined) sets.push(Prisma.sql`"track_opens" = ${data.trackOpens}`)
   if (data.requestReadReceipts !== undefined) sets.push(Prisma.sql`"request_read_receipts" = ${data.requestReadReceipts}`)
+  if (data.autoCheckSeconds !== undefined) sets.push(Prisma.sql`"auto_check_seconds" = ${data.autoCheckSeconds}`)
   if (sets.length === 0) return getSettings()
 
   await prisma.$executeRaw`

@@ -195,6 +195,10 @@ export async function UnifiedInboxPanel({
   // Drafts take the list pane's place, so the conversation queries are not run
   // at all rather than run and thrown away.
   const connections = await listConnections()
+  // The module's own settings, fetched once for the whole screen: the tab row
+  // needs them to know whether to keep checking for mail while somebody is
+  // watching, and the conversation pane needs them for which end it opens at.
+  const settings = await getSettings()
   // The status tabs count what is behind them given everything else already
   // chosen, so they come from the same filters with the status left out.
   const listing = params.draftsOnly || params.sentOnly
@@ -298,12 +302,11 @@ export async function UnifiedInboxPanel({
       // means by opening one.
       if (thread.unread) await setThreadRead(thread.id, false)
 
-      const [messages, files, events, ownDraft, settings] = await Promise.all([
+      const [messages, files, events, ownDraft] = await Promise.all([
         listThreadMessages(thread.id),
         attachmentsForThread(thread.id),
         listThreadEvents(thread.id),
         draftForThread(thread.id, user.id, sendableIds),
-        getSettings(),
       ])
       const byMessage = new Map<string, AttachmentRow[]>()
       for (const file of files) {
@@ -534,6 +537,7 @@ export async function UnifiedInboxPanel({
         defaultInboxId={pinnedInboxId}
         canReorder={canManage}
         canCheckNow={canManage && connections.length > 0}
+        autoCheckSeconds={settings.autoCheckSeconds}
       />
 
       {/* Nothing above Drafts or Sent: where a conversation stands, and who it

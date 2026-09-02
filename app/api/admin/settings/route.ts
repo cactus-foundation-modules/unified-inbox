@@ -119,6 +119,10 @@ const Body = z.object({
   quoteNumberPattern: Pattern,
   trackOpens: z.boolean().optional(),
   requestReadReceipts: z.boolean().optional(),
+  // NULL is off. The floor is the check-now route's own cooldown: anything
+  // sooner is refused there anyway, so offering it would only buy a screen full
+  // of "a check has just run".
+  autoCheckSeconds: z.number().int().min(60).max(3600).nullable().optional(),
 })
 
 export async function PATCH(request: NextRequest) {

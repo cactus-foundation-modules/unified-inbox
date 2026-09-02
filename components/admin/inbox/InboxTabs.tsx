@@ -74,6 +74,11 @@ type Props = {
    *  account to collect from, and a site whose only channels are a chat and an
    *  enquiry form has nothing for the button to do. */
   canCheckNow: boolean
+  /** Seconds between checks that run on their own while this page is open and
+   *  in front of somebody, or null when the site has not asked for that. Only
+   *  meaningful alongside canCheckNow - the button owns the timer, and there is
+   *  no timer without the button. */
+  autoCheckSeconds: number | null
 }
 
 function Count({ value, word = 'unread' }: { value: number; word?: string }) {
@@ -91,6 +96,7 @@ function Count({ value, word = 'unread' }: { value: number; word?: string }) {
 export function InboxTabs({
   base, params, inboxes, channels, allCount, current, showUnrouted, unroutedCount,
   showDrafts, draftCount, composeHref, defaultInboxId, canReorder, canCheckNow,
+  autoCheckSeconds,
 }: Props) {
   const router = useRouter()
   const [notice, setNotice] = useState<CheckNowNotice | null>(null)
@@ -322,7 +328,7 @@ export function InboxTabs({
   return (
     <div onKeyDown={onStripKeyDown}>
       <div className="uin-tabrow">
-        {canCheckNow && <CheckNowButton onResult={setNotice} />}
+        {canCheckNow && <CheckNowButton onResult={setNotice} autoSeconds={autoCheckSeconds} />}
         <div className="uin-tabrow-strip">
           <TabStrip
             style={{ marginBottom: '0.5rem' }}

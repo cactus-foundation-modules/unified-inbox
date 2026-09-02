@@ -43,6 +43,7 @@ export function CollectingPanel({ settings, inboxes, retention, busy, call }: {
         autoLink: draft.autoLink,
         newestFirst: draft.newestFirst,
         defaultInboxId: draft.defaultInboxId || null,
+        autoCheckSeconds: draft.autoCheckSeconds,
       }),
     }, 'Settings saved.')
   }
@@ -157,6 +158,32 @@ export function CollectingPanel({ settings, inboxes, retention, busy, call }: {
           onChange={(newestFirst) => setDraft({ ...draft, newestFirst })}
           hint="Off, a conversation reads top to bottom the way it happened. On, the latest message is the first thing you see and the writing box sits with it, which saves scrolling past a long back and forth to find out what was last said."
         />
+        <FieldRow>
+          <div className="field">
+            <label htmlFor={`${fid}-autocheck`}>Check for new mail while the inbox is open</label>
+            <select
+              id={`${fid}-autocheck`}
+              value={draft.autoCheckSeconds === null ? '' : String(draft.autoCheckSeconds)}
+              onChange={(e) => setDraft({
+                ...draft,
+                autoCheckSeconds: e.target.value === '' ? null : Number(e.target.value),
+              })}
+            >
+              <option value="">No - only on the schedule, or when I press the button</option>
+              <option value="60">Every minute</option>
+              <option value="120">Every 2 minutes</option>
+              <option value="300">Every 5 minutes</option>
+              <option value="600">Every 10 minutes</option>
+              <option value="1800">Every half hour</option>
+            </select>
+            <span className="field-hint">
+              Only while somebody has the inbox open and is actually looking at that tab, and only
+              for people who look after the mail accounts. A tab left behind another window stops
+              checking until it comes back to the front. The more often you ask, the more work your
+              hosting does, so pick the longest wait you can live with.
+            </span>
+          </div>
+        </FieldRow>
         <CheckField
           label="Attach an order or a purchase order to a conversation when the message mentions one"
           checked={draft.autoLink}
