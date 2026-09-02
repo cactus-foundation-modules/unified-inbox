@@ -1151,8 +1151,98 @@ export async function listAttachmentStorageRefs(): Promise<string[]> {
     SELECT "media_key" AS ref FROM "uin_attachments" WHERE "media_key" IS NOT NULL
     UNION ALL
     SELECT "media_url" AS ref FROM "uin_attachments" WHERE "media_url" IS NOT NULL
+    UNION ALL
+    SELECT "media_key" AS ref FROM "uin_outbound_uploads"
+    UNION ALL
+    SELECT "media_url" AS ref FROM "uin_outbound_uploads"
   `
   return rows.map((r) => r.ref).filter((r): r is string => !!r)
+}
+
+// ---------------------------------------------------------------------------
+// Files dropped onto a message that has not been sent yet
+// ---------------------------------------------------------------------------
+
+export type OutboundUpload = {
+  id: string
+  mediaKey: string
+  mediaUrl: string
+  mediaProvider: string
+  filename: string
+  contentType: string | null
+  sizeBytes: number
+}
+
+/** One dropped file, now in storage, remembered so that neither core's storage
+ *  repair nor this module's own housekeeping can lose track of it. */
+export async function recordOutboundUpload(data: {
+  authorUserId: string
+  mediaKey: string
+  mediaUrl: string
+  mediaProvider: string
+  filename: string
+  contentType: string | null
+  sizeBytes: number
+}): Promise<string> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    INSERT INTO "uin_outbound_uploads"
+      ("author_user_id", "media_key", "media_url", "media_provider",
+       "filename", "content_type", "size_bytes")
+    VALUES (${data.authorUserId}, ${data.mediaKey}, ${data.mediaUrl}, ${data.mediaProvider},
+            ${data.filename}, ${data.contentType}, ${data.sizeBytes})
+    RETURNING "id"
+  `
+  return rows[0]!.id
+}
+
+/**
+ * Dropped files old enough to be given up on, and pointed at by nothing.
+ *
+ * "Pointed at by nothing" is the whole of the safety here, and it is asked of
+ * both places a reference can live: an attachment row, written when the message
+ * actually went, and a draft that is still waiting to be finished. A draft's
+ * files are a JSON array of the same references the send route takes, so the
+ * key is looked for inside it as text - which is exact, because a key carries a
+ * uuid no other string in that column would contain.
+ */
+export async function abandonedOutboundUploads(
+  olderThan: Date,
+  limit: number,
+): Promise<OutboundUpload[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT u."id", u."media_key", u."media_url", u."media_provider",
+           u."filename", u."content_type", u."size_bytes"
+      FROM "uin_outbound_uploads" u
+     WHERE u."created_at" < ${olderThan}
+       AND NOT EXISTS (
+             SELECT 1 FROM "uin_attachments" a WHERE a."media_key" = u."media_key"
+           )
+       AND NOT EXISTS (
+             SELECT 1 FROM "uin_drafts" d
+              WHERE d."attachments"::text LIKE '%' || u."media_key" || '%'
+           )
+     ORDER BY u."created_at" ASC
+     LIMIT ${limit}
+  `
+  return rows.map((row) => ({
+    id: String(row.id),
+    mediaKey: String(row.media_key),
+    mediaUrl: String(row.media_url),
+    mediaProvider: String(row.media_provider),
+    filename: String(row.filename),
+    contentType: row.content_type === null ? null : String(row.content_type),
+    sizeBytes: Number(row.size_bytes ?? 0),
+  }))
+}
+
+/** The rows, once their bytes have gone. Bytes first, rows second, exactly as
+ *  retention does it: an interrupted sweep leaves an object nothing points at,
+ *  which is recoverable, rather than a row pointing at bytes that have gone. */
+export async function deleteOutboundUploads(ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0
+  return prisma.$executeRaw`
+    DELETE FROM "uin_outbound_uploads" WHERE "id" = ANY(${ids}::text[])
+  `
 }
 
 // ---------------------------------------------------------------------------

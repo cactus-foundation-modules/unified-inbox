@@ -10,6 +10,8 @@ import { useRouter } from 'next/navigation'
 import { inboxHref } from '@/modules/unified-inbox/lib/list'
 import { isWorthSaving, splitAddresses, type DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
 import { AttachmentChips, AttachmentPicker, plainReason, toHtml, type Attachment } from './AttachmentPicker'
+import { AttachmentDropNotice, AttachmentDropOverlay } from './AttachmentDropChrome'
+import { useAttachmentDrop } from './useAttachmentDrop'
 import { ConfirmDialog } from './ConfirmDialog'
 import { CloseIcon } from './icons'
 
@@ -96,6 +98,18 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
   // Typed since the last time any of it was put down somewhere. Deliberately
   // not "is there text": text that has just been saved is not at risk.
   const [dirty, setDirty] = useState(false)
+
+  /** A file dragged onto the dialog, rather than found in the library. The
+   *  whole card is the target, not just the box: somebody dragging a quote at
+   *  a new message is aiming at the message, and asking them to hit a
+   *  particular rectangle inside it is asking them to aim twice. */
+  const drop = useAttachmentDrop({
+    disabled: busy,
+    onAttached: (item) => {
+      setAttachments((prev) => (prev.some((a) => a.key === item.key) ? prev : [...prev, item]))
+      setDirty(true)
+    },
+  })
 
   // One token per screenful, exactly as the reply composer carries: a double
   // press, or a retry after a timeout that may or may not have arrived, is one
@@ -351,12 +365,14 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
   return (
     <div className="uin-modal">
       <div
-        className="uin-modal-card uin-modal-card-compose"
+        className="uin-modal-card uin-modal-card-compose uin-droppable"
         role="dialog"
         aria-modal="true"
         aria-labelledby="uin-compose-title"
         ref={card}
+        {...drop.dropProps}
       >
+        <AttachmentDropOverlay dragging={drop.dragging} />
         <div className="uin-modal-head">
           <h2 className="uin-modal-title" id="uin-compose-title">
             {draftId ? 'A message you started' : 'A new message'}
@@ -498,7 +514,14 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
                   setDirty(true)
                 }}
               />
+              <span className="uin-recipients">or drag one onto this message</span>
             </div>
+
+            <AttachmentDropNotice
+              progress={drop.progress}
+              errors={drop.errors}
+              dismissErrors={drop.dismissErrors}
+            />
 
             {error && <div className="alert alert-danger" role="alert">{error}</div>}
             {note && !error && <div className="alert alert-success" role="status">{note}</div>}

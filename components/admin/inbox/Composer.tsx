@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { isWorthSaving, splitAddresses, type DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
 import { AttachmentChips, AttachmentPicker, plainReason, toHtml, type Attachment } from './AttachmentPicker'
+import { AttachmentDropNotice, AttachmentDropOverlay } from './AttachmentDropChrome'
+import { useAttachmentDrop } from './useAttachmentDrop'
 import { ConfirmDialog } from './ConfirmDialog'
 
 // The composer: reply, reply to everybody, forward, and an internal note.
@@ -79,6 +81,18 @@ export function Composer({
   // beforeunload guard below is asking about, and it is deliberately not "is
   // there text", because text that has just been saved is not at risk.
   const [dirty, setDirty] = useState(false)
+
+  /** A file dragged straight onto the box, rather than found in the library.
+   *  Off for an internal note, which is not sent anywhere and has nothing to
+   *  carry a file on, and off while something is in flight for the reason the
+   *  chips are greyed then: a message on its way is not one to add to. */
+  const drop = useAttachmentDrop({
+    disabled: busy || mode === 'note',
+    onAttached: (item) => {
+      setAttachments((prev) => (prev.some((a) => a.key === item.key) ? prev : [...prev, item]))
+      setDirty(true)
+    },
+  })
 
   // One token per composer session, deliberately NOT regenerated per click: it
   // is what makes a double press, or a retry after a timeout that may or may not
@@ -327,7 +341,8 @@ export function Composer({
   }, [mentionQuery, mentions, staff])
 
   return (
-    <div className="uin-composer">
+    <div className="uin-composer uin-droppable" {...drop.dropProps}>
+      <AttachmentDropOverlay dragging={drop.dragging} />
       {/* Above the chips, and shown whenever there is a reason at all. It used
           to be tied to the mode, which meant it appeared only on modes that are
           not offered when it applies - so the one person who needed it, the one
@@ -447,7 +462,16 @@ export function Composer({
               setDirty(true)
             }}
           />
+          <span className="uin-recipients">or drag one onto this box</span>
         </div>
+      )}
+
+      {mode !== 'note' && (
+        <AttachmentDropNotice
+          progress={drop.progress}
+          errors={drop.errors}
+          dismissErrors={drop.dismissErrors}
+        />
       )}
 
       {error && <div className="alert alert-danger" role="alert">{error}</div>}

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { errorResponse } from '@/lib/utils'
-import { sweepRetention, sweepStalledSends } from '@/modules/unified-inbox/lib/retention'
+import { sweepAbandonedUploads, sweepRetention, sweepStalledSends } from '@/modules/unified-inbox/lib/retention'
 import { pruneDeliveries } from '@/modules/unified-inbox/lib/webhooks-db'
 
 // The daily tidy: the retention window, and the people it leaves holding
@@ -42,5 +42,17 @@ export async function GET(request: NextRequest) {
   // and a log nobody prunes is a table nobody meant to create.
   const webhookAttempts = await pruneDeliveries(30)
 
-  return NextResponse.json({ ok: true, stalledSends, webhookAttempts, ...retention })
+  // Files dragged onto a message that was then never sent and never saved. Only
+  // the ones nothing at all points at, and only once they are a week old - a
+  // draft holding one keeps it for as long as the draft lives.
+  const uploads = await sweepAbandonedUploads()
+
+  return NextResponse.json({
+    ok: true,
+    stalledSends,
+    webhookAttempts,
+    abandonedUploads: uploads.removed,
+    abandonedUploadFailures: uploads.failures,
+    ...retention,
+  })
 }

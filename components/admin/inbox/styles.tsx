@@ -717,6 +717,41 @@ const CSS = `
 .uin-composer textarea { width: 100%; min-height: 8rem; resize: vertical; }
 .uin-composer-modes { display: flex; flex-wrap: wrap; gap: 0.375rem; }
 .uin-composer-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+
+/* ---- dragging a file onto a message ------------------------------------- */
+/* The target is whatever box the composer hangs this on, so it only has to
+   provide the corner the overlay is measured from. */
+.uin-droppable { position: relative; }
+/* The tint drawn over that box while a file is over it. Deaf to the pointer, or
+   it becomes the thing being dragged over.
+   TWO grounds, so two tints - see this file's opening note. The reply composer
+   is --color-surface-raised, and the only tint that differs from THAT in both
+   themes is --color-bg-subtle; the new-message card is --color-surface, where
+   bg-subtle is the identical colour in dark mode and surface-raised is the one
+   that shows. Painting one of them everywhere would be invisible in half the
+   places it is drawn, in one theme only. */
+.uin-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  border: 2px dashed var(--color-primary);
+  border-radius: 0.5rem;
+  background: var(--color-bg-subtle);
+  /* Enough to say "here", not so much that the message underneath disappears
+     and somebody wonders what they are dropping onto. */
+  opacity: 0.94;
+}
+.uin-modal-card .uin-drop-overlay { background: var(--color-surface-raised); border-radius: 0.75rem; }
+.uin-drop-overlay-label {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.uin-drop-errors { list-style: none; margin: 0 0 0.5rem; padding: 0; display: grid; gap: 0.25rem; }
 .uin-recipients { font-size: 0.8125rem; color: var(--color-text-secondary); }
 
 /* ---- writing a new message, over the top -------------------------------- */

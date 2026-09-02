@@ -1,6 +1,8 @@
 import type { MediaProviderType } from '@prisma/client'
 import { deleteMedia } from '@/lib/media/upload'
 import {
+  abandonedOutboundUploads,
+  deleteOutboundUploads,
   deleteThreads,
   failStalledSends,
   getSettings,
@@ -147,6 +149,53 @@ export async function sweepRetention(opts: { deadline: number; now?: Date } = { 
 
   await markRetentionRun()
   return outcome
+}
+
+/** How long a dropped file may sit in storage attached to nothing before it is
+ *  given up on. Long enough that somebody who dropped a quote in on Friday and
+ *  came back to it the following Thursday still finds it; short enough that the
+ *  bucket does not fill with files nobody ever sent. */
+export const ABANDONED_UPLOAD_MS = 7 * 24 * 60 * 60 * 1000
+
+/** Dropped files removed per pass. Each one is a request to storage. */
+export const ABANDONED_UPLOAD_BATCH = 50
+
+/**
+ * Files dropped onto a message that was then never sent and never saved.
+ *
+ * Dragging a file onto a reply puts the bytes into storage there and then,
+ * because the send route only ever takes an attachment by where it already
+ * lives. Most of those go on to be sent, and some are saved with a draft; the
+ * rest are somebody closing the tab and thinking no more about it, and without
+ * this they would sit in the bucket forever.
+ *
+ * Nothing is removed while anything at all points at it - a sent message's
+ * attachment row, or an unfinished draft - whatever its age. That check is the
+ * query's, not this function's, and it is the reason a draft saved eleven
+ * months ago still opens with its files on it.
+ */
+export async function sweepAbandonedUploads(now = new Date()): Promise<{ removed: number; failures: number }> {
+  const cutoff = new Date(now.getTime() - ABANDONED_UPLOAD_MS)
+  const rows = await abandonedOutboundUploads(cutoff, ABANDONED_UPLOAD_BATCH)
+  if (rows.length === 0) return { removed: 0, failures: 0 }
+
+  // Bytes first, rows second, for retention's reason: an interrupted sweep
+  // leaves an object nothing points at, which is recoverable and which the
+  // storage check can offer up, rather than a row pointing at bytes that have
+  // gone.
+  const gone: string[] = []
+  let failures = 0
+  for (const row of rows) {
+    try {
+      await deleteMedia(row.mediaProvider as MediaProviderType, row.mediaKey)
+      gone.push(row.id)
+    } catch (err) {
+      failures += 1
+      console.warn('[unified-inbox] housekeeping could not remove an abandoned upload:', err)
+    }
+  }
+  const removed = await deleteOutboundUploads(gone)
+  return { removed, failures }
 }
 
 /** What the settings screen shows beside the window box, so the owner can see

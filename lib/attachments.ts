@@ -61,6 +61,27 @@ export function attachmentKey(
   return `${mediaKeyPrefix(provider)}${ATTACHMENT_FOLDER}/${messageId}/${attachmentId}-${safeFilename(filename)}`
 }
 
+/**
+ * The storage key for a file somebody has just dragged onto a message.
+ *
+ * The same prefix as an inbound attachment, one folder along, and for the same
+ * reason: no media library row, so nothing a person attaches to an email turns
+ * up in the picker for everybody who happens to hold media permission.
+ *
+ * The random id is doing real work rather than merely avoiding collisions. The
+ * media Worker serves any object under `media/` to anyone who asks for it by
+ * key, so an attachment's privacy rests on its key being unguessable - which is
+ * exactly how inbound attachment keys are built, from two ids nobody outside
+ * the database has seen.
+ */
+export function outboundUploadKey(
+  provider: MediaProviderType,
+  uploadId: string,
+  filename: string,
+): string {
+  return `${mediaKeyPrefix(provider)}${ATTACHMENT_FOLDER}/outbound/${uploadId}-${safeFilename(filename)}`
+}
+
 export type FetchedAttachment = {
   buffer: Buffer
   contentType: string
