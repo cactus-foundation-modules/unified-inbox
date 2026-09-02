@@ -8,6 +8,7 @@ import { DRAFT_MODES, isSignatureKind } from './types'
 import type {
   AttachmentFetchMode,
   Connection,
+  DiscoveredFolder,
   Draft,
   DraftAttachment,
   DraftMode,
@@ -59,6 +60,27 @@ function optionalSecret(value: string | null | undefined): string | null | undef
 // Connections
 // ---------------------------------------------------------------------------
 
+const FOLDER_ROLES = ['inbox', 'sent', 'archive', 'junk', 'trash', 'drafts'] as const
+
+/** The stored folder list, checked on the way out. It is our own write, but it
+ *  is a JSONB column all the same: a row written by an older version of this
+ *  module, or restored from a backup taken from one, has to come back as either
+ *  a well-formed list or nothing. Half a list would reach the settings screen
+ *  as a menu with holes in it. */
+function parseDiscoveredFolders(value: unknown): DiscoveredFolder[] | null {
+  if (!Array.isArray(value)) return null
+  const folders: DiscoveredFolder[] = []
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') return null
+    const row = entry as Record<string, unknown>
+    if (typeof row.path !== 'string' || typeof row.name !== 'string') return null
+    const specialUse = typeof row.specialUse === 'string' ? row.specialUse : null
+    const role = FOLDER_ROLES.find((r) => r === row.role) ?? null
+    folders.push({ path: row.path, name: row.name, specialUse, role })
+  }
+  return folders
+}
+
 function mapConnection(r: Record<string, unknown>): Connection {
   return {
     id: r.id as string,
@@ -71,6 +93,8 @@ function mapConnection(r: Record<string, unknown>): Connection {
     extraFolders: (r.extra_folders as string[] | null) ?? [],
     foldersOnly: !!r.folders_only,
     discardUnrouted: !!r.discard_unrouted,
+    discoveredFolders: parseDiscoveredFolders(r.discovered_folders),
+    foldersCheckedAt: (r.folders_checked_at as Date | null) ?? null,
     lastSyncAt: (r.last_sync_at as Date | null) ?? null,
     lastSyncStatus: (r.last_sync_status as SyncStatus | null) ?? null,
     lastSyncError: (r.last_sync_error as string | null) ?? null,
@@ -161,6 +185,27 @@ export async function updateConnection(id: string, data: {
 
 export async function deleteConnection(id: string): Promise<void> {
   await prisma.$executeRaw`DELETE FROM "uin_connections" WHERE "id" = ${id}`
+}
+
+/** Keeps whatever folder discovery just found, so the folder pickers on the
+ *  settings screen have a menu to draw without opening somebody's mailbox on a
+ *  page load. Never called on a failed connection: a server that would not
+ *  answer has not told us its folders have gone, only that it is not talking,
+ *  and throwing the last known list away over that would leave the pickers
+ *  empty for no reason. */
+export async function recordDiscoveredFolders(
+  id: string,
+  folders: DiscoveredFolder[]
+): Promise<Date> {
+  const checkedAt = new Date()
+  await prisma.$executeRaw`
+    UPDATE "uin_connections"
+       SET "discovered_folders" = ${JSON.stringify(folders)}::jsonb,
+           "folders_checked_at" = ${checkedAt},
+           "updated_at" = now()
+     WHERE "id" = ${id}
+  `
+  return checkedAt
 }
 
 export async function recordConnectionSync(

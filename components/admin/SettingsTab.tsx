@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 import type { Data } from '@puckeditor/core'
 import MarkdownEditor from './MarkdownEditor'
 import { WebhooksSection, SETTINGS_SECTION_HEADING } from './WebhooksSection'
+import { FolderPicker } from './FolderPicker'
 import { ConfirmDialog } from './inbox/ConfirmDialog'
 import { InboxStyles } from './inbox/styles'
 
@@ -41,6 +42,12 @@ type Connection = {
   extraFolders: string[]
   foldersOnly: boolean
   discardUnrouted: boolean
+  /** What this account's mail server last said its folders were called, or null
+   *  if nobody has asked it yet. Kept on the account rather than fetched when a
+   *  form opens: listing folders means opening somebody's mailbox, which is not
+   *  a thing to do on a page load. */
+  discoveredFolders: MailFolder[] | null
+  foldersCheckedAt: string | null
   lastSyncAt: string | null
   lastSyncStatus: 'ok' | 'error' | null
   lastSyncError: string | null
@@ -182,6 +189,28 @@ function NoteAlert({ note }: { note: Note | null }) {
  *  the same thing, because from the screen's point of view it is the same
  *  thing. */
 const OFFLINE = 'Could not reach the site. Check your connection and try again.'
+
+/** Ask a mail account what its folders are called. The answer is kept against
+ *  the account server-side, so every caller finishes with a reload rather than
+ *  holding a list of its own - the two folder pickers and the mail account list
+ *  all draw the same one, and only one of them used to. */
+async function fetchFolders(connectionId: string): Promise<
+  { ok: true; count: number } | { ok: false; error: string }
+> {
+  try {
+    const res = await fetch(`${API}/connections/${connectionId}/test`, { method: 'POST' })
+    const body = await res.json().catch(() => ({}))
+    // Both: the request has to have been answered at all, and the answer has to
+    // say the mailbox opened. Reading only the second one meant a refusal was
+    // told apart from a bad password by luck rather than by asking.
+    if (res.ok && body.ok) {
+      return { ok: true, count: Array.isArray(body.folders) ? body.folders.length : 0 }
+    }
+    return { ok: false, error: (body as { error?: string }).error ?? 'That did not work.' }
+  } catch {
+    return { ok: false, error: OFFLINE }
+  }
+}
 
 function blankConnection() {
   return {
@@ -334,6 +363,8 @@ export function UnifiedInboxSettingsTab() {
         users={data.users}
         busy={busy}
         call={call}
+        setMessage={setMessage}
+        reload={load}
       />
 
       <ModuleSettingsSection
@@ -402,7 +433,6 @@ function ConnectionsSection({ connections, collection, busy, call, setMessage, r
 }) {
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState<ConnectionDraft>(blankConnection())
-  const [folders, setFolders] = useState<Record<string, MailFolder[]>>({})
   const [testing, setTesting] = useState<string | null>(null)
   const [checking, setChecking] = useState<string | null>(null)
   // Which mail account the Remove question is about. Null when nothing is asked.
@@ -460,19 +490,15 @@ function ConnectionsSection({ connections, collection, busy, call, setMessage, r
     setTesting(id)
     setMessage(null)
     try {
-      const res = await fetch(`${API}/connections/${id}/test`, { method: 'POST' })
-      const body = await res.json().catch(() => ({}))
-      // Both: the request has to have been answered at all, and the answer has
-      // to say the mailbox opened. Reading only the second one meant a refusal
-      // was told apart from a bad password by luck rather than by asking.
-      if (res.ok && body.ok) {
-        setFolders((f) => ({ ...f, [id]: body.folders }))
-        setMessage({ tone: 'ok', text: `Connected. Found ${body.folders.length} folder${body.folders.length === 1 ? '' : 's'}.` })
+      const result = await fetchFolders(id)
+      if (result.ok) {
+        setMessage({ tone: 'ok', text: `Connected. Found ${result.count} folder${result.count === 1 ? '' : 's'}.` })
+        // The folders it found are kept against the account, so they arrive
+        // back with everything else rather than in a copy held here.
+        await reload()
       } else {
-        setMessage({ tone: 'bad', text: body.error ?? 'That did not work.' })
+        setMessage({ tone: 'bad', text: result.error })
       }
-    } catch {
-      setMessage({ tone: 'bad', text: OFFLINE })
     } finally {
       // In a finally, so a test that never comes back does not leave the button
       // greyed out and reading "Testing..." for the rest of the visit.
@@ -551,9 +577,9 @@ function ConnectionsSection({ connections, collection, busy, call, setMessage, r
             <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => setRemoving(connection)}>Remove</button>
           </div>
           <CollectionProgress stat={stats.get(connection.id)} />
-          {folders[connection.id] && (
+          {connection.discoveredFolders && connection.discoveredFolders.length > 0 && (
             <div style={{ ...MUTED, fontSize: '0.8125rem', marginTop: '0.5rem' }}>
-              Folders found: {folders[connection.id]!.map((f) => f.path).join(', ')}
+              Folders found: {connection.discoveredFolders.map((f) => f.path).join(', ')}
             </div>
           )}
         </div>
@@ -647,13 +673,15 @@ function ConnectionsSection({ connections, collection, busy, call, setMessage, r
 // Inboxes
 // ---------------------------------------------------------------------------
 
-function InboxesSection({ inboxes, connections, access, users, busy, call }: {
+function InboxesSection({ inboxes, connections, access, users, busy, call, setMessage, reload }: {
   inboxes: Inbox[]
   connections: Connection[]
   access: AccessRow[]
   users: StaffMember[]
   busy: boolean
   call: Caller
+  setMessage: (n: Note | null) => void
+  reload: () => Promise<void>
 }) {
   const [senderWarning, setSenderWarning] = useState<string | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
@@ -661,6 +689,7 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
   const [staff, setStaff] = useState<AccessRow[]>([])
   // Which inbox the Remove question is about. Null when nothing is asked.
   const [removing, setRemoving] = useState<Inbox | null>(null)
+  const [refreshingFolders, setRefreshingFolders] = useState(false)
   const fid = useId()
 
   const accessByInbox = useMemo(() => {
@@ -763,6 +792,31 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
     setStaff((current) => current.map((s) => s.userId === userId ? { ...s, canReply: !s.canReply } : s))
   }
 
+  // The mail account this address is collected from, and therefore whose
+  // folders the two pickers below offer. An address needs no mail account at
+  // all - a contact form writes into one - and in that case there is nothing to
+  // list, so the pickers say so rather than offering an empty menu.
+  const chosen = connections.find((c) => c.id === draft.connectionId) ?? null
+
+  async function refreshFolders() {
+    if (!chosen) return
+    setRefreshingFolders(true)
+    setMessage(null)
+    try {
+      const result = await fetchFolders(chosen.id)
+      if (result.ok) {
+        setMessage({ tone: 'ok', text: `Folder list updated. ${result.count} folder${result.count === 1 ? '' : 's'} on ${chosen.label}.` })
+        // The form stays open and the draft stays exactly as it is: this
+        // reloads the account's folder list, not the address being edited.
+        await reload()
+      } else {
+        setMessage({ tone: 'bad', text: result.error })
+      }
+    } finally {
+      setRefreshingFolders(false)
+    }
+  }
+
   return (
     <section className="card" style={{ marginBottom: '1.5rem' }}>
       <h3 style={LABEL_STYLE}>Inboxes</h3>
@@ -826,14 +880,31 @@ function InboxesSection({ inboxes, connections, access, users, busy, call }: {
               {connections.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
             </select>
           </div>
-          <div className="field">
-            <label htmlFor={`${fid}-folder`}>Folder to read</label>
-            <input id={`${fid}-folder`} value={draft.imapFolder} onChange={(e) => setDraft({ ...draft, imapFolder: e.target.value })} placeholder="INBOX" />
-          </div>
-          <div className="field">
-            <label htmlFor={`${fid}-sent`}>Sent folder <span style={{ ...MUTED, fontWeight: 400 }}>(optional)</span></label>
-            <input id={`${fid}-sent`} value={draft.sentFolder} onChange={(e) => setDraft({ ...draft, sentFolder: e.target.value })} placeholder="Sent Messages" />
-          </div>
+          <FolderPicker
+            id={`${fid}-folder`}
+            label="Folder to read"
+            value={draft.imapFolder}
+            onChange={(imapFolder) => setDraft({ ...draft, imapFolder })}
+            folders={chosen?.discoveredFolders ?? null}
+            checkedAt={chosen?.foldersCheckedAt ?? null}
+            connectionChosen={chosen !== null}
+            refreshing={refreshingFolders}
+            onRefresh={() => { void refreshFolders() }}
+            placeholder="INBOX"
+          />
+          <FolderPicker
+            id={`${fid}-sent`}
+            label={<>Sent folder <span style={{ ...MUTED, fontWeight: 400 }}>(optional)</span></>}
+            value={draft.sentFolder}
+            onChange={(sentFolder) => setDraft({ ...draft, sentFolder })}
+            folders={chosen?.discoveredFolders ?? null}
+            checkedAt={chosen?.foldersCheckedAt ?? null}
+            connectionChosen={chosen !== null}
+            refreshing={refreshingFolders}
+            onRefresh={() => { void refreshFolders() }}
+            blankLabel="Work it out from the mail account"
+            placeholder="Sent Messages"
+          />
           <div className="field">
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontWeight: 400 }}>
               <input type="checkbox" checked={draft.isCatchAll} onChange={(e) => setDraft({ ...draft, isCatchAll: e.target.checked })} />

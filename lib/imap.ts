@@ -1,6 +1,7 @@
 import { ImapFlow } from 'imapflow'
 import { decryptSecret } from '@/lib/crypto/secrets'
-import { getConnection, getConnectionSecret } from './db'
+import { getConnection, getConnectionSecret, recordDiscoveredFolders } from './db'
+import type { DiscoveredFolder } from './types'
 
 // ---------------------------------------------------------------------------
 // Opening a mailbox, and nothing else. The sync engine is S3's; this file
@@ -10,16 +11,9 @@ import { getConnection, getConnectionSecret } from './db'
 // Nothing here ever writes to a mailbox. Not a flag, not a move, not a delete.
 // ---------------------------------------------------------------------------
 
-export type MailFolder = {
-  /** The name to store: what IMAP calls it, delimiters and all. */
-  path: string
-  /** What it looks like in a mail app. */
-  name: string
-  /** '\\Sent', '\\Archive', '\\Junk' and friends, where the server says. */
-  specialUse: string | null
-  /** Our guess at what it is for, used to fill the folder boxes in. */
-  role: 'inbox' | 'sent' | 'archive' | 'junk' | 'trash' | 'drafts' | null
-}
+/** The shape itself lives in ./types, which the settings screen can import
+ *  without pulling a mail library into the browser bundle. */
+export type MailFolder = DiscoveredFolder
 
 const NAME_FALLBACKS: Array<[MailFolder['role'], string[]]> = [
   ['sent', ['Sent', 'Sent Items', 'Sent Mail', 'Sent Messages']],
@@ -108,13 +102,17 @@ export async function listFolders(client: ImapFlow): Promise<MailFolder[]> {
  * raw IMAP errors are unreadable ("Invalid credentials (Failure)").
  */
 export async function testConnection(connectionId: string): Promise<
-  { ok: true; folders: MailFolder[] } | { ok: false; error: string }
+  { ok: true; folders: MailFolder[]; checkedAt: string } | { ok: false; error: string }
 > {
   let client: ImapFlow | null = null
   try {
     client = await openMailbox(await credentialsForConnection(connectionId))
     const folders = await listFolders(client)
-    return { ok: true, folders }
+    // Kept, not just reported. This is the only place anything asks a mail
+    // server what its folders are called, so it is also the only place the
+    // folder pickers on the settings screen can get their menu from.
+    const checkedAt = await recordDiscoveredFolders(connectionId, folders)
+    return { ok: true, folders, checkedAt: checkedAt.toISOString() }
   } catch (err) {
     return { ok: false, error: explainImapError(err) }
   } finally {

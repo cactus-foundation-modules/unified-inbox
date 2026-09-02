@@ -68,6 +68,20 @@ export type Draft = {
   updatedAt: Date
 }
 
+/** One folder on a mail server, as the server described it. Lives here rather
+ *  than beside the IMAP client so the settings screen can name the shape
+ *  without dragging a mail library into the browser bundle. */
+export type DiscoveredFolder = {
+  /** The name to store: what IMAP calls it, delimiters and all. */
+  path: string
+  /** What it looks like in a mail app. */
+  name: string
+  /** '\\Sent', '\\Archive', '\\Junk' and friends, where the server says. */
+  specialUse: string | null
+  /** Our guess at what it is for, used to fill the folder boxes in. */
+  role: 'inbox' | 'sent' | 'archive' | 'junk' | 'trash' | 'drafts' | null
+}
+
 /** A mail account. The password is never handed out - callers get
  *  `hasPassword` and set a new one if they want it changed. */
 export type Connection = {
@@ -86,6 +100,12 @@ export type Connection = {
   /** Do not file mail addressed to none of this site's addresses. Only ever
    *  applied to mail starting a new conversation. */
   discardUnrouted: boolean
+  /** What the server said its folders were called, last time anybody asked.
+   *  Null means nobody ever has, which the settings screen tells apart from an
+   *  account that answered with an empty list. */
+  discoveredFolders: DiscoveredFolder[] | null
+  /** When that list was taken. */
+  foldersCheckedAt: Date | null
   lastSyncAt: Date | null
   lastSyncStatus: SyncStatus | null
   lastSyncError: string | null
