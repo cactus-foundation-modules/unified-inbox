@@ -15,6 +15,7 @@ import type {
   IdentityKind,
   Inbox,
   InboxAccess,
+  UserDefaultInbox,
   Organisation,
   Person,
   PersonIdentity,
@@ -442,12 +443,54 @@ export async function listAllInboxAccess(): Promise<InboxAccess[]> {
   }))
 }
 
-/** Replaces an inbox's whole guest list in one go. An empty list means "back to
- *  everybody who can view the inbox at all", which is the difference between no
- *  rows and a row per person. */
-export async function setInboxAccess(
+// ---------------------------------------------------------------------------
+// Somebody's own inbox
+//
+// Kept apart from the guest list on purpose: an inbox with no access rows is
+// open to everybody who may read the hub at all, so recording a preference on
+// that table would restrict the address as a side effect of expressing it.
+// ---------------------------------------------------------------------------
+
+/** Every "this address is theirs" row on the site, for drawing the settings
+ *  screen in one query rather than one per person. */
+export async function listUserDefaultInboxes(): Promise<UserDefaultInbox[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "user_id", "inbox_id" FROM "uin_user_default_inbox"
+  `
+  return rows.map((r) => ({ userId: r.user_id as string, inboxId: r.inbox_id as string }))
+}
+
+/** The address one person calls their own, or null when they have not been
+ *  given one. Says nothing about whether they may still read it - the caller
+ *  checks that, because the answer is different for the tabs and for a
+ *  signature. */
+export async function defaultInboxIdFor(userId: string): Promise<string | null> {
+  const rows = await prisma.$queryRaw<{ inbox_id: string }[]>`
+    SELECT "inbox_id" FROM "uin_user_default_inbox" WHERE "user_id" = ${userId} LIMIT 1
+  `
+  return rows[0]?.inbox_id ?? null
+}
+
+/**
+ * Who this inbox is for, saved in one go: the guest list, and the people whose
+ * own address it is.
+ *
+ * An empty guest list is meaningful: it hands the address back to everybody who
+ * can view the hub at all, which is the difference between no rows and a row
+ * per person.
+ *
+ * Both halves in one transaction because they are one screenful and one Save.
+ * Half of it landing would leave somebody named as an owner of an address they
+ * had just been taken off, and nothing on the screen would say which half went.
+ *
+ * Naming somebody here moves their own inbox rather than adding a second one -
+ * the primary key on the person is what makes that an update - and taking them
+ * off leaves them with none at all, which is what everybody starts with.
+ */
+export async function setInboxAudience(
   inboxId: string,
-  entries: Array<{ userId: string; canReply: boolean }>
+  entries: Array<{ userId: string; canReply: boolean }>,
+  defaultForUserIds: string[],
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`DELETE FROM "uin_inbox_access" WHERE "inbox_id" = ${inboxId}`
@@ -456,6 +499,27 @@ export async function setInboxAccess(
         INSERT INTO "uin_inbox_access" ("inbox_id", "user_id", "can_reply")
         VALUES (${inboxId}, ${entry.userId}, ${entry.canReply})
         ON CONFLICT ("inbox_id", "user_id") DO UPDATE SET "can_reply" = EXCLUDED."can_reply"
+      `
+    }
+
+    // Anybody who had this address as their own and is no longer on the list
+    // goes back to having none. Scoped to THIS inbox, so a save here never
+    // disturbs whoever calls another address their own.
+    if (defaultForUserIds.length === 0) {
+      await tx.$executeRaw`DELETE FROM "uin_user_default_inbox" WHERE "inbox_id" = ${inboxId}`
+    } else {
+      await tx.$executeRaw`
+        DELETE FROM "uin_user_default_inbox"
+         WHERE "inbox_id" = ${inboxId}
+           AND "user_id" NOT IN (${Prisma.join(defaultForUserIds)})
+      `
+    }
+    for (const userId of defaultForUserIds) {
+      await tx.$executeRaw`
+        INSERT INTO "uin_user_default_inbox" ("user_id", "inbox_id")
+        VALUES (${userId}, ${inboxId})
+        ON CONFLICT ("user_id")
+        DO UPDATE SET "inbox_id" = EXCLUDED."inbox_id", "updated_at" = now()
       `
     }
   })
@@ -2208,6 +2272,18 @@ export type SentMessageRow = {
   authorUserId: string | null
 }
 
+/**
+ * What belongs on the Sent list, and to whom.
+ *
+ * Ordinary outbound mail, on a conversation this person may read - that half
+ * has not changed. The second half is colleague post: a message one address
+ * here sent to another is filed as INBOUND on the colleague it was addressed
+ * to, because that is what it is to them, and the sender would otherwise watch
+ * their own message disappear the moment it was delivered. It is still
+ * something they sent, so it is listed for whoever may read the address it went
+ * out as - which is a different question from whether they may read the
+ * colleague's inbox it landed in, and the right one: it is their own writing.
+ */
 function sentWhere(
   inboxIds: string[],
   includeUnrouted: boolean,
@@ -2215,8 +2291,21 @@ function sentWhere(
 ): Prisma.Sql | null {
   const visible = visibilityClause(inboxIds, includeUnrouted, providerModules)
   if (!visible) return null
-  return Prisma.sql`m."direction" = 'out' AND ${visible}`
+  const outbound = Prisma.sql`(m."direction" = 'out' AND ${visible})`
+  if (inboxIds.length === 0) return outbound
+  return Prisma.sql`(${outbound} OR (m."direction" = 'in' AND lower(m."from_address") IN (
+    SELECT lower(i."address") FROM "uin_inboxes" i WHERE i."id" IN (${Prisma.join(inboxIds)})
+  )))`
 }
+
+/** The address a listed message went out as, as an inbox id. Outbound mail
+ *  carries it already; colleague post has to be read back off the From line,
+ *  because the thread it landed on belongs to the person who received it. */
+const SENT_INBOX_ID = Prisma.sql`COALESCE(
+  m."inbox_id",
+  (SELECT i."id" FROM "uin_inboxes" i WHERE lower(i."address") = lower(m."from_address") LIMIT 1),
+  t."inbox_id"
+)`
 
 export async function listSentMessages(
   inboxIds: string[],
@@ -2229,7 +2318,7 @@ export async function listSentMessages(
   if (!where) return []
   const offset = Math.max(0, (page - 1) * perPage)
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT m."id", m."thread_id", COALESCE(m."inbox_id", t."inbox_id") AS "inbox_id",
+    SELECT m."id", m."thread_id", ${SENT_INBOX_ID} AS "inbox_id",
            COALESCE(m."subject", t."subject") AS "subject",
            COALESCE(m."snippet", LEFT(m."body_text", 200)) AS "preview",
            m."to_addresses", m."sent_at", m."has_attachments", m."delivery_status",

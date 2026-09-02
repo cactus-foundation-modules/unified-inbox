@@ -157,6 +157,7 @@ export function UnifiedInboxSettingsTab() {
             inboxes={data.inboxes}
             connections={data.connections}
             access={data.access}
+            defaults={data.defaults}
             users={data.users}
             busy={busy}
             call={call}

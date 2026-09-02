@@ -127,3 +127,85 @@ export function shouldDiscardUnrouted(input: {
 }): boolean {
   return input.enabled && input.inboxId === null && input.threadId === null
 }
+
+/** The header passes that name a recipient outright, as opposed to the
+ *  catch-all sweeping up something nobody was named on. */
+const NAMED_RECIPIENT: ReadonlyArray<RoutingDecision['matchedOn']> = ['delivered-to', 'to', 'cc']
+
+export type MessagePlacement = {
+  direction: 'in' | 'out'
+  routing: RoutingDecision
+}
+
+/**
+ * Which way a message read off the mail server is facing, and whose inbox it
+ * belongs in. The two answers are made together because they disagree in
+ * exactly one case and that case is the whole reason this function exists.
+ *
+ * Sitting in a Sent folder settles it: the mail server is stating that this
+ * account sent the thing, and a reply to a customer that the owner wrote on
+ * their phone has to read as the owner talking however it is addressed. That
+ * clause stays.
+ *
+ * Everywhere else, "the From line is one of ours" is not the same statement.
+ * One colleague writing to another is from one of our addresses AND to one of
+ * our addresses, and it is post for the person it was addressed to: it arrived
+ * in their mailbox, they are the one who has to answer it, and calling it
+ * outbound on the sender files it where the recipient will never look and
+ * leaves the conversation with no inbound message for a reply audience to be
+ * worked out from. So a message found outside a Sent folder, from one of our
+ * addresses, and naming a DIFFERENT one of our addresses on Delivered-To, To or
+ * Cc, is inbound for that colleague.
+ *
+ * The sender's own address is struck out of the recipient lists first, so
+ * "to: me, cc: emma" still reaches Emma rather than settling on the writer. A
+ * message to nobody but ourselves has nothing left after that and stays
+ * outbound, which is right: a note to self is something we sent.
+ *
+ * The catch-all is deliberately not enough. It matches mail nobody here was
+ * named on, so treating it as a colleague's post would turn every reply we send
+ * a customer into inbound mail for whichever address happens to sweep up.
+ */
+export function placeMessage(input: {
+  /** Whether the copy being read was found in a folder the account sends from. */
+  inSentFolder: boolean
+  fromAddress: string | null
+  /** Every address this account answers to: its inboxes, and the login itself. */
+  ownAddresses: Iterable<string>
+  headers: { deliveredTo?: string[]; to?: string[]; cc?: string[] }
+  inboxes: RoutableInbox[]
+}): MessagePlacement {
+  const from = input.fromAddress ? normaliseAddress(input.fromAddress) : null
+
+  if (input.inSentFolder) {
+    return {
+      direction: 'out',
+      routing: routeSentToInbox(from ? [from] : [], input.headers, input.inboxes),
+    }
+  }
+
+  const own = new Set(Array.from(input.ownAddresses, normaliseAddress))
+  if (from === null || !own.has(from)) {
+    return { direction: 'in', routing: routeToInbox(input.headers, input.inboxes) }
+  }
+
+  const colleague = routeToInbox(withoutSender(input.headers, from), input.inboxes)
+  if (NAMED_RECIPIENT.includes(colleague.matchedOn)) {
+    return { direction: 'in', routing: colleague }
+  }
+
+  return { direction: 'out', routing: routeSentToInbox([from], input.headers, input.inboxes) }
+}
+
+function withoutSender(
+  headers: { deliveredTo?: string[]; to?: string[]; cc?: string[] },
+  sender: string,
+): { deliveredTo: string[]; to: string[]; cc: string[] } {
+  const drop = (list: string[] | undefined): string[] =>
+    (list ?? []).filter((address) => normaliseAddress(address) !== sender)
+  return {
+    deliveredTo: drop(headers.deliveredTo),
+    to: drop(headers.to),
+    cc: drop(headers.cc),
+  }
+}

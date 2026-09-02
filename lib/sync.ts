@@ -2,7 +2,7 @@ import type { ImapFlow } from 'imapflow'
 import { prisma } from '@/lib/db/prisma'
 import { simpleParser, type ParsedMail } from 'mailparser'
 import { upsertAlert, clearAlert } from '@/lib/notifications/alerts'
-import { normaliseAddress, parseAddressList, routeSentToInbox, routeToInbox, shouldDiscardUnrouted, type RoutableInbox } from './addresses'
+import { normaliseAddress, parseAddressList, placeMessage, shouldDiscardUnrouted, type RoutableInbox } from './addresses'
 import {
   acquireConnectionLock,
   candidateThreads,
@@ -622,17 +622,18 @@ async function fileMessage(
   const deliveredTo = parseAddressList(headerValue(parsed, 'delivered-to') ?? headerValue(parsed, 'x-delivered-to'))
     .concat(parseAddressList(headerValue(parsed, 'envelope-to')))
 
-  // Sent by us, or sitting in the Sent folder: either way it is outbound, and
-  // it appears in the thread as something the owner said rather than something
-  // the customer did. This is what stops a conversation reading as though
-  // nobody ever replied when the reply was written on a phone.
-  const direction: 'in' | 'out' = ctx.folder.kind === 'sent' || (fromAddress !== null && ctx.ownAddresses.has(fromAddress))
-    ? 'out'
-    : 'in'
-
-  const routed = direction === 'out'
-    ? routeSentToInbox(fromAddress ? [fromAddress] : [], { deliveredTo, to, cc }, ctx.routing)
-    : routeToInbox({ deliveredTo, to, cc }, ctx.routing)
+  // Which way it faces and whose inbox it lands in, decided together because
+  // the two answers disagree over colleague post - see placeMessage. A copy
+  // found in a Sent folder is still outbound whoever it was addressed to: the
+  // mail server is stating this account sent it, and a reply written on a phone
+  // has to read as the owner talking or the conversation looks unanswered.
+  const { direction, routing: routed } = placeMessage({
+    inSentFolder: ctx.folder.kind === 'sent',
+    fromAddress,
+    ownAddresses: ctx.ownAddresses,
+    headers: { deliveredTo, to, cc },
+    inboxes: ctx.routing,
+  })
 
   const automated = classifyAutomated({
     autoSubmitted: headerValue(parsed, 'auto-submitted'),

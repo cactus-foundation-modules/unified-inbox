@@ -4,14 +4,20 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { TabStrip } from '@/components/admin/TabStrip'
-import { inboxHref, moveInOrder } from '@/modules/unified-inbox/lib/list'
+import { inboxHref, moveInOrder, pinDefaultInbox } from '@/modules/unified-inbox/lib/list'
 import { PenIcon } from './icons'
 import { CheckNowButton, type CheckNowNotice } from './CheckNowButton'
 
-// What the list is a list of, along the top: everything at once, then each
-// address people write to, then the channels another module owns, then Sent and
-// Drafts where a mail program has kept them for thirty years, and last of all
-// mail nobody could file - which only an administrator sees at all.
+// What the list is a list of, along the top: this person's own address if they
+// have been given one, then everything at once, then each address people write
+// to, then the channels another module owns, then Sent and Drafts where a mail
+// program has kept them for thirty years, and last of all mail nobody could
+// file - which only an administrator sees at all.
+//
+// The pinned address is the one exception to the row being the same for
+// everybody. It is first because it is what that person opens the hub for, and
+// All is second rather than gone: somebody who works purchasing@ still wants to
+// see the lot without hunting for it.
 //
 // It is core's tab strip rather than a rail of this module's own, so the inbox
 // arrives looking like every other admin screen with tabs and scrolls its own
@@ -56,6 +62,10 @@ type Props = {
    *  may send from - in which case the button is not there at all, rather than
    *  there and disappointing. */
   composeHref: string | null
+  /** The address this person calls their own, pinned to the front of the row,
+   *  or null when they have not been given one. Already known to be one they
+   *  may read - the panel resolves it against the visible list. */
+  defaultInboxId: string | null
   /** Whether this person may drag the addresses into a different order. The
    *  order is the site's rather than one person's, so it takes `manage`. */
   canReorder: boolean
@@ -80,7 +90,7 @@ function Count({ value, word = 'unread' }: { value: number; word?: string }) {
 
 export function InboxTabs({
   base, params, inboxes, channels, allCount, current, showUnrouted, unroutedCount,
-  showDrafts, draftCount, composeHref, canReorder, canCheckNow,
+  showDrafts, draftCount, composeHref, defaultInboxId, canReorder, canCheckNow,
 }: Props) {
   const router = useRouter()
   const [notice, setNotice] = useState<CheckNowNotice | null>(null)
@@ -122,8 +132,22 @@ export function InboxTabs({
     }
   }, [router])
 
-  const move = useCallback((from: number, to: number) => {
-    const next = moveInOrder(order, from, to)
+  // This person's own address, out in front, and everything else in the order
+  // the site keeps. Both halves are worked out from one list so the drag below
+  // can talk in one and save in the other.
+  const { pinned, rest } = pinDefaultInbox(order, defaultInboxId)
+
+  // Said in addresses rather than in positions, because the row as it is drawn
+  // and the order the site keeps are two different lists the moment anything is
+  // pinned. Resolving against the site's own order here is what keeps the
+  // pinned address exactly where it was in it - pinning is one person's
+  // preference and must not rearrange the row for everybody else.
+  const move = useCallback((fromId: string, toId: string) => {
+    const next = moveInOrder(
+      order,
+      order.findIndex((i) => i.id === fromId),
+      order.findIndex((i) => i.id === toId),
+    )
     if (next === order) return
     setOrder(next)
     void save(next, order)
@@ -134,34 +158,29 @@ export function InboxTabs({
   const link = (inbox: string | null) =>
     inboxHref(base, params, { inbox, page: null, id: null, person: null, compose: null, draft: null })
 
-  const draggable = canReorder && order.length > 1
+  // Only the addresses that are actually in the row can be dragged, and the
+  // pinned one is not one of them: it is where it is because it is this
+  // person's, not because of the order.
+  const draggable = canReorder && rest.length > 1
 
-  const items = [
-    {
-      key: 'all',
-      href: link(null),
-      active: current === null,
-      label: (
-        <span className="uin-tab">
-          <span className="uin-tab-name">All</span>
-          <Count value={allCount} />
-        </span>
-      ),
-    },
-    ...order.map((inbox, index) => ({
+  /** One address's tab. `index` is its place among the draggable ones, or null
+   *  for the pinned address, which sits still. */
+  const inboxTab = (inbox: TabInbox, index: number | null) => {
+    const movable = draggable && index !== null
+    return {
       key: inbox.id,
       href: link(inbox.id),
       active: current === inbox.id,
       label: (
         <span
           className="uin-tab"
-          title={inbox.address}
-          data-uin-drag={draggable ? '1' : undefined}
-          data-uin-dragging={dragId === inbox.id ? '1' : undefined}
-          data-uin-over={overId === inbox.id && dragId !== inbox.id ? '1' : undefined}
-          draggable={draggable}
+          title={index === null ? `${inbox.address} - your own inbox` : inbox.address}
+          data-uin-drag={movable ? '1' : undefined}
+          data-uin-dragging={movable && dragId === inbox.id ? '1' : undefined}
+          data-uin-over={movable && overId === inbox.id && dragId !== inbox.id ? '1' : undefined}
+          draggable={movable}
           onDragStart={(event: React.DragEvent<HTMLSpanElement>) => {
-            if (!draggable) return
+            if (!movable) return
             setDragId(inbox.id)
             // Overwritten deliberately: a dragged link otherwise carries its own
             // URL, and dropping it on the address bar or another window would be
@@ -170,24 +189,25 @@ export function InboxTabs({
             event.dataTransfer.setData('text/plain', inbox.id)
           }}
           onDragOver={(event: React.DragEvent<HTMLSpanElement>) => {
-            if (!draggable || !dragId) return
+            if (!movable || !dragId) return
             event.preventDefault()
             event.dataTransfer.dropEffect = 'move'
             setOverId(inbox.id)
           }}
           onDragLeave={() => setOverId((c) => (c === inbox.id ? null : c))}
           onDrop={(event: React.DragEvent<HTMLSpanElement>) => {
-            if (!draggable || !dragId) return
+            if (!movable || !dragId) return
             event.preventDefault()
-            const from = order.findIndex((i) => i.id === dragId)
+            const from = dragId
             setDragId(null)
             setOverId(null)
-            move(from, index)
+            move(from, inbox.id)
           }}
           onDragEnd={() => { setDragId(null); setOverId(null) }}
         >
           <span className="uin-tab-name">{inbox.name}</span>
           <Count value={inbox.count} />
+          {index === null && <span className="sr-only"> . Your own inbox.</span>}
           {/* How to move an address without a mouse has to reach the thing that
               takes the keystroke, which is core's link around this span rather
               than the span itself. Said as words inside it: a link takes its name
@@ -195,14 +215,33 @@ export function InboxTabs({
               description hung on the span reached nobody and an aria-label on a
               span with no role of its own is not something every browser honours
               either. */}
-          {draggable && (
+          {movable && (
             <span className="sr-only">
               . Hold Alt and press the left or right arrow keys to move it along the row.
             </span>
           )}
         </span>
       ),
-    })),
+    }
+  }
+
+  const items = [
+    // Ahead of All, because it is what this person opened the hub to read.
+    ...(pinned ? [inboxTab(pinned, null)] : []),
+    {
+      key: 'all',
+      // Named rather than left out: with an address of their own, an empty
+      // inbox param means "take me to mine", so All has to say so out loud.
+      href: link('all'),
+      active: current === null,
+      label: (
+        <span className="uin-tab">
+          <span className="uin-tab-name">All</span>
+          <Count value={allCount} />
+        </span>
+      ),
+    },
+    ...rest.map((inbox, index) => inboxTab(inbox, index)),
     ...channels.map((channel) => ({
       key: `m:${channel.moduleName}`,
       href: link(`m:${channel.moduleName}`),
@@ -263,18 +302,20 @@ export function InboxTabs({
     const strip = event.currentTarget
     const links = Array.from(strip.querySelectorAll<HTMLAnchorElement>('a[href]'))
     const at = links.indexOf((event.target as HTMLElement).closest('a') as HTMLAnchorElement)
-    // The All tab is first and is nobody's address, so the addresses start one
-    // along. Anything past them - a channel, Not filed, Drafts - is not ours.
-    const index = at - 1
-    if (index < 0 || index >= order.length) return
+    // What comes before the movable addresses: this person's own one if they
+    // have been given one, and then All, which is nobody's address. Anything
+    // past them - a channel, Not filed, Drafts - is not ours either.
+    const offset = pinned ? 2 : 1
+    const index = at - offset
+    if (index < 0 || index >= rest.length) return
     const to = event.key === 'ArrowLeft' ? index - 1 : index + 1
-    if (to < 0 || to >= order.length) return
+    if (to < 0 || to >= rest.length) return
     event.preventDefault()
-    move(index, to)
+    move(rest[index]!.id, rest[to]!.id)
     // The keyboard follows the address it just moved, so a second press carries
     // on from where it is rather than from whatever landed under the cursor.
     requestAnimationFrame(() => {
-      strip.querySelectorAll<HTMLAnchorElement>('a[href]')[to + 1]?.focus()
+      strip.querySelectorAll<HTMLAnchorElement>('a[href]')[to + offset]?.focus()
     })
   }
 

@@ -3,6 +3,7 @@ import { getActiveMediaProvider, isMediaProviderConfigured } from '@/lib/config/
 import { downloadMedia } from '@/lib/media/upload'
 import {
   createOutboundThread,
+  defaultInboxIdFor,
   getInbox,
   getQuotableMessage,
   getThread,
@@ -39,7 +40,7 @@ import { normaliseSubject, buildSnippet, cleanMessageId } from './threading'
 import { htmlToText } from './html'
 import { buildRawMessage } from './mime'
 import { appendToSent } from './append'
-import { renderInboxSignature } from './signature'
+import { chooseSignatureSource, renderInboxSignature } from './signature'
 import { deliver, sendingIdentity, transportForInbox, type SendableMessage } from './transport'
 
 // ---------------------------------------------------------------------------
@@ -213,12 +214,18 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
           })
         : null
 
+  // Whoever pressed Send may have an address of their own, and its signature is
+  // theirs wherever they are answering from. One extra read per send, and only
+  // a second one when they actually have one.
+  const ownInboxId = await defaultInboxIdFor(request.authorUserId)
+  const ownInbox = ownInboxId && ownInboxId !== inbox.id ? await getInbox(ownInboxId) : null
+
   const body = assembleBody({
     bodyHtml: request.bodyHtml,
     // Rendered rather than read: the inbox's signature may be rich text, pasted
     // markup or a stack of email blocks, and only one place knows how to turn
     // each of those into an email.
-    signature: await renderInboxSignature(inbox),
+    signature: await renderInboxSignature(chooseSignatureSource(ownInbox, inbox)),
     quoted,
   })
 

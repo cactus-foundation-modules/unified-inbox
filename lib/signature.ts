@@ -67,6 +67,27 @@ export function hasSignature(inbox: SignatureSource | null): boolean {
   }
 }
 
+/**
+ * Whose signature goes at the foot of this reply.
+ *
+ * An inbox's signature signs off as the department - accounts@ signs as
+ * accounts whoever is typing - and that is still what a shared address wants.
+ * But somebody given an address of their own has written a signature there in
+ * their own name, and it is theirs wherever they are answering from: a reply
+ * they send out of purchasing@ is still from them.
+ *
+ * So their own address wins when it has a signature to give, and the address
+ * the reply is leaving from is what fills the gap when it has not - which is
+ * exactly what happened before anybody had an address of their own, so nobody
+ * loses a signature by being given one.
+ */
+export function chooseSignatureSource<T extends SignatureSource>(
+  ownInbox: T | null,
+  sendingInbox: T,
+): T {
+  return ownInbox && hasSignature(ownInbox) ? ownInbox : sendingInbox
+}
+
 /** The site values the block-built kind needs. The send path can pass these in
  *  rather than have one reply read the site config twice. */
 export type SignatureRenderContext = { palette: EmailPalette; site: SiteEmailContext }

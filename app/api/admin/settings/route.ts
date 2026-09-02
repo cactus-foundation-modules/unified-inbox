@@ -10,6 +10,7 @@ import {
   getSettings,
   peopleCount,
   listAllInboxAccess,
+  listUserDefaultInboxes,
   listConnections,
   listInboxes,
   unroutedCount,
@@ -29,10 +30,11 @@ export async function GET() {
   if (!user) return errorResponse('Not authenticated', 401)
   if (!await hasPermission(user, 'unifiedinbox.manage')) return errorResponse('Forbidden', 403)
 
-  const [connections, inboxes, access, settings, collection, unrouted, people, clashes, retention, users] = await Promise.all([
+  const [connections, inboxes, access, defaults, settings, collection, unrouted, people, clashes, retention, users] = await Promise.all([
     listConnections(),
     listInboxes(),
     listAllInboxAccess(),
+    listUserDefaultInboxes(),
     getSettings(),
     collectionStats(),
     unroutedCount(),
@@ -50,6 +52,9 @@ export async function GET() {
     connections,
     inboxes,
     access,
+    // Whose own address each one is. Drawn on the same screen as the guest
+    // list, so it is fetched with it rather than one request per person.
+    defaults,
     settings,
     // How collection is getting on, per mail account: how much has been
     // gathered, roughly how much there is, and whether the older mail is still

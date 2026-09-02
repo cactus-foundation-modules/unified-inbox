@@ -24,6 +24,9 @@ const db = vi.hoisted(() => ({
   getMessage: vi.fn(),
   listAttachmentsForMessage: vi.fn(),
   getSettings: vi.fn(),
+  // Nobody in here has an address of their own unless a test says so, which is
+  // where every site starts.
+  defaultInboxIdFor: vi.fn(async (): Promise<string | null> => null),
 }))
 
 const transport = vi.hoisted(() => ({
@@ -118,6 +121,8 @@ beforeEach(() => {
   // Delivery receipts off, which is how every site starts and what every test
   // below assumes unless it says otherwise.
   db.getSettings.mockResolvedValue({ trackOpens: false, requestReadReceipts: false })
+  // Nobody has an address of their own unless the test in question says so.
+  db.defaultInboxIdFor.mockResolvedValue(null)
   db.getThread.mockResolvedValue({
     id: 'thread-1',
     inboxId: 'inbox-1',
@@ -180,6 +185,54 @@ describe('sendMessage - the order of operations', () => {
       threadId: 'thread-1',
       inboxId: 'inbox-1',
     })
+  })
+})
+
+describe('sendMessage - the signature at the foot of it', () => {
+  // An inbox's signature signs off as the department, which is what a shared
+  // address wants. Somebody given an address of their own has written one in
+  // their own name there, and it goes out wherever they are answering from.
+  const OWN = {
+    ...INBOX,
+    id: 'inbox-mine',
+    name: 'Jo Bloggs',
+    address: 'jo@deskwell.co.uk',
+    signatureHtml: '<p>Jo Bloggs</p>',
+  }
+
+  it('uses the address the reply leaves from when the sender has none of their own', async () => {
+    await sendMessage(baseRequest())
+    expect(db.insertOutboundMessage.mock.calls[0]![0].bodyHtml).toContain('<p>Deskwell</p>')
+  })
+
+  it('uses the sender’s own address when they have one', async () => {
+    db.defaultInboxIdFor.mockResolvedValue('inbox-mine')
+    db.getInbox.mockImplementation(async (id: string) => (id === 'inbox-mine' ? OWN : INBOX))
+
+    await sendMessage(baseRequest())
+
+    const html = db.insertOutboundMessage.mock.calls[0]![0].bodyHtml
+    expect(html).toContain('<p>Jo Bloggs</p>')
+    expect(html).not.toContain('<p>Deskwell</p>')
+    // The reply still LEAVES from the address it was sent from. Only the
+    // signature is theirs.
+    expect(db.insertOutboundMessage.mock.calls[0]![0].fromAddress).toBe('hi@deskwell.co.uk')
+  })
+
+  it('falls back to the sending address when their own has no signature', async () => {
+    db.defaultInboxIdFor.mockResolvedValue('inbox-mine')
+    db.getInbox.mockImplementation(async (id: string) =>
+      (id === 'inbox-mine' ? { ...OWN, signatureHtml: null } : INBOX))
+
+    await sendMessage(baseRequest())
+    expect(db.insertOutboundMessage.mock.calls[0]![0].bodyHtml).toContain('<p>Deskwell</p>')
+  })
+
+  it('does not read the same inbox twice when their own is the one being sent from', async () => {
+    db.defaultInboxIdFor.mockResolvedValue('inbox-1')
+    await sendMessage(baseRequest())
+    expect(db.getInbox.mock.calls.every((c) => c[0] === 'inbox-1')).toBe(true)
+    expect(db.insertOutboundMessage.mock.calls[0]![0].bodyHtml).toContain('<p>Deskwell</p>')
   })
 })
 

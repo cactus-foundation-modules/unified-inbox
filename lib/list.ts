@@ -123,6 +123,45 @@ export function chooseSendingInbox(
   return sendableIds[0] ?? null
 }
 
+/**
+ * Which tab the hub opens on when the address names none.
+ *
+ * Somebody with an address of their own lands on it rather than on All, which
+ * is the whole point of having one - and it is decided here, before the params
+ * are read, so every query, count and link on the screen is built from the same
+ * answer. `all` is a real value rather than the absence of one for exactly this
+ * reason: without it there would be no way to ask for All at all.
+ */
+export function effectiveInboxParam(
+  raw: string | undefined,
+  defaultInboxId: string | null,
+): string | undefined {
+  if (raw) return raw
+  return defaultInboxId ?? undefined
+}
+
+/**
+ * The addresses along the top, with one person's own pulled to the front.
+ *
+ * `rest` stays in the site's own order, which is what the drag saves and what
+ * everybody else sees. Pinning is per person and changes nothing for anybody
+ * else, so it happens here at the last moment rather than in the query.
+ *
+ * A default naming an address this person cannot see - taken off the guest list
+ * since, or removed altogether - pins nothing rather than showing a tab that
+ * would not open.
+ */
+export function pinDefaultInbox<T extends { id: string }>(
+  inboxes: T[],
+  defaultInboxId: string | null,
+): { pinned: T | null; rest: T[] } {
+  const pinned = defaultInboxId
+    ? inboxes.find((i) => i.id === defaultInboxId) ?? null
+    : null
+  if (!pinned) return { pinned: null, rest: inboxes }
+  return { pinned, rest: inboxes.filter((i) => i.id !== pinned.id) }
+}
+
 export function pageCount(total: number, perPage: number = PER_PAGE): number {
   if (total <= 0) return 1
   return Math.ceil(total / perPage)

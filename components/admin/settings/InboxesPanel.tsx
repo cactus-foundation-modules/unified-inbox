@@ -6,7 +6,7 @@ import { ConfirmDialog } from '../inbox/ConfirmDialog'
 import { fetchFolders } from './api'
 import { SignatureEditor } from './SignatureEditor'
 import { blankInbox, type InboxDraft } from './inbox-draft'
-import type { AccessRow, Caller, Connection, Inbox, Note, StaffMember } from './types'
+import type { AccessRow, Caller, Connection, DefaultInboxRow, Inbox, Note, StaffMember } from './types'
 import {
   CheckField, Chip, EditPanel, EmptyState, FieldGroup, FieldRow, FormActions,
   ListRow, ListRowHeader, MUTED, Panel,
@@ -21,10 +21,11 @@ import {
 // than in one column of fourteen boxes, which is what it used to be.
 // ---------------------------------------------------------------------------
 
-export function InboxesPanel({ inboxes, connections, access, users, busy, call, setMessage, reload }: {
+export function InboxesPanel({ inboxes, connections, access, defaults, users, busy, call, setMessage, reload }: {
   inboxes: Inbox[]
   connections: Connection[]
   access: AccessRow[]
+  defaults: DefaultInboxRow[]
   users: StaffMember[]
   busy: boolean
   call: Caller
@@ -35,6 +36,11 @@ export function InboxesPanel({ inboxes, connections, access, users, busy, call, 
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState<InboxDraft>(blankInbox())
   const [staff, setStaff] = useState<AccessRow[]>([])
+  // Whose own address the inbox being edited is. Held as ids rather than as
+  // rows because that is what goes back up, and because somebody can be given
+  // an address without being on its guest list - an inbox nobody is named on is
+  // open to everybody anyway.
+  const [ownedBy, setOwnedBy] = useState<string[]>([])
   // Which inbox the Remove question is about. Null when nothing is asked.
   const [removing, setRemoving] = useState<Inbox | null>(null)
   const [refreshingFolders, setRefreshingFolders] = useState(false)
@@ -55,9 +61,28 @@ export function InboxesPanel({ inboxes, connections, access, users, busy, call, 
     [connections],
   )
 
+  const defaultsByInbox = useMemo(() => {
+    const map = new Map<string, string[]>()
+    for (const row of defaults) {
+      const list = map.get(row.inboxId)
+      if (list) list.push(row.userId)
+      else map.set(row.inboxId, [row.userId])
+    }
+    return map
+  }, [defaults])
+
+  /** The address somebody already calls their own, when it is not this one -
+   *  so the screen can say what ticking the box is about to take away. */
+  function ownInboxElsewhere(userId: string, thisInboxId: string | null): Inbox | null {
+    const row = defaults.find((d) => d.userId === userId)
+    if (!row || row.inboxId === thisInboxId) return null
+    return inboxes.find((i) => i.id === row.inboxId) ?? null
+  }
+
   function startNew() {
     setDraft(blankInbox())
     setStaff([])
+    setOwnedBy([])
     setEditing('new')
   }
 
@@ -84,6 +109,7 @@ export function InboxesPanel({ inboxes, connections, access, users, busy, call, 
       sortOrder: inbox.sortOrder,
     })
     setStaff(accessByInbox.get(inbox.id) ?? [])
+    setOwnedBy(defaultsByInbox.get(inbox.id) ?? [])
     setEditing(inbox.id)
   }
 
@@ -121,7 +147,13 @@ export function InboxesPanel({ inboxes, connections, access, users, busy, call, 
     // with a cheerful message on the screen.
     const access = await call(`/inboxes/${saved.inbox.id}/access`, {
       method: 'PUT',
-      body: JSON.stringify({ entries: staff.map((s) => ({ userId: s.userId, canReply: s.canReply })) }),
+      body: JSON.stringify({
+        entries: staff.map((s) => ({ userId: s.userId, canReply: s.canReply })),
+        // Sent with the guest list rather than after it: they are one Save, and
+        // half of it landing would leave somebody named as owning an address
+        // they had just been taken off.
+        defaultUserIds: ownedBy,
+      }),
     }, 'Inbox saved.')
     if (!access) return
     // Saved either way. This only says whether replies will actually leave the
@@ -143,6 +175,12 @@ export function InboxesPanel({ inboxes, connections, access, users, busy, call, 
 
   function toggleReply(userId: string) {
     setStaff((current) => current.map((s) => s.userId === userId ? { ...s, canReply: !s.canReply } : s))
+  }
+
+  function toggleOwn(userId: string) {
+    setOwnedBy((current) => current.includes(userId)
+      ? current.filter((id) => id !== userId)
+      : [...current, userId])
   }
 
   // The mail account this address is collected from, and therefore whose
@@ -307,7 +345,13 @@ export function InboxesPanel({ inboxes, connections, access, users, busy, call, 
 
         <FieldGroup
           title="Who can read it"
-          hint="Tick nobody and it is open to everyone who can see the inbox at all. Tick anybody and it becomes theirs alone - which is how the accounts address stays away from the rest of the team."
+          hint={<>
+            Tick nobody and it is open to everyone who can see the inbox at all. Tick anybody and it
+            becomes theirs alone - which is how the accounts address stays away from the rest of the
+            team. Mark it as somebody&rsquo;s own and it sits first along the top for them, it is
+            what they land on, and its signature goes on their replies wherever they send from.
+            Everyone has one address of their own at most, so ticking this moves theirs here.
+          </>}
         >
           {/* Named by the group's own legend above, so no second label here. */}
           <div className="field">
@@ -323,6 +367,12 @@ export function InboxesPanel({ inboxes, connections, access, users, busy, call, 
               }}>
                 {users.map((u, index) => {
                   const row = staff.find((s) => s.userId === u.id)
+                  // An inbox nobody is named on is open to everybody, so making
+                  // it somebody's own is only offered where they can actually
+                  // read it - named on it, or the list empty.
+                  const canRead = !!row || staff.length === 0
+                  const owns = ownedBy.includes(u.id)
+                  const elsewhere = owns ? null : ownInboxElsewhere(u.id, editing === 'new' ? null : editing)
                   return (
                     <div
                       key={u.id}
@@ -341,12 +391,25 @@ export function InboxesPanel({ inboxes, connections, access, users, busy, call, 
                           <span style={{ ...MUTED, fontSize: '0.8125rem' }}>{u.email}</span>
                         </span>
                       </label>
-                      {row && (
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontWeight: 400, fontSize: '0.8125rem', cursor: 'pointer' }}>
-                          <input type="checkbox" checked={row.canReply} onChange={() => toggleReply(u.id)} />
-                          Can reply
-                        </label>
-                      )}
+                      <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        {row && (
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontWeight: 400, fontSize: '0.8125rem', cursor: 'pointer' }}>
+                            <input type="checkbox" checked={row.canReply} onChange={() => toggleReply(u.id)} />
+                            Can reply
+                          </label>
+                        )}
+                        {canRead && (
+                          <label
+                            style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontWeight: 400, fontSize: '0.8125rem', cursor: 'pointer' }}
+                            title={elsewhere
+                              ? `${u.name} currently opens on ${elsewhere.name}. Ticking this moves them here.`
+                              : 'They open the inbox on this address, and their replies are signed with its signature.'}
+                          >
+                            <input type="checkbox" checked={owns} onChange={() => toggleOwn(u.id)} />
+                            Their own inbox
+                          </label>
+                        )}
+                      </div>
                     </div>
                   )
                 })}
@@ -397,6 +460,7 @@ export function InboxesPanel({ inboxes, connections, access, users, busy, call, 
           return <div key={inbox.id}>{inboxForm(`Editing ${inbox.address}`)}</div>
         }
         const rows = accessByInbox.get(inbox.id) ?? []
+        const owners = defaultsByInbox.get(inbox.id) ?? []
         const connection = inbox.connectionId ? connectionsById.get(inbox.connectionId) : null
         return (
           <ListRow key={inbox.id}>
@@ -405,6 +469,11 @@ export function InboxesPanel({ inboxes, connections, access, users, busy, call, 
               badges={<>
                 {inbox.isCatchAll && <Chip tone="info">Catch-all</Chip>}
                 {rows.length > 0 && <Chip tone="plain">{rows.length === 1 ? '1 person' : `${rows.length} people`}</Chip>}
+                {owners.length > 0 && (
+                  <Chip tone="info">
+                    {owners.length === 1 ? 'Somebody\u2019s own' : `${owners.length} people\u2019s own`}
+                  </Chip>
+                )}
                 {!inbox.connectionId && <Chip tone="plain">Send only</Chip>}
               </>}
               subtitle={inbox.address}

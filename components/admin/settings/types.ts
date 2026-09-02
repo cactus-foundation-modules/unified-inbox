@@ -58,6 +58,10 @@ export type Inbox = {
 
 export type AccessRow = { inboxId: string; userId: string; canReply: boolean }
 
+/** One person and the address they call their own. One row per person at most:
+ *  naming a second address moves it rather than adding to it. */
+export type DefaultInboxRow = { userId: string; inboxId: string }
+
 export type Settings = {
   backfillMonths: number
   retentionMonths: number | null
@@ -94,6 +98,8 @@ export type Payload = {
   connections: Connection[]
   inboxes: Inbox[]
   access: AccessRow[]
+  /** Whose own address each inbox is, across the whole site. */
+  defaults: DefaultInboxRow[]
   settings: Settings
   collection: CollectionStat[]
   unrouted: number

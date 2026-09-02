@@ -154,6 +154,15 @@ export type InboxAccess = {
   canReply: boolean
 }
 
+/** The address that is one person's own: what they land on, what sits first
+ *  along the top of the hub for them, and where their signature is written.
+ *  One per person or none, which is why it is keyed on the person rather than
+ *  on the pair. */
+export type UserDefaultInbox = {
+  userId: string
+  inboxId: string
+}
+
 export type UnifiedInboxSettings = {
   backfillMonths: number
   retentionMonths: number | null

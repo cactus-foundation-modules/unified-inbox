@@ -7,6 +7,7 @@ import { canReplyToInbox, canViewInbox, replyableInboxIds, visibleInboxIds } fro
 import {
   attachmentsForThread,
   countDrafts,
+  defaultInboxIdFor,
   countThreads,
   draftForThread,
   getDraft,
@@ -43,7 +44,7 @@ import { addressesForPerson, buildContextQuery } from '@/modules/unified-inbox/l
 import { ContextRail } from './inbox/ContextRail'
 import { PersonView } from './inbox/PersonView'
 import { replyRecipients } from '@/modules/unified-inbox/lib/compose'
-import { chooseSendingInbox, inboxHref, parseInboxParams, PER_PAGE } from '@/modules/unified-inbox/lib/list'
+import { chooseSendingInbox, effectiveInboxParam, inboxHref, parseInboxParams, PER_PAGE } from '@/modules/unified-inbox/lib/list'
 import { providerForModule, visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
 import { InboxStyles } from './inbox/styles'
 import { InboxTabs } from './inbox/InboxTabs'
@@ -117,12 +118,24 @@ export async function UnifiedInboxPanel({
     )
   }
 
-  const params = parseInboxParams(searchParams)
+  // The address this person calls their own, if it is still one they may read.
+  // Resolved against the visible list rather than trusted: an address can be
+  // taken off somebody's guest list, or deleted, long after it was made theirs,
+  // and a tab that opens on "that inbox is not here" is worse than no tab.
+  const ownInboxId = await defaultInboxIdFor(user.id)
+  const pinnedInboxId = ownInboxId && visible.has(ownInboxId) ? ownInboxId : null
+
+  // An address of one's own is where the hub opens when the URL names no tab,
+  // so it is settled here, before anything is parsed - every query, count and
+  // link below is then built from the one answer rather than from two.
+  const wantedInbox = effectiveInboxParam(searchParams.inbox, pinnedInboxId)
+  const chosen = wantedInbox ? { ...searchParams, inbox: wantedInbox } : searchParams
+  const params = parseInboxParams(chosen)
   // The tab has to survive every link on this screen, or following one lands on
   // whichever tab the host happens to render first.
   const carried: Record<string, string> = { tab: 'unified-inbox' }
   for (const key of ['inbox', 'status', 'unread', 'assignee', 'q', 'page', 'id', 'person'] as const) {
-    const value = searchParams[key]
+    const value = chosen[key]
     if (value) carried[key] = value
   }
 
@@ -518,6 +531,7 @@ export async function UnifiedInboxPanel({
         showDrafts={sendable.length > 0 || draftCount > 0}
         draftCount={draftCount}
         composeHref={composeHref}
+        defaultInboxId={pinnedInboxId}
         canReorder={canManage}
         canCheckNow={canManage && connections.length > 0}
       />
