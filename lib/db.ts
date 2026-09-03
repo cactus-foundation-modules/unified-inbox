@@ -6,7 +6,7 @@ import { normaliseAddress } from './addresses'
 import type { ThreadRef } from './threading'
 import type { OutboundCandidate } from './relay-copy'
 import { remoteImageUrls } from './remote-images'
-import { DRAFT_MODES, isSignatureKind } from './types'
+import { DRAFT_MODES, DRAFT_SEND_STATES, isSignatureKind } from './types'
 import type {
   AttachmentFetchMode,
   Connection,
@@ -14,6 +14,7 @@ import type {
   Draft,
   DraftAttachment,
   DraftMode,
+  DraftSendState,
   IdentityKind,
   Inbox,
   InboxAccess,
@@ -471,6 +472,17 @@ export async function defaultInboxIdFor(userId: string): Promise<string | null> 
     SELECT "inbox_id" FROM "uin_user_default_inbox" WHERE "user_id" = ${userId} LIMIT 1
   `
   return rows[0]?.inbox_id ?? null
+}
+
+/** Whether this address is somebody's own rather than a department's.
+ *
+ *  Asked at send time, because it settles whose signature goes at the foot:
+ *  a personal address signs as its owner whoever is holding the keyboard. */
+export async function inboxIsSomebodysOwn(inboxId: string): Promise<boolean> {
+  const rows = await prisma.$queryRaw<{ one: number }[]>`
+    SELECT 1 AS one FROM "uin_user_default_inbox" WHERE "inbox_id" = ${inboxId} LIMIT 1
+  `
+  return rows.length > 0
 }
 
 /**
@@ -2447,6 +2459,14 @@ function mapDraft(r: Record<string, unknown>): Draft {
     // jsonb comes back parsed, and can be any shape at all if somebody has been
     // at the table by hand. Anything that is not a list of files is no files.
     attachments: Array.isArray(r.attachments) ? (r.attachments as DraftAttachment[]) : [],
+    sendAt: (r.send_at as Date | null) ?? null,
+    // A state the column check could not have allowed is a row somebody has
+    // been at by hand. Read as an ordinary draft, which is the state that does
+    // nothing on its own.
+    sendState: DRAFT_SEND_STATES.includes(r.send_state as Exclude<DraftSendState, null>)
+      ? (r.send_state as DraftSendState)
+      : null,
+    sendError: (r.send_error as string | null) ?? null,
     createdAt: r.created_at as Date,
     updatedAt: r.updated_at as Date,
   }
@@ -2665,6 +2685,12 @@ export type DraftInput = {
   subject: string | null
   body: string
   attachments: DraftAttachment[]
+  /** When it should leave on its own. A date puts it in the queue; null takes
+   *  it back out and leaves an ordinary draft, which is also what clears the
+   *  reason a failed one gives. LEFT OUT means leave whatever time is already
+   *  on it - an ordinary Save from the composer must not quietly cancel a
+   *  message somebody had set for the morning. */
+  sendAt?: Date | null
 }
 
 /**
@@ -2678,6 +2704,20 @@ export type DraftInput = {
  * one draft and one lost paragraph.
  */
 export async function saveDraft(data: DraftInput): Promise<Draft> {
+  // One decision, made once: a time means it is waiting to go, no time means it
+  // is an ordinary draft, and saying nothing about it at all means leave it as
+  // it was. Every other scheduling column follows from that, so a saved edit
+  // never leaves a stale reason or a stale claim behind - and never cancels a
+  // departure nobody asked to cancel.
+  const keep = data.sendAt === undefined
+  const sendAt = data.sendAt ?? null
+  const sendState: DraftSendState = sendAt ? 'scheduled' : null
+  const schedule = keep
+    ? Prisma.sql`"send_at" = "send_at", "send_state" = "send_state", "send_error" = "send_error"`
+    : Prisma.sql`"send_at" = ${sendAt}, "send_state" = ${sendState}, "send_error" = NULL, "claimed_at" = NULL`
+  const scheduleOnConflict = keep
+    ? Prisma.sql`"send_at" = "uin_drafts"."send_at", "send_state" = "uin_drafts"."send_state"`
+    : Prisma.sql`"send_at" = EXCLUDED."send_at", "send_state" = EXCLUDED."send_state", "send_error" = NULL, "claimed_at" = NULL`
   if (data.id) {
     const updated = await prisma.$queryRaw<Record<string, unknown>[]>`
       UPDATE "uin_drafts"
@@ -2688,6 +2728,7 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
              "subject"      = ${data.subject},
              "body"         = ${data.body},
              "attachments"  = ${JSON.stringify(data.attachments)}::jsonb,
+             ${schedule},
              "updated_at"   = now()
        WHERE "id" = ${data.id} AND ${editScope(data.authorUserId, data.replyableInboxIds)}
       RETURNING *
@@ -2700,10 +2741,10 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     INSERT INTO "uin_drafts"
       ("author_user_id", "inbox_id", "thread_id", "mode", "to_addresses",
-       "cc_addresses", "subject", "body", "attachments")
+       "cc_addresses", "subject", "body", "attachments", "send_at", "send_state")
     VALUES (${data.authorUserId}, ${data.inboxId}, ${data.threadId}, ${data.mode},
             ${data.to}::text[], ${data.cc}::text[], ${data.subject}, ${data.body},
-            ${JSON.stringify(data.attachments)}::jsonb)
+            ${JSON.stringify(data.attachments)}::jsonb, ${sendAt}, ${sendState})
     ON CONFLICT ("thread_id", "author_user_id") WHERE "thread_id" IS NOT NULL
     DO UPDATE SET "inbox_id"     = EXCLUDED."inbox_id",
                   "mode"         = EXCLUDED."mode",
@@ -2712,6 +2753,7 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
                   "subject"      = EXCLUDED."subject",
                   "body"         = EXCLUDED."body",
                   "attachments"  = EXCLUDED."attachments",
+                  ${scheduleOnConflict},
                   "updated_at"   = now()
     RETURNING *
   `
@@ -2748,6 +2790,82 @@ export async function discardDraftAfterSend(
     // reported to somebody whose email actually left is a lie.
     console.error('[unified-inbox] could not tidy up the draft after sending', err)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Messages written now and sent later.
+//
+// A scheduled message is a draft with a departure time on it (see
+// migrations/021_scheduled_send.sql), so everything above already governs who
+// may write one, read one and throw one away. What is left is the queue: taking
+// the ones whose time has come, and putting back the ones a run took and never
+// settled.
+//
+// The claim is a single UPDATE, and it is what stops one message going twice.
+// Two runs overlapping - the scheduled tick and somebody pressing Check now -
+// both look for due rows, and only one of them can move a row out of
+// 'scheduled'. SKIP LOCKED means the loser walks past the row rather than
+// waiting behind it holding a lock for the length of a mail send.
+// ---------------------------------------------------------------------------
+
+/** Takes the messages whose time has come, marking them as being sent in the
+ *  same statement that finds them. Whatever comes back is this run's and
+ *  nobody else's. */
+export async function claimDueScheduledDrafts(now: Date, limit: number): Promise<Draft[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    UPDATE "uin_drafts"
+       SET "send_state" = 'sending',
+           "claimed_at" = now()
+     WHERE "id" IN (
+       SELECT "id" FROM "uin_drafts"
+        WHERE "send_state" = 'scheduled' AND "send_at" <= ${now}
+        ORDER BY "send_at" ASC
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+     )
+    RETURNING *
+  `
+  return rows.map(mapDraft)
+}
+
+/** Its time came and the mail server said no. The writing stays exactly where
+ *  it is, with the reason beside it, because the alternative is a message
+ *  nobody sent and nobody can find. */
+export async function failScheduledDraft(id: string, reason: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "uin_drafts"
+       SET "send_state" = 'failed',
+           "send_error" = ${reason},
+           "claimed_at" = NULL,
+           "updated_at" = now()
+     WHERE "id" = ${id} AND "send_state" = 'sending'
+  `
+}
+
+/** Claims from a run that died between taking a message and settling it. Put
+ *  back rather than failed: nothing was sent, so there is nothing to explain,
+ *  and the next run picks it up as it would have done. Returns how many. */
+export async function releaseStaleScheduledClaims(before: Date): Promise<number> {
+  return await prisma.$executeRaw`
+    UPDATE "uin_drafts"
+       SET "send_state" = 'scheduled',
+           "claimed_at" = NULL
+     WHERE "send_state" = 'sending'
+       AND ("claimed_at" IS NULL OR "claimed_at" < ${before})
+  `
+}
+
+/** Puts back the exact rows this run claimed and then ran out of clock for.
+ *  By id rather than by age, because a run that reached its deadline must not
+ *  disturb a claim another run is still working through. */
+export async function releaseScheduledClaims(ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0
+  return await prisma.$executeRaw`
+    UPDATE "uin_drafts"
+       SET "send_state" = 'scheduled',
+           "claimed_at" = NULL
+     WHERE "send_state" = 'sending' AND "id" IN (${Prisma.join(ids)})
+  `
 }
 
 // ---------------------------------------------------------------------------

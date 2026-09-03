@@ -7,6 +7,8 @@ import { AttachmentChips, AttachmentPicker, plainReason, toHtml, type Attachment
 import { AttachmentDropNotice, AttachmentDropOverlay } from './AttachmentDropChrome'
 import { useAttachmentDrop } from './useAttachmentDrop'
 import { ConfirmDialog } from './ConfirmDialog'
+import { SendLater } from './SendLater'
+import type { DraftSendState } from '@/modules/unified-inbox/lib/types'
 
 // The composer: reply, reply to everybody, forward, and an internal note.
 //
@@ -48,11 +50,16 @@ type Props = {
   /** Counts those presses, so pressing Forward twice still reads as a second
    *  instruction rather than as nothing having changed. */
   requestedAt?: number
+  /** The earliest a message may be set to go, in the picker's own shape and in
+   *  the site's zone. Worked out on the server, because this browser may be
+   *  standing somewhere else entirely. */
+  minSendAt: string
+  timezone: string
 }
 
 export function Composer({
   threadId, replyTo, replyAllTo, canReply, canForward, staff, cannotReplyReason, draft,
-  requestedMode, requestedAt,
+  requestedMode, requestedAt, minSendAt, timezone,
 }: Props) {
   const router = useRouter()
   // A saved draft says which of the three it was, and opening the conversation
@@ -86,6 +93,13 @@ export function Composer({
   // Where a click was headed when it was caught, or null when nothing was.
   const [leavingTo, setLeavingTo] = useState<string | null>(null)
   const [draftId, setDraftId] = useState<string | null>(draft?.id ?? null)
+  // When this reply is set to go out on its own, and how that went last time it
+  // was tried. Held here rather than read off the draft prop each render: a
+  // schedule set in this box has to show straight away, before the server has
+  // redrawn the screen behind it.
+  const [sendAt, setSendAt] = useState<string | null>(draft?.sendAt ?? null)
+  const [sendState, setSendState] = useState<DraftSendState>(draft?.sendState ?? null)
+  const [sendError, setSendError] = useState<string | null>(draft?.sendError ?? null)
   // Typed since the last time any of it was put down somewhere. What the
   // beforeunload guard below is asking about, and it is deliberately not "is
   // there text", because text that has just been saved is not at risk.
@@ -262,6 +276,10 @@ export function Composer({
       setMentions([])
       setMentionQuery('')
       setDirty(false)
+      // The draft went with the message, and so did any time on it.
+      setSendAt(null)
+      setSendState(null)
+      setSendError(null)
       // Said out loud, because the box emptying could as easily mean something
       // went wrong as mean it went.
       setNote(mode === 'note' ? 'Your note is on the conversation.' : 'Sent. It is on the conversation above.')
@@ -279,7 +297,11 @@ export function Composer({
     }
   }, [attachments, draftId, forwardTo, mentions, mode, replyAllTo, replyTo, router, text, threadId])
 
-  const save = useCallback(async () => {
+  /** Puts the box down as a draft, with or without a time on it. Saving and
+   *  scheduling are one request on purpose: a scheduled message IS a draft with
+   *  a departure time, and two requests would leave a window where the writing
+   *  was saved and the time was not. `wallClock` null takes a time back off. */
+  const save = useCallback(async (wallClock?: string | null) => {
     const payload = {
       id: draftId ?? undefined,
       threadId,
@@ -291,6 +313,10 @@ export function Composer({
       attachments: attachments.map(({ key, url, filename, contentType, sizeBytes }) => ({
         key, url, filename, contentType, sizeBytes,
       })),
+      // Undefined is dropped by JSON.stringify, which is exactly what "leave
+      // whatever time is on it" has to look like on the wire. A string sets a
+      // time, null takes it off.
+      sendAt: wallClock,
     }
     if (!isWorthSaving(payload)) {
       setError('There is nothing to save yet.')
@@ -313,8 +339,16 @@ export function Composer({
         return
       }
       if (data?.id) setDraftId(data.id as string)
+      // What came back rather than what was asked for: the server is the one
+      // that decides what a typed time means.
+      const at = typeof data?.sendAt === 'string' ? data.sendAt : null
+      setSendAt(at)
+      setSendState(at ? 'scheduled' : null)
+      setSendError(null)
       setDirty(false)
-      setNote('Saved. It is waiting under Drafts, and here.')
+      setNote(at
+        ? 'Saved, and set to go out on its own.'
+        : 'Saved. It is waiting under Drafts, and here.')
       router.refresh()
     } catch {
       setError('The site could not be reached. Nothing was saved.')
@@ -336,6 +370,9 @@ export function Composer({
       setText('')
       setForwardTo('')
       setAttachments([])
+      setSendAt(null)
+      setSendState(null)
+      setSendError(null)
       setDirty(false)
       setNote('')
       router.refresh()
@@ -495,6 +532,22 @@ export function Composer({
         />
       )}
 
+      {/* An internal note is not sent to anybody, so there is nothing to send
+          later. Neither is a reply with nobody to reply to. */}
+      {mode !== 'note' && (
+        <SendLater
+          sendAt={sendAt}
+          sendState={sendState}
+          sendError={sendError}
+          minWallClock={minSendAt}
+          timezone={timezone}
+          busy={busy}
+          disabled={nobodyToReplyTo}
+          onSchedule={(wallClock) => { void save(wallClock) }}
+          onCancel={() => { void save(null) }}
+        />
+      )}
+
       {error && <div className="alert alert-danger" role="alert">{error}</div>}
       {note && !error && <div className="alert alert-success" role="status">{note}</div>}
 
@@ -512,7 +565,12 @@ export function Composer({
             : mode === 'note' ? 'Save note' : 'Send'}
         </button>
         {mode !== 'note' && (
-          <button type="button" className="btn btn-secondary btn-sm" onClick={save} disabled={busy}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => { void save() }}
+            disabled={busy}
+          >
             {busyWith === 'save' ? 'Saving...' : 'Save as a draft'}
           </button>
         )}

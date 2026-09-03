@@ -562,6 +562,21 @@ const CSS = `
   color: var(--color-destructive-hover);
 }
 
+/* ---- sending it later ---------------------------------------------------- */
+/* The picker sits inside the composer rather than in a dialog of its own: it is
+   one more thing to say about the message being written, not a trip somewhere
+   else. Set apart with a rule above it so a date box never reads as another
+   field of the message. */
+.uin-sendlater { display: flex; flex-direction: column; gap: 0.5rem; }
+.uin-sendlater-picker {
+  display: flex; flex-direction: column; gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background: var(--color-surface-raised);
+}
+.uin-sendlater-picker input[type="datetime-local"] { max-width: 16rem; }
+
 /* ---- pagination --------------------------------------------------------- */
 .uin-pager {
   display: flex; gap: 0.5rem; align-items: center; justify-content: space-between;

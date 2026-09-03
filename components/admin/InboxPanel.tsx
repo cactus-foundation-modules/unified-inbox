@@ -41,6 +41,7 @@ import { attachableKinds, loadContext } from '@/modules/unified-inbox/lib/adapte
 import { defaultLinkKind } from '@/modules/unified-inbox/lib/link-kinds'
 import { modulesForInbox } from '@/modules/unified-inbox/lib/module-senders'
 import { canEditDraft, forComposer } from '@/modules/unified-inbox/lib/drafts'
+import { MIN_LEAD_MS, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
 import { addressesForPerson, buildContextQuery } from '@/modules/unified-inbox/lib/identity'
 import { ContextRail } from './inbox/ContextRail'
 import { PersonView } from './inbox/PersonView'
@@ -90,6 +91,10 @@ export async function UnifiedInboxPanel({
   // out in UTC - an hour behind the site for most of the year.
   const timezone = await getSiteTimezone()
   const canManage = await hasPermission(user, 'unifiedinbox.manage')
+  // The earliest a message may be set to go out, worked out here in the site's
+  // own zone rather than in whichever one the reader's browser is standing in.
+  // Both composers hand it straight to the date box as its floor.
+  const minSendAt = toWallClock(new Date(new Date().getTime() + MIN_LEAD_MS), timezone)
   const canEditLinks = canManage || await hasPermission(user, 'unifiedinbox.reply')
 
   // Anything whose snooze has elapsed is open again by the time the list is
@@ -416,6 +421,7 @@ export async function UnifiedInboxPanel({
           blockState={blockState}
           now={new Date()}
           timezone={timezone}
+          minSendAt={minSendAt}
         />
       )
 
@@ -481,6 +487,8 @@ export async function UnifiedInboxPanel({
           draft={editing}
           authorName={staffById[editing.authorUserId] ?? 'A colleague'}
           inboxName={editing.inboxId ? allInboxes.find((i) => i.id === editing.inboxId)?.name ?? null : null}
+          now={new Date()}
+          timezone={timezone}
         />
       )
     } else if (sendable.length > 0) {
@@ -491,6 +499,8 @@ export async function UnifiedInboxPanel({
           inboxes={sendable.map((i) => ({ id: i.id, name: i.name, address: i.address }))}
           defaultInboxId={chooseSendingInbox(sendableIds, editing?.inboxId ?? params.inboxId)}
           draft={editing ? forComposer(editing) : null}
+          minSendAt={minSendAt}
+          timezone={timezone}
         />
       )
     } else {

@@ -53,6 +53,9 @@ type Props = {
   /** The site's timezone. Every clock time on this pane is stamped in it: the
    *  server renders these, and its own clock is UTC. */
   timezone: string
+  /** The earliest a reply may be set to go out on its own, already in the
+   *  picker's shape and in that same timezone. */
+  minSendAt: string
 }
 
 function formatBytes(bytes: number | null): string {
@@ -345,7 +348,7 @@ function unattendedEvent(event: ThreadEventRow): string | null {
 export function ThreadPane({
   base, params, thread, inboxName, messages, events, staff, staffById,
   canReply, cannotReplyReason, replyTo, replyAllTo, draft, newestFirst,
-  canDeleteMessages, blockState, now, timezone,
+  canDeleteMessages, blockState, now, timezone, minSendAt,
 }: Props) {
   // The list arrives oldest first. Reversing a copy rather than sorting again:
   // the query already decided the order, and this only says which end to read
@@ -442,6 +445,8 @@ export function ThreadPane({
             staff={staff}
             cannotReplyReason={cannotReplyReason}
             draft={draft}
+            minSendAt={minSendAt}
+            timezone={timezone}
           />
         )}
 
@@ -471,6 +476,8 @@ export function ThreadPane({
             staff={staff}
             cannotReplyReason={cannotReplyReason}
             draft={draft}
+            minSendAt={minSendAt}
+            timezone={timezone}
           />
         )}
 

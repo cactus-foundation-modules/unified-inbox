@@ -7,6 +7,7 @@ import {
   draftRecipientLabel,
   draftSubjectLabel,
 } from '@/modules/unified-inbox/lib/drafts'
+import { scheduleLabel } from '@/modules/unified-inbox/lib/scheduled'
 import { PaperclipIcon, PenIcon } from './icons'
 
 // The Drafts list: what anybody has started on an address you can read, and
@@ -56,6 +57,11 @@ export function DraftListView({
     <ul className="uin-list">
       {drafts.map((draft) => {
         const who = draftRecipientLabel(draft)
+        // A message with a time on it is still a draft, and still in this list -
+        // the tag is the whole of the difference. Keeping it here rather than
+        // on a tab of its own means somebody looking for what they have not
+        // sent yet finds all of it in one place.
+        const going = scheduleLabel(draft, now, timezone)
         // "No recipient yet" and "A reply" are sentences standing in for an
         // address nobody has typed yet. Initials taken off the first of them put
         // NR in a circle, which reads as a draft to somebody of that name.
@@ -89,6 +95,18 @@ export function DraftListView({
               </span>
               <span className="uin-row-meta">
                 <span className="uin-row-tags">
+                  {going && (
+                    <span
+                      // The same two grounds the conversation list already
+                      // uses for "waiting" and "went wrong", so a scheduled
+                      // message reads the way a snoozed conversation does and
+                      // a failed one reads the way a failed send does.
+                      className={draft.sendState === 'failed' ? 'uin-tag uin-tag-failed' : 'uin-tag uin-tag-snoozed'}
+                      title={draft.sendError ?? undefined}
+                    >
+                      <span className="uin-tag-text">{going}</span>
+                    </span>
+                  )}
                   {draft.attachments.length > 0 && (
                     <span className="uin-tag" title="Has an attachment">
                       {PaperclipIcon}<span className="sr-only">Has an attachment</span>

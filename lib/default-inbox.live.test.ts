@@ -171,6 +171,13 @@ describe.runIf(shouldRun)('an address of one’s own, against a real database', 
     expect(await lib.listUserDefaultInboxes()).toEqual([{ userId: emma, inboxId: accounts }])
   })
 
+  it('knows which addresses are somebody’s own, from the inbox’s side', async () => {
+    // Asked at send time to settle whose signature goes at the foot: a reply
+    // leaving a personal address signs as its owner whoever pressed Send.
+    expect(await lib.inboxIsSomebodysOwn(accounts)).toBe(true)
+    expect(await lib.inboxIsSomebodysOwn(purchasing)).toBe(false)
+  })
+
   it('takes it away from whoever is dropped off the list, and nobody else', async () => {
     await lib.setInboxAudience(purchasing, [{ userId: marcus, canReply: true }], [marcus])
     expect(await lib.defaultInboxIdFor(marcus)).toBe(purchasing)
@@ -180,6 +187,8 @@ describe.runIf(shouldRun)('an address of one’s own, against a real database', 
     await lib.setInboxAudience(purchasing, [{ userId: marcus, canReply: true }], [])
     expect(await lib.defaultInboxIdFor(marcus)).toBeNull()
     expect(await lib.defaultInboxIdFor(emma)).toBe(accounts)
+    // And the inbox stops being anybody's own along with it.
+    expect(await lib.inboxIsSomebodysOwn(purchasing)).toBe(false)
   })
 
   it('lets go when the person does', async () => {

@@ -101,4 +101,9 @@ describe('chooseSignatureSource', () => {
   it('is the address being sent from for anybody without one of their own', () => {
     expect(chooseSignatureSource(null, purchasing)).toBe(purchasing)
   })
+
+  it('is the address being sent from when that address is somebody’s own', () => {
+    // A reply leaving marcus@ is from Marcus whoever pressed Send.
+    expect(chooseSignatureSource(mine, purchasing, true)).toBe(purchasing)
+  })
 })

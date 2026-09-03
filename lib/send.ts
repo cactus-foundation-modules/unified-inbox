@@ -7,6 +7,7 @@ import {
   getInbox,
   getQuotableMessage,
   getThread,
+  inboxIsSomebodysOwn,
   insertOutboundAttachment,
   insertOutboundMessage,
   listInboxes,
@@ -218,10 +219,15 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
           }, timezone)
         : null
 
-  // Whoever pressed Send may have an address of their own, and its signature is
-  // theirs wherever they are answering from. One extra read per send, and only
-  // a second one when they actually have one.
-  const ownInboxId = await defaultInboxIdFor(request.authorUserId)
+  // An address that is somebody's own signs as them whoever presses Send: a
+  // reply leaving marcus@ is from Marcus even when a colleague sent the draft
+  // out for him. Nothing else needs asking in that case, so nothing else is.
+  //
+  // Otherwise it is a shared address, and whoever pressed Send may have an
+  // address of their own whose signature is theirs wherever they answer from.
+  // One extra read per send, and only a second one when they actually have one.
+  const sendingInboxIsSomebodysOwn = await inboxIsSomebodysOwn(inbox.id)
+  const ownInboxId = sendingInboxIsSomebodysOwn ? null : await defaultInboxIdFor(request.authorUserId)
   const ownInbox = ownInboxId && ownInboxId !== inbox.id ? await getInbox(ownInboxId) : null
 
   const body = assembleBody({
@@ -229,7 +235,9 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
     // Rendered rather than read: the inbox's signature may be rich text, pasted
     // markup or a stack of email blocks, and only one place knows how to turn
     // each of those into an email.
-    signature: await renderInboxSignature(chooseSignatureSource(ownInbox, inbox)),
+    signature: await renderInboxSignature(
+      chooseSignatureSource(ownInbox, inbox, sendingInboxIsSomebodysOwn),
+    ),
     quoted,
   })
 

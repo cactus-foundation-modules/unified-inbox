@@ -108,6 +108,10 @@ type SlotProps = {
   staff: Array<{ id: string; name: string }>
   cannotReplyReason: string | null
   draft: DraftForComposer | null
+  /** The earliest a reply may be set to go out, in the picker's own shape and
+   *  in the site's zone. Worked out on the server and carried through. */
+  minSendAt: string
+  timezone: string
 }
 
 /**

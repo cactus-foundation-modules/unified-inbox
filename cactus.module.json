@@ -1,6 +1,6 @@
 {
   "name": "unified-inbox",
-  "version": "0.1.39",
+  "version": "0.1.40",
   "tablePrefix": "uin_",
   "description": "Every conversation with every customer and supplier in one place - email, live chat, contact form, calls and texts - with your own records beside them.",
   "requiresCoreVersion": "0.5.1470",
@@ -80,6 +80,10 @@
     {
       "path": "/api/m/unified-inbox/cron/housekeeping",
       "schedule": "40 3 * * *"
+    },
+    {
+      "path": "/api/m/unified-inbox/cron/scheduled-send",
+      "schedule": "*/5 * * * *"
     }
   ],
   "teardown": [

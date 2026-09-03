@@ -1,5 +1,5 @@
 import { inboxHref } from './list'
-import type { Draft, DraftAttachment } from './types'
+import type { Draft, DraftAttachment, DraftSendState } from './types'
 
 // ---------------------------------------------------------------------------
 // Drafts: the pure half.
@@ -111,6 +111,11 @@ export type DraftForComposer = {
   subject: string | null
   body: string
   attachments: DraftAttachment[]
+  /** When it goes out on its own, as an ISO stamp. A Date in props arrives at a
+   *  client component as an empty object, so it makes the trip as a string. */
+  sendAt: string | null
+  sendState: DraftSendState
+  sendError: string | null
 }
 
 export function forComposer(draft: Draft): DraftForComposer {
@@ -123,6 +128,9 @@ export function forComposer(draft: Draft): DraftForComposer {
     subject: draft.subject,
     body: draft.body,
     attachments: draft.attachments,
+    sendAt: draft.sendAt ? draft.sendAt.toISOString() : null,
+    sendState: draft.sendState,
+    sendError: draft.sendError,
   }
 }
 

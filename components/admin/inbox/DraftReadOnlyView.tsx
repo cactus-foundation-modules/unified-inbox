@@ -2,6 +2,7 @@ import Link from 'next/link'
 import type { Draft } from '@/modules/unified-inbox/lib/types'
 import { inboxHref } from '@/modules/unified-inbox/lib/list'
 import { draftRecipientLabel, draftSubjectLabel } from '@/modules/unified-inbox/lib/drafts'
+import { describeSendAt } from '@/modules/unified-inbox/lib/scheduled'
 import { CloseIcon, PaperclipIcon } from './icons'
 
 // Somebody else's half-written message, open for reading.
@@ -26,9 +27,15 @@ type Props = {
   /** Which address it would have left as, or null for a conversation another
    *  module owns. */
   inboxName: string | null
+  now: Date
+  /** The site's timezone, so a departure time reads the way the site tells the
+   *  time rather than the way the server does. */
+  timezone: string
 }
 
-export function DraftReadOnlyView({ base, params, draft, authorName, inboxName }: Props) {
+export function DraftReadOnlyView({
+  base, params, draft, authorName, inboxName, now, timezone,
+}: Props) {
   const closeHref = inboxHref(base, params, { compose: null, draft: null })
 
   return (
@@ -53,6 +60,20 @@ export function DraftReadOnlyView({ base, params, draft, authorName, inboxName }
             This one is {authorName}&rsquo;s, so it is here to read rather than to finish.
             {inboxName && <> It would go out as {inboxName}.</>}
           </p>
+
+          {/* A colleague's message with a time on it goes out on its own, and
+              somebody reading it needs to know that before they write the same
+              thing themselves. */}
+          {draft.sendState === 'scheduled' && (
+            <div className="alert alert-info" role="status">
+              It is set to go out {describeSendAt(draft.sendAt, now, timezone)}, on its own.
+            </div>
+          )}
+          {draft.sendState === 'failed' && (
+            <div className="alert alert-danger" role="alert">
+              It was set to go out and did not.{draft.sendError ? ` ${draft.sendError}` : ''}
+            </div>
+          )}
 
           <dl className="uin-draft-read">
             <dt>To</dt>

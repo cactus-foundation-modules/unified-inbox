@@ -27,6 +27,8 @@ const db = vi.hoisted(() => ({
   // Nobody in here has an address of their own unless a test says so, which is
   // where every site starts.
   defaultInboxIdFor: vi.fn(async (): Promise<string | null> => null),
+  // And the address being sent from is a shared one unless a test says so.
+  inboxIsSomebodysOwn: vi.fn(async (): Promise<boolean> => false),
 }))
 
 const transport = vi.hoisted(() => ({
@@ -123,6 +125,7 @@ beforeEach(() => {
   db.getSettings.mockResolvedValue({ trackOpens: false, requestReadReceipts: false })
   // Nobody has an address of their own unless the test in question says so.
   db.defaultInboxIdFor.mockResolvedValue(null)
+  db.inboxIsSomebodysOwn.mockResolvedValue(false)
   db.getThread.mockResolvedValue({
     id: 'thread-1',
     inboxId: 'inbox-1',
@@ -226,6 +229,28 @@ describe('sendMessage - the signature at the foot of it', () => {
 
     await sendMessage(baseRequest())
     expect(db.insertOutboundMessage.mock.calls[0]![0].bodyHtml).toContain('<p>Deskwell</p>')
+  })
+
+  it('signs as the address being sent from when that address is somebody’s own', async () => {
+    // Marcus wrote it, somebody else pressed Send, and it is leaving marcus@.
+    // It signs as Marcus.
+    db.inboxIsSomebodysOwn.mockResolvedValue(true)
+    db.defaultInboxIdFor.mockResolvedValue('inbox-mine')
+    db.getInbox.mockImplementation(async (id: string) => (id === 'inbox-mine' ? OWN : INBOX))
+
+    await sendMessage(baseRequest())
+
+    const html = db.insertOutboundMessage.mock.calls[0]![0].bodyHtml
+    expect(html).toContain('<p>Deskwell</p>')
+    expect(html).not.toContain('<p>Jo Bloggs</p>')
+  })
+
+  it('asks nothing about the sender when the address being sent from is somebody’s own', async () => {
+    db.inboxIsSomebodysOwn.mockResolvedValue(true)
+
+    await sendMessage(baseRequest())
+
+    expect(db.defaultInboxIdFor).not.toHaveBeenCalled()
   })
 
   it('does not read the same inbox twice when their own is the one being sent from', async () => {

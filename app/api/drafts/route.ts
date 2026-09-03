@@ -2,9 +2,11 @@ import { NextResponse } from 'next/server'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
+import { getSiteTimezone } from '@/lib/config/timezone.server'
 import { canOpenThread, canReplyToInbox, replyableInboxIds } from '@/modules/unified-inbox/lib/access'
 import { allInboxIds, getThreadDetail, saveDraft } from '@/modules/unified-inbox/lib/db'
 import { isWorthSaving } from '@/modules/unified-inbox/lib/drafts'
+import { decideSendAt } from '@/modules/unified-inbox/lib/scheduled'
 import { visibleProviderModules } from '@/modules/unified-inbox/lib/provider-registry'
 import { DraftBody } from '@/modules/unified-inbox/lib/validation'
 
@@ -61,6 +63,34 @@ export async function POST(request: Request) {
     return errorResponse('You do not have permission to send from that inbox.', 403)
   }
 
+  // ---- a time on it, if it is going out on its own ------------------------
+  //
+  // Everything the send route would refuse at three in the morning is refused
+  // here instead, while somebody is standing there who can fix it. A scheduled
+  // message that quietly fails is worse than one that was never scheduled: the
+  // screen said it was going.
+  // Undefined means the save said nothing about a time, so whatever is already
+  // on the draft stays. Null means somebody pressed Cancel the timer.
+  let sendAt: Date | null | undefined = body.sendAt === undefined ? undefined : null
+  if (body.sendAt) {
+    const decision = decideSendAt(body.sendAt, new Date(), await getSiteTimezone())
+    if (!decision.ok) return errorResponse(decision.reason, 400)
+    sendAt = decision.at
+
+    if (!inboxId && !thread) {
+      return errorResponse('Pick which of your addresses it should go out from first.', 400)
+    }
+    if (!body.body.trim()) {
+      return errorResponse('There is nothing written in it to send.', 400)
+    }
+    // A reply takes its recipients and its subject off the conversation when
+    // its time comes, so only a message starting one has to carry them now.
+    if (!thread) {
+      if (to.length === 0) return errorResponse('Say who it is going to.', 400)
+      if (!body.subject?.trim()) return errorResponse('Give the message a subject.', 400)
+    }
+  }
+
   // Finishing a colleague's draft is allowed on an address this person may send
   // from, so the save has to know which those are. Its own id is not enough.
   const sendableIds = await replyableInboxIds(user, await allInboxIds())
@@ -77,7 +107,12 @@ export async function POST(request: Request) {
     subject: body.subject?.trim() || null,
     body: body.body,
     attachments,
+    sendAt,
   })
 
-  return NextResponse.json({ id: draft.id, savedAt: draft.updatedAt.toISOString() })
+  return NextResponse.json({
+    id: draft.id,
+    savedAt: draft.updatedAt.toISOString(),
+    sendAt: draft.sendAt ? draft.sendAt.toISOString() : null,
+  })
 }

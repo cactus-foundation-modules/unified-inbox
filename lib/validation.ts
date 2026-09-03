@@ -105,6 +105,13 @@ export const DraftBody = z.object({
    *  out of it. */
   body: z.string().max(500_000),
   attachments: z.array(AttachmentRef).max(20).optional(),
+  /** When it should go out on its own, as the wall clock somebody typed:
+   *  "2026-09-04T09:00", with no zone on it. It is turned into an instant on
+   *  the server against the SITE's zone - see lib/scheduled.ts - because nine
+   *  o'clock means nine o'clock to the person reading the screen, not to
+   *  whichever machine happens to be answering. Null takes the time back off
+   *  and leaves an ordinary draft. */
+  sendAt: z.string().max(40).nullable().optional(),
 })
 
 /** What the reading screen posts when somebody works through a conversation.

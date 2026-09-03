@@ -135,6 +135,42 @@ export async function canUserViewInbox(userId: string, inboxId: string): Promise
   return decideInboxAccess(rows, userId, perms).view
 }
 
+/**
+ * May this colleague SEND from this address? The reply half of the same
+ * question `canUserViewInbox` asks about reading.
+ *
+ * It exists for the one thing this module does with nobody sitting there:
+ * posting a message somebody scheduled. The rights that decide it are the ones
+ * held at the moment it leaves, not the ones held when the time was set -
+ * somebody taken off accounts@ on Friday does not have a message leave as
+ * accounts@ on Monday.
+ */
+export async function canUserReplyToInbox(userId: string, inboxId: string): Promise<boolean> {
+  const held = await permissionsForUserId(userId, [
+    'unifiedinbox.view',
+    'unifiedinbox.reply',
+    'unifiedinbox.manage',
+  ])
+  if (!held) return false
+  const perms = {
+    canView: held.has('unifiedinbox.view'),
+    canReply: held.has('unifiedinbox.reply'),
+    canManage: held.has('unifiedinbox.manage'),
+  }
+  if (!perms.canManage && !perms.canReply) return false
+  const rows = await listInboxAccess(inboxId)
+  return decideInboxAccess(rows, userId, perms).reply
+}
+
+/** Whether this colleague may answer anything at all. Asked about a channel
+ *  another module owns, where there is no inbox guest list to consult and the
+ *  channel's own permission is the other half. */
+export async function userCanReply(userId: string): Promise<boolean> {
+  const held = await permissionsForUserId(userId, ['unifiedinbox.reply', 'unifiedinbox.manage'])
+  if (!held) return false
+  return held.has('unifiedinbox.reply') || held.has('unifiedinbox.manage')
+}
+
 // ---------------------------------------------------------------------------
 // Conversations that sit in no inbox.
 //

@@ -64,9 +64,24 @@ export type Draft = {
   subject: string | null
   body: string
   attachments: DraftAttachment[]
+  /** When it should leave on its own, or null for one that goes when somebody
+   *  presses Send. */
+  sendAt: Date | null
+  /** Null for an ordinary draft. See migrations/021_scheduled_send.sql for what
+   *  each of the three means. */
+  sendState: DraftSendState
+  /** Why the last attempt to send it was refused, in a sentence a person can
+   *  act on. Only ever set alongside a 'failed' state. */
+  sendError: string | null
   createdAt: Date
   updatedAt: Date
 }
+
+/** Where a scheduled message has got to. Null is an ordinary draft, which is
+ *  what every draft is until somebody puts a time on it. */
+export type DraftSendState = 'scheduled' | 'sending' | 'failed' | null
+
+export const DRAFT_SEND_STATES = ['scheduled', 'sending', 'failed'] as const
 
 /** One folder on a mail server, as the server described it. Lives here rather
  *  than beside the IMAP client so the settings screen can name the shape

@@ -15,6 +15,7 @@ import { runPeoplePass } from '@/modules/unified-inbox/lib/identity'
 import { syncAllProviders, PROVIDER_BUDGET_MS } from '@/modules/unified-inbox/lib/provider-sync'
 import { deliverPending, WEBHOOK_BUDGET_MS } from '@/modules/unified-inbox/lib/webhooks'
 import { cooldownFor, dueForCheck } from '@/modules/unified-inbox/lib/check-cooldown'
+import { runDueScheduledSends } from '@/modules/unified-inbox/lib/scheduled-send'
 
 // Check now. Same engine as the hourly job, a bigger slice of clock (E9): this
 // runs in a module route with a 60 second ceiling of its own rather than inside
@@ -57,6 +58,17 @@ export async function POST(request: Request) {
   const { due, restedSeconds } = dueForCheck(connections, cooldownFor(automatic))
 
   const started = Date.now()
+
+  // Anything written earlier and due to go out by now, before a single mailbox
+  // is opened. The scheduled tick is hourly at best on Vercel and daily on the
+  // free plan, and somebody sitting in front of the inbox is a better clock
+  // than either - a message set for half past nine leaves at half past nine
+  // rather than at ten. Its own claim is what stops it also going out on the
+  // tick, so the two runs cannot post the same message twice.
+  //
+  // Small slice, and deliberately not allowed to sink the check: whatever it
+  // does not get through is still due, and the tick will have it.
+  const posted = await runDueScheduledSends({ deadline: started + 8_000 }).catch(() => null)
   // Every account was opened moments ago, so there is nothing worth opening
   // again. The answer is still a good one - the screen reloads on the back of
   // it and shows whatever that check brought in.
@@ -66,6 +78,7 @@ export async function POST(request: Request) {
       ok: true,
       checked: false,
       collected: 0,
+      sentOnSchedule: posted?.sent ?? 0,
       stillWorking: false,
       error: null,
       message: `Your mail was checked ${ago} second${ago === 1 ? '' : 's'} ago, so this is up to date.`,
@@ -107,6 +120,7 @@ export async function POST(request: Request) {
     ok: !failed,
     checked: true,
     collected,
+    sentOnSchedule: posted?.sent ?? 0,
     stillWorking,
     error: failed?.error ?? null,
     message: failed

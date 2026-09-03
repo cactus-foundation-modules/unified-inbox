@@ -70,21 +70,29 @@ export function hasSignature(inbox: SignatureSource | null): boolean {
 /**
  * Whose signature goes at the foot of this reply.
  *
- * An inbox's signature signs off as the department - accounts@ signs as
+ * A shared inbox's signature signs off as the department - accounts@ signs as
  * accounts whoever is typing - and that is still what a shared address wants.
  * But somebody given an address of their own has written a signature there in
  * their own name, and it is theirs wherever they are answering from: a reply
  * they send out of purchasing@ is still from them.
  *
- * So their own address wins when it has a signature to give, and the address
- * the reply is leaving from is what fills the gap when it has not - which is
- * exactly what happened before anybody had an address of their own, so nobody
- * loses a signature by being given one.
+ * A personal address the other way round settles it just as firmly. A reply
+ * leaving marcus@ is from Marcus and says so, whoever pressed Send - a manager
+ * sending a draft on his behalf is not signing it in their own name. So when
+ * the address being sent from is somebody's own, its signature wins outright
+ * and the sender's never gets a look in.
+ *
+ * That leaves the shared case, where the sender's own address wins when it has
+ * a signature to give, and the address the reply is leaving from fills the gap
+ * when it has not - which is exactly what happened before anybody had an
+ * address of their own, so nobody loses a signature by being given one.
  */
 export function chooseSignatureSource<T extends SignatureSource>(
   ownInbox: T | null,
   sendingInbox: T,
+  sendingInboxIsSomebodysOwn = false,
 ): T {
+  if (sendingInboxIsSomebodysOwn) return sendingInbox
   return ownInbox && hasSignature(ownInbox) ? ownInbox : sendingInbox
 }
 

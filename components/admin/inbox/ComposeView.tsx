@@ -15,6 +15,8 @@ import { useAttachmentDrop } from './useAttachmentDrop'
 import { ConfirmDialog } from './ConfirmDialog'
 import { RecipientField } from './RecipientField'
 import { CloseIcon } from './icons'
+import { SendLater } from './SendLater'
+import type { DraftSendState } from '@/modules/unified-inbox/lib/types'
 
 // Writing a brand new message, rather than answering one somebody else started.
 //
@@ -70,9 +72,15 @@ type Props = {
   defaultInboxId: string | null
   /** The draft being finished, when the address named one. */
   draft: DraftForComposer | null
+  /** The earliest a message may be set to go, in the picker's own shape and in
+   *  the site's zone rather than this browser's. */
+  minSendAt: string
+  timezone: string
 }
 
-export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Props) {
+export function ComposeView({
+  base, params, inboxes, defaultInboxId, draft, minSendAt, timezone,
+}: Props) {
   const router = useRouter()
   const [inboxId, setInboxId] = useState(draft?.inboxId ?? defaultInboxId ?? '')
   const [to, setTo] = useState((draft?.to ?? []).join(', '))
@@ -96,6 +104,12 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
   // Held rather than read from the address, because the first save mints it and
   // the second must land on the same row - four presses of Save are one draft.
   const [draftId, setDraftId] = useState<string | null>(draft?.id ?? null)
+  // When this one is set to go out on its own, and how the last attempt went.
+  // Held here so a time set in this dialog shows before the screen behind it
+  // has been redrawn.
+  const [sendAt, setSendAt] = useState<string | null>(draft?.sendAt ?? null)
+  const [sendState, setSendState] = useState<DraftSendState>(draft?.sendState ?? null)
+  const [sendError, setSendError] = useState<string | null>(draft?.sendError ?? null)
   // Typed since the last time any of it was put down somewhere. Deliberately
   // not "is there text": text that has just been saved is not at risk.
   const [dirty, setDirty] = useState(false)
@@ -294,7 +308,11 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
     }
   }, [attachments, base, cc, draftId, inboxId, params, router, subject, text, to])
 
-  const save = useCallback(async () => {
+  /** Puts the screenful down as a draft, with or without a time on it. One
+   *  request for both, because a scheduled message IS a draft with a departure
+   *  time - two requests would leave a window where the writing was saved and
+   *  the time was not. */
+  const save = useCallback(async (wallClock?: string | null) => {
     const payload = {
       id: draftId ?? undefined,
       inboxId: inboxId || null,
@@ -306,6 +324,10 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
       attachments: attachments.map(({ key, url, filename, contentType, sizeBytes }) => ({
         key, url, filename, contentType, sizeBytes,
       })),
+      // Undefined is dropped by JSON.stringify, which is what "leave whatever
+      // time is on it" looks like on the wire. A string sets one, null takes
+      // it off.
+      sendAt: wallClock,
     }
     if (!isWorthSaving(payload)) {
       setError('There is nothing to save yet.')
@@ -328,8 +350,16 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
         return
       }
       if (data?.id) setDraftId(data.id as string)
+      // What came back rather than what was asked for: the server decides what
+      // a typed time means.
+      const at = typeof data?.sendAt === 'string' ? data.sendAt : null
+      setSendAt(at)
+      setSendState(at ? 'scheduled' : null)
+      setSendError(null)
       setDirty(false)
-      setNote('Saved. It is waiting under Drafts.')
+      setNote(at
+        ? 'Saved, and set to go out on its own. It waits under Drafts until then.'
+        : 'Saved. It is waiting under Drafts.')
       // The Drafts tab carries a count, and it is drawn on the server.
       router.refresh()
     } catch {
@@ -522,6 +552,17 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
               dismissErrors={drop.dismissErrors}
             />
 
+            <SendLater
+              sendAt={sendAt}
+              sendState={sendState}
+              sendError={sendError}
+              minWallClock={minSendAt}
+              timezone={timezone}
+              busy={busy}
+              onSchedule={(wallClock) => { void save(wallClock) }}
+              onCancel={() => { void save(null) }}
+            />
+
             {error && <div className="alert alert-danger" role="alert">{error}</div>}
             {note && !error && <div className="alert alert-success" role="status">{note}</div>}
 
@@ -529,7 +570,12 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
               <button type="button" className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
                 {busyWith === 'send' ? 'Sending...' : 'Send'}
               </button>
-              <button type="button" className="btn btn-secondary btn-sm" onClick={save} disabled={busy}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => { void save() }}
+                disabled={busy}
+              >
                 {busyWith === 'save' ? 'Saving...' : 'Save as a draft'}
               </button>
               {draftId ? (
