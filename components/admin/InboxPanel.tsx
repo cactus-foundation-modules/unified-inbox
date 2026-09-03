@@ -11,6 +11,7 @@ import {
   defaultInboxIdFor,
   countThreads,
   draftForThread,
+  draftsHeldByThread,
   getDraft,
   getPerson,
   getSettings,
@@ -313,11 +314,16 @@ export async function UnifiedInboxPanel({
       // means by opening one.
       if (thread.unread) await setThreadRead(thread.id, false)
 
-      const [messages, files, events, ownDraft] = await Promise.all([
+      const [messages, files, events, ownDraft, heldDrafts] = await Promise.all([
         listThreadMessages(thread.id),
         attachmentsForThread(thread.id),
         listThreadEvents(thread.id),
         draftForThread(thread.id, user.id, sendableIds),
+        // Anything that was queued to this person and stood down when this
+        // arrived. Read through the same visibility rule as every other way of
+        // reaching a draft, so the warning is not a way of learning that a
+        // colleague has one on an address this reader cannot open.
+        draftsHeldByThread(thread.id, user.id, visibleIds),
       ])
       const byMessage = new Map<string, AttachmentRow[]>()
       for (const file of files) {
@@ -422,6 +428,16 @@ export async function UnifiedInboxPanel({
           now={new Date()}
           timezone={timezone}
           minSendAt={minSendAt}
+          heldDrafts={heldDrafts.map((held) => ({
+            id: held.id,
+            threadId: held.threadId,
+            to: held.to,
+            subject: held.subject,
+            // A Date in props arrives at a client component as an empty object,
+            // and this pane is rendered on the server for one that is not - so
+            // it makes the trip as a string either way.
+            sendAt: held.sendAt ? held.sendAt.toISOString() : null,
+          }))}
         />
       )
 

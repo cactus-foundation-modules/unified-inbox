@@ -45,6 +45,13 @@ the same human collapse into one story.
   starting, and it waits under the **Drafts** tab until you come back to it. Your own only: a shared address does not mean a shared
   notepad. A reply goes back under its conversation with the words still in the
   box; a new message opens where you left it. Sending one clears it away.
+- **Send it later, and chase it up.** A message written at half past eleven at
+  night can be set to go out at nine in the morning, and can carry a follow-up
+  with it: once it has gone, the conversation goes quiet for as long as you said
+  and comes back if nobody has answered. A reply cancels the chase on its own,
+  so you only see it when there was nothing to see. And if the person it is
+  addressed to writes to you before it leaves, the message is held rather than
+  sent - their conversation says so, with a link to what was waiting.
 - **Getting through it.** Hand a conversation to somebody, set it to come back
   later, mark it done, and search everything you are allowed to see. Both of
   those are bets on silence - "nothing until Thursday" and "nothing more at

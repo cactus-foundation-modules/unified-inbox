@@ -1,8 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import {
   MAX_AHEAD_DAYS,
+  MAX_FOLLOW_UP_MINUTES,
+  MIN_FOLLOW_UP_MINUTES,
+  decideFollowUp,
   decideSendAt,
+  describeFollowUp,
   describeSendAt,
+  followUpAt,
   plainTextToHtml,
   scheduleLabel,
   toWallClock,
@@ -128,5 +133,75 @@ describe('plainTextToHtml', () => {
 
   it('keeps the line breaks somebody typed', () => {
     expect(plainTextToHtml('One\r\nTwo\nThree')).toBe('One<br>Two<br>Three')
+  })
+})
+
+describe('a held message in the list', () => {
+  const now = new Date('2026-06-01T10:00:00.000Z')
+
+  it('says it was held rather than saying nothing', () => {
+    // The state is gone - a stood-down message is an ordinary draft - so the
+    // held column is the only thing left that knows why it stopped waiting.
+    const label = scheduleLabel(
+      { sendAt: new Date('2026-06-02T08:00:00.000Z'), sendState: null, heldByThreadId: 'thr-1' },
+      now,
+      LONDON,
+    )
+    expect(label).toBe('Held - they wrote first')
+  })
+
+  it('still says when a waiting one goes, held or not', () => {
+    const label = scheduleLabel(
+      { sendAt: new Date('2026-06-02T08:00:00.000Z'), sendState: 'scheduled', heldByThreadId: null },
+      now,
+      LONDON,
+    )
+    expect(label).toMatch(/^Goes out tomorrow at /)
+  })
+})
+
+describe('decideFollowUp', () => {
+  it('takes nothing as no follow-up', () => {
+    expect(decideFollowUp(null)).toEqual({ ok: true, minutes: null })
+  })
+
+  it('takes the lengths the menu offers', () => {
+    expect(decideFollowUp(60 * 24 * 3)).toEqual({ ok: true, minutes: 4320 })
+  })
+
+  it('refuses one that comes back before they have opened their mail', () => {
+    const decision = decideFollowUp(MIN_FOLLOW_UP_MINUTES - 1)
+    expect(decision.ok).toBe(false)
+  })
+
+  it('refuses one further off than a message may be scheduled at all', () => {
+    expect(decideFollowUp(MAX_FOLLOW_UP_MINUTES + 1).ok).toBe(false)
+  })
+
+  it('refuses a length that is not a whole number of minutes', () => {
+    expect(decideFollowUp(1440.5).ok).toBe(false)
+  })
+})
+
+describe('describeFollowUp', () => {
+  it('says the ones off the menu the way the menu says them', () => {
+    expect(describeFollowUp(60 * 24 * 3)).toBe('three days later')
+  })
+
+  it('counts the days for one nobody picked off it', () => {
+    expect(describeFollowUp(60 * 24 * 5)).toBe('5 days later')
+  })
+
+  it('says nothing about no follow-up', () => {
+    expect(describeFollowUp(null)).toBe('')
+  })
+})
+
+describe('followUpAt', () => {
+  it('counts from when the message actually left, not from when it was set', () => {
+    // A message that went out late is chased late: the whole reason the length
+    // is stored rather than the moment.
+    const left = new Date('2026-06-02T09:07:00.000Z')
+    expect(followUpAt(left, 60 * 24 * 3).toISOString()).toBe('2026-06-05T09:07:00.000Z')
   })
 })

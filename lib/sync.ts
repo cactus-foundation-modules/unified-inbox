@@ -38,6 +38,7 @@ import {
   threadsHoldingIdentity,
   touchThread,
   reopenOnReply,
+  holdScheduledDraftsFor,
   recordEvent,
   type StoredMessageRef,
 } from './db'
@@ -887,6 +888,22 @@ async function fileMessage(
     if (!automated) {
       const was = await reopenOnReply(thread)
       if (was) await recordEvent(thread, null, 'woken', { was, direction: input.direction })
+    }
+
+    // They wrote first. Anything we had set to go out to this person is stood
+    // down before it can ask a question they have just answered - the writing
+    // is kept, the departure time is not, and this conversation says so.
+    //
+    // Inbound and not the mail system talking: an out-of-office is not somebody
+    // writing back, and standing a quote down because a supplier is on holiday
+    // is the opposite of helpful. An outbound copy found in Sent is us, and
+    // holding our own messages against ourselves would stand down every
+    // scheduled message the moment a colleague answered on their phone.
+    if (!automated && input.direction === 'in' && fromAddress) {
+      const held = await holdScheduledDraftsFor(fromAddress, thread)
+      if (held.length > 0) {
+        await recordEvent(thread, null, 'held', { count: held.length, address: fromAddress })
+      }
     }
 
     return { threadId: thread, messageId: written }

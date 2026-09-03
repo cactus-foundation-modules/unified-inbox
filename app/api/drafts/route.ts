@@ -6,7 +6,7 @@ import { getSiteTimezone } from '@/lib/config/timezone.server'
 import { canOpenThread, canReplyToInbox, replyableInboxIds } from '@/modules/unified-inbox/lib/access'
 import { allInboxIds, getThreadDetail, saveDraft } from '@/modules/unified-inbox/lib/db'
 import { isWorthSaving } from '@/modules/unified-inbox/lib/drafts'
-import { decideSendAt } from '@/modules/unified-inbox/lib/scheduled'
+import { decideFollowUp, decideSendAt } from '@/modules/unified-inbox/lib/scheduled'
 import { visibleProviderModules } from '@/modules/unified-inbox/lib/provider-registry'
 import { DraftBody } from '@/modules/unified-inbox/lib/validation'
 
@@ -72,6 +72,12 @@ export async function POST(request: Request) {
   // Undefined means the save said nothing about a time, so whatever is already
   // on the draft stays. Null means somebody pressed Cancel the timer.
   let sendAt: Date | null | undefined = body.sendAt === undefined ? undefined : null
+  // The chase rides with the departure time: it is stored only when one is
+  // being set, and cancelling the timer takes it off. Refused here, with
+  // somebody standing there, rather than by a check constraint at three in the
+  // morning.
+  const followUp = decideFollowUp(body.followUpMinutes ?? null)
+  if (!followUp.ok) return errorResponse(followUp.reason, 400)
   if (body.sendAt) {
     const decision = decideSendAt(body.sendAt, new Date(), await getSiteTimezone())
     if (!decision.ok) return errorResponse(decision.reason, 400)
@@ -108,11 +114,13 @@ export async function POST(request: Request) {
     body: body.body,
     attachments,
     sendAt,
+    followUpMinutes: followUp.minutes,
   })
 
   return NextResponse.json({
     id: draft.id,
     savedAt: draft.updatedAt.toISOString(),
     sendAt: draft.sendAt ? draft.sendAt.toISOString() : null,
+    followUpMinutes: draft.followUpMinutes,
   })
 }

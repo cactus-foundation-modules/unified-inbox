@@ -2260,6 +2260,13 @@ export type ThreadEventKind =
   | 'linked'
   | 'unlinked'
   | 'merged'
+  /** Mail arrived from somebody a scheduled message was addressed to, so that
+   *  message was stood down before it could ask a question that had already
+   *  been answered. */
+  | 'held'
+  /** A scheduled message went out carrying a follow-up, so the conversation was
+   *  put to sleep until the chase is due. */
+  | 'awaiting'
 
 export async function recordEvent(
   threadId: string,
@@ -2467,6 +2474,11 @@ function mapDraft(r: Record<string, unknown>): Draft {
       ? (r.send_state as DraftSendState)
       : null,
     sendError: (r.send_error as string | null) ?? null,
+    // A column the check constraint could not have allowed is a row somebody
+    // has been at by hand, and a follow-up nobody can read is no follow-up.
+    followUpMinutes: typeof r.follow_up_minutes === 'number' ? r.follow_up_minutes : null,
+    heldByThreadId: (r.held_by_thread_id as string | null) ?? null,
+    heldAt: (r.held_at as Date | null) ?? null,
     createdAt: r.created_at as Date,
     updatedAt: r.updated_at as Date,
   }
@@ -2691,6 +2703,12 @@ export type DraftInput = {
    *  on it - an ordinary Save from the composer must not quietly cancel a
    *  message somebody had set for the morning. */
   sendAt?: Date | null
+  /** How long after it goes out to bring the conversation back if nobody has
+   *  answered. Rides with the departure time: it is only read when `sendAt` is
+   *  mentioned at all, and taking the time off takes the follow-up off with it,
+   *  because a chase for a message that is not going anywhere is a conversation
+   *  that comes back for no reason. */
+  followUpMinutes?: number | null
 }
 
 /**
@@ -2712,12 +2730,18 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
   const keep = data.sendAt === undefined
   const sendAt = data.sendAt ?? null
   const sendState: DraftSendState = sendAt ? 'scheduled' : null
+  // The follow-up rides with the departure time. Setting a time may set one;
+  // taking the time off takes it off, because a message that is not going
+  // anywhere has nothing to be chased about. And putting a time back on stands
+  // the draft back up: whatever mail stood it down has been read by whoever is
+  // scheduling it again.
+  const followUp = sendAt ? data.followUpMinutes ?? null : null
   const schedule = keep
     ? Prisma.sql`"send_at" = "send_at", "send_state" = "send_state", "send_error" = "send_error"`
-    : Prisma.sql`"send_at" = ${sendAt}, "send_state" = ${sendState}, "send_error" = NULL, "claimed_at" = NULL`
+    : Prisma.sql`"send_at" = ${sendAt}, "send_state" = ${sendState}, "send_error" = NULL, "claimed_at" = NULL, "follow_up_minutes" = ${followUp}, "held_by_thread_id" = NULL, "held_at" = NULL`
   const scheduleOnConflict = keep
     ? Prisma.sql`"send_at" = "uin_drafts"."send_at", "send_state" = "uin_drafts"."send_state"`
-    : Prisma.sql`"send_at" = EXCLUDED."send_at", "send_state" = EXCLUDED."send_state", "send_error" = NULL, "claimed_at" = NULL`
+    : Prisma.sql`"send_at" = EXCLUDED."send_at", "send_state" = EXCLUDED."send_state", "send_error" = NULL, "claimed_at" = NULL, "follow_up_minutes" = EXCLUDED."follow_up_minutes", "held_by_thread_id" = NULL, "held_at" = NULL`
   if (data.id) {
     const updated = await prisma.$queryRaw<Record<string, unknown>[]>`
       UPDATE "uin_drafts"
@@ -2741,10 +2765,12 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     INSERT INTO "uin_drafts"
       ("author_user_id", "inbox_id", "thread_id", "mode", "to_addresses",
-       "cc_addresses", "subject", "body", "attachments", "send_at", "send_state")
+       "cc_addresses", "subject", "body", "attachments", "send_at", "send_state",
+       "follow_up_minutes")
     VALUES (${data.authorUserId}, ${data.inboxId}, ${data.threadId}, ${data.mode},
             ${data.to}::text[], ${data.cc}::text[], ${data.subject}, ${data.body},
-            ${JSON.stringify(data.attachments)}::jsonb, ${sendAt}, ${sendState})
+            ${JSON.stringify(data.attachments)}::jsonb, ${sendAt}, ${sendState},
+            ${followUp})
     ON CONFLICT ("thread_id", "author_user_id") WHERE "thread_id" IS NOT NULL
     DO UPDATE SET "inbox_id"     = EXCLUDED."inbox_id",
                   "mode"         = EXCLUDED."mode",
@@ -2760,18 +2786,34 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
   return mapDraft(rows[0]!)
 }
 
-/** Throws one away. Returns whether there was one to throw - a Discard pressed
- *  twice is not an error, and neither is sending a message whose draft another
- *  tab has already tidied up. */
+/** Throws one away and hands back what was thrown - or null when there was
+ *  nothing to throw, which is what a Discard pressed twice looks like, and what
+ *  sending a message whose draft another tab has already tidied up looks like.
+ *
+ *  Returned rather than merely counted because a draft carries instructions
+ *  that outlive it: a follow-up is set on the conversation AFTER the message has
+ *  gone and the draft has been cleared away, and reading the row first would be
+ *  a second query racing this one. */
+export async function deleteDraftReturning(
+  id: string,
+  userId: string,
+  replyableInboxIds: string[],
+): Promise<Draft | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    DELETE FROM "uin_drafts"
+     WHERE "id" = ${id} AND ${editScope(userId, replyableInboxIds)}
+    RETURNING *
+  `
+  return rows[0] ? mapDraft(rows[0]) : null
+}
+
+/** The same, for the callers that only want to know whether there was one. */
 export async function deleteDraft(
   id: string,
   userId: string,
   replyableInboxIds: string[],
 ): Promise<boolean> {
-  const count = await prisma.$executeRaw`
-    DELETE FROM "uin_drafts" WHERE "id" = ${id} AND ${editScope(userId, replyableInboxIds)}
-  `
-  return count > 0
+  return (await deleteDraftReturning(id, userId, replyableInboxIds)) !== null
 }
 
 /** The draft behind a message that has just gone. Called by the send route
@@ -2781,14 +2823,18 @@ export async function discardDraftAfterSend(
   id: string | null | undefined,
   userId: string,
   replyableInboxIds: string[],
-): Promise<void> {
-  if (!id) return
+): Promise<Draft | null> {
+  if (!id) return null
   try {
-    await deleteDraft(id, userId, replyableInboxIds)
+    // What it was is handed back: a draft may carry a follow-up, and the chase
+    // belongs to whoever WROTE it rather than to whoever pressed Send, so the
+    // row is the only thing that still knows who that was.
+    return await deleteDraftReturning(id, userId, replyableInboxIds)
   } catch (err) {
     // The message has gone. A draft left behind is untidy; a failed send
     // reported to somebody whose email actually left is a lie.
     console.error('[unified-inbox] could not tidy up the draft after sending', err)
+    return null
   }
 }
 
@@ -2853,6 +2899,74 @@ export async function releaseStaleScheduledClaims(before: Date): Promise<number>
      WHERE "send_state" = 'sending'
        AND ("claimed_at" IS NULL OR "claimed_at" < ${before})
   `
+}
+
+// ---------------------------------------------------------------------------
+// Standing a scheduled message down, because they wrote first.
+//
+// A message set for Monday morning was written without Monday's post in front
+// of it. If the person it is addressed to writes to us before it leaves,
+// sending it anyway asks a question that has already been answered - so the
+// departure time comes off and the writing stays exactly where it is, for
+// somebody to read alongside what has just arrived and send, rewrite or throw
+// away themselves.
+//
+// It is deliberately NOT a fourth send_state. What is left is an ordinary
+// draft, which everything in this module already understands; the two held
+// columns are the note explaining why it stopped being scheduled, and the note
+// is what the conversation screen shows.
+//
+// Only ever 'scheduled' rows. A message already claimed by a run that is
+// posting it right now is gone - the mail server may already have it - and
+// pretending it was held would be the module telling somebody a message it had
+// sent was still here.
+// ---------------------------------------------------------------------------
+
+/** Stands down every scheduled message addressed to this person, and says
+ *  which. Matched without regard to case, because a mail server does not care
+ *  and neither does anybody typing an address into the To line. Only the To
+ *  line: it is who the message is FOR, and standing a departure down is too
+ *  strong a thing to do on the strength of a Cc.
+ *
+ *  The state goes, so nothing collects it; the TIME STAYS, so the screen can
+ *  say what it was going to do rather than only that it is not doing it. A time
+ *  with no state on it is an ordinary draft to every other query in this file,
+ *  which is exactly what a stood-down message is. */
+export async function holdScheduledDraftsFor(address: string, threadId: string): Promise<Draft[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    UPDATE "uin_drafts" d
+       SET "send_state"        = NULL,
+           "send_error"        = NULL,
+           "claimed_at"        = NULL,
+           "held_by_thread_id" = ${threadId},
+           "held_at"           = now(),
+           "updated_at"        = now()
+     WHERE d."send_state" = 'scheduled'
+       AND EXISTS (
+         SELECT 1 FROM unnest(d."to_addresses") AS "recipient"
+          WHERE lower("recipient") = lower(${address})
+       )
+    RETURNING *
+  `
+  return rows.map(mapDraft)
+}
+
+/** What is being held because of this conversation, for whoever may read it.
+ *  The same visibility rule as every other way of reaching a draft (E17): a
+ *  message held on an address this reader cannot open is never fetched, so the
+ *  warning is not a way of learning that it exists. */
+export async function draftsHeldByThread(
+  threadId: string,
+  userId: string,
+  inboxIds: string[],
+): Promise<Draft[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT d.* FROM "uin_drafts" d
+     WHERE d."held_by_thread_id" = ${threadId} AND ${draftScope(userId, inboxIds)}
+     ORDER BY d."held_at" DESC
+     LIMIT 20
+  `
+  return rows.map(mapDraft)
 }
 
 /** Puts back the exact rows this run claimed and then ran out of clock for.

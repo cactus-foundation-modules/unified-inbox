@@ -73,6 +73,18 @@ export type Draft = {
   /** Why the last attempt to send it was refused, in a sentence a person can
    *  act on. Only ever set alongside a 'failed' state. */
   sendError: string | null
+  /** How long after it goes out to bring the conversation back if nobody has
+   *  answered, or null for a message nobody wants chasing. Expressed in minutes
+   *  because it is a length of time rather than a moment: the moment is not
+   *  known until the message actually leaves. */
+  followUpMinutes: number | null
+  /** The conversation whose arrival stood this message down, or null - which is
+   *  what it is for all but a handful of drafts. Set when mail turns up from
+   *  somebody a scheduled message was addressed to: the time comes off, the
+   *  writing stays, and the warning belongs on that conversation. */
+  heldByThreadId: string | null
+  /** When that happened. */
+  heldAt: Date | null
   createdAt: Date
   updatedAt: Date
 }

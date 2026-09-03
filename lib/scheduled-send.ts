@@ -7,6 +7,7 @@ import {
   releaseStaleScheduledClaims,
 } from './db'
 import { canUserOpenThread, canUserReplyToInbox, userCanReply } from './access'
+import { applyFollowUpAfterSend } from './follow-up'
 import { plainTextToHtml, STALE_CLAIM_MS } from './scheduled'
 import { sendMessage } from './send'
 import { sendProviderReply } from './provider-send'
@@ -95,6 +96,11 @@ export async function runDueScheduledSends(options?: {
     const outcome = await sendOneScheduled(draft)
     if (outcome.ok) {
       sent += 1
+      // Chase it up, if it was written with a chase on it. Its own failure is
+      // not the send's failure: the message has gone, and a conversation that
+      // stays in Open rather than being put to sleep is a smaller loss than a
+      // message reported as unsent.
+      await applyFollowUpAfterSend(draft, outcome.threadId, new Date())
       // The message has gone, so the draft it was written in goes with it -
       // exactly as it does when somebody presses Send themselves.
       await deleteDraft(draft.id, draft.authorUserId, [])
@@ -107,7 +113,9 @@ export async function runDueScheduledSends(options?: {
   return { released, sent, failed, moreDue }
 }
 
-async function sendOneScheduled(draft: Draft): Promise<{ ok: true } | { ok: false; reason: string }> {
+async function sendOneScheduled(
+  draft: Draft,
+): Promise<{ ok: true; threadId: string | null } | { ok: false; reason: string }> {
   if (!draft.body.trim()) {
     return { ok: false, reason: 'There was nothing written in it by the time it was due.' }
   }
@@ -136,7 +144,7 @@ async function sendOneScheduled(draft: Draft): Promise<{ ok: true } | { ok: fals
       authorUserId: draft.authorUserId,
       authorName: null,
     })
-    return result.ok ? { ok: true } : { ok: false, reason: result.reason }
+    return result.ok ? { ok: true, threadId: thread.id } : { ok: false, reason: result.reason }
   }
 
   const inboxId = draft.inboxId ?? thread?.inboxId ?? null
@@ -184,5 +192,8 @@ async function sendOneScheduled(draft: Draft): Promise<{ ok: true } | { ok: fals
     authorUserId: draft.authorUserId,
   })
 
-  return result.ok ? { ok: true } : { ok: false, reason: result.reason }
+  // The conversation the message landed on, which for one starting a new
+  // conversation did not exist until a moment ago - and is exactly the one a
+  // follow-up has to be set on.
+  return result.ok ? { ok: true, threadId: result.threadId } : { ok: false, reason: result.reason }
 }

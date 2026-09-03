@@ -112,6 +112,12 @@ export const DraftBody = z.object({
    *  whichever machine happens to be answering. Null takes the time back off
    *  and leaves an ordinary draft. */
   sendAt: z.string().max(40).nullable().optional(),
+  /** How long after it goes out to bring the conversation back if nobody has
+   *  answered, in minutes. Only read when a time is being set: a follow-up on a
+   *  message that is not going anywhere is a conversation that comes back for no
+   *  reason. Bounds are checked on the server (lib/scheduled.ts), which is also
+   *  where the column's own limits are stated. */
+  followUpMinutes: z.number().int().nullable().optional(),
 })
 
 /** What the reading screen posts when somebody works through a conversation.

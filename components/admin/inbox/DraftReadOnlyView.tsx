@@ -69,6 +69,16 @@ export function DraftReadOnlyView({
               It is set to go out {describeSendAt(draft.sendAt, now, timezone)}, on its own.
             </div>
           )}
+          {/* Stood down rather than sent: somebody reading a colleague's draft
+              needs to know the timer came off it and why, or they will assume
+              it went. */}
+          {!draft.sendState && draft.heldByThreadId && (
+            <div className="alert alert-info" role="status">
+              They wrote back before this went out
+              {draft.sendAt ? ` ${describeSendAt(draft.sendAt, now, timezone)}` : ''}, so it was
+              held and nothing was sent.
+            </div>
+          )}
           {draft.sendState === 'failed' && (
             <div className="alert alert-danger" role="alert">
               It was set to go out and did not.{draft.sendError ? ` ${draft.sendError}` : ''}

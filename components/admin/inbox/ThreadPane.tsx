@@ -2,6 +2,8 @@ import Link from 'next/link'
 import type { AttachmentRow, ThreadDetail, ThreadEventRow, ThreadMessageRow } from '@/modules/unified-inbox/lib/db'
 import type { DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
 import { channelLabel, formatFull, formatWhen, inboxHref, splitQuotedText } from '@/modules/unified-inbox/lib/list'
+import { draftHref } from '@/modules/unified-inbox/lib/drafts'
+import { describeSendAt } from '@/modules/unified-inbox/lib/scheduled'
 import { BackIcon, ClockIcon, InboundIcon, NoteIcon, OutboundIcon, PaperclipIcon, TickIcon } from './icons'
 import { MessageBody } from './MessageBody'
 import { RetryButton } from './RetryButton'
@@ -56,6 +58,20 @@ type Props = {
   /** The earliest a reply may be set to go out on its own, already in the
    *  picker's shape and in that same timezone. */
   minSendAt: string
+  /** Messages that were set to go out to this person and were stood down when
+   *  this conversation arrived. Almost always empty; when it is not, it is the
+   *  most important thing on the screen. */
+  heldDrafts: HeldDraftView[]
+}
+
+/** One stood-down message, said in the little the warning needs: who it was
+ *  for, what it was about, when it was going to go, and where to open it. */
+export type HeldDraftView = {
+  id: string
+  threadId: string | null
+  to: string[]
+  subject: string | null
+  sendAt: string | null
 }
 
 function formatBytes(bytes: number | null): string {
@@ -334,8 +350,23 @@ const EVENT_WORDS: Record<string, string> = {
  *  never there - so these carry their own whole sentence instead.
  *
  *  Returns null for anything with a person behind it, which is most of it. */
-function unattendedEvent(event: ThreadEventRow): string | null {
+function unattendedEvent(event: ThreadEventRow, staffById: Record<string, string>): string | null {
   if (event.userId) return null
+  if (event.kind === 'held') {
+    const count = typeof event.detail?.count === 'number' ? event.detail.count : 1
+    return count > 1
+      ? `They wrote first, so ${count} messages waiting to go out to them were held`
+      : 'They wrote first, so a message waiting to go out to them was held'
+  }
+  if (event.kind === 'awaiting') {
+    // Named, because the chase was handed to whoever WROTE the message rather
+    // than to whoever sent it, and a conversation that reappears on somebody
+    // else's list needs to say why it is theirs.
+    const author = typeof event.detail?.userId === 'string' ? staffById[event.detail.userId] : null
+    return author
+      ? `It went out, so it comes back to ${author} if nobody replies`
+      : 'It went out, so it comes back if nobody replies'
+  }
   if (event.kind !== 'woken') return null
   // Worth saying which it was: coming back early from a snooze is mildly
   // surprising, and something you had marked done reopening is the sort of
@@ -348,7 +379,7 @@ function unattendedEvent(event: ThreadEventRow): string | null {
 export function ThreadPane({
   base, params, thread, inboxName, messages, events, staff, staffById,
   canReply, cannotReplyReason, replyTo, replyAllTo, draft, newestFirst,
-  canDeleteMessages, blockState, now, timezone, minSendAt,
+  canDeleteMessages, blockState, now, timezone, minSendAt, heldDrafts,
 }: Props) {
   // The list arrives oldest first. Reversing a copy rather than sorting again:
   // the query already decided the order, and this only says which end to read
@@ -423,6 +454,22 @@ export function ThreadPane({
       </div>
 
       <div className="uin-thread-body">
+        {/* First thing in the body, above the messages, because it changes what
+            you are about to do: something we had queued to this person was
+            standing by, and reading their message without knowing that is how
+            you answer a question twice. Nothing has been sent, and the writing
+            is untouched - the link opens it exactly where it was left. */}
+        {heldDrafts.map((heldDraft) => (
+          <div key={heldDraft.id} className="alert alert-info" role="status">
+            <strong>A message to them was waiting to go out.</strong>{' '}
+            {heldDraft.subject?.trim() ? `"${heldDraft.subject.trim()}" was set to go out` : 'It was set to go out'}
+            {heldDraft.sendAt ? ` ${describeSendAt(heldDraft.sendAt, now, timezone)}` : ''}
+            . They wrote to you first, so it was held and nothing was sent.{' '}
+            <Link href={draftHref(base, params, heldDraft)}>Open it</Link> to send it as it is,
+            change it, or throw it away.
+          </div>
+        ))}
+
         {thread.providerModule && messages.length === 0 && (
           <div className="alert alert-info">
             This conversation came from somewhere else on the site, and whatever used to serve it is
@@ -487,7 +534,7 @@ export function ThreadPane({
             <ul className="uin-log">
               {events.map((event) => (
                 <li key={event.id}>
-                  {unattendedEvent(event) ?? (
+                  {unattendedEvent(event, staffById) ?? (
                     <>
                       {(event.userId && staffById[event.userId]) || 'Somebody'}{' '}
                       {EVENT_WORDS[event.kind] ?? 'changed something'}

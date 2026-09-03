@@ -110,6 +110,11 @@ export function ComposeView({
   const [sendAt, setSendAt] = useState<string | null>(draft?.sendAt ?? null)
   const [sendState, setSendState] = useState<DraftSendState>(draft?.sendState ?? null)
   const [sendError, setSendError] = useState<string | null>(draft?.sendError ?? null)
+  // The chase set on it, and whether mail from the recipient took the timer off
+  // before it could go. Both travel with the draft rather than being worked out
+  // here: the server decides what a saved schedule means.
+  const [followUpMinutes, setFollowUpMinutes] = useState<number | null>(draft?.followUpMinutes ?? null)
+  const [held, setHeld] = useState(draft?.held ?? false)
   // Typed since the last time any of it was put down somewhere. Deliberately
   // not "is there text": text that has just been saved is not at risk.
   const [dirty, setDirty] = useState(false)
@@ -312,7 +317,7 @@ export function ComposeView({
    *  request for both, because a scheduled message IS a draft with a departure
    *  time - two requests would leave a window where the writing was saved and
    *  the time was not. */
-  const save = useCallback(async (wallClock?: string | null) => {
+  const save = useCallback(async (wallClock?: string | null, followUp?: number | null) => {
     const payload = {
       id: draftId ?? undefined,
       inboxId: inboxId || null,
@@ -328,6 +333,9 @@ export function ComposeView({
       // time is on it" looks like on the wire. A string sets one, null takes
       // it off.
       sendAt: wallClock,
+      // Read by the server only when a time is being set, and cleared with the
+      // time when one is taken off.
+      followUpMinutes: followUp ?? null,
     }
     if (!isWorthSaving(payload)) {
       setError('There is nothing to save yet.')
@@ -356,6 +364,10 @@ export function ComposeView({
       setSendAt(at)
       setSendState(at ? 'scheduled' : null)
       setSendError(null)
+      setFollowUpMinutes(typeof data?.followUpMinutes === 'number' ? data.followUpMinutes : null)
+      // Saving with a time on it stands the message back up: whatever mail held
+      // it has been read by whoever is scheduling it again.
+      if (at) setHeld(false)
       setDirty(false)
       setNote(at
         ? 'Saved, and set to go out on its own. It waits under Drafts until then.'
@@ -556,10 +568,12 @@ export function ComposeView({
               sendAt={sendAt}
               sendState={sendState}
               sendError={sendError}
+              followUpMinutes={followUpMinutes}
+              held={held}
               minWallClock={minSendAt}
               timezone={timezone}
               busy={busy}
-              onSchedule={(wallClock) => { void save(wallClock) }}
+              onSchedule={(wallClock, followUp) => { void save(wallClock, followUp) }}
               onCancel={() => { void save(null) }}
             />
 

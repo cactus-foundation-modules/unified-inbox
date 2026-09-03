@@ -103,10 +103,20 @@ export function describeSendAt(at: Date | string | null, now: Date, timezone: st
 /** What the row in the list says about a message that has a time on it. Empty
  *  for an ordinary draft, which has nothing extra to say. */
 export function scheduleLabel(
-  draft: { sendAt: Date | string | null; sendState: DraftSendState },
+  draft: {
+    sendAt: Date | string | null
+    sendState: DraftSendState
+    /** Set when mail from the recipient stood it down. Read only for a draft
+     *  with no state left on it, which is what standing one down leaves. */
+    heldByThreadId?: string | null
+  },
   now: Date,
   timezone: string,
 ): string {
+  // A stood-down message is an ordinary draft again, so it has no state to
+  // switch on - and saying nothing about it would put it back in the list
+  // looking like something nobody ever finished.
+  if (!draft.sendState && draft.heldByThreadId) return 'Held - they wrote first'
   switch (draft.sendState) {
     case 'scheduled':
       return `Goes out ${describeSendAt(draft.sendAt, now, timezone)}`
@@ -137,4 +147,68 @@ export function plainTextToHtml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/\r?\n/g, '<br>')
+}
+
+// ---------------------------------------------------------------------------
+// Chasing it up.
+//
+// A follow-up is a length of time, not a moment. The moment is not known when
+// somebody sets it - the message has not left yet, and it leaves at nine in the
+// morning whatever time it was written - so what is stored is "three days after
+// it goes", and the moment is worked out once it has actually gone.
+//
+// It is applied as a SNOOZE on the conversation, which is the whole reason it
+// is worth having: a reply already cancels a snooze (reopenOnReply), so a chase
+// nobody needs disappears on its own the instant the supplier writes back.
+// Nothing has to remember to cancel it, which is the part a reminder of its own
+// would get wrong.
+// ---------------------------------------------------------------------------
+
+/** The shortest follow-up worth setting. Under a day is a conversation coming
+ *  back before the recipient has opened their mail, which teaches people to
+ *  ignore it. Matches the column's own check in migration 022. */
+export const MIN_FOLLOW_UP_MINUTES = 60 * 24
+
+/** The longest. A year, matching how far ahead a message may be scheduled at
+ *  all, and matching the column's check. */
+export const MAX_FOLLOW_UP_MINUTES = MAX_AHEAD_DAYS * 24 * 60
+
+/** The handful of answers people actually give, offered rather than a box to
+ *  type a number of minutes into. */
+export const followUpChoices: ReadonlyArray<{ minutes: number; label: string }> = [
+  { minutes: 60 * 24, label: 'A day later' },
+  { minutes: 60 * 24 * 3, label: 'Three days later' },
+  { minutes: 60 * 24 * 7, label: 'A week later' },
+  { minutes: 60 * 24 * 14, label: 'A fortnight later' },
+]
+
+/** Whatever came off the wire, or nothing. A number the column would refuse is
+ *  refused here instead, where there is somebody to tell. */
+export function decideFollowUp(minutes: number | null): { ok: true; minutes: number | null } | { ok: false; reason: string } {
+  if (minutes === null) return { ok: true, minutes: null }
+  if (!Number.isInteger(minutes)) return { ok: false, reason: 'That is not a length of time this understands.' }
+  if (minutes < MIN_FOLLOW_UP_MINUTES) {
+    return { ok: false, reason: 'Give them at least a day to answer before it comes back.' }
+  }
+  if (minutes > MAX_FOLLOW_UP_MINUTES) {
+    return { ok: false, reason: 'That is more than a year away. Pick something nearer.' }
+  }
+  return { ok: true, minutes }
+}
+
+/** How long, said the way somebody would say it. Falls back to counting days
+ *  for a length nobody picked off the menu. */
+export function describeFollowUp(minutes: number | null): string {
+  if (!minutes) return ''
+  const known = followUpChoices.find((choice) => choice.minutes === minutes)
+  if (known) return known.label.toLowerCase()
+  const days = Math.round(minutes / (60 * 24))
+  return days <= 1 ? 'a day later' : `${days} days later`
+}
+
+/** When the conversation should come back, given when the message actually
+ *  left. Worked out here rather than at the moment it was set, because a
+ *  message that went out late should be chased late. */
+export function followUpAt(sentAt: Date, minutes: number): Date {
+  return new Date(sentAt.getTime() + minutes * 60_000)
 }

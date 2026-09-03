@@ -116,6 +116,13 @@ export type DraftForComposer = {
   sendAt: string | null
   sendState: DraftSendState
   sendError: string | null
+  /** How long after it goes out the conversation should come back if nobody has
+   *  answered, or null for a message nobody wants chasing. */
+  followUpMinutes: number | null
+  /** Whether mail from the recipient stood it down before it could leave. The
+   *  conversation it was held by is not sent to the browser: the composer only
+   *  has to say that the timer came off and why. */
+  held: boolean
 }
 
 export function forComposer(draft: Draft): DraftForComposer {
@@ -131,6 +138,8 @@ export function forComposer(draft: Draft): DraftForComposer {
     sendAt: draft.sendAt ? draft.sendAt.toISOString() : null,
     sendState: draft.sendState,
     sendError: draft.sendError,
+    followUpMinutes: draft.followUpMinutes,
+    held: draft.heldByThreadId !== null,
   }
 }
 
