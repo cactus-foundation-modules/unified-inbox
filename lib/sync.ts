@@ -32,13 +32,17 @@ import {
   releaseConnectionLock,
   saveSyncState,
   attachLocation,
+  recordRelayIdentity,
+  unlocatedOutboundNear,
   threadsForMessageIds,
   threadsHoldingIdentity,
   touchThread,
   reopenOnReply,
   recordEvent,
+  type StoredMessageRef,
 } from './db'
 import { prepareInboundHtml, htmlToText } from './html'
+import { chooseRelayCopy, RELAY_COPY_WINDOW_MS } from './relay-copy'
 import { readReadReceipt } from './receipts'
 import { clashMessage, mailboxClashes } from './reply-catcher-guard'
 import { credentialsForConnection, explainImapError, listFolders, openMailbox } from './imap'
@@ -537,6 +541,48 @@ function addressesFrom(parsed: ParsedMail, field: 'to' | 'cc'): string[] {
   return list.flatMap((entry) => entry.value.map((v) => normaliseAddress(v.address ?? '')).filter(Boolean))
 }
 
+/**
+ * The outbound row this delivered copy is, when a relay rewrote our Message-ID.
+ *
+ * Only ever asked about mail sent from one of this account's own addresses, and
+ * only after the Message-ID has failed to place it. Claiming a row records the
+ * relay's id on it, which both closes the row to any further claim and gives
+ * threading the handle the rest of the world will quote back at us.
+ */
+async function matchRelayCopy(input: {
+  fromAddress: string | null
+  ownAddresses: Set<string>
+  toAddresses: string[]
+  ccAddresses: string[]
+  subject: string | null
+  sentAt: Date
+  relayMessageId: string
+}): Promise<StoredMessageRef | null> {
+  if (!input.fromAddress || !input.ownAddresses.has(input.fromAddress)) return null
+
+  const candidates = await unlocatedOutboundNear({
+    fromAddress: input.fromAddress,
+    sentAt: input.sentAt,
+    windowMs: RELAY_COPY_WINDOW_MS,
+  })
+  const match = chooseRelayCopy(candidates, {
+    toAddresses: input.toAddresses,
+    ccAddresses: input.ccAddresses,
+    subject: input.subject,
+    sentAt: input.sentAt,
+  })
+  if (!match) return null
+
+  await recordRelayIdentity(match.id, input.relayMessageId)
+  return {
+    id: match.id,
+    threadId: match.threadId,
+    messageIdHeader: match.messageIdHeader,
+    imapFolder: null,
+    imapUid: null,
+  }
+}
+
 async function fileMessage(
   ctx: FolderContext,
   entry: { uid: number; source: Buffer; size: number | null }
@@ -602,7 +648,19 @@ async function fileMessage(
   // is the SENDER's side of it, and the colleague it was addressed to still has
   // no copy on their own conversation. The side already written is skipped
   // below, on the same ledger as every other side.
-  const ours = await findOutboundByMessageId(identity)
+  const ours = (await findOutboundByMessageId(identity))
+    // Or the same reply wearing a relay's Message-ID rather than the one we
+    // wrote, which is what comes back whenever the sending service stamps its
+    // own id over ours. Matched on who, to whom, about what and when instead.
+    ?? (await matchRelayCopy({
+      fromAddress,
+      ownAddresses: ctx.ownAddresses,
+      toAddresses: to,
+      ccAddresses: cc,
+      subject,
+      sentAt,
+      relayMessageId: identity,
+    }))
   if (ours) {
     await attachLocation(ours.id, { connectionId: ctx.connectionId, folder: ctx.folder.path, uid: entry.uid })
     if (!internal) {

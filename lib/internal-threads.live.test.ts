@@ -228,6 +228,60 @@ describe.runIf(shouldRun)('colleague mail on both conversations, against a real 
     }))).toBeTruthy()
   })
 
+  it('finds the reply just sent when its Message-ID came back rewritten', async () => {
+    const { chooseRelayCopy, RELAY_COPY_WINDOW_MS } = await import('./relay-copy')
+
+    // The row the send path writes: no location on it, because nothing has met
+    // it in a mailbox yet.
+    const sentAt = new Date()
+    const rows = await db.$queryRawUnsafe<{ id: string }[]>(
+      `INSERT INTO "uin_messages" ("thread_id", "inbox_id", "direction", "channel", "message_id_header",
+        "from_name", "from_address", "to_addresses", "cc_addresses", "subject", "body_text", "snippet",
+        "sent_at", "has_attachments", "size_bytes", "source", "delivery_status", "thread_match", "routed_on")
+       VALUES ($1, $2, 'out', 'email', 'uin.relay1@deskwell.co.uk', 'Marcus Ashford', 'marcus@deskwell.co.uk',
+               ARRAY['chris@deskwell.co.uk'], ARRAY[]::text[], 'Re: Artisan Furniture', 'Tuesday works.',
+               'Tuesday works.', $3, false, 1024, 'brevo', 'sent', 'new', 'outbound')
+       RETURNING "id"`,
+      marcusThread, marcusInbox, sentAt,
+    )
+    const outboundId = rows[0]!.id
+
+    // The delivered copy, carrying the relay's id and its second-precision clock.
+    const delivered = {
+      toAddresses: ['chris@deskwell.co.uk'],
+      ccAddresses: [],
+      subject: 'Re: Artisan Furniture',
+      sentAt: new Date(Math.floor(sentAt.getTime() / 1000) * 1000),
+    }
+
+    const candidates = await lib.unlocatedOutboundNear({
+      fromAddress: 'MARCUS@deskwell.co.uk',
+      sentAt: delivered.sentAt,
+      windowMs: RELAY_COPY_WINDOW_MS,
+    })
+    const match = chooseRelayCopy(candidates, delivered)
+    expect(match?.id).toBe(outboundId)
+
+    await lib.recordRelayIdentity(outboundId, 'relay1@smtp-relay.example.com')
+    await lib.attachLocation(outboundId, {
+      connectionId, folder: 'Deskwell/Marcus Ashford', uid: 43,
+    })
+
+    // Claimed once and once only: a second copy of the same mail, met in another
+    // folder, finds nothing left to take.
+    const again = await lib.unlocatedOutboundNear({
+      fromAddress: 'marcus@deskwell.co.uk',
+      sentAt: delivered.sentAt,
+      windowMs: RELAY_COPY_WINDOW_MS,
+    })
+    expect(again.map((c) => c.id)).not.toContain(outboundId)
+
+    // And the relay's id now leads to the conversation, which is what a reply
+    // quoting it in In-Reply-To needs.
+    const refs = await lib.threadsForMessageIds(['relay1@smtp-relay.example.com'])
+    expect((refs.get('relay1@smtp-relay.example.com') ?? []).map((r) => r.threadId)).toEqual([marcusThread])
+  })
+
   it('hands back every conversation a referenced message sits on, with its inbox', async () => {
     const refs = await lib.threadsForMessageIds(['original@deskwell.co.uk'])
     const found = refs.get('original@deskwell.co.uk') ?? []

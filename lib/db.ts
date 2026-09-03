@@ -4,6 +4,7 @@ import { prisma } from '@/lib/db/prisma'
 import { encryptSecret, tryDecryptSecret } from '@/lib/crypto/secrets'
 import { normaliseAddress } from './addresses'
 import type { ThreadRef } from './threading'
+import type { OutboundCandidate } from './relay-copy'
 import { remoteImageUrls } from './remote-images'
 import { DRAFT_MODES, isSignatureKind } from './types'
 import type {
@@ -875,6 +876,62 @@ export async function attachLocation(
        SET "connection_id" = COALESCE("connection_id", ${location.connectionId}),
            "imap_folder" = COALESCE("imap_folder", ${location.folder}),
            "imap_uid" = COALESCE("imap_uid", ${location.uid}::bigint)
+     WHERE "id" = ${messageId}
+  `
+}
+
+/**
+ * The replies this hub sent around a given moment that have never been found in
+ * a mailbox, so a delivered copy carrying a relay's own Message-ID can be
+ * matched back to one of them (see lib/relay-copy.ts).
+ *
+ * "Never been found" is `connection_id IS NULL`: the send path leaves it empty
+ * and it is filled the moment a copy of that message is met on an account, so a
+ * row can only ever be claimed once. The window is applied here and the rest of
+ * the test - the recipients, the subject - is applied in memory, because it is
+ * a handful of rows and the rules that decide are worth being able to read.
+ */
+export async function unlocatedOutboundNear(input: {
+  fromAddress: string
+  sentAt: Date
+  windowMs: number
+}): Promise<OutboundCandidate[]> {
+  const from = new Date(input.sentAt.getTime() - input.windowMs)
+  const to = new Date(input.sentAt.getTime() + input.windowMs)
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "id", "thread_id", "message_id_header", "to_addresses", "cc_addresses", "subject", "sent_at"
+      FROM "uin_messages"
+     WHERE "direction" = 'out'
+       AND "channel" = 'email'
+       AND "connection_id" IS NULL
+       AND lower("from_address") = ${input.fromAddress.toLowerCase()}
+       AND "sent_at" BETWEEN ${from} AND ${to}
+     ORDER BY "sent_at"
+     LIMIT 20
+  `
+  return rows.map((r) => ({
+    id: r.id as string,
+    threadId: r.thread_id as string,
+    messageIdHeader: (r.message_id_header as string | null) ?? null,
+    toAddresses: (r.to_addresses as string[] | null) ?? [],
+    ccAddresses: (r.cc_addresses as string[] | null) ?? [],
+    subject: (r.subject as string | null) ?? null,
+    sentAt: r.sent_at as Date,
+  }))
+}
+
+/**
+ * Records the Message-ID a relay put on our message in place of ours.
+ *
+ * It is the handle everybody else in the world now knows the message by: it is
+ * what the recipient's mail client quotes in In-Reply-To, and threadsForMessageIds
+ * matches it, so a reply lands on the conversation it answers instead of
+ * starting a new one.
+ */
+export async function recordRelayIdentity(messageId: string, relayMessageId: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "uin_messages"
+       SET "provider_message_id" = ${relayMessageId}
      WHERE "id" = ${messageId}
   `
 }
