@@ -1,7 +1,13 @@
 'use client'
 
 import { useState } from 'react'
-import { describeFollowUp, describeSendAt, followUpChoices } from '@/modules/unified-inbox/lib/scheduled'
+import { instantAtWallClock } from '@/lib/config/timezone'
+import {
+  describeSendAt,
+  followUpMinutesBetween,
+  followUpOptions,
+  MIN_FOLLOW_UP_MINUTES,
+} from '@/modules/unified-inbox/lib/scheduled'
 import type { DraftSendState } from '@/modules/unified-inbox/lib/types'
 
 // Send it later: the control both composers share.
@@ -68,9 +74,38 @@ export function SendLater({
   // Held here rather than read straight off the draft so that changing it and
   // pressing Never mind leaves the saved one alone.
   const [followUp, setFollowUp] = useState<number | null>(followUpMinutes)
+  // A day and a time of somebody's own choosing, as the browser's own box spells
+  // it. Three ready-made answers cover most of it and none of them covers "the
+  // Monday they said they would decide by".
+  const [chaseWhen, setChaseWhen] = useState('')
   const [problem, setProblem] = useState('')
 
   const scheduled = sendState === 'scheduled' || sendState === 'sending'
+
+  // The moment the typed wall clock means, worked out the same way the server
+  // works it out: against the SITE's zone rather than this browser's. It is what
+  // the follow-up answers are counted from - "tomorrow morning" for a message
+  // leaving on Friday night is Saturday morning.
+  const wall = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(value)
+  const departure = wall ? instantAtWallClock(wall[1]!, wall[2]!, timezone) : null
+  const choices = departure ? followUpOptions(departure, timezone) : []
+  // What is chosen, as a moment, so a chip can show itself pressed and the line
+  // underneath can say the day rather than a number of minutes.
+  const chaseAt = departure && followUp !== null
+    ? new Date(departure.getTime() + followUp * 60_000)
+    : null
+
+  /** A moment somebody picked, kept as the length of time that is stored. */
+  const chooseChase = (until: Date) => {
+    if (!departure) return
+    const minutes = followUpMinutesBetween(departure, until)
+    if (minutes < MIN_FOLLOW_UP_MINUTES) {
+      setProblem('Pick a time after the message has gone, not before it.')
+      return
+    }
+    setProblem('')
+    setFollowUp(minutes)
+  }
 
   const schedule = () => {
     if (!value) {
@@ -107,9 +142,13 @@ export function SendLater({
           {sendState === 'sending'
             ? 'This one is going out now.'
             : `This is set to go out ${describeSendAt(sendAt, new Date(), timezone)}. It leaves on its own - you do not have to be here.`}
-          {sendState === 'scheduled' && followUpMinutes ? (
-            <> If nobody has replied {describeFollowUp(followUpMinutes)}, the conversation comes
-              back to whoever wrote it.</>
+          {sendState === 'scheduled' && followUpMinutes && sendAt ? (
+            <> If nobody has replied by{' '}
+              {describeSendAt(
+                new Date(new Date(sendAt).getTime() + followUpMinutes * 60_000),
+                new Date(),
+                timezone,
+              )}, the conversation comes back to whoever wrote it.</>
           ) : null}
         </div>
       )}
@@ -153,23 +192,70 @@ export function SendLater({
           </div>
           {/* Beside the time rather than behind another button: whether to chase
               it is part of the same thought as when to send it, and a chase
-              nobody was offered is a chase nobody sets. */}
+              nobody was offered is a chase nobody sets.
+
+              The same three answers, in the same words, that putting a
+              conversation to sleep offers - with the same day-and-time box
+              underneath for the one they do not cover. Two controls that mean
+              "bring this back later" and disagree about how to say it is one
+              vocabulary too many. */}
           <div className="field">
-            <label htmlFor="uin-follow-up">Bring it back if nobody replies</label>
-            <select
-              id="uin-follow-up"
-              value={followUp === null ? '' : String(followUp)}
-              onChange={(e) => setFollowUp(e.target.value ? Number(e.target.value) : null)}
-            >
-              <option value="">Do not bring it back</option>
-              {followUpChoices.map((choice) => (
-                <option key={choice.minutes} value={choice.minutes}>{choice.label}</option>
+            <span className="uin-recipients" id="uin-follow-up-label">
+              Bring it back if nobody replies
+            </span>
+            <div className="uin-thread-actions" role="group" aria-labelledby="uin-follow-up-label">
+              <button
+                type="button"
+                className="uin-chip"
+                aria-pressed={followUp === null}
+                onClick={() => { setFollowUp(null); setProblem('') }}
+              >
+                Leave it
+              </button>
+              {choices.map((choice) => (
+                <button
+                  key={choice.id}
+                  type="button"
+                  className="uin-chip"
+                  aria-pressed={chaseAt !== null && chaseAt.getTime() === choice.until.getTime()}
+                  onClick={() => chooseChase(choice.until)}
+                >
+                  {choice.label}
+                </button>
               ))}
-            </select>
+            </div>
+            <div className="uin-snooze-custom">
+              <label htmlFor="uin-follow-up-when">Or pick a day and time</label>
+              <input
+                id="uin-follow-up-when"
+                type="datetime-local"
+                value={chaseWhen}
+                // Never earlier than the message itself: a chase before the send
+                // is a conversation coming back to ask about something that has
+                // not happened.
+                min={value || minWallClock}
+                onChange={(e) => { setChaseWhen(e.target.value); setProblem('') }}
+              />
+              <button
+                type="button"
+                className="uin-chip"
+                disabled={!chaseWhen}
+                onClick={() => {
+                  const picked = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(chaseWhen)
+                  if (!picked) {
+                    setProblem('That is not a date and time this understands.')
+                    return
+                  }
+                  chooseChase(instantAtWallClock(picked[1]!, picked[2]!, timezone))
+                }}
+              >
+                Bring it back then
+              </button>
+            </div>
             <span className="uin-field-hint">
-              The conversation goes quiet until then and comes back to whoever wrote the message -
-              unless they answer, which brings it straight back anyway. So you only ever see the
-              chase if there was nothing to chase.
+              {chaseAt
+                ? `It comes back to whoever wrote it ${describeSendAt(chaseAt, new Date(), timezone)}, unless they answer first - which brings it back straight away.`
+                : 'The conversation goes quiet until whenever you say, and comes back to whoever wrote the message - unless they answer, which brings it back anyway. So you only ever see the chase if there was nothing to chase.'}
             </span>
           </div>
           {problem && <div className="alert alert-danger" role="alert">{problem}</div>}

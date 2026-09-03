@@ -1,4 +1,9 @@
-import { calendarDateIn, formatInSiteTimezone, instantAtWallClock } from '@/lib/config/timezone'
+import {
+  calendarDateIn,
+  formatInSiteTimezone,
+  instantAtWallClock,
+  wallClockDaysAhead,
+} from '@/lib/config/timezone'
 import type { DraftSendState } from './types'
 
 // ---------------------------------------------------------------------------
@@ -164,23 +169,51 @@ export function plainTextToHtml(text: string): string {
 // would get wrong.
 // ---------------------------------------------------------------------------
 
-/** The shortest follow-up worth setting. Under a day is a conversation coming
- *  back before the recipient has opened their mail, which teaches people to
- *  ignore it. Matches the column's own check in migration 022. */
-export const MIN_FOLLOW_UP_MINUTES = 60 * 24
+/** The shortest follow-up worth setting. Five minutes, matching the column's
+ *  own check in migration 023: a chase measured in seconds is a conversation
+ *  that comes back before the message has finished sending, and everything
+ *  longer than that is somebody's own business. */
+export const MIN_FOLLOW_UP_MINUTES = 5
 
 /** The longest. A year, matching how far ahead a message may be scheduled at
  *  all, and matching the column's check. */
 export const MAX_FOLLOW_UP_MINUTES = MAX_AHEAD_DAYS * 24 * 60
 
-/** The handful of answers people actually give, offered rather than a box to
- *  type a number of minutes into. */
-export const followUpChoices: ReadonlyArray<{ minutes: number; label: string }> = [
-  { minutes: 60 * 24, label: 'A day later' },
-  { minutes: 60 * 24 * 3, label: 'Three days later' },
-  { minutes: 60 * 24 * 7, label: 'A week later' },
-  { minutes: 60 * 24 * 14, label: 'A fortnight later' },
-]
+/**
+ * When to chase, offered as the same handful of answers - and the same words -
+ * as putting a conversation to sleep offers (`snoozeOptions`, lib/list.ts).
+ *
+ * Deliberately the same list said the same way: "bring this back if nobody
+ * replies" and "bring this back on Thursday" are one idea, and a second control
+ * with its own vocabulary for it would be a second thing to learn. The one
+ * difference is what the answers are counted FROM - the moment the message goes
+ * out, not the moment somebody is standing here reading the screen. "Tomorrow
+ * morning" for a message leaving on Friday night is Saturday morning, which is
+ * what anybody setting it would expect and is not what counting from now would
+ * have given.
+ */
+export function followUpOptions(
+  sendAt: Date,
+  timezone: string,
+): Array<{ id: string; label: string; until: Date }> {
+  return [
+    { id: 'later', label: 'In three hours', until: new Date(sendAt.getTime() + 3 * 3_600_000) },
+    { id: 'tomorrow', label: 'Tomorrow morning', until: wallClockDaysAhead(sendAt, 1, '09:00', timezone) },
+    { id: 'week', label: 'Next week', until: wallClockDaysAhead(sendAt, 7, '09:00', timezone) },
+  ]
+}
+
+/**
+ * A chosen moment as the length of time that is actually stored.
+ *
+ * The moment is what somebody picks and the length is what survives: the
+ * message has not gone yet, and one that leaves ten minutes late should be
+ * chased ten minutes late rather than at a fixed hour that has already been.
+ * Rounded to the minute, which is the resolution of every box that produces one.
+ */
+export function followUpMinutesBetween(sendAt: Date, until: Date): number {
+  return Math.round((until.getTime() - sendAt.getTime()) / 60_000)
+}
 
 /** Whatever came off the wire, or nothing. A number the column would refuse is
  *  refused here instead, where there is somebody to tell. */
@@ -188,22 +221,12 @@ export function decideFollowUp(minutes: number | null): { ok: true; minutes: num
   if (minutes === null) return { ok: true, minutes: null }
   if (!Number.isInteger(minutes)) return { ok: false, reason: 'That is not a length of time this understands.' }
   if (minutes < MIN_FOLLOW_UP_MINUTES) {
-    return { ok: false, reason: 'Give them at least a day to answer before it comes back.' }
+    return { ok: false, reason: 'Pick a time after the message has gone, not before it.' }
   }
   if (minutes > MAX_FOLLOW_UP_MINUTES) {
     return { ok: false, reason: 'That is more than a year away. Pick something nearer.' }
   }
   return { ok: true, minutes }
-}
-
-/** How long, said the way somebody would say it. Falls back to counting days
- *  for a length nobody picked off the menu. */
-export function describeFollowUp(minutes: number | null): string {
-  if (!minutes) return ''
-  const known = followUpChoices.find((choice) => choice.minutes === minutes)
-  if (known) return known.label.toLowerCase()
-  const days = Math.round(minutes / (60 * 24))
-  return days <= 1 ? 'a day later' : `${days} days later`
 }
 
 /** When the conversation should come back, given when the message actually

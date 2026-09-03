@@ -358,10 +358,15 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     await lib.deleteDraft(draft.id, emma, [purchasing])
   })
 
-  it('refuses a follow-up the column will not have', async () => {
+  it('takes a chase measured in hours, and refuses one measured in a minute', async () => {
+    // Migration 023 dropped the day-long floor: the follow-up offers the same
+    // answers snoozing does, and "in three hours" is three hours.
     const draft = await put(future)
+    await db.$executeRawUnsafe(`UPDATE "uin_drafts" SET "follow_up_minutes" = 180 WHERE "id" = $1`, draft.id)
+    expect((await lib.getDraft(draft.id, emma, [purchasing]))?.followUpMinutes).toBe(180)
+
     await expect(
-      db.$executeRawUnsafe(`UPDATE "uin_drafts" SET "follow_up_minutes" = 5 WHERE "id" = $1`, draft.id),
+      db.$executeRawUnsafe(`UPDATE "uin_drafts" SET "follow_up_minutes" = 1 WHERE "id" = $1`, draft.id),
     ).rejects.toThrow()
     await lib.deleteDraft(draft.id, emma, [purchasing])
   })

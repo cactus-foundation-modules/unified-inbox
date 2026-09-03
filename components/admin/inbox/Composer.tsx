@@ -105,6 +105,9 @@ export function Composer({
   // here: the server decides what a saved schedule means.
   const [followUpMinutes, setFollowUpMinutes] = useState<number | null>(draft?.followUpMinutes ?? null)
   const [held, setHeld] = useState(draft?.held ?? false)
+  // Waiting for its own time, or going out this minute. Either way it is out of
+  // this composer's hands.
+  const waiting = sendState === 'scheduled' || sendState === 'sending'
   // Typed since the last time any of it was put down somewhere. What the
   // beforeunload guard below is asking about, and it is deliberately not "is
   // there text", because text that has just been saved is not at risk.
@@ -566,19 +569,25 @@ export function Composer({
       {note && !error && <div className="alert alert-success" role="status">{note}</div>}
 
       <div className="uin-composer-row">
-        <button
-          type="button"
-          className="btn btn-primary btn-sm"
-          onClick={submit}
-          // Nothing to reply to means the server would refuse it anyway, and
-          // finding that out by pressing Send is finding it out too late.
-          disabled={busy || nobodyToReplyTo}
-        >
-          {busyWith === 'send'
-            ? (mode === 'note' ? 'Saving...' : 'Sending...')
-            : mode === 'note' ? 'Save note' : 'Send'}
-        </button>
-        {mode !== 'note' && (
+        {/* A reply with a time on it has already been decided about. Send would
+            post it now and Save would look like the way to keep it, which it is
+            not - so while it is waiting, the panel above is the whole of what is
+            left to do: move it, or cancel the timer and have these back. */}
+        {!waiting && (
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={submit}
+            // Nothing to reply to means the server would refuse it anyway, and
+            // finding that out by pressing Send is finding it out too late.
+            disabled={busy || nobodyToReplyTo}
+          >
+            {busyWith === 'send'
+              ? (mode === 'note' ? 'Saving...' : 'Sending...')
+              : mode === 'note' ? 'Save note' : 'Send'}
+          </button>
+        )}
+        {mode !== 'note' && !waiting && (
           <button
             type="button"
             className="btn btn-secondary btn-sm"

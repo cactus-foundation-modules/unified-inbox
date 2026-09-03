@@ -115,6 +115,9 @@ export function ComposeView({
   // here: the server decides what a saved schedule means.
   const [followUpMinutes, setFollowUpMinutes] = useState<number | null>(draft?.followUpMinutes ?? null)
   const [held, setHeld] = useState(draft?.held ?? false)
+  // Waiting for its own time, or going out this minute. Either way it is out of
+  // this composer's hands.
+  const waiting = sendState === 'scheduled' || sendState === 'sending'
   // Typed since the last time any of it was put down somewhere. Deliberately
   // not "is there text": text that has just been saved is not at risk.
   const [dirty, setDirty] = useState(false)
@@ -581,17 +584,26 @@ export function ComposeView({
             {note && !error && <div className="alert alert-success" role="status">{note}</div>}
 
             <div className="uin-composer-row">
-              <button type="button" className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
-                {busyWith === 'send' ? 'Sending...' : 'Send'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => { void save() }}
-                disabled={busy}
-              >
-                {busyWith === 'save' ? 'Saving...' : 'Save as a draft'}
-              </button>
+              {/* A message with a time on it has already been decided about. Send
+                  and Save both contradict that decision - one would post it now
+                  and the other would look like the way to keep it, which it is
+                  not - so the panel above is the whole of what is left to do:
+                  move it, or cancel the timer and have these back. */}
+              {!waiting && (
+                <>
+                  <button type="button" className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
+                    {busyWith === 'send' ? 'Sending...' : 'Send'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => { void save() }}
+                    disabled={busy}
+                  >
+                    {busyWith === 'save' ? 'Saving...' : 'Save as a draft'}
+                  </button>
+                </>
+              )}
               {draftId ? (
                 <button
                   type="button"

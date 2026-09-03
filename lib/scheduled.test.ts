@@ -5,9 +5,10 @@ import {
   MIN_FOLLOW_UP_MINUTES,
   decideFollowUp,
   decideSendAt,
-  describeFollowUp,
   describeSendAt,
   followUpAt,
+  followUpMinutesBetween,
+  followUpOptions,
   plainTextToHtml,
   scheduleLabel,
   toWallClock,
@@ -169,9 +170,13 @@ describe('decideFollowUp', () => {
     expect(decideFollowUp(60 * 24 * 3)).toEqual({ ok: true, minutes: 4320 })
   })
 
-  it('refuses one that comes back before they have opened their mail', () => {
-    const decision = decideFollowUp(MIN_FOLLOW_UP_MINUTES - 1)
-    expect(decision.ok).toBe(false)
+  it('takes three hours, which the menu offers and a day-long floor would have refused', () => {
+    expect(decideFollowUp(180)).toEqual({ ok: true, minutes: 180 })
+  })
+
+  it('refuses one that would come back before the message has gone', () => {
+    expect(decideFollowUp(MIN_FOLLOW_UP_MINUTES - 1).ok).toBe(false)
+    expect(decideFollowUp(-60).ok).toBe(false)
   })
 
   it('refuses one further off than a message may be scheduled at all', () => {
@@ -183,17 +188,37 @@ describe('decideFollowUp', () => {
   })
 })
 
-describe('describeFollowUp', () => {
-  it('says the ones off the menu the way the menu says them', () => {
-    expect(describeFollowUp(60 * 24 * 3)).toBe('three days later')
+describe('followUpOptions', () => {
+  const LEAVES = new Date('2026-06-05T20:30:00.000Z')
+
+  it('offers the same three answers, in the same words, as putting one to sleep', () => {
+    expect(followUpOptions(LEAVES, LONDON).map((o) => o.label))
+      .toEqual(['In three hours', 'Tomorrow morning', 'Next week'])
   })
 
-  it('counts the days for one nobody picked off it', () => {
-    expect(describeFollowUp(60 * 24 * 5)).toBe('5 days later')
+  it('counts them from when the message goes out, not from now', () => {
+    // A message leaving on Friday night is chased on Saturday morning. Counting
+    // from now would have made "tomorrow morning" a moment before it had gone.
+    const [later, tomorrow, week] = followUpOptions(LEAVES, LONDON)
+    expect(later!.until.toISOString()).toBe('2026-06-05T23:30:00.000Z')
+    expect(tomorrow!.until.toISOString()).toBe('2026-06-06T08:00:00.000Z')
+    expect(week!.until.toISOString()).toBe('2026-06-12T08:00:00.000Z')
+  })
+})
+
+describe('followUpMinutesBetween', () => {
+  it('keeps a chosen moment as the length that is actually stored', () => {
+    // The moment is what somebody picks; the length is what survives, so a
+    // message that leaves late is chased late.
+    const sendAt = new Date('2026-06-05T09:00:00.000Z')
+    expect(followUpMinutesBetween(sendAt, new Date('2026-06-08T09:00:00.000Z'))).toBe(4320)
   })
 
-  it('says nothing about no follow-up', () => {
-    expect(describeFollowUp(null)).toBe('')
+  it('goes negative for a moment before the message leaves, which is refused', () => {
+    const sendAt = new Date('2026-06-05T09:00:00.000Z')
+    const minutes = followUpMinutesBetween(sendAt, new Date('2026-06-05T08:00:00.000Z'))
+    expect(minutes).toBe(-60)
+    expect(decideFollowUp(minutes).ok).toBe(false)
   })
 })
 

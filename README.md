@@ -47,8 +47,9 @@ the same human collapse into one story.
   box; a new message opens where you left it. Sending one clears it away.
 - **Send it later, and chase it up.** A message written at half past eleven at
   night can be set to go out at nine in the morning, and can carry a follow-up
-  with it: once it has gone, the conversation goes quiet for as long as you said
-  and comes back if nobody has answered. A reply cancels the chase on its own,
+  with it - offered in the same words, and with the same day-and-time box, as
+  putting a conversation to sleep: once it has gone, the conversation goes quiet
+  until whenever you said and comes back if nobody has answered. A reply cancels the chase on its own,
   so you only see it when there was nothing to see. And if the person it is
   addressed to writes to you before it leaves, the message is held rather than
   sent - their conversation says so, with a link to what was waiting.
