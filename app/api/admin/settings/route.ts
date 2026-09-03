@@ -119,9 +119,9 @@ const Body = z.object({
   quoteNumberPattern: Pattern,
   trackOpens: z.boolean().optional(),
   requestReadReceipts: z.boolean().optional(),
-  // NULL is off. The floor is the check-now route's own cooldown: anything
-  // sooner is refused there anyway, so offering it would only buy a screen full
-  // of "a check has just run".
+  // NULL is off. The floor is the check-now route's own cooldown for a round
+  // nobody asked for: an account visited inside that minute is stepped over
+  // there anyway, so a shorter interval would buy nothing but function calls.
   autoCheckSeconds: z.number().int().min(60).max(3600).nullable().optional(),
 })
 

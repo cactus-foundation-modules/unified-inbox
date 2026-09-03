@@ -9,9 +9,10 @@ import { RefreshIcon } from './icons'
 //
 // Same engine and same route as the Check now button in Settings, with no
 // account named, so it collects from every mail account at once - which is what
-// somebody standing in front of the list means by refreshing it. The route
-// keeps a minute's cooldown of its own and turns a second press away in plain
-// English, so its answer is worth showing rather than swallowing.
+// somebody standing in front of the list means by refreshing it. An account
+// checked in the last few seconds is stepped over rather than opened again, and
+// the route says so in plain English instead of refusing - a press is always
+// answered, and the list always refreshes on the back of it.
 //
 // Only offered where it can actually do something: it takes the manage
 // permission and there has to be a mail account to check. A button whose only
@@ -46,7 +47,10 @@ export function CheckNowButton({ onResult, autoSeconds }: Props) {
       const response = await fetch('/api/m/unified-inbox/admin/check-now', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: '{}',
+        // Rounds the page runs on its own rest an account for a minute; a
+        // press rests it for seconds. Somebody who has just pressed the button
+        // is asking, and the answer to a question is not "you asked recently".
+        body: JSON.stringify({ auto: quiet }),
       })
       const body = await response.json().catch(() => null)
       if (response.ok) {
