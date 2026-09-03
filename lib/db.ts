@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db/prisma'
 import { encryptSecret, tryDecryptSecret } from '@/lib/crypto/secrets'
 import { normaliseAddress } from './addresses'
+import type { ThreadRef } from './threading'
 import { remoteImageUrls } from './remote-images'
 import { DRAFT_MODES, isSignatureKind } from './types'
 import type {
@@ -891,18 +892,43 @@ export async function attachLocation(
  */
 export async function threadsForMessageIds(
   messageIds: string[]
-): Promise<Map<string, string>> {
+): Promise<Map<string, ThreadRef[]>> {
   if (messageIds.length === 0) return new Map()
-  const rows = await prisma.$queryRaw<{ message_id_header: string; thread_id: string }[]>`
-    SELECT "message_id_header", "thread_id" FROM "uin_messages"
-     WHERE "message_id_header" = ANY(${messageIds}::text[])
+  const rows = await prisma.$queryRaw<{ message_id_header: string; thread_id: string; inbox_id: string | null }[]>`
+    SELECT m."message_id_header", m."thread_id", t."inbox_id" FROM "uin_messages" m
+      JOIN "uin_threads" t ON t."id" = m."thread_id"
+     WHERE m."message_id_header" = ANY(${messageIds}::text[])
     UNION ALL
-    SELECT "provider_message_id" AS "message_id_header", "thread_id" FROM "uin_messages"
-     WHERE "provider_message_id" = ANY(${messageIds}::text[])
+    SELECT m."provider_message_id" AS "message_id_header", m."thread_id", t."inbox_id" FROM "uin_messages" m
+      JOIN "uin_threads" t ON t."id" = m."thread_id"
+     WHERE m."provider_message_id" = ANY(${messageIds}::text[])
   `
-  const map = new Map<string, string>()
-  for (const row of rows) if (!map.has(row.message_id_header)) map.set(row.message_id_header, row.thread_id)
+  // Every thread a referenced id sits on, not just the first. Internal mail is
+  // held once per inbox involved, and the caller picks the side it belongs to.
+  const map = new Map<string, ThreadRef[]>()
+  for (const row of rows) {
+    const refs = map.get(row.message_id_header) ?? []
+    if (refs.some((ref) => ref.threadId === row.thread_id)) continue
+    refs.push({ threadId: row.thread_id, inboxId: row.inbox_id })
+    map.set(row.message_id_header, refs)
+  }
   return map
+}
+
+/** Which threads already hold this message on this account. Empty means it is
+ *  new; one entry short of its sides means a side is still to be filed. */
+export async function threadsHoldingIdentity(
+  connectionId: string,
+  messageIdHeader: string,
+  internalKey: string | null,
+): Promise<Set<string>> {
+  const rows = await prisma.$queryRaw<{ thread_id: string }[]>`
+    SELECT "thread_id" FROM "uin_messages"
+     WHERE "connection_id" = ${connectionId}
+       AND ("message_id_header" = ${messageIdHeader}
+            OR (${internalKey}::text IS NOT NULL AND "internal_key" = ${internalKey}))
+  `
+  return new Set(rows.map((r) => r.thread_id))
 }
 
 export type ThreadCandidateRow = {
@@ -992,12 +1018,29 @@ export type InsertMessageInput = {
   threadMatch: string
   routedOn: string
   autoKind: string | null
+  /** Set only on mail between two of our own addresses: the handle that spots
+   *  the second copy of it when a relay rewrote the Message-ID. */
+  internalKey?: string | null
 }
 
 /**
- * Files a message. The unique index on (connection_id, message_id_header) is the
- * real guard: two ticks racing, or the same mail found in a second folder, both
- * land on ON CONFLICT DO NOTHING and return null rather than a duplicate.
+ * Files a message. The unique index on (connection_id, thread_id,
+ * message_id_header) is the real guard: two ticks racing, or the same mail found
+ * in a second folder, both land on ON CONFLICT DO NOTHING and return null rather
+ * than a duplicate.
+ *
+ * The thread is part of that key because one internal email is genuinely two
+ * messages - Marcus's sent one and Chris's received one - each on its own
+ * conversation. It is NOT a licence to file the same mail twice on one thread:
+ * the caller looks up which threads already hold it before writing, and a
+ * second copy carrying a rewritten Message-ID is turned away by the separate
+ * unique index on (thread_id, internal_key).
+ *
+ * The conflict clause names no columns on purpose. Given a target, Postgres
+ * guards THAT index and raises 23505 for a clash on any other - so naming the
+ * Message-ID index turned a duplicate spotted by the pair key into an exception
+ * that aborted the whole sweep. Bare DO NOTHING covers every unique index on
+ * the table, which is what "we already hold this" has always meant here.
  */
 export async function insertMessage(data: InsertMessageInput): Promise<string | null> {
   const rows = await prisma.$queryRaw<{ id: string }[]>`
@@ -1005,16 +1048,14 @@ export async function insertMessage(data: InsertMessageInput): Promise<string | 
       ("thread_id", "connection_id", "direction", "channel", "message_id_header", "in_reply_to",
        "references_header", "from_name", "from_address", "reply_to", "to_addresses", "cc_addresses", "subject",
        "body_text", "body_html", "snippet", "sent_at", "has_attachments", "size_bytes", "source",
-       "imap_folder", "imap_uid", "thread_match", "routed_on", "auto_kind")
+       "imap_folder", "imap_uid", "thread_match", "routed_on", "auto_kind", "internal_key")
     VALUES (${data.threadId}, ${data.connectionId}, ${data.direction}, 'email', ${data.messageIdHeader},
             ${data.inReplyTo}, ${data.references}::text[], ${data.fromName}, ${data.fromAddress},
             ${data.replyTo}, ${data.toAddresses}::text[], ${data.ccAddresses}::text[], ${data.subject}, ${data.bodyText},
             ${data.bodyHtml}, ${data.snippet}, ${data.sentAt}, ${data.hasAttachments}, ${data.sizeBytes},
             'imap', ${data.imapFolder}, ${data.imapUid}::bigint, ${data.threadMatch}, ${data.routedOn},
-            ${data.autoKind})
-    ON CONFLICT ("connection_id", "message_id_header")
-      WHERE "connection_id" IS NOT NULL AND "message_id_header" IS NOT NULL
-      DO NOTHING
+            ${data.autoKind}, ${data.internalKey ?? null})
+    ON CONFLICT DO NOTHING
     RETURNING "id"
   `
   return rows[0]?.id ?? null
@@ -2143,6 +2184,7 @@ export async function getMessageHtml(id: string): Promise<{
 export type ThreadEventKind =
   | 'assigned'
   | 'snoozed'
+  | 'woken'
   | 'status'
   | 'note'
   | 'mentioned'
@@ -2225,6 +2267,31 @@ export async function wakeDueThreads(): Promise<number> {
        SET "status" = 'open', "snooze_until" = NULL, "updated_at" = now()
      WHERE "status" = 'snoozed' AND "snooze_until" IS NOT NULL AND "snooze_until" <= now()
   `
+}
+
+/**
+ * One sleeping conversation, woken because somebody has written on it.
+ *
+ * "Come back to me on Thursday" is a statement about silence. The moment the
+ * customer answers - or a colleague answers them from their own mail client -
+ * the conversation is live again, and leaving it out of Open until Thursday is
+ * how a question sits unanswered for three days in a folder nobody opens.
+ *
+ * Deliberately narrower than wakeDueThreads: one row, named, and only when it
+ * is actually asleep. `AND "status" = 'snoozed'` is what makes it safe to call
+ * on every message that lands - a conversation somebody marked done is left
+ * done, an open one is not rewritten, and two ticks racing cost one no-op.
+ *
+ * Returns true only when there was a snooze to cancel, so the caller writes one
+ * timeline entry rather than one per polled message.
+ */
+export async function wakeSnoozedThread(threadId: string): Promise<boolean> {
+  const changed = await prisma.$executeRaw`
+    UPDATE "uin_threads"
+       SET "status" = 'open', "snooze_until" = NULL, "updated_at" = now()
+     WHERE "id" = ${threadId} AND "status" = 'snoozed'
+  `
+  return changed > 0
 }
 
 /**
@@ -4171,4 +4238,107 @@ export async function brevoSendingKeys(): Promise<Array<{ label: string; apiKey:
     seen.add(entry.apiKey)
     return true
   })
+}
+
+// ---------------------------------------------------------------------------
+// Who somebody is likely to be writing to
+// ---------------------------------------------------------------------------
+
+export type RecipientSuggestion = {
+  address: string
+  /** The person's name where we hold one, otherwise whatever the mail headers
+   *  called them. Null when neither has ever given us one. */
+  name: string | null
+  organisation: string | null
+  /** When this inbox last exchanged anything with them. Drives the order. */
+  lastAt: Date
+}
+
+/**
+ * Addresses this inbox has actually dealt with, most recent first.
+ *
+ * Built from the messages on the inbox's own conversations rather than from the
+ * people table, because the two answer different questions. The people table
+ * knows everybody the site has ever met; this box wants the handful the person
+ * standing in front of it is likely to be writing to next, and "who has
+ * accounts@ been talking to this month" is a far better guess than "who exists".
+ *
+ * Both directions count. Somebody we wrote to and who never answered is still a
+ * name worth offering - a supplier chased twice is exactly the address somebody
+ * reaches for - and taking senders only would leave them out.
+ *
+ * Our own addresses are struck out. Offering `accounts@` as a suggestion inside
+ * `accounts@` is offering to write to yourself, and every inbox on the site
+ * appears in the To line of the colleague mail this module now files on both
+ * sides, so without this the list fills up with the site's own addresses.
+ *
+ * The search is a plain prefix-or-contains on the address and the name, which
+ * is what a person typing into a To box means. It is deliberately not the
+ * people search: that one goes looking through notes and organisations, which
+ * is right for a directory and wrong for a menu that has to answer between
+ * keystrokes.
+ */
+export async function recentRecipients(opts: {
+  /** The inbox being written from. Null asks across every inbox named. */
+  inboxId: string | null
+  /** Every inbox this person may read - the bound on what can be suggested. */
+  visibleInboxIds: string[]
+  search?: string | null
+  limit?: number
+}): Promise<RecipientSuggestion[]> {
+  const scope = opts.inboxId ? [opts.inboxId] : opts.visibleInboxIds
+  if (scope.length === 0) return []
+  if (opts.inboxId && !opts.visibleInboxIds.includes(opts.inboxId)) return []
+
+  const term = opts.search?.trim() ?? ''
+  const like = `%${term}%`
+  const filter = term
+    ? Prisma.sql`AND (c."address" ILIKE ${like} OR c."name" ILIKE ${like})`
+    : Prisma.empty
+
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    WITH correspondents AS (
+      SELECT lower(a.address)                      AS address,
+             max(m."sent_at")                      AS last_at,
+             -- The most recent name anybody put on it, ours or theirs.
+             (array_agg(m."from_name" ORDER BY m."sent_at" DESC)
+                FILTER (WHERE m."from_name" IS NOT NULL AND lower(m."from_address") = lower(a.address))
+             )[1]                                  AS name
+        FROM "uin_messages" m
+        JOIN "uin_threads" t ON t."id" = m."thread_id"
+        CROSS JOIN LATERAL unnest(
+               ARRAY[m."from_address"] || m."to_addresses" || m."cc_addresses"
+             ) AS a(address)
+       WHERE t."inbox_id" IN (${Prisma.join(scope)})
+         AND m."channel" = 'email'
+         AND a.address IS NOT NULL
+         AND a.address <> ''
+         AND position('@' in a.address) > 1
+         -- Never suggest one of our own addresses.
+         AND NOT EXISTS (
+               SELECT 1 FROM "uin_inboxes" i WHERE lower(i."address") = lower(a.address)
+             )
+       GROUP BY lower(a.address)
+    )
+    SELECT c."address",
+           COALESCE(p."display_name", c."name") AS name,
+           o."name"                             AS organisation,
+           c."last_at"
+      FROM correspondents c
+      LEFT JOIN "uin_person_identities" pi
+             ON pi."match_value" = split_part(split_part(c."address", '@', 1), '+', 1)
+                                || '@' || split_part(c."address", '@', 2)
+      LEFT JOIN "uin_people" p ON p."id" = pi."person_id" AND p."merged_into_id" IS NULL
+      LEFT JOIN "uin_organisations" o ON o."id" = p."organisation_id"
+     WHERE TRUE ${filter}
+     ORDER BY c."last_at" DESC
+     LIMIT ${Math.min(Math.max(opts.limit ?? 8, 1), 25)}
+  `
+
+  return rows.map((r) => ({
+    address: r.address as string,
+    name: (r.name as string | null) ?? null,
+    organisation: (r.organisation as string | null) ?? null,
+    lastAt: r.last_at as Date,
+  }))
 }

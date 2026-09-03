@@ -326,6 +326,13 @@ const EVENT_WORDS: Record<string, string> = {
   merged: 'merged it with another',
 }
 
+/** Entries nobody did. The rest of the log reads "<name> <did something>", and
+ *  putting "Somebody" in front of an automatic one invents a colleague who was
+ *  never there - so these carry their own whole sentence instead. */
+const UNATTENDED_EVENTS: Record<string, string> = {
+  woken: 'A reply arrived, so it stopped being snoozed',
+}
+
 export function ThreadPane({
   base, params, thread, inboxName, messages, events, staff, staffById,
   canReply, cannotReplyReason, replyTo, replyAllTo, draft, newestFirst,
@@ -455,8 +462,14 @@ export function ThreadPane({
             <ul className="uin-log">
               {events.map((event) => (
                 <li key={event.id}>
-                  {(event.userId && staffById[event.userId]) || 'Somebody'}{' '}
-                  {EVENT_WORDS[event.kind] ?? 'changed something'}
+                  {UNATTENDED_EVENTS[event.kind] && !event.userId ? (
+                    UNATTENDED_EVENTS[event.kind]
+                  ) : (
+                    <>
+                      {(event.userId && staffById[event.userId]) || 'Somebody'}{' '}
+                      {EVENT_WORDS[event.kind] ?? 'changed something'}
+                    </>
+                  )}
                   {' - '}
                   {formatFull(event.createdAt, timezone)}
                 </li>

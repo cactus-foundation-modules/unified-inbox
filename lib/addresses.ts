@@ -197,6 +197,67 @@ export function placeMessage(input: {
   return { direction: 'out', routing: routeSentToInbox([from], input.headers, input.inboxes) }
 }
 
+/** One inbox's stake in a message, and which way the message reads from there. */
+export type MessageSide = {
+  inboxId: string
+  /** Relative to THIS inbox, not to the site: the same email is something
+   *  Marcus sent and something Chris received. */
+  direction: 'in' | 'out'
+}
+
+/**
+ * Every inbox with a stake in a message, when the message is between two of our
+ * own addresses.
+ *
+ * One email, two conversations. `placeMessage` above answers "whose post is
+ * this?" with a single inbox, which is the right question for a customer's mail
+ * and the wrong one for a colleague's: mail from marcus@ to chris@ is Marcus's
+ * sent message AND Chris's received one, and each of them needs their own
+ * conversation to mark done, snooze and answer, exactly as they would with a
+ * customer. Filing it once leaves whichever of them lost the toss looking at a
+ * tab where the message is not.
+ *
+ * Returns nothing at all unless at least two distinct inboxes are involved, so
+ * every ordinary customer email walks straight past this and is filed once, the
+ * way it always was.
+ *
+ * The catch-all is deliberately not consulted, for the same reason it is not
+ * consulted in `placeMessage`: it matches mail nobody here was named on, and
+ * treating that as a colleague's post would mint a second conversation out of
+ * every reply the site sends a customer.
+ */
+export function internalSides(input: {
+  fromAddress: string | null
+  headers: { deliveredTo?: string[]; to?: string[]; cc?: string[] }
+  inboxes: RoutableInbox[]
+}): MessageSide[] {
+  const from = input.fromAddress ? normaliseAddress(input.fromAddress) : null
+  if (!from) return []
+
+  const byAddress = new Map(input.inboxes.map((i) => [normaliseAddress(i.address), i]))
+  const sender = byAddress.get(from)
+  if (!sender) return []
+
+  const sides: MessageSide[] = [{ inboxId: sender.id, direction: 'out' }]
+  const seen = new Set<string>([sender.id])
+
+  const recipients = [
+    ...(input.headers.deliveredTo ?? []),
+    ...(input.headers.to ?? []),
+    ...(input.headers.cc ?? []),
+  ]
+  for (const address of recipients) {
+    const inbox = byAddress.get(normaliseAddress(address))
+    if (!inbox || seen.has(inbox.id)) continue
+    seen.add(inbox.id)
+    sides.push({ inboxId: inbox.id, direction: 'in' })
+  }
+
+  // Only ourselves on both ends counts as internal. A note to self has one side
+  // and is simply something we sent.
+  return sides.length > 1 ? sides : []
+}
+
 function withoutSender(
   headers: { deliveredTo?: string[]; to?: string[]; cc?: string[] },
   sender: string,

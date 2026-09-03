@@ -2,7 +2,14 @@ import type { ImapFlow } from 'imapflow'
 import { prisma } from '@/lib/db/prisma'
 import { simpleParser, type ParsedMail } from 'mailparser'
 import { upsertAlert, clearAlert } from '@/lib/notifications/alerts'
-import { normaliseAddress, parseAddressList, placeMessage, shouldDiscardUnrouted, type RoutableInbox } from './addresses'
+import {
+  internalSides,
+  normaliseAddress,
+  parseAddressList,
+  placeMessage,
+  shouldDiscardUnrouted,
+  type RoutableInbox,
+} from './addresses'
 import {
   acquireConnectionLock,
   candidateThreads,
@@ -26,7 +33,10 @@ import {
   saveSyncState,
   attachLocation,
   threadsForMessageIds,
+  threadsHoldingIdentity,
   touchThread,
+  wakeSnoozedThread,
+  recordEvent,
 } from './db'
 import { prepareInboundHtml, htmlToText } from './html'
 import { readReadReceipt } from './receipts'
@@ -51,10 +61,12 @@ import {
   classifyAutomated,
   cleanMessageId,
   contentIdentity,
+  internalPairKey,
   normaliseSubject,
   parseReferences,
   HEURISTIC_WINDOW_DAYS,
   type AutomatedKind,
+  type ThreadMatch,
 } from './threading'
 import type { Inbox } from './types'
 import { queueMessageWebhooks } from './webhooks'
@@ -549,8 +561,26 @@ async function fileMessage(
   const identity = cleanMessageId(parsed.messageId)
     ?? contentIdentity({ sentAt, fromAddress, subject, sizeBytes })
 
+  const to = addressesFrom(parsed, 'to')
+  const cc = addressesFrom(parsed, 'cc')
+  const deliveredTo = parseAddressList(headerValue(parsed, 'delivered-to') ?? headerValue(parsed, 'x-delivered-to'))
+    .concat(parseAddressList(headerValue(parsed, 'envelope-to')))
+
+  // Mail from one of our addresses to another is one email and two
+  // conversations - the sender's and the recipient's - so that each of them can
+  // mark it done, snooze it and answer it without reaching into somebody else's
+  // tab. Empty for every ordinary customer email, which is filed once as it
+  // always was.
+  const sides = internalSides({ fromAddress, headers: { deliveredTo, to, cc }, inboxes: ctx.routing })
+  const internal = sides.length > 1
+  const internalKey = internal ? internalPairKey({ sentAt, fromAddress, subject }) : null
+
+  const held = internal
+    ? await threadsHoldingIdentity(ctx.connectionId, identity, internalKey)
+    : null
+
   const existing = await findMessageByIdentity(ctx.connectionId, identity)
-  if (existing) {
+  if (existing && !internal) {
     // Already held - found in another folder, or moved between folders since we
     // last looked. Same message. Record the location so we do not read it again
     // and move on (E2, E3).
@@ -567,17 +597,25 @@ async function fileMessage(
   // Our own reply, coming back at us out of the Sent folder because the send
   // path appended it there. It is the message we already hold, not a discovery
   // (E11). Give it a location so its attachments can be fetched, and stop.
+  //
+  // Internal mail carries on past this rather than stopping: the outbound row
+  // is the SENDER's side of it, and the colleague it was addressed to still has
+  // no copy on their own conversation. The side already written is skipped
+  // below, on the same ledger as every other side.
   const ours = await findOutboundByMessageId(identity)
   if (ours) {
     await attachLocation(ours.id, { connectionId: ctx.connectionId, folder: ctx.folder.path, uid: entry.uid })
-    await markLocationProcessed({
-      connectionId: ctx.connectionId,
-      folder: ctx.folder.path,
-      uid: entry.uid,
-      messageIdHeader: identity,
-      threadId: ours.threadId,
-    })
-    return { stored: false, sentAt }
+    if (!internal) {
+      await markLocationProcessed({
+        connectionId: ctx.connectionId,
+        folder: ctx.folder.path,
+        uid: entry.uid,
+        messageIdHeader: identity,
+        threadId: ours.threadId,
+      })
+      return { stored: false, sentAt }
+    }
+    held?.add(ours.threadId)
   }
 
   // A read receipt, if that is what this is: the recipient's mail program
@@ -617,11 +655,6 @@ async function fileMessage(
     }
   }
 
-  const to = addressesFrom(parsed, 'to')
-  const cc = addressesFrom(parsed, 'cc')
-  const deliveredTo = parseAddressList(headerValue(parsed, 'delivered-to') ?? headerValue(parsed, 'x-delivered-to'))
-    .concat(parseAddressList(headerValue(parsed, 'envelope-to')))
-
   // Which way it faces and whose inbox it lands in, decided together because
   // the two answers disagree over colleague post - see placeMessage. A copy
   // found in a Sent folder is still outbound whoever it was addressed to: the
@@ -651,21 +684,26 @@ async function fileMessage(
   const byMessageId = await threadsForMessageIds([inReplyTo, ...references].filter((id): id is string => !!id))
 
   const participants = [fromAddress, ...to, ...cc].filter((a): a is string => !!a)
-  const needsHeuristic = !inReplyTo || !byMessageId.has(inReplyTo)
+  // Internal mail always asks for candidates: a header match on one side's
+  // conversation says nothing about whether the other side has one yet.
+  const needsHeuristic = internal || !inReplyTo || !byMessageId.has(inReplyTo)
   const candidates = needsHeuristic && subjectNormalised
     ? await candidateThreads(subjectNormalised, new Date(sentAt.getTime() - HEURISTIC_WINDOW_DAYS * 24 * 60 * 60 * 1000))
     : []
 
-  const match = chooseThread({
+  const chooseFor = (inboxId: string | null, restrictToInbox: boolean): ThreadMatch => chooseThread({
     inReplyTo,
     references,
     byMessageId,
     subjectNormalised,
     participants,
     sentAt,
-    inboxId: routed.inboxId,
+    inboxId,
     candidates,
+    restrictToInbox,
   })
+
+  const match = chooseFor(routed.inboxId, false)
 
   // Mail for nobody here, starting a conversation of its own. On an account
   // that carries the owner's own post beside the site's, that is their bank and
@@ -693,20 +731,8 @@ async function fileMessage(
   const bodyText = parsed.text ?? (bodyHtml ? htmlToText(bodyHtml) : null)
   const snippet = buildSnippet(bodyText) || buildSnippet(bodyHtml ? htmlToText(bodyHtml) : null)
 
-  const threadId = match.threadId ?? await createThread({
-    inboxId: routed.inboxId,
-    subject,
-    subjectNormalised,
-    preview: snippet || null,
-    lastMessageAt: sentAt,
-    lastDirection: direction,
-    unread: direction === 'in' && !automated,
-  })
-
-  const messageId = await insertMessage({
-    threadId,
+  const common = {
     connectionId: ctx.connectionId,
-    direction,
     messageIdHeader: identity,
     inReplyTo,
     references,
@@ -724,48 +750,127 @@ async function fileMessage(
     sizeBytes,
     imapFolder: ctx.folder.path,
     imapUid: entry.uid,
-    threadMatch: match.matchedOn,
     routedOn: routed.matchedOn,
     autoKind: automated,
-  })
+  }
 
-  if (!messageId) {
-    // Two ticks raced for the same message and the other one won. The unique
-    // index did its job; nothing to do but note the location.
+  /** Files one side of a message: its conversation, its row, its attachments.
+   *  Returns the conversation it landed on, and the row it wrote - null when
+   *  another tick won the race for it and the unique index turned this one
+   *  away. */
+  async function writeSide(input: {
+    inboxId: string | null
+    direction: 'in' | 'out'
+    threadMatch: ThreadMatch
+    internalKey: string | null
+  }): Promise<{ threadId: string; messageId: string | null }> {
+    const thread = input.threadMatch.threadId ?? await createThread({
+      inboxId: input.inboxId,
+      subject,
+      subjectNormalised,
+      preview: snippet || null,
+      lastMessageAt: sentAt,
+      lastDirection: input.direction,
+      unread: input.direction === 'in' && !automated,
+    })
+
+    const written = await insertMessage({
+      ...common,
+      threadId: thread,
+      direction: input.direction,
+      threadMatch: input.threadMatch.matchedOn,
+      internalKey: input.internalKey,
+    })
+    if (!written) return { threadId: thread, messageId: null }
+
+    // Metadata only. The bytes stay on the mail server until somebody opens one -
+    // pulling every attachment on the account through a 25 second cron slice is
+    // not a plan, and D17 wants them fetched lazily anyway.
+    for (const [index, attachment] of parsed.attachments.entries()) {
+      await insertAttachment({
+        messageId: written,
+        filename: attachment.filename || `attachment-${index + 1}`,
+        contentType: attachment.contentType || null,
+        sizeBytes: attachment.size ?? null,
+        imapPartId: String(index),
+      })
+    }
+
+    await touchThread(thread, {
+      sentAt,
+      direction: input.direction,
+      preview: snippet || null,
+      subject,
+      subjectNormalised,
+      // An out-of-office or a bounce is the mail system talking, not the person.
+      // Marking the conversation unread for it lies about the state of the
+      // relationship, which is exactly what E7 is about.
+      markUnread: input.direction === 'in' && !automated,
+      inboxId: input.inboxId,
+    })
+
+    // Somebody has written on it, so it stops being asleep.
+    //
+    // Both directions count, and the second one is the reason this sits here
+    // rather than behind `direction === 'in'`. A reply typed in this hub never
+    // reaches this code at all - the send path already holds that row, and the
+    // copy coming back out of Sent is turned away by findOutboundByMessageId
+    // above. So an OUTBOUND message arriving here is one this hub did not send:
+    // a colleague answering the customer from their phone or from Outlook. That
+    // conversation is being dealt with by somebody, and hiding it until
+    // Thursday is exactly wrong.
+    //
+    // The mail system talking to itself is not somebody writing, so a bounce or
+    // an out-of-office leaves the snooze where it is - the same line E7 draws
+    // for the unread flag, drawn once more.
+    if (!automated && await wakeSnoozedThread(thread)) {
+      await recordEvent(thread, null, 'woken', { direction: input.direction })
+    }
+
+    return { threadId: thread, messageId: written }
+  }
+
+  // Mail between two of our own addresses: one conversation per inbox, each
+  // reading the way that inbox sees it. A side already filed - by an earlier
+  // tick, by the copy in the other folder, or by the send path that wrote the
+  // outbound row - is stepped over rather than written twice.
+  if (internal) {
+    const written: string[] = []
+    let primaryThread: string | null = null
+    for (const side of sides) {
+      const sideMatch = chooseFor(side.inboxId, true)
+      if (sideMatch.threadId && held?.has(sideMatch.threadId)) {
+        primaryThread ??= sideMatch.threadId
+        continue
+      }
+      const side_ = await writeSide({
+        inboxId: side.inboxId,
+        direction: side.direction,
+        threadMatch: sideMatch,
+        internalKey,
+      })
+      primaryThread ??= side_.threadId
+      if (side_.messageId) written.push(side_.messageId)
+    }
+
     await markLocationProcessed({
       connectionId: ctx.connectionId,
       folder: ctx.folder.path,
       uid: entry.uid,
       messageIdHeader: identity,
-      threadId,
+      threadId: primaryThread,
     })
-    return { stored: false, sentAt }
+
+    for (const messageId of written) await queueMessageWebhooks(messageId)
+    return { stored: written.length > 0, sentAt }
   }
 
-  // Metadata only. The bytes stay on the mail server until somebody opens one -
-  // pulling every attachment on the account through a 25 second cron slice is
-  // not a plan, and D17 wants them fetched lazily anyway.
-  for (const [index, attachment] of parsed.attachments.entries()) {
-    await insertAttachment({
-      messageId,
-      filename: attachment.filename || `attachment-${index + 1}`,
-      contentType: attachment.contentType || null,
-      sizeBytes: attachment.size ?? null,
-      imapPartId: String(index),
-    })
-  }
-
-  await touchThread(threadId, {
-    sentAt,
-    direction,
-    preview: snippet || null,
-    subject,
-    subjectNormalised,
-    // An out-of-office or a bounce is the mail system talking, not the person.
-    // Marking the conversation unread for it lies about the state of the
-    // relationship, which is exactly what E7 is about.
-    markUnread: direction === 'in' && !automated,
+  // Everything else: one address, one conversation, filed exactly as before.
+  const { threadId, messageId } = await writeSide({
     inboxId: routed.inboxId,
+    direction,
+    threadMatch: match,
+    internalKey: null,
   })
 
   await markLocationProcessed({
@@ -775,6 +880,10 @@ async function fileMessage(
     messageIdHeader: identity,
     threadId,
   })
+
+  // Two ticks raced for the same message and the other one won. The unique
+  // index did its job; the location is noted and there is nothing else to do.
+  if (!messageId) return { stored: false, sentAt }
 
   // Last, and only once the message is safely filed and its location recorded:
   // note down anybody who asked to be told. Queueing only - the sending happens

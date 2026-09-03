@@ -13,6 +13,7 @@ import { AttachmentChips, AttachmentPicker, plainReason, toHtml, type Attachment
 import { AttachmentDropNotice, AttachmentDropOverlay } from './AttachmentDropChrome'
 import { useAttachmentDrop } from './useAttachmentDrop'
 import { ConfirmDialog } from './ConfirmDialog'
+import { RecipientField } from './RecipientField'
 import { CloseIcon } from './icons'
 
 // Writing a brand new message, rather than answering one somebody else started.
@@ -424,14 +425,13 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
               <div className="uin-field-row">
                 <label htmlFor="uin-new-to">To</label>
                 <div className="uin-field-control">
-                  <input
+                  <RecipientField
                     id="uin-new-to"
-                    type="text"
                     value={to}
-                    onChange={(e) => { setTo(e.target.value); setDirty(true) }}
-                    onKeyDown={onLineKeyDown(showCc ? 'uin-new-cc' : 'uin-new-subject')}
+                    onChange={(next) => { setTo(next); setDirty(true) }}
+                    inboxId={inboxId || null}
+                    onEnter={onLineKeyDown(showCc ? 'uin-new-cc' : 'uin-new-subject')}
                     placeholder="name@example.com, somebody.else@example.com"
-                    autoComplete="off"
                   />
                   {!showCc && (
                     <button type="button" className="uin-field-add" onClick={() => setShowCc(true)}>
@@ -445,14 +445,13 @@ export function ComposeView({ base, params, inboxes, defaultInboxId, draft }: Pr
                 <div className="uin-field-row">
                   <label htmlFor="uin-new-cc">Cc</label>
                   <div className="uin-field-control">
-                    <input
+                    <RecipientField
                       id="uin-new-cc"
-                      type="text"
                       value={cc}
-                      onChange={(e) => { setCc(e.target.value); setDirty(true) }}
-                      onKeyDown={onLineKeyDown('uin-new-subject')}
+                      onChange={(next) => { setCc(next); setDirty(true) }}
+                      inboxId={inboxId || null}
+                      onEnter={onLineKeyDown('uin-new-subject')}
                       placeholder="somebody.else@example.com"
-                      autoComplete="off"
                     />
                     {/* Only while it is empty: a line with an address on it is
                         taken away by clearing it, and a button that quietly

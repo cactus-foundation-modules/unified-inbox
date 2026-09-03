@@ -105,6 +105,35 @@ export function isSyntheticIdentity(id: string | null | undefined): boolean {
   return !!id && id.endsWith('@no-message-id.unified-inbox')
 }
 
+/**
+ * The handle that recognises the two copies of one internal email as the same
+ * email, when the Message-ID cannot.
+ *
+ * Mail between two of our own addresses is read twice: once from the sender's
+ * Sent folder and once from where it was delivered. Usually both copies carry
+ * the same Message-ID and the ordinary identity check settles it. It does not
+ * when the message went out through a sending service that rewrote the header
+ * on the way - the delivered copy then arrives with an id we have never seen,
+ * and without this it is filed a second time as though somebody had written
+ * twice.
+ *
+ * Built from the three things a relay does not touch: when it was sent, who
+ * sent it, and what it was about. Size is deliberately left out, because the
+ * two copies genuinely differ in size once headers have been added in transit.
+ */
+export function internalPairKey(input: {
+  sentAt: Date | null
+  fromAddress: string | null
+  subject: string | null
+}): string {
+  const parts = [
+    input.sentAt ? input.sentAt.toISOString() : '',
+    (input.fromAddress ?? '').toLowerCase(),
+    normaliseSubject(input.subject),
+  ]
+  return `sha256-${createHash('sha256').update(parts.join(' ')).digest('hex').slice(0, 40)}`
+}
+
 export type AutomatedKind = 'auto-reply' | 'bounce' | 'bulk' | 'own-notification'
 
 /**
@@ -157,6 +186,31 @@ export type ThreadMatch =
   | { threadId: string; matchedOn: 'in-reply-to' | 'references' | 'heuristic' }
   | { threadId: null; matchedOn: 'new' }
 
+/** Where a Message-ID we already hold is filed. A list rather than one answer,
+ *  because internal mail is held once per inbox involved in it. */
+export type ThreadRef = { threadId: string; inboxId: string | null }
+
+/**
+ * Of the threads a referenced message is filed on, the one this side should
+ * join.
+ *
+ * `restrictToInbox` is what keeps two colleagues' conversations apart. Marcus's
+ * reply quotes the Message-ID of Chris's original, and that original is filed
+ * on both Marcus's thread and Chris's. Following the header blind puts the
+ * reply on whichever came back first, which is how a reply ends up in a tab its
+ * recipient cannot see. With the restriction on, each side follows the header
+ * into its OWN conversation and starts one if it has none yet.
+ *
+ * Off - which is every customer email - the first match wins exactly as before,
+ * so a thread whose inbox has since changed, or that was never filed to one,
+ * keeps collecting its replies.
+ */
+function pickThread(refs: ThreadRef[] | undefined, inboxId: string | null, restrict: boolean): string | null {
+  if (!refs || refs.length === 0) return null
+  if (!restrict) return refs[0]!.threadId
+  return refs.find((ref) => ref.inboxId === inboxId)?.threadId ?? null
+}
+
 /** How far apart two messages can be and still be judged the same conversation
  *  on subject alone. Long enough for a slow supplier, short enough that next
  *  year's "Invoice" is not last year's. */
@@ -172,22 +226,27 @@ export const HEURISTIC_WINDOW_DAYS = 30
 export function chooseThread(input: {
   inReplyTo: string | null
   references: string[]
-  /** Message-ID to thread id, for every referenced id we hold. */
-  byMessageId: Map<string, string>
+  /** Message-ID to the threads it is filed on, for every referenced id we hold. */
+  byMessageId: Map<string, ThreadRef[]>
   subjectNormalised: string
   participants: string[]
   sentAt: Date
   inboxId: string | null
   candidates: ThreadCandidate[]
+  /** Only join a conversation that belongs to `inboxId`. Set for mail between
+   *  two of our own addresses, where each side keeps its own conversation. */
+  restrictToInbox?: boolean
 }): ThreadMatch {
+  const restrict = input.restrictToInbox === true
+
   if (input.inReplyTo) {
-    const threadId = input.byMessageId.get(input.inReplyTo)
+    const threadId = pickThread(input.byMessageId.get(input.inReplyTo), input.inboxId, restrict)
     if (threadId) return { threadId, matchedOn: 'in-reply-to' }
   }
   // Newest reference first: the nearest ancestor we hold is the better answer
   // when a long thread has been forked.
   for (const reference of [...input.references].reverse()) {
-    const threadId = input.byMessageId.get(reference)
+    const threadId = pickThread(input.byMessageId.get(reference), input.inboxId, restrict)
     if (threadId) return { threadId, matchedOn: 'references' }
   }
 
@@ -198,7 +257,11 @@ export function chooseThread(input: {
   let best: { id: string; at: number } | null = null
   for (const candidate of input.candidates) {
     if (candidate.subjectNormalised !== input.subjectNormalised) continue
-    if (input.inboxId && candidate.inboxId && candidate.inboxId !== input.inboxId) continue
+    if (restrict) {
+      // Each side of internal mail keeps to its own inbox, an unfiled thread
+      // included - joining one would hand the conversation to the wrong tab.
+      if (candidate.inboxId !== input.inboxId) continue
+    } else if (input.inboxId && candidate.inboxId && candidate.inboxId !== input.inboxId) continue
     const at = candidate.lastMessageAt ? candidate.lastMessageAt.getTime() : 0
     if (!at || Math.abs(input.sentAt.getTime() - at) > windowMs) continue
     if (!candidate.participants.some((p) => participants.has(p.toLowerCase()))) continue

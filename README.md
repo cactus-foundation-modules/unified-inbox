@@ -46,7 +46,14 @@ the same human collapse into one story.
   notepad. A reply goes back under its conversation with the words still in the
   box; a new message opens where you left it. Sending one clears it away.
 - **Getting through it.** Hand a conversation to somebody, set it to come back
-  later, mark it done, and search everything you are allowed to see.
+  later, mark it done, and search everything you are allowed to see. Setting one
+  to come back later is a bet on silence, so anybody breaking the silence
+  cancels it: a reply from the customer, or a colleague answering them from
+  their own phone, puts the conversation straight back under **Open** rather
+  than leaving it asleep until Thursday. An out-of-office or a bounce is the
+  mail system talking rather than a person, and leaves it where it was. Your own
+  reply, sent from here, does the same - you set the reminder knowing you were
+  about to answer.
 - **Pictures stay off** until you ask for them, and when you do they are fetched
   by the site rather than by your browser, so a sender learns nothing about you.
 - **Settings** for how far back to go when starting out, how long to keep

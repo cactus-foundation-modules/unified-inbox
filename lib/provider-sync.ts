@@ -9,8 +9,10 @@ import {
   insertProviderMessage,
   providerThreadState,
   providerWatermarks,
+  recordEvent,
   recountProviderThread,
   upsertProviderThread,
+  wakeSnoozedThread,
 } from './db'
 import { allConversationProviders } from './provider-registry'
 import { normaliseSubject } from './threading'
@@ -235,6 +237,14 @@ export async function syncProvider(
     if (stored > 0) {
       outcome.messages += stored
       await recountProviderThread(threadId)
+      // Somebody has written on it since it was put to sleep, so it stops being
+      // asleep. A reply typed in this hub is claimed above and never counted
+      // here, so anything left is the customer, or a colleague answering them
+      // in the module that owns the channel - either way the conversation is
+      // live again and belongs in Open.
+      if (await wakeSnoozedThread(threadId)) {
+        await recordEvent(threadId, null, 'woken', { providerModule: moduleName })
+      }
     }
   }
 

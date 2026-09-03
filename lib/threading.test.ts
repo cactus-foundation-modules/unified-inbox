@@ -5,9 +5,11 @@ import {
   classifyAutomated,
   cleanMessageId,
   contentIdentity,
+  internalPairKey,
   isSyntheticIdentity,
   normaliseSubject,
   parseReferences,
+  type ThreadRef,
 } from './threading'
 
 // These cover the two things in the ingest stage that lose or corrupt real
@@ -132,7 +134,7 @@ describe('chooseThread', () => {
   const base = {
     inReplyTo: null as string | null,
     references: [] as string[],
-    byMessageId: new Map<string, string>(),
+    byMessageId: new Map<string, ThreadRef[]>(),
     subjectNormalised: 'order 1234',
     participants: ['customer@example.com'],
     sentAt: new Date('2026-08-20T10:00:00.000Z'),
@@ -152,7 +154,7 @@ describe('chooseThread', () => {
     expect(chooseThread({
       ...base,
       inReplyTo: 'a@x',
-      byMessageId: new Map([['a@x', 'thread-9']]),
+      byMessageId: new Map([['a@x', [{ threadId: 'thread-9', inboxId: 'inbox-1' }]]]),
       candidates: [candidate],
     })).toEqual({ threadId: 'thread-9', matchedOn: 'in-reply-to' })
   })
@@ -161,7 +163,10 @@ describe('chooseThread', () => {
     expect(chooseThread({
       ...base,
       references: ['old@x', 'newer@x'],
-      byMessageId: new Map([['old@x', 'thread-old'], ['newer@x', 'thread-new']]),
+      byMessageId: new Map([
+        ['old@x', [{ threadId: 'thread-old', inboxId: 'inbox-1' }]],
+        ['newer@x', [{ threadId: 'thread-new', inboxId: 'inbox-1' }]],
+      ]),
     })).toEqual({ threadId: 'thread-new', matchedOn: 'references' })
   })
 
@@ -193,6 +198,56 @@ describe('chooseThread', () => {
     })).toEqual({ threadId: null, matchedOn: 'new' })
   })
 
+  it('follows the header into this side\'s own conversation when a message is held on two', () => {
+    // Chris's original is filed on Marcus's conversation AND on Chris's. Marcus
+    // replies; his reply quotes that one Message-ID. Each side has to land on
+    // its own thread, or the answer turns up in a tab its recipient cannot see.
+    const byMessageId = new Map([['original@x', [
+      { threadId: 'thread-marcus', inboxId: 'inbox-marcus' },
+      { threadId: 'thread-chris', inboxId: 'inbox-chris' },
+    ]]])
+
+    expect(chooseThread({
+      ...base, inReplyTo: 'original@x', byMessageId,
+      inboxId: 'inbox-chris', restrictToInbox: true,
+    })).toEqual({ threadId: 'thread-chris', matchedOn: 'in-reply-to' })
+
+    expect(chooseThread({
+      ...base, inReplyTo: 'original@x', byMessageId,
+      inboxId: 'inbox-marcus', restrictToInbox: true,
+    })).toEqual({ threadId: 'thread-marcus', matchedOn: 'in-reply-to' })
+  })
+
+  it('starts a conversation for a side that has none yet rather than borrowing the other one', () => {
+    expect(chooseThread({
+      ...base,
+      inReplyTo: 'original@x',
+      byMessageId: new Map([['original@x', [{ threadId: 'thread-marcus', inboxId: 'inbox-marcus' }]]]),
+      inboxId: 'inbox-chris',
+      restrictToInbox: true,
+      candidates: [],
+    })).toEqual({ threadId: null, matchedOn: 'new' })
+  })
+
+  it('restricted, will not fall back onto an unfiled conversation', () => {
+    expect(chooseThread({
+      ...base,
+      candidates: [{ ...candidate, inboxId: null }],
+      restrictToInbox: true,
+    })).toEqual({ threadId: null, matchedOn: 'new' })
+  })
+
+  it('unrestricted, still takes the first thread a referenced id sits on', () => {
+    expect(chooseThread({
+      ...base,
+      inReplyTo: 'original@x',
+      byMessageId: new Map([['original@x', [
+        { threadId: 'thread-marcus', inboxId: 'inbox-marcus' },
+        { threadId: 'thread-chris', inboxId: 'inbox-chris' },
+      ]]]),
+    })).toEqual({ threadId: 'thread-marcus', matchedOn: 'in-reply-to' })
+  })
+
   it('starts a new conversation for a message with no subject', () => {
     expect(chooseThread({ ...base, subjectNormalised: '', candidates: [candidate] }))
       .toEqual({ threadId: null, matchedOn: 'new' })
@@ -215,5 +270,32 @@ describe('buildSnippet', () => {
 
   it('truncates rather than handing a list view a whole email', () => {
     expect(buildSnippet('x'.repeat(500)).length).toBeLessThanOrEqual(200)
+  })
+})
+
+describe('internalPairKey', () => {
+  const sent = new Date('2026-09-02T23:53:10.000Z')
+
+  it('matches the two copies of one internal email through a rewritten Message-ID', () => {
+    // Same email, read twice: once from the sender's Sent folder, once from the
+    // recipient's own. The relay rewrote the Message-ID on the way, so the
+    // header cannot say they are the same. The size differs too, because
+    // headers were added in transit - which is why size is not in the key.
+    expect(internalPairKey({ sentAt: sent, fromAddress: 'marcus@deskwell.co.uk', subject: 'Re: Artisan Furniture' }))
+      .toBe(internalPairKey({ sentAt: sent, fromAddress: 'Marcus@Deskwell.co.uk', subject: 'RE: Artisan Furniture' }))
+  })
+
+  it('does not match two different messages in the same conversation', () => {
+    expect(internalPairKey({ sentAt: sent, fromAddress: 'marcus@deskwell.co.uk', subject: 'Re: Artisan Furniture' }))
+      .not.toBe(internalPairKey({
+        sentAt: new Date('2026-09-02T23:59:00.000Z'),
+        fromAddress: 'marcus@deskwell.co.uk',
+        subject: 'Re: Artisan Furniture',
+      }))
+  })
+
+  it('does not match the two people in one conversation', () => {
+    expect(internalPairKey({ sentAt: sent, fromAddress: 'marcus@deskwell.co.uk', subject: 'Artisan Furniture' }))
+      .not.toBe(internalPairKey({ sentAt: sent, fromAddress: 'chris@deskwell.co.uk', subject: 'Artisan Furniture' }))
   })
 })

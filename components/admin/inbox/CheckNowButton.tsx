@@ -50,12 +50,12 @@ export function CheckNowButton({ onResult, autoSeconds }: Props) {
       })
       const body = await response.json().catch(() => null)
       if (response.ok) {
-        // A check nobody asked for says something only when it has something to
-        // say. "Nothing new to collect" every few minutes, unprompted, is a
-        // notice that trains people to stop reading notices.
-        if (!quiet || (body?.collected ?? 0) > 0) {
-          onResult({ tone: 'ok', text: body?.message ?? 'Checked.' })
-        }
+        // A check nobody asked for says nothing at all, even when it collected
+        // something. New mail announcing itself in a strip across the top of
+        // the list is a notice about a thing that is already on screen,
+        // underneath it, in bold - and it lands while somebody is reading
+        // something else. The list refreshing IS the answer.
+        if (!quiet) onResult({ tone: 'ok', text: body?.message ?? 'Checked.' })
         // Whatever it collected belongs in the list already on screen.
         router.refresh()
       } else if (!quiet) {

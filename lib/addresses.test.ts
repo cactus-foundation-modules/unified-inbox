@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   addressDomain,
+  internalSides,
   isValidAddress,
   normaliseAddress,
   parseAddressList,
@@ -324,5 +325,81 @@ describe('placeMessage', () => {
         inboxes: [chris, emma],
       })).toEqual({ direction: 'in', routing: { inboxId: 'emma', matchedOn: 'to' } })
     })
+  })
+})
+
+describe('internalSides', () => {
+  const chris = { id: 'chris', address: 'chris@deskwell.co.uk', isCatchAll: false }
+  const marcus = { id: 'marcus', address: 'marcus@deskwell.co.uk', isCatchAll: false }
+  const emma = { id: 'emma', address: 'emma@deskwell.co.uk', isCatchAll: false }
+  const hi = { id: 'hi', address: 'hi@deskwell.co.uk', isCatchAll: true }
+  const inboxes = [chris, marcus, emma, hi]
+
+  it('gives a colleague email a side each, facing the way that inbox sees it', () => {
+    expect(internalSides({
+      fromAddress: 'marcus@deskwell.co.uk',
+      headers: { to: ['chris@deskwell.co.uk'] },
+      inboxes,
+    })).toEqual([
+      { inboxId: 'marcus', direction: 'out' },
+      { inboxId: 'chris', direction: 'in' },
+    ])
+  })
+
+  it('gives everybody copied in a side of their own', () => {
+    expect(internalSides({
+      fromAddress: 'chris@deskwell.co.uk',
+      headers: { to: ['marcus@deskwell.co.uk'], cc: ['emma@deskwell.co.uk'] },
+      inboxes,
+    })).toEqual([
+      { inboxId: 'chris', direction: 'out' },
+      { inboxId: 'marcus', direction: 'in' },
+      { inboxId: 'emma', direction: 'in' },
+    ])
+  })
+
+  it('says nothing about a customer email, which is filed once as it always was', () => {
+    expect(internalSides({
+      fromAddress: 'customer@example.com',
+      headers: { to: ['hi@deskwell.co.uk'] },
+      inboxes,
+    })).toEqual([])
+  })
+
+  it('says nothing about a reply we send a customer', () => {
+    expect(internalSides({
+      fromAddress: 'hi@deskwell.co.uk',
+      headers: { to: ['customer@example.com'] },
+      inboxes,
+    })).toEqual([])
+  })
+
+  it('does not count the catch-all as a colleague', () => {
+    // The catch-all matches mail nobody here was named on. Counting it would
+    // mint a second conversation out of every reply the site sends a customer.
+    expect(internalSides({
+      fromAddress: 'marcus@deskwell.co.uk',
+      headers: { to: ['customer@example.com'] },
+      inboxes,
+    })).toEqual([])
+  })
+
+  it('treats a note to self as one thing we sent, not a conversation with ourselves', () => {
+    expect(internalSides({
+      fromAddress: 'marcus@deskwell.co.uk',
+      headers: { to: ['marcus@deskwell.co.uk'] },
+      inboxes,
+    })).toEqual([])
+  })
+
+  it('never gives one inbox two sides when it is named twice', () => {
+    expect(internalSides({
+      fromAddress: 'chris@deskwell.co.uk',
+      headers: { deliveredTo: ['marcus@deskwell.co.uk'], to: ['Marcus@Deskwell.co.uk'], cc: ['marcus@deskwell.co.uk'] },
+      inboxes,
+    })).toEqual([
+      { inboxId: 'chris', direction: 'out' },
+      { inboxId: 'marcus', direction: 'in' },
+    ])
   })
 })

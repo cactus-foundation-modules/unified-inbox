@@ -15,6 +15,10 @@ const claimLocalOutbound = vi.hoisted(() => vi.fn())
 const recountProviderThread = vi.hoisted(() => vi.fn())
 const providerWatermarks = vi.hoisted(() => vi.fn())
 const allConversationProviders = vi.hoisted(() => vi.fn())
+// Asleep by default, so the ordinary case writes no timeline entry. The tests
+// that care about waking say so themselves.
+const wakeSnoozedThread = vi.hoisted(() => vi.fn(async () => false))
+const recordEvent = vi.hoisted(() => vi.fn())
 
 vi.mock('./db', () => ({
   providerThreadState,
@@ -23,6 +27,8 @@ vi.mock('./db', () => ({
   claimLocalOutbound,
   recountProviderThread,
   providerWatermarks,
+  wakeSnoozedThread,
+  recordEvent,
 }))
 vi.mock('./provider-registry', () => ({ allConversationProviders }))
 
@@ -78,12 +84,45 @@ beforeEach(() => {
   claimLocalOutbound.mockReset().mockResolvedValue(false)
   recountProviderThread.mockReset().mockResolvedValue(undefined)
   providerWatermarks.mockReset().mockResolvedValue({})
+  wakeSnoozedThread.mockReset().mockResolvedValue(false)
+  recordEvent.mockReset().mockResolvedValue(undefined)
   allConversationProviders.mockReset().mockResolvedValue([])
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
 
 describe('syncProvider', () => {
+  it('wakes a sleeping conversation when the party writes on it again', async () => {
+    wakeSnoozedThread.mockResolvedValue(true)
+    const thread = vi.fn().mockResolvedValue({ summary: summary(), messages: [message()] })
+
+    await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }))
+
+    expect(wakeSnoozedThread).toHaveBeenCalledWith('t1')
+    // Nobody did this, so nobody's name goes on it.
+    expect(recordEvent).toHaveBeenCalledWith('t1', null, 'woken', { providerModule: 'live-chat' })
+  })
+
+  it('leaves the snooze alone when the conversation had nothing new in it', async () => {
+    // Everything on it is already held - the ordinary answer on a settled
+    // channel, and not somebody writing.
+    insertProviderMessage.mockResolvedValue(null)
+    const thread = vi.fn().mockResolvedValue({ summary: summary(), messages: [message()] })
+
+    await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }))
+
+    expect(wakeSnoozedThread).not.toHaveBeenCalled()
+  })
+
+  it('writes no timeline entry when it was not asleep to begin with', async () => {
+    const thread = vi.fn().mockResolvedValue({ summary: summary(), messages: [message()] })
+
+    await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }))
+
+    expect(wakeSnoozedThread).toHaveBeenCalledWith('t1')
+    expect(recordEvent).not.toHaveBeenCalled()
+  })
+
   it('files a conversation and its messages', async () => {
     const thread = vi.fn().mockResolvedValue({ summary: summary(), messages: [message()] })
     const outcome = await syncProvider(

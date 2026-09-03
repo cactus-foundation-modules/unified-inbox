@@ -919,6 +919,84 @@ const CSS = `
 }
 .uin-field-add:hover { color: var(--color-text); }
 
+/* The suggestion menu under To and Cc.
+   The field itself keeps the borderless look of every other line, so the menu
+   is the only thing that draws a box - anchored to the field rather than to the
+   row, or a Cc line appearing underneath would shove it sideways. */
+.uin-recipient-field { position: relative; flex: 1 1 auto; min-width: 0; display: flex; }
+.uin-recipient-field input { flex: 1 1 auto; min-width: 0; }
+.uin-suggestions {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + 0.35rem);
+  left: -0.5rem;
+  right: -0.5rem;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  max-height: 17rem;
+  overflow-y: auto;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: 0.625rem;
+  box-shadow: var(--shadow-xl);
+}
+.uin-suggestions-head,
+.uin-suggestions-foot {
+  padding: 0.35rem 0.5rem 0.3rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.uin-suggestion {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 0.45rem;
+  cursor: pointer;
+  min-width: 0;
+}
+.uin-suggestion[data-active='1'] { background: var(--color-primary-subtle); }
+.uin-suggestion-avatar {
+  flex: none;
+  width: 1.75rem;
+  height: 1.75rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.uin-suggestion-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.uin-suggestion-name {
+  font-size: 0.8125rem;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.uin-suggestion-meta {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Nothing animates for somebody who asked the browser to stop it. */
+@media (prefers-reduced-motion: no-preference) {
+  .uin-suggestions { animation: uin-suggestions-in 120ms ease-out; }
+  @keyframes uin-suggestions-in {
+    from { opacity: 0; transform: translateY(-0.15rem); }
+    to { opacity: 1; transform: none; }
+  }
+}
+
 /* Everything the four lines above do not take. */
 .uin-compose-message { flex: 1 1 auto; display: flex; min-height: 6rem; }
 .uin-modal .uin-composer textarea {
