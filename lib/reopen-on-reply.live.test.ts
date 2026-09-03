@@ -19,13 +19,15 @@ import {
 } from '@/lib/backup/vps-database'
 
 // ---------------------------------------------------------------------------
-// A reply cancels a snooze, executed.
+// A reply puts a conversation back in Open, executed.
 //
-// `wakeSnoozedThread` is raw SQL, and raw SQL is a string to `tsc`, a string to
+// `reopenOnReply` is raw SQL, and raw SQL is a string to `tsc`, a string to
 // `eslint`, and never executed by a build - so a statement Postgres will not
 // parse, or one whose WHERE clause is a shade too wide, passes every gate this
-// repository has. The gate it must not pass is a conversation somebody marked
-// DONE quietly reappearing in Open every time a bounce lands on it.
+// repository has. This one is also the least ordinary statement in the module:
+// a CTE that reads the status under FOR UPDATE and an UPDATE ... FROM that
+// returns it, because plain RETURNING would hand back the value just written.
+// Whether Postgres agrees is not a thing to find out on a customer's site.
 //
 // A real throwaway database on the Postgres VPS, built from the core schema and
 // this module's own migrations. Named `cactus_rt_*` and dropped afterwards; the
@@ -34,13 +36,13 @@ import {
 //
 // Skipped unless opted into, so a plain `npm test` never touches the network:
 //
-//   RUN_INBOX_SNOOZE_GUARDS=1 npx vitest run \
-//     modules/unified-inbox/lib/snooze-wake.live.test.ts --testTimeout 120000
+//   RUN_INBOX_REOPEN_GUARDS=1 npx vitest run \
+//     modules/unified-inbox/lib/reopen-on-reply.live.test.ts --testTimeout 120000
 //
 // A SKIP here is a FAIL - the whole point is that the SQL runs.
 // ---------------------------------------------------------------------------
 
-const shouldRun = process.env.RUN_INBOX_SNOOZE_GUARDS === '1'
+const shouldRun = process.env.RUN_INBOX_REOPEN_GUARDS === '1'
 if (shouldRun) {
   try {
     ;(process as unknown as { loadEnvFile: (p: string) => void }).loadEnvFile('.env')
@@ -74,7 +76,7 @@ type Db = typeof import('./db')
 const SENT_AT = new Date('2026-09-03T09:14:00.000Z')
 const THURSDAY = new Date('2026-09-10T08:00:00.000Z')
 
-describe.runIf(shouldRun)('a reply cancels a snooze, against a real database', () => {
+describe.runIf(shouldRun)('a reply puts a conversation back in Open, against a real database', () => {
   let vps: VpsConfig
   let role: TestRole
   let database: TestDatabase
@@ -123,7 +125,7 @@ describe.runIf(shouldRun)('a reply cancels a snooze, against a real database', (
 
     const stamp = Date.now()
     role = await createTestRole(vps, `cactus_rt_role_${stamp}`)
-    database = await createTestDatabase(vps, `cactus_rt_uinsnz_${stamp}`, role)
+    database = await createTestDatabase(vps, `cactus_rt_uinreo_${stamp}`, role)
     process.env.DATABASE_URL = database.connectionUri
     process.env.ENCRYPTION_KEY = KEY
 
@@ -167,62 +169,98 @@ describe.runIf(shouldRun)('a reply cancels a snooze, against a real database', (
     const id = await threadIn('snoozed', THURSDAY)
     expect(await stateOf(id)).toMatchObject({ status: 'snoozed' })
 
-    expect(await lib.wakeSnoozedThread(id)).toBe(true)
+    expect(await lib.reopenOnReply(id)).toBe('snoozed')
 
     // Status and snooze move together. A conversation left 'open' with a stamp
     // on it is the bug wakeDueThreads exists to avoid re-creating.
     expect(await stateOf(id)).toEqual({ status: 'open', snoozeUntil: null })
   })
 
-  it('says no the second time, so two ticks racing write one timeline entry', async () => {
-    const id = await threadIn('snoozed', THURSDAY)
-    expect(await lib.wakeSnoozedThread(id)).toBe(true)
-    expect(await lib.wakeSnoozedThread(id)).toBe(false)
+  it('opens one somebody had finished with, and says that is what it was', async () => {
+    const id = await threadIn('done')
+
+    // The whole reason the caller wants the old status back: the conversation
+    // is identical afterwards either way, and only this says which sentence the
+    // timeline should carry.
+    expect(await lib.reopenOnReply(id)).toBe('done')
+    expect(await stateOf(id)).toEqual({ status: 'open', snoozeUntil: null })
   })
 
-  it('leaves a conversation somebody marked done exactly where they left it', async () => {
-    const id = await threadIn('done')
-    expect(await lib.wakeSnoozedThread(id)).toBe(false)
-    expect(await stateOf(id)).toMatchObject({ status: 'done' })
+  it('says nothing the second time, so two ticks write one timeline entry', async () => {
+    const snoozed = await threadIn('snoozed', THURSDAY)
+    expect(await lib.reopenOnReply(snoozed)).toBe('snoozed')
+    expect(await lib.reopenOnReply(snoozed)).toBeNull()
+
+    const done = await threadIn('done')
+    expect(await lib.reopenOnReply(done)).toBe('done')
+    expect(await lib.reopenOnReply(done)).toBeNull()
   })
 
   it('does not rewrite one that was already open', async () => {
     const id = await threadIn('open')
-    expect(await lib.wakeSnoozedThread(id)).toBe(false)
+    expect(await lib.reopenOnReply(id)).toBeNull()
     expect(await stateOf(id)).toEqual({ status: 'open', snoozeUntil: null })
   })
 
   it('touches nothing but the conversation it was given', async () => {
-    const woken = await threadIn('snoozed', THURSDAY)
-    const bystander = await threadIn('snoozed', THURSDAY)
+    const reopened = await threadIn('snoozed', THURSDAY)
+    const sleeping = await threadIn('snoozed', THURSDAY)
+    const finished = await threadIn('done')
 
-    expect(await lib.wakeSnoozedThread(woken)).toBe(true)
+    expect(await lib.reopenOnReply(reopened)).toBe('snoozed')
 
-    expect(await stateOf(bystander)).toMatchObject({ status: 'snoozed' })
+    expect(await stateOf(sleeping)).toMatchObject({ status: 'snoozed' })
+    expect(await stateOf(finished)).toMatchObject({ status: 'done' })
   })
 
   it('writes the timeline entry with nobody attached to it', async () => {
-    const id = await threadIn('snoozed', THURSDAY)
-    await lib.wakeSnoozedThread(id)
+    const id = await threadIn('done')
+    const was = await lib.reopenOnReply(id)
     // user_id is a foreign key to User with ON DELETE SET NULL. Nobody did this,
     // so it goes in null - and the column has to actually accept that.
-    await lib.recordEvent(id, null, 'woken', { direction: 'in' })
+    await lib.recordEvent(id, null, 'woken', { was, direction: 'in' })
 
     const events = await lib.listThreadEvents(id)
     expect(events).toHaveLength(1)
-    expect(events[0]).toMatchObject({ kind: 'woken', userId: null, detail: { direction: 'in' } })
+    expect(events[0]).toMatchObject({
+      kind: 'woken', userId: null, detail: { was: 'done', direction: 'in' },
+    })
   })
 
-  it('puts it back in the list the Open tab draws', async () => {
-    const id = await threadIn('snoozed', THURSDAY)
-    const open = () => lib.listThreads({
-      inboxIds: [inboxId], includeUnrouted: false, status: 'open', page: 1, perPage: 50,
-    })
+  it('moves it out of the tab it was under and into Open', async () => {
+    const listed = (status: 'open' | 'snoozed' | 'done') => lib.listThreads({
+      inboxIds: [inboxId], includeUnrouted: false, status, page: 1, perPage: 50,
+    }).then((rows) => rows.map((t) => t.id))
 
-    expect((await open()).map((t) => t.id)).not.toContain(id)
+    const snoozed = await threadIn('snoozed', THURSDAY)
+    const done = await threadIn('done')
 
-    await lib.wakeSnoozedThread(id)
+    expect(await listed('snoozed')).toContain(snoozed)
+    expect(await listed('done')).toContain(done)
+    expect(await listed('open')).toEqual(expect.not.arrayContaining([snoozed, done]))
 
-    expect((await open()).map((t) => t.id)).toContain(id)
+    await lib.reopenOnReply(snoozed)
+    await lib.reopenOnReply(done)
+
+    expect(await listed('open')).toEqual(expect.arrayContaining([snoozed, done]))
+    expect(await listed('snoozed')).not.toContain(snoozed)
+    expect(await listed('done')).not.toContain(done)
+  })
+
+  it('counts a reopened conversation on the badge again, which done ones are not', async () => {
+    // unreadCounts skips done conversations on purpose. That is precisely why a
+    // reply to a finished one had to reopen it rather than merely mark it
+    // unread: unread and done is unread and invisible.
+    const badge = async () => (await lib.unreadCounts([inboxId], false))[inboxId] ?? 0
+
+    // A delta rather than an absolute: the tests above share this database and
+    // have left their own reopened conversations lying about in it.
+    const before = await badge()
+    const id = await threadIn('done')
+    expect(await badge()).toBe(before)
+
+    await lib.reopenOnReply(id)
+
+    expect(await badge()).toBe(before + 1)
   })
 })

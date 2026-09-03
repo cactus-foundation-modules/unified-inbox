@@ -328,9 +328,18 @@ const EVENT_WORDS: Record<string, string> = {
 
 /** Entries nobody did. The rest of the log reads "<name> <did something>", and
  *  putting "Somebody" in front of an automatic one invents a colleague who was
- *  never there - so these carry their own whole sentence instead. */
-const UNATTENDED_EVENTS: Record<string, string> = {
-  woken: 'A reply arrived, so it stopped being snoozed',
+ *  never there - so these carry their own whole sentence instead.
+ *
+ *  Returns null for anything with a person behind it, which is most of it. */
+function unattendedEvent(event: ThreadEventRow): string | null {
+  if (event.userId) return null
+  if (event.kind !== 'woken') return null
+  // Worth saying which it was: coming back early from a snooze is mildly
+  // surprising, and something you had marked done reopening is the sort of
+  // thing you want an explanation for before you go looking for one.
+  return event.detail?.was === 'done'
+    ? 'A reply arrived, so it was opened again'
+    : 'A reply arrived, so it stopped being snoozed'
 }
 
 export function ThreadPane({
@@ -462,9 +471,7 @@ export function ThreadPane({
             <ul className="uin-log">
               {events.map((event) => (
                 <li key={event.id}>
-                  {UNATTENDED_EVENTS[event.kind] && !event.userId ? (
-                    UNATTENDED_EVENTS[event.kind]
-                  ) : (
+                  {unattendedEvent(event) ?? (
                     <>
                       {(event.userId && staffById[event.userId]) || 'Somebody'}{' '}
                       {EVENT_WORDS[event.kind] ?? 'changed something'}

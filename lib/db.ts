@@ -2269,29 +2269,54 @@ export async function wakeDueThreads(): Promise<number> {
   `
 }
 
+/** What a conversation was before a reply put it back in Open. Null when it
+ *  was already there and nothing happened. */
+export type ReopenedFrom = 'snoozed' | 'done' | null
+
 /**
- * One sleeping conversation, woken because somebody has written on it.
+ * One conversation put back in Open, because somebody has written on it.
  *
- * "Come back to me on Thursday" is a statement about silence. The moment the
- * customer answers - or a colleague answers them from their own mail client -
- * the conversation is live again, and leaving it out of Open until Thursday is
- * how a question sits unanswered for three days in a folder nobody opens.
+ * Both of the ways a conversation leaves Open are statements about silence.
+ * "Come back to me on Thursday" says nothing will happen before Thursday, and
+ * "done" says nothing more will happen at all. A reply contradicts both, so
+ * both are reversed by one rule rather than two - it is easier to explain and
+ * there is no second case to forget about.
+ *
+ * Done is the one that matters more, which is not obvious. A snoozed
+ * conversation comes back on its own on Thursday. A done one never does, and
+ * the unread badge on the address tabs deliberately skips done conversations
+ * (see unreadCounts) - so a customer's reply to something we had finished with
+ * used to sit at the top of a tab nobody opens, unread, badgeless, indefinitely.
+ * That is the failure this exists to prevent.
  *
  * Deliberately narrower than wakeDueThreads: one row, named, and only when it
- * is actually asleep. `AND "status" = 'snoozed'` is what makes it safe to call
- * on every message that lands - a conversation somebody marked done is left
- * done, an open one is not rewritten, and two ticks racing cost one no-op.
+ * is not already open. `AND "status" <> 'open'` is what makes it safe to call on
+ * every message that lands - an open conversation is not rewritten, and two
+ * ticks racing cost one no-op.
  *
- * Returns true only when there was a snooze to cancel, so the caller writes one
- * timeline entry rather than one per polled message.
+ * Returns what it was, so the caller can say which of the two happened, and so
+ * that an already-open conversation writes no timeline entry at all rather than
+ * one per polled message. The status is read in the CTE, before the UPDATE,
+ * because RETURNING would hand back the value we have just written. FOR UPDATE
+ * is what settles the race: the second tick blocks, re-reads, finds the row
+ * open and matches nothing.
  */
-export async function wakeSnoozedThread(threadId: string): Promise<boolean> {
-  const changed = await prisma.$executeRaw`
-    UPDATE "uin_threads"
+export async function reopenOnReply(threadId: string): Promise<ReopenedFrom> {
+  const rows = await prisma.$queryRaw<{ was: string }[]>`
+    WITH "before" AS (
+      SELECT "id", "status"
+        FROM "uin_threads"
+       WHERE "id" = ${threadId} AND "status" <> 'open'
+         FOR UPDATE
+    )
+    UPDATE "uin_threads" t
        SET "status" = 'open', "snooze_until" = NULL, "updated_at" = now()
-     WHERE "id" = ${threadId} AND "status" = 'snoozed'
+      FROM "before"
+     WHERE t."id" = "before"."id"
+    RETURNING "before"."status" AS "was"
   `
-  return changed > 0
+  const was = rows[0]?.was
+  return was === 'snoozed' || was === 'done' ? was : null
 }
 
 /**

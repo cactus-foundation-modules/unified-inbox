@@ -35,7 +35,7 @@ import {
   threadsForMessageIds,
   threadsHoldingIdentity,
   touchThread,
-  wakeSnoozedThread,
+  reopenOnReply,
   recordEvent,
 } from './db'
 import { prepareInboundHtml, htmlToText } from './html'
@@ -809,7 +809,8 @@ async function fileMessage(
       inboxId: input.inboxId,
     })
 
-    // Somebody has written on it, so it stops being asleep.
+    // Somebody has written on it, so it goes back in Open - whether it was
+    // asleep until Thursday or marked done a fortnight ago.
     //
     // Both directions count, and the second one is the reason this sits here
     // rather than behind `direction === 'in'`. A reply typed in this hub never
@@ -817,14 +818,17 @@ async function fileMessage(
     // copy coming back out of Sent is turned away by findOutboundByMessageId
     // above. So an OUTBOUND message arriving here is one this hub did not send:
     // a colleague answering the customer from their phone or from Outlook. That
-    // conversation is being dealt with by somebody, and hiding it until
-    // Thursday is exactly wrong.
+    // conversation is being dealt with by somebody, and hiding it is exactly
+    // wrong.
     //
     // The mail system talking to itself is not somebody writing, so a bounce or
-    // an out-of-office leaves the snooze where it is - the same line E7 draws
-    // for the unread flag, drawn once more.
-    if (!automated && await wakeSnoozedThread(thread)) {
-      await recordEvent(thread, null, 'woken', { direction: input.direction })
+    // an out-of-office leaves it where it is - the same line E7 draws for the
+    // unread flag, drawn once more. Which matters most on the done half: a
+    // mailing list nobody has unsubscribed from should not drag a finished
+    // conversation back into Open every week.
+    if (!automated) {
+      const was = await reopenOnReply(thread)
+      if (was) await recordEvent(thread, null, 'woken', { was, direction: input.direction })
     }
 
     return { threadId: thread, messageId: written }

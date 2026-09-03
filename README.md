@@ -46,14 +46,18 @@ the same human collapse into one story.
   notepad. A reply goes back under its conversation with the words still in the
   box; a new message opens where you left it. Sending one clears it away.
 - **Getting through it.** Hand a conversation to somebody, set it to come back
-  later, mark it done, and search everything you are allowed to see. Setting one
-  to come back later is a bet on silence, so anybody breaking the silence
-  cancels it: a reply from the customer, or a colleague answering them from
-  their own phone, puts the conversation straight back under **Open** rather
-  than leaving it asleep until Thursday. An out-of-office or a bounce is the
-  mail system talking rather than a person, and leaves it where it was. Your own
-  reply, sent from here, does the same - you set the reminder knowing you were
-  about to answer.
+  later, mark it done, and search everything you are allowed to see. Both of
+  those are bets on silence - "nothing until Thursday" and "nothing more at
+  all" - so anybody breaking the silence settles the bet. A reply from the
+  customer, or a colleague answering them from their own phone, puts the
+  conversation straight back under **Open**, whether it was asleep until
+  Thursday or marked done a fortnight ago. Done matters most: a snoozed
+  conversation comes back on its own eventually, and a finished one never does,
+  so a reply to something you had put away used to sit unread at the top of a
+  tab nobody opens. An out-of-office or a bounce is the mail system talking
+  rather than a person, and leaves it where it was - which is what stops a
+  mailing list dragging a finished conversation back every week. Your own reply,
+  sent from here, does the same.
 - **Pictures stay off** until you ask for them, and when you do they are fetched
   by the site rather than by your browser, so a sender learns nothing about you.
 - **Settings** for how far back to go when starting out, how long to keep
