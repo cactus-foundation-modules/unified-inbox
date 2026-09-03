@@ -566,7 +566,10 @@ export async function UnifiedInboxPanel({
         unroutedCount={counts[''] ?? 0}
         showDrafts={sendable.length > 0 || draftCount > 0}
         draftCount={draftCount}
-        composeHref={composeHref}
+        /* Write a message rides beside the search on the status row below. The
+           status row is not drawn on Drafts and Sent, so on those two the
+           button falls back to the end of the addresses. */
+        composeHref={listing ? composeHref : null}
         defaultInboxId={pinnedInboxId}
         canReorder={canManage}
         canCheckNow={canManage && connections.length > 0}
@@ -584,6 +587,7 @@ export async function UnifiedInboxPanel({
             status={params.status}
             counts={statuses}
             search={params.search}
+            composeHref={composeHref}
           />
           <Filters
             base={base}

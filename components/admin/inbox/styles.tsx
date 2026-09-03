@@ -160,6 +160,9 @@ const CSS = `
 .uin-draft-read dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 
 /* ---- the search box, at the end of the status tabs ---------------------- */
+/* Search and Write a message share the trailing slot, the button last: the row
+   reads left to right as narrow the list, then add to it. */
+.uin-search-row { display: flex; gap: 0.5rem; align-items: center; min-width: 0; }
 .uin-search { display: flex; gap: 0.375rem; align-items: center; }
 .uin-search input { min-width: 0; width: 9rem; }
 @media (min-width: 700px) {

@@ -1,7 +1,8 @@
+import Link from 'next/link'
 import { TabStrip } from '@/components/admin/TabStrip'
 import { QueryForm } from './QueryForm'
 import { inboxHref, type StatusFilter } from '@/modules/unified-inbox/lib/list'
-import { SearchIcon } from './icons'
+import { PenIcon, SearchIcon } from './icons'
 
 // Where a conversation stands, under the addresses: waiting, set aside, dealt
 // with, or the lot.
@@ -26,6 +27,10 @@ type Props = {
   status: StatusFilter
   counts: Record<string, number>
   search: string | null
+  /** Where "Write a message" goes, or null when there is no address this person
+      may send from. It rides at the end of this row, past the search, because
+      it is the one control up here that is not a way of narrowing the list. */
+  composeHref: string | null
 }
 
 const STATUS_TABS: Array<{ value: StatusFilter; label: string; countKey: string }> = [
@@ -35,7 +40,7 @@ const STATUS_TABS: Array<{ value: StatusFilter; label: string; countKey: string 
   { value: 'all', label: 'Everything', countKey: 'all' },
 ]
 
-export function StatusTabs({ base, params, status, counts, search }: Props) {
+export function StatusTabs({ base, params, status, counts, search, composeHref }: Props) {
   // Any change starts again at page one and closes whatever was open, since the
   // conversation on screen may not survive the new filter. A person's page goes
   // with it: searching used to leave somebody's page pinned beside a list that
@@ -75,19 +80,27 @@ export function StatusTabs({ base, params, status, counts, search }: Props) {
         }
       })}
       trailing={
-        <QueryForm base={base} hidden={hidden} className="uin-search">
-          <label className="sr-only" htmlFor="uin-search">Search conversations you can see</label>
-          <input
-            id="uin-search"
-            name="q"
-            type="search"
-            defaultValue={search ?? ''}
-            placeholder="Search conversations you can see"
-          />
-          <button type="submit" className="btn btn-secondary btn-sm" aria-label="Search">
-            {SearchIcon}
-          </button>
-        </QueryForm>
+        <div className="uin-search-row">
+          <QueryForm base={base} hidden={hidden} className="uin-search">
+            <label className="sr-only" htmlFor="uin-search">Search conversations you can see</label>
+            <input
+              id="uin-search"
+              name="q"
+              type="search"
+              defaultValue={search ?? ''}
+              placeholder="Search conversations you can see"
+            />
+            <button type="submit" className="btn btn-secondary btn-sm" aria-label="Search">
+              {SearchIcon}
+            </button>
+          </QueryForm>
+          {composeHref && (
+            <Link className="uin-compose" href={composeHref} aria-label="Write a message">
+              {PenIcon}
+              <span className="uin-compose-words">Write a message</span>
+            </Link>
+          )}
+        </div>
       }
     />
   )
