@@ -2,7 +2,7 @@ import { prisma } from '@/lib/db/prisma'
 import type { ContextAdapter, ContextItem, ContextQuery, ContextSection } from './types'
 import { SECTION_LIMIT } from './types'
 import { detailLine, humanStatus, inList, shortDate, toDate } from './format'
-import { getSiteTimezone } from '@/lib/config/timezone'
+import { getSiteTimezone } from '@/lib/config/timezone.server'
 
 // The books' side of the person: what is on account with them and not settled.
 //

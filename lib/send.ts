@@ -36,7 +36,7 @@ import {
   type ReplyMode,
 } from './compose'
 import { normaliseAddress, isValidAddress } from './addresses'
-import { getSiteTimezone } from '@/lib/config/timezone'
+import { getSiteTimezone } from '@/lib/config/timezone.server'
 import { normaliseSubject, buildSnippet, cleanMessageId } from './threading'
 import { htmlToText } from './html'
 import { buildRawMessage } from './mime'

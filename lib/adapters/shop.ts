@@ -4,7 +4,7 @@ import type {
 } from './types'
 import { SECTION_LIMIT, SUGGEST_LIMIT } from './types'
 import { detailLine, humanStatus, inList, likeTerm, money, shortDate, toDate } from './format'
-import { getSiteTimezone } from '@/lib/config/timezone'
+import { getSiteTimezone } from '@/lib/config/timezone.server'
 
 // What the shop knows about this person: their orders, newest first.
 //

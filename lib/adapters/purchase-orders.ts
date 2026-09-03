@@ -4,7 +4,7 @@ import type {
 } from './types'
 import { SECTION_LIMIT, SUGGEST_LIMIT } from './types'
 import { detailLine, humanStatus, inList, likeTerm, money, shortDate, toDate } from './format'
-import { getSiteTimezone } from '@/lib/config/timezone'
+import { getSiteTimezone } from '@/lib/config/timezone.server'
 
 // Purchasing's side of the person: which supplier they are, what is on order
 // with them, and what they have billed us for that is not settled.

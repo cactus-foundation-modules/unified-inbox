@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/db/prisma'
 import type { ContextAdapter, ContextItem, ContextQuery, ContextSection } from './types'
 import { detailLine, humanStatus, shortDate, toDate } from './format'
-import { getSiteTimezone } from '@/lib/config/timezone'
+import { getSiteTimezone } from '@/lib/config/timezone.server'
 
 // The member account behind the address, if the person has one.
 //

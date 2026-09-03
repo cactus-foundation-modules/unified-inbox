@@ -4,7 +4,7 @@ import type {
 } from './types'
 import { SECTION_LIMIT, SUGGEST_LIMIT } from './types'
 import { detailLine, humanStatus, inList, likeTerm, shortDate, toDate } from './format'
-import { getSiteTimezone } from '@/lib/config/timezone'
+import { getSiteTimezone } from '@/lib/config/timezone.server'
 
 // Quotes this person has asked for, matched on the address they gave. Only the
 // ones still live: a quote that was won became an order and shows up under the
