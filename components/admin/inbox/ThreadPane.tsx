@@ -8,7 +8,7 @@ import { RetryButton } from './RetryButton'
 import { ThreadActions } from './ThreadActions'
 import { DeleteMessageButton } from './MessageActions'
 import { BlockParticipant } from './BlockParticipant'
-import { Composer } from './Composer'
+import { ComposerOpenProvider, ComposerSlot, ReplyActions } from './ComposerOpen'
 
 // One conversation, oldest message first - the order the story happened in.
 //
@@ -356,7 +356,14 @@ export function ThreadPane({
   // delete button refreshes instead, so this is server truth again.
   const ordered = newestFirst ? [...messages].reverse() : messages
 
+  // A draft opens the box on the way in, and nothing else does: a conversation
+  // is opened to be read far more often than to be answered.
+  const openAs = draft && draft.mode !== 'new' ? draft.mode : null
+
   return (
+    // Keyed on the conversation, so opening the next one starts shut again
+    // rather than inheriting whatever was open on the last.
+    <ComposerOpenProvider key={thread.id} initialMode={openAs}>
     <div className="uin-thread">
       <div className="uin-thread-head">
         {/* On a phone this is the way back to a list that is not on the screen.
@@ -389,6 +396,10 @@ export function ThreadPane({
           )}
           {thread.status === 'done' && <span className="uin-tag uin-tag-done">Done</span>}
         </div>
+        {/* What you can say, before what you can do to it: answering is what
+            somebody came here for, and the box itself is no longer sitting open
+            underneath waiting to be noticed. */}
+        <ReplyActions canReply={canReply} canForward={canReply} cannotReplyReason={cannotReplyReason} />
         <ThreadActions
           threadId={thread.id}
           status={thread.status}
@@ -416,15 +427,13 @@ export function ThreadPane({
           </div>
         )}
 
-        {/* The messages come first and the writing box after them, because the
-            conversation is what somebody opened this to read. An empty list used
-            to render as nothing at all, which put the writing box directly under
-            the subject and left no sign that anything was missing.
-
-            Reading newest first, the writing box goes above the messages, since
-            the reply belongs beside the thing being replied to. */}
+        {/* The writing box, when somebody has asked for one - the buttons that
+            ask are in the row of actions above. It still appears beside the
+            newest message rather than at the top of the pane, which reading
+            newest first means above the list and otherwise below it: a reply
+            belongs beside the thing being replied to. */}
         {newestFirst && (
-          <Composer
+          <ComposerSlot
             threadId={thread.id}
             replyTo={replyTo}
             replyAllTo={replyAllTo}
@@ -453,7 +462,7 @@ export function ThreadPane({
         )}
 
         {!newestFirst && (
-          <Composer
+          <ComposerSlot
             threadId={thread.id}
             replyTo={replyTo}
             replyAllTo={replyAllTo}
@@ -486,5 +495,6 @@ export function ThreadPane({
         )}
       </div>
     </div>
+    </ComposerOpenProvider>
   )
 }

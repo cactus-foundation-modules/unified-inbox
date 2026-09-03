@@ -581,17 +581,17 @@ const CSS = `
   border-radius: 0.625rem;
   background: var(--color-surface);
 }
-/* The subject, the meta line and the row of actions. It used to be stuck to the
-   top of whatever was scrolling, on the reasoning that "who is this and what do
-   I do with it" is worth keeping on the screen. It cost more than it was worth.
-   An HTML message can be four thousand pixels tall, and a tall opaque band
-   pinned over the top of a scrolled conversation puts the subject, the meta line
-   and the actions immediately above the composer with the message itself out of
-   sight above them - which reads as a conversation with no message in it, and is
-   what was photographed. It scrolls with the conversation now. The pane is one
-   screen tall and scrolls its own contents, so the header is one flick away
-   rather than the several thousand pixels it was when the page did the
-   scrolling, and that is what the stickiness was really compensating for. */
+/* The subject, the meta line and the two rows of actions, pinned to the top of
+   the conversation as it scrolls. Reply, Forward and Internal note live in
+   there, and a button you have to scroll four thousand pixels of quoted email
+   to reach is not a button.
+
+   It was unpinned once before, for a good reason: back then the writing box was
+   always open directly beneath it, so a scrolled conversation showed a tall
+   opaque band with the composer under it and the message itself out of sight -
+   which read as a conversation with nothing in it. The box opens on request
+   now, so what is pinned is the conversation's own header and what you can do
+   with it, and the message is what fills the rest. */
 .uin-thread-head {
   display: grid;
   gap: 0.5rem;
@@ -599,6 +599,29 @@ const CSS = `
   border-bottom: 1px solid var(--color-border);
   border-radius: 0.625rem 0.625rem 0 0;
   background: var(--color-surface);
+}
+/* Pinned only where the conversation scrolls its own contents. Below that
+   breakpoint the whole page scrolls, and a band this tall pinned to a phone's
+   viewport would take a third of the screen away from the thing being read.
+   Opaque on purpose either way: messages passing behind a translucent header
+   are unreadable twice over. */
+@media (min-width: 900px) {
+  .uin-thread-head {
+    position: sticky;
+    top: 0;
+    /* Over the messages, and over anything inside the writing box that has a
+       stacking context of its own. */
+    z-index: 3;
+  }
+}
+/* Answering, one row above the things done TO the conversation. The one that is
+   open reads as pressed - without it, opening the box and scrolling down leaves
+   no sign of which of the three you are writing. */
+.uin-reply-actions .btn[data-open="1"] {
+  background: var(--color-primary-subtle);
+  border-color: var(--color-primary-border);
+  color: var(--color-text);
+  font-weight: 600;
 }
 .uin-thread-subject { font-size: 1.0625rem; font-weight: 650; margin: 0; }
 .uin-thread-actions { display: flex; flex-wrap: wrap; gap: 0.375rem; align-items: center; }

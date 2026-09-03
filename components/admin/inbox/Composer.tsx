@@ -17,7 +17,8 @@ import { ConfirmDialog } from './ConfirmDialog'
 // thing twice is the one thing the browser has to help with, and it does it by
 // carrying a token.
 
-type Mode = 'reply' | 'reply-all' | 'forward' | 'note'
+export type ComposerMode = 'reply' | 'reply-all' | 'forward' | 'note'
+type Mode = ComposerMode
 
 type StaffMember = { id: string; name: string }
 
@@ -40,10 +41,18 @@ type Props = {
   cannotReplyReason: string | null
   /** What this person left in this box last time, if they left anything. */
   draft: DraftForComposer | null
+  /** Which of the three the button at the top of the conversation asked for.
+   *  The chips below still change it afterwards - this only says what it opened
+   *  as, and what a later press up there changed it to. */
+  requestedMode?: Mode
+  /** Counts those presses, so pressing Forward twice still reads as a second
+   *  instruction rather than as nothing having changed. */
+  requestedAt?: number
 }
 
 export function Composer({
   threadId, replyTo, replyAllTo, canReply, canForward, staff, cannotReplyReason, draft,
+  requestedMode, requestedAt,
 }: Props) {
   const router = useRouter()
   // A saved draft says which of the three it was, and opening the conversation
@@ -53,7 +62,7 @@ export function Composer({
   // pressed and Send would be refused by the server. It falls back to a note,
   // and the explanation above the chips says why.
   const [mode, setMode] = useState<Mode>(() => {
-    const wanted: Mode = draft && draft.mode !== 'new' ? draft.mode : canReply ? 'reply' : 'note'
+    const wanted: Mode = requestedMode ?? (draft && draft.mode !== 'new' ? draft.mode : canReply ? 'reply' : 'note')
     if ((wanted === 'reply' || wanted === 'reply-all') && !canReply) return 'note'
     if (wanted === 'reply-all' && replyAllTo.length <= replyTo.length) return 'reply'
     if (wanted === 'forward' && !canForward) return canReply ? 'reply' : 'note'
@@ -81,6 +90,18 @@ export function Composer({
   // beforeunload guard below is asking about, and it is deliberately not "is
   // there text", because text that has just been saved is not at risk.
   const [dirty, setDirty] = useState(false)
+
+  // A later press of one of the buttons at the top of the conversation. Applied
+  // while rendering rather than in an effect - React's own way of adjusting
+  // state when a prop changes, and it saves the box drawing once in the old
+  // mode before switching. Never on the first render: the box already opened as
+  // that mode, and applying it again would undo a chip pressed in the same
+  // breath.
+  const [lastRequest, setLastRequest] = useState(requestedAt)
+  if (requestedAt !== undefined && requestedAt !== lastRequest) {
+    setLastRequest(requestedAt)
+    if (requestedMode) setMode(requestedMode)
+  }
 
   /** A file dragged straight onto the box, rather than found in the library.
    *  Off for an internal note, which is not sent anywhere and has nothing to
