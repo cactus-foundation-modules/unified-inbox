@@ -54,8 +54,12 @@ describe('detailLine and dates', () => {
   })
 
   it('reads a date column back', () => {
-    expect(shortDate('2026-03-12T00:00:00.000Z')).toBe('12 Mar 2026')
-    expect(shortDate('nonsense')).toBeNull()
+    expect(shortDate('2026-03-12T00:00:00.000Z', 'Europe/London')).toBe('12 Mar 2026')
+    expect(shortDate('nonsense', 'Europe/London')).toBeNull()
+    // Midnight UTC on a summer date is already the next day in London, which is
+    // the whole reason this takes a zone rather than guessing.
+    expect(shortDate('2026-07-11T23:30:00.000Z', 'Europe/London')).toBe('12 Jul 2026')
+    expect(shortDate('2026-07-11T23:30:00.000Z', 'UTC')).toBe('11 Jul 2026')
     expect(toDate(null)).toBeNull()
   })
 })

@@ -36,10 +36,11 @@ type Props = {
    *  badge on every row marks nothing. */
   currentUserId: string
   now: Date
+  timezone: string
 }
 
 export function DraftListView({
-  base, params, drafts, inboxNames, openThreadId, openDraftId, staffById, currentUserId, now,
+  base, params, drafts, inboxNames, openThreadId, openDraftId, staffById, currentUserId, now, timezone,
 }: Props) {
   if (drafts.length === 0) {
     return (
@@ -107,7 +108,7 @@ export function DraftListView({
                     <span className="uin-tag"><span className="uin-tag-text">{inboxName}</span></span>
                   )}
                 </span>
-                <span>{formatWhen(draft.updatedAt, now)}</span>
+                <span>{formatWhen(draft.updatedAt, now, timezone)}</span>
               </span>
             </Link>
           </li>

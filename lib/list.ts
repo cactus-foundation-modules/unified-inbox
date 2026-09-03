@@ -10,6 +10,8 @@
 // not drawn.
 // ---------------------------------------------------------------------------
 
+import { calendarDateIn, formatInSiteTimezone, wallClockDaysAhead } from '@/lib/config/timezone'
+
 export const PER_PAGE = 25
 
 export type StatusFilter = 'open' | 'snoozed' | 'done' | 'all'
@@ -210,31 +212,34 @@ export function initialsFor(label: string): string {
  * Today gets a clock, this week gets a weekday, anything older gets a date -
  * which is how a person scanning a list actually reads time.
  */
-export function formatWhen(value: Date | string | null, now: Date = new Date()): string {
+export function formatWhen(value: Date | string | null, now: Date, timezone: string): string {
   if (!value) return ''
   const date = value instanceof Date ? value : new Date(value)
   if (Number.isNaN(date.getTime())) return ''
   const diff = now.getTime() - date.getTime()
-  const sameDay = date.toDateString() === now.toDateString()
-  if (sameDay) {
-    return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+  // "Today" and "this year" are questions about a calendar, and a calendar
+  // belongs to a zone. `toDateString()`/`getFullYear()` answer in the server's
+  // own, which is UTC - so a message sent at half past midnight was filed under
+  // yesterday for the whole of British Summer Time.
+  const dayOfDate = calendarDateIn(date, timezone)
+  const dayOfNow = calendarDateIn(now, timezone)
+  if (dayOfDate === dayOfNow) {
+    return formatInSiteTimezone(date, timezone, { hour: '2-digit', minute: '2-digit' })
   }
   if (diff < 7 * 86_400_000 && diff >= 0) {
-    return date.toLocaleDateString('en-GB', { weekday: 'short' })
+    return formatInSiteTimezone(date, timezone, { weekday: 'short' })
   }
-  if (date.getFullYear() === now.getFullYear()) {
-    return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+  if (dayOfDate.slice(0, 4) === dayOfNow.slice(0, 4)) {
+    return formatInSiteTimezone(date, timezone, { day: 'numeric', month: 'short' })
   }
-  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+  return formatInSiteTimezone(date, timezone, { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 /** The long form, for the header of one message where there is room to be
  *  exact and somebody may be working out what happened when. */
-export function formatFull(value: Date | string | null): string {
+export function formatFull(value: Date | string | null, timezone: string): string {
   if (!value) return ''
-  const date = value instanceof Date ? value : new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-  return date.toLocaleString('en-GB', {
+  return formatInSiteTimezone(value, timezone, {
     weekday: 'short', day: 'numeric', month: 'long', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
   })
@@ -243,14 +248,13 @@ export function formatFull(value: Date | string | null): string {
 /** How long a snooze lasts, offered as the handful of answers people actually
  *  give. Computed from a passed-in `now` so the tests are not at the mercy of
  *  the clock. */
-export function snoozeOptions(now: Date): Array<{ id: string; label: string; until: Date }> {
+export function snoozeOptions(now: Date, timezone: string): Array<{ id: string; label: string; until: Date }> {
   const later = new Date(now.getTime() + 3 * 3_600_000)
-  const tomorrow = new Date(now)
-  tomorrow.setDate(tomorrow.getDate() + 1)
-  tomorrow.setHours(9, 0, 0, 0)
-  const nextWeek = new Date(now)
-  nextWeek.setDate(nextWeek.getDate() + 7)
-  nextWeek.setHours(9, 0, 0, 0)
+  // "Tomorrow morning" has to mean nine o'clock to the person reading it.
+  // `setHours(9, ...)` sets nine on the server's clock, which is UTC, so every
+  // snooze came back an hour late from March to October.
+  const tomorrow = wallClockDaysAhead(now, 1, '09:00', timezone)
+  const nextWeek = wallClockDaysAhead(now, 7, '09:00', timezone)
   return [
     { id: 'later', label: 'In three hours', until: later },
     { id: 'tomorrow', label: 'Tomorrow morning', until: tomorrow },

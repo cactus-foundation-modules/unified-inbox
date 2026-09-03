@@ -2,6 +2,7 @@ import { prisma } from '@/lib/db/prisma'
 import type { ContextAdapter, ContextItem, ContextQuery, ContextSection } from './types'
 import { SECTION_LIMIT } from './types'
 import { detailLine, humanStatus, inList, shortDate, toDate } from './format'
+import { getSiteTimezone } from '@/lib/config/timezone'
 
 // The books' side of the person: what is on account with them and not settled.
 //
@@ -21,6 +22,7 @@ export const bookkeepingAdapter: ContextAdapter = {
   tables: ['bk_transactions', 'bk_counterparty_aliases'],
 
   async load(query: ContextQuery): Promise<ContextSection | null> {
+    const tz = await getSiteTimezone()
     const handles = counterpartyHandles(query)
     if (handles.length === 0) return null
 
@@ -57,7 +59,7 @@ export const bookkeepingAdapter: ContextAdapter = {
       title: (r.reference as string) || (r.description as string) || 'Entry',
       detail: detailLine(
         r.direction === 'income' ? 'They owe us' : 'We owe them',
-        shortDate(r.tax_point_date),
+        shortDate(r.tax_point_date, tz),
       ),
       status: humanStatus(r.status),
       at: toDate(r.tax_point_date),

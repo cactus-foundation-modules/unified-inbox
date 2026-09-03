@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client'
+import { formatInSiteTimezone } from '@/lib/config/timezone'
 
 // Turning what a raw query hands back into something a person reads.
 //
@@ -28,11 +29,11 @@ export function money(value: unknown, currency: string | null | undefined): stri
   }
 }
 
-export function shortDate(value: unknown): string | null {
+export function shortDate(value: unknown, timezone: string): string | null {
   if (!value) return null
   const date = value instanceof Date ? value : new Date(String(value))
   if (Number.isNaN(date.getTime())) return null
-  return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(date)
+  return formatInSiteTimezone(date, timezone, { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 export function toDate(value: unknown): Date | null {

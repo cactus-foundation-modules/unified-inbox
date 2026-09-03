@@ -34,6 +34,7 @@ type Props = {
   inboxNames: Record<string, string>
   staffById: Record<string, string>
   now: Date
+  timezone: string
 }
 
 /** Who it went to, in as few characters as tell the truth, or nothing at all
@@ -52,7 +53,7 @@ function recipientLabel(row: SentMessageRow): string | null {
 }
 
 export function SentListView({
-  base, params, rows, total, page, openThreadId, inboxNames, staffById, now,
+  base, params, rows, total, page, openThreadId, inboxNames, staffById, now, timezone,
 }: Props) {
   const pages = pageCount(total, PER_PAGE)
 
@@ -133,7 +134,7 @@ export function SentListView({
                       <span className="uin-tag"><span className="uin-tag-text">{inboxName}</span></span>
                     )}
                   </span>
-                  <span>{formatWhen(row.sentAt, now)}</span>
+                  <span>{formatWhen(row.sentAt, now, timezone)}</span>
                 </span>
               </Link>
             </li>

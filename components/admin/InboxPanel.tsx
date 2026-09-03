@@ -3,6 +3,7 @@ import { headers } from 'next/headers'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { prisma } from '@/lib/db/prisma'
+import { getSiteTimezone } from '@/lib/config/timezone'
 import { canReplyToInbox, canViewInbox, replyableInboxIds, visibleInboxIds } from '@/modules/unified-inbox/lib/access'
 import {
   attachmentsForThread,
@@ -84,6 +85,10 @@ export async function UnifiedInboxPanel({
 
   const adminPath = (await headers()).get('x-cactus-admin-path') ?? ''
   const base = `/${adminPath}/inbox`
+  // Read once and handed to every view below. This panel and everything under
+  // it are server-rendered, so a clock time left to the machine's own zone comes
+  // out in UTC - an hour behind the site for most of the year.
+  const timezone = await getSiteTimezone()
   const canManage = await hasPermission(user, 'unifiedinbox.manage')
   const canEditLinks = canManage || await hasPermission(user, 'unifiedinbox.reply')
 
@@ -270,6 +275,7 @@ export async function UnifiedInboxPanel({
           canEdit={canEditLinks}
           canManage={canManage}
           now={new Date()}
+          timezone={timezone}
         />
       )
       }
@@ -409,6 +415,7 @@ export async function UnifiedInboxPanel({
           canDeleteMessages={canDeleteMessages}
           blockState={blockState}
           now={new Date()}
+          timezone={timezone}
         />
       )
 
@@ -582,6 +589,7 @@ export async function UnifiedInboxPanel({
               staffById={staffById}
               currentUserId={user.id}
               now={new Date()}
+              timezone={timezone}
             />
           ) : params.sentOnly ? (
             <SentListView
@@ -594,6 +602,7 @@ export async function UnifiedInboxPanel({
               inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
               staffById={staffById}
               now={new Date()}
+              timezone={timezone}
             />
           ) : (
             <ThreadListView
@@ -608,6 +617,7 @@ export async function UnifiedInboxPanel({
               canManage={canManage}
               searching={!!params.search}
               now={new Date()}
+              timezone={timezone}
             />
           )}
         </div>

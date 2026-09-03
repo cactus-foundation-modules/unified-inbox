@@ -156,25 +156,35 @@ describe('quoting', () => {
     bodyHtml: '<p>Do you have them in blue?</p>',
   }
 
+  it('stamps the attribution line in the site timezone, not the server one', () => {
+    // 14:05 UTC on 3 March 2026 is 14:05 in London (still GMT); in summer the
+    // same maths is what stopped a reply quoting a customer an hour early.
+    expect(quoteForReply(original, 'Europe/London').text).toContain('at 14:05')
+    expect(quoteForReply({ ...original, sentAt: new Date('2026-07-03T13:05:00Z') }, 'Europe/London').text)
+      .toContain('at 14:05')
+    expect(quoteForReply({ ...original, sentAt: new Date('2026-07-03T13:05:00Z') }, 'UTC').text)
+      .toContain('at 13:05')
+  })
+
   it('quotes with an attribution line a mail client will fold away', () => {
-    const q = quoteForReply(original)
+    const q = quoteForReply(original, 'Europe/London')
     expect(q.html).toContain('Jane Smith')
     expect(q.html).toContain('<blockquote')
     expect(q.text).toContain('> Do you have them in blue?')
   })
 
   it('strips anything dangerous out of the quoted markup', () => {
-    const q = quoteForReply({ ...original, bodyHtml: '<p>hi</p><script>alert(1)</script>' })
+    const q = quoteForReply({ ...original, bodyHtml: '<p>hi</p><script>alert(1)</script>' }, 'Europe/London')
     expect(q.html).not.toContain('<script')
   })
 
   it('falls back to the text part when there is no HTML', () => {
-    const q = quoteForReply({ ...original, bodyHtml: null })
+    const q = quoteForReply({ ...original, bodyHtml: null }, 'Europe/London')
     expect(q.html).toContain('Do you have them in blue?')
   })
 
   it('a forward reproduces the original headers in the body, not in From (E12)', () => {
-    const q = quoteForForward(original)
+    const q = quoteForForward(original, 'Europe/London')
     expect(q.html).toContain('Forwarded message')
     expect(q.html).toContain('jane@customer.com')
     expect(q.text).toContain('From: Jane Smith jane@customer.com')

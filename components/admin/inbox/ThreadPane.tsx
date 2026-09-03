@@ -50,6 +50,9 @@ type Props = {
    *  Null when the channel cannot refuse anybody, which is most of them. */
   blockState: { blocked: boolean; channelLabel: string } | null
   now: Date
+  /** The site's timezone. Every clock time on this pane is stamped in it: the
+   *  server renders these, and its own clock is UTC. */
+  timezone: string
 }
 
 function formatBytes(bytes: number | null): string {
@@ -78,7 +81,7 @@ const AUTO_LABELS: Record<string, string> = {
  * know which of the two happened. Every message on a site with receipts
  * switched off has none of these, and this renders nothing.
  */
-function DeliveryReceipt({ message, now }: { message: ThreadMessageView; now: Date }) {
+function DeliveryReceipt({ message, now, timezone }: { message: ThreadMessageView; now: Date; timezone: string }) {
   const hardBounce = message.bouncedAt
     && ['hard', 'blocked', 'invalid', 'spam', 'error'].includes(message.bounceKind ?? '')
   const softBounce = message.bouncedAt && !hardBounce
@@ -109,11 +112,11 @@ function DeliveryReceipt({ message, now }: { message: ThreadMessageView; now: Da
           className="uin-tag uin-tag-done"
           title={
             message.openSource === 'receipt'
-              ? `Their email program confirmed it: ${formatFull(message.openedAt)}`
-              : `First opened ${formatFull(message.openedAt)}`
+              ? `Their email program confirmed it: ${formatFull(message.openedAt, timezone)}`
+              : `First opened ${formatFull(message.openedAt, timezone)}`
           }
         >
-          {TickIcon} Opened {formatWhen(message.openedAt, now)}
+          {TickIcon} Opened {formatWhen(message.openedAt, now, timezone)}
           {message.openCount > 1 ? ` (${message.openCount} times)` : ''}
         </span>
       ) : message.openSource === 'proxy' ? (
@@ -124,8 +127,8 @@ function DeliveryReceipt({ message, now }: { message: ThreadMessageView; now: Da
           Their email app fetched it
         </span>
       ) : message.deliveredAt && !hardBounce ? (
-        <span className="uin-tag" title={`Delivered ${formatFull(message.deliveredAt)}`}>
-          Delivered {formatWhen(message.deliveredAt, now)}
+        <span className="uin-tag" title={`Delivered ${formatFull(message.deliveredAt, timezone)}`}>
+          Delivered {formatWhen(message.deliveredAt, now, timezone)}
         </span>
       ) : null}
     </>
@@ -136,14 +139,15 @@ function DeliveryReceipt({ message, now }: { message: ThreadMessageView; now: Da
  *  thing - a time today, a weekday this week, a date after that - with the full
  *  date in the tooltip for anybody working out exactly when. The two used to
  *  disagree: the list said "Fri" and the conversation said the whole date. */
-function MessageWhen({ at, now }: { at: Date | string | null; now: Date }) {
-  return <span className="uin-msg-when" title={formatFull(at)}>{formatWhen(at, now)}</span>
+function MessageWhen({ at, now, timezone }: { at: Date | string | null; now: Date; timezone: string }) {
+  return <span className="uin-msg-when" title={formatFull(at, timezone)}>{formatWhen(at, now, timezone)}</span>
 }
 
-function MessageHeader({ message, staffById, now }: {
+function MessageHeader({ message, staffById, now, timezone }: {
   message: ThreadMessageView
   staffById: Record<string, string>
   now: Date
+  timezone: string
 }) {
   if (message.direction === 'note') {
     const author = message.authorUserId ? staffById[message.authorUserId] : null
@@ -151,7 +155,7 @@ function MessageHeader({ message, staffById, now }: {
       <div className="uin-msg-head">
         <span className="uin-msg-who">{author ?? 'Somebody here'}</span>
         <span className="uin-msg-dir">{NoteIcon} Internal note, not sent</span>
-        <MessageWhen at={message.sentAt} now={now} />
+        <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
       </div>
     )
   }
@@ -167,7 +171,7 @@ function MessageHeader({ message, staffById, now }: {
           {OutboundIcon}
           {message.toAddresses.length > 0 ? ` Sent to ${message.toAddresses.join(', ')}` : ' Sent'}
         </span>
-        <MessageWhen at={message.sentAt} now={now} />
+        <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
       </div>
     )
   }
@@ -177,7 +181,7 @@ function MessageHeader({ message, staffById, now }: {
       <span className="uin-msg-dir">
         {InboundIcon} Received{message.fromName && message.fromAddress ? ` from ${message.fromAddress}` : ''}
       </span>
-      <MessageWhen at={message.sentAt} now={now} />
+      <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
     </div>
   )
 }
@@ -197,10 +201,11 @@ function MessageText({ text }: { text: string }) {
   )
 }
 
-function Message({ message, staffById, now, canDelete }: {
+function Message({ message, staffById, now, timezone, canDelete }: {
   message: ThreadMessageView
   staffById: Record<string, string>
   now: Date
+  timezone: string
   /** Whether this reader may get rid of a message the channel owns. Decided on
    *  the server, per channel and per person - see InboxPanel. */
   canDelete: boolean
@@ -214,7 +219,7 @@ function Message({ message, staffById, now, canDelete }: {
 
   return (
     <article className={`uin-msg uin-msg-${kind}`}>
-      <MessageHeader message={message} staffById={staffById} now={now} />
+      <MessageHeader message={message} staffById={staffById} now={now} timezone={timezone} />
       {message.autoKind && (
         <div className="uin-msg-foot uin-msg-flag">
           <span className="uin-tag uin-tag-snoozed">{AUTO_LABELS[message.autoKind] ?? 'Sent automatically'}</span>
@@ -274,7 +279,7 @@ function Message({ message, staffById, now, canDelete }: {
           {message.deliveryStatus === 'sent' && (
             <>
               <span className="uin-tag uin-tag-done">{TickIcon} Sent</span>
-              <DeliveryReceipt message={message} now={now} />
+              <DeliveryReceipt message={message} now={now} timezone={timezone} />
             </>
           )}
           {message.deliveryStatus === 'failed' && (
@@ -324,7 +329,7 @@ const EVENT_WORDS: Record<string, string> = {
 export function ThreadPane({
   base, params, thread, inboxName, messages, events, staff, staffById,
   canReply, cannotReplyReason, replyTo, replyAllTo, draft, newestFirst,
-  canDeleteMessages, blockState, now,
+  canDeleteMessages, blockState, now, timezone,
 }: Props) {
   // The list arrives oldest first. Reversing a copy rather than sorting again:
   // the query already decided the order, and this only says which end to read
@@ -360,11 +365,11 @@ export function ThreadPane({
           {/* Said as a label with a date after it. "last Fri" on its own reads as
               the Friday before this one, and disagreed with the row in the list
               beside it, which says the same date as plainly "Fri". */}
-          <span title={formatFull(thread.lastMessageAt)}>
-            &middot; last message {formatWhen(thread.lastMessageAt, now)}
+          <span title={formatFull(thread.lastMessageAt, timezone)}>
+            &middot; last message {formatWhen(thread.lastMessageAt, now, timezone)}
           </span>
           {thread.status === 'snoozed' && thread.snoozeUntil && (
-            <span className="uin-tag uin-tag-snoozed">Back {formatWhen(thread.snoozeUntil, now)}</span>
+            <span className="uin-tag uin-tag-snoozed">Back {formatWhen(thread.snoozeUntil, now, timezone)}</span>
           )}
           {thread.status === 'done' && <span className="uin-tag uin-tag-done">Done</span>}
         </div>
@@ -374,6 +379,7 @@ export function ThreadPane({
           unread={thread.unread}
           assigneeUserId={thread.assigneeUserId}
           staff={staff}
+          timezone={timezone}
         />
         {/* Beside what is done TO the conversation, because that is what this
             is: it changes what happens next, not what is in the thread. */}
@@ -425,7 +431,7 @@ export function ThreadPane({
         ) : (
           <div className="uin-messages">
             {ordered.map((message) => (
-              <Message key={message.id} message={message} staffById={staffById} now={now} canDelete={canDeleteMessages} />
+              <Message key={message.id} message={message} staffById={staffById} now={now} timezone={timezone} canDelete={canDeleteMessages} />
             ))}
           </div>
         )}
@@ -452,7 +458,7 @@ export function ThreadPane({
                   {(event.userId && staffById[event.userId]) || 'Somebody'}{' '}
                   {EVENT_WORDS[event.kind] ?? 'changed something'}
                   {' - '}
-                  {formatFull(event.createdAt)}
+                  {formatFull(event.createdAt, timezone)}
                 </li>
               ))}
             </ul>

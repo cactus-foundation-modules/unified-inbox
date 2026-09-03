@@ -36,6 +36,7 @@ import {
   type ReplyMode,
 } from './compose'
 import { normaliseAddress, isValidAddress } from './addresses'
+import { getSiteTimezone } from '@/lib/config/timezone'
 import { normaliseSubject, buildSnippet, cleanMessageId } from './threading'
 import { htmlToText } from './html'
 import { buildRawMessage } from './mime'
@@ -191,6 +192,9 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
   if (!inbox) return { ok: false, reason: 'That inbox no longer exists.' }
 
   const parent = prepared.parent
+  // The quoted original carries a time the recipient will read, so it is stamped
+  // in the site's own zone rather than the server's.
+  const timezone = await getSiteTimezone()
   const quoted =
     request.mode === 'forward' && parent
       ? quoteForForward({
@@ -201,7 +205,7 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
           subject: parent.subject,
           bodyText: parent.bodyText,
           bodyHtml: parent.bodyHtml,
-        })
+        }, timezone)
       : parent && (request.mode === 'reply' || request.mode === 'reply-all')
         ? quoteForReply({
             sentAt: parent.sentAt,
@@ -211,7 +215,7 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
             subject: parent.subject,
             bodyText: parent.bodyText,
             bodyHtml: parent.bodyHtml,
-          })
+          }, timezone)
         : null
 
   // Whoever pressed Send may have an address of their own, and its signature is

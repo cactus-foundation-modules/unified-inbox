@@ -4,6 +4,7 @@ import type {
 } from './types'
 import { SECTION_LIMIT, SUGGEST_LIMIT } from './types'
 import { detailLine, humanStatus, inList, likeTerm, money, shortDate, toDate } from './format'
+import { getSiteTimezone } from '@/lib/config/timezone'
 
 // Purchasing's side of the person: which supplier they are, what is on order
 // with them, and what they have billed us for that is not settled.
@@ -30,6 +31,7 @@ export const purchaseOrdersAdapter: ContextAdapter = {
   linkLabel: 'Purchase order',
 
   async load(query: ContextQuery): Promise<ContextSection | null> {
+    const tz = await getSiteTimezone()
     if (query.emails.length === 0 && query.domains.length === 0) return null
 
     const suppliers = await prisma.$queryRaw<{ id: string; name: string }[]>`
@@ -77,7 +79,7 @@ export const purchaseOrdersAdapter: ContextAdapter = {
         title: (r.number as string) || 'Purchase order',
         detail: detailLine(
           money(r.total, r.currency as string),
-          r.expected_date ? `due ${shortDate(r.expected_date)}` : shortDate(r.raised_date),
+          r.expected_date ? `due ${shortDate(r.expected_date, tz)}` : shortDate(r.raised_date, tz),
         ),
         status: humanStatus(r.status),
         at: toDate(r.raised_date),
@@ -88,7 +90,7 @@ export const purchaseOrdersAdapter: ContextAdapter = {
         title: `Bill ${(r.supplier_invoice_number as string) || ''}`.trim(),
         detail: detailLine(
           money(r.total, r.currency as string),
-          r.due_date ? `due ${shortDate(r.due_date)}` : null,
+          r.due_date ? `due ${shortDate(r.due_date, tz)}` : null,
         ),
         status: humanStatus(r.status),
         at: toDate(r.due_date),
@@ -133,6 +135,7 @@ export const purchaseOrdersAdapter: ContextAdapter = {
    * reference for the job is not ours to search.
    */
   async suggest(kind, term, query): Promise<LinkSuggestion[]> {
+    const tz = await getSiteTimezone()
     if (kind !== 'po') return []
     const trimmed = term.trim()
     const like = likeTerm(trimmed)
@@ -165,7 +168,7 @@ export const purchaseOrdersAdapter: ContextAdapter = {
       detail: detailLine(
         (r.supplier_name as string) || null,
         money(r.total, r.currency as string),
-        r.expected_date ? `due ${shortDate(r.expected_date)}` : shortDate(r.raised_date),
+        r.expected_date ? `due ${shortDate(r.expected_date, tz)}` : shortDate(r.raised_date, tz),
       ),
       status: humanStatus(r.status),
     })).filter((row) => row.reference.length > 0)

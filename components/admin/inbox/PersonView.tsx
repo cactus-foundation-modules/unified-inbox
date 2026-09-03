@@ -3,6 +3,7 @@ import type { ContextSection } from '@/modules/unified-inbox/lib/adapters'
 import type { OutboundLogRow, ThreadListRow, PersonEventRow, MergeRow } from '@/modules/unified-inbox/lib/db'
 import type { Person, PersonIdentity, RecordLink } from '@/modules/unified-inbox/lib/types'
 import { channelLabel, formatFull, formatWhen, inboxHref, participantLabel } from '@/modules/unified-inbox/lib/list'
+import { formatInSiteTimezone } from '@/lib/config/timezone'
 import { BackIcon, InboundIcon, OutboundIcon } from './icons'
 import { PersonActionsBar, PersonActionsPanels, PersonActionsProvider } from './PersonActions'
 import { ContextRail } from './ContextRail'
@@ -35,6 +36,9 @@ type Props = {
   canEdit: boolean
   canManage: boolean
   now: Date
+  /** The site's timezone - this view is server-rendered, so nothing here may
+   *  lean on the machine's own clock. */
+  timezone: string
 }
 
 type TimelineItem =
@@ -59,11 +63,9 @@ function buildTimeline(threads: ThreadListRow[], outbound: OutboundLogRow[]): Ti
 
 /** A date with no clock on it. When somebody first wrote in is a fact about a
  *  day, and a weekday and a time of day only make it harder to read. */
-function formatDay(value: Date | string | null): string {
+function formatDay(value: Date | string | null, timezone: string): string {
   if (!value) return ''
-  const date = value instanceof Date ? value : new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+  return formatInSiteTimezone(value, timezone, { day: 'numeric', month: 'long', year: 'numeric' })
 }
 
 /** What one line of the record says. Everything written against a person today
@@ -81,11 +83,11 @@ function describeEvent(event: PersonEventRow): string {
 
 export function PersonView({
   adminPath, base, params, person, identities, threads, outbound, sections, links,
-  events, merges, alsoHere, staffById, canEdit, canManage, now,
+  events, merges, alsoHere, staffById, canEdit, canManage, now, timezone,
 }: Props) {
   const timeline = buildTimeline(threads, outbound)
   const name = person.displayName || person.primaryEmail || 'Somebody'
-  const knownSince = formatDay(person.createdAt)
+  const knownSince = formatDay(person.createdAt, timezone)
   const cappedThreads = threads.length >= THREAD_CAP
   const cappedOutbound = outbound.length >= OUTBOUND_CAP
   const stopsAt = [
@@ -193,7 +195,7 @@ export function PersonView({
                             {item.row.unread && <span className="uin-tag">Unread</span>}
                           </div>
                           <span className="uin-ctx-sub">
-                            {participantLabel(item.row)} &middot; {formatWhen(item.at, now)}
+                            {participantLabel(item.row)} &middot; {formatWhen(item.at, now, timezone)}
                           </span>
                         </li>
                       ) : (
@@ -209,7 +211,7 @@ export function PersonView({
                             )}
                           </div>
                           <span className="uin-ctx-sub">
-                            {item.row.toAddress} &middot; {formatWhen(item.at, now)}
+                            {item.row.toAddress} &middot; {formatWhen(item.at, now, timezone)}
                           </span>
                         </li>
                       ),
@@ -242,7 +244,7 @@ export function PersonView({
                         {(event.userId && staffById[event.userId]) || 'Somebody'}{' '}
                         {describeEvent(event)}
                         {' - '}
-                        {formatFull(event.createdAt)}
+                        {formatFull(event.createdAt, timezone)}
                       </li>
                     ))}
                   </ul>

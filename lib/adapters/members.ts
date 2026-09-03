@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db/prisma'
 import type { ContextAdapter, ContextItem, ContextQuery, ContextSection } from './types'
 import { detailLine, humanStatus, shortDate, toDate } from './format'
+import { getSiteTimezone } from '@/lib/config/timezone'
 
 // The member account behind the address, if the person has one.
 //
@@ -16,6 +17,7 @@ export const membersAdapter: ContextAdapter = {
   tables: [],
 
   async load(query: ContextQuery): Promise<ContextSection | null> {
+    const tz = await getSiteTimezone()
     if (query.emails.length === 0) return null
 
     const rows = await prisma.member.findMany({
@@ -37,7 +39,7 @@ export const membersAdapter: ContextAdapter = {
     const items: ContextItem[] = rows.map((m) => ({
       id: m.id,
       title: m.fullName || m.displayName || m.username,
-      detail: detailLine(m.organisation, `joined ${shortDate(m.createdAt)}`),
+      detail: detailLine(m.organisation, `joined ${shortDate(m.createdAt, tz)}`),
       status: humanStatus(m.status),
       at: toDate(m.createdAt),
       href: `members/${m.id}`,

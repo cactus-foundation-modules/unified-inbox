@@ -4,6 +4,7 @@ import type {
 } from './types'
 import { SECTION_LIMIT, SUGGEST_LIMIT } from './types'
 import { detailLine, humanStatus, inList, likeTerm, shortDate, toDate } from './format'
+import { getSiteTimezone } from '@/lib/config/timezone'
 
 // Quotes this person has asked for, matched on the address they gave. Only the
 // ones still live: a quote that was won became an order and shows up under the
@@ -20,6 +21,7 @@ export const quotesAdapter: ContextAdapter = {
   linkLabel: 'Quote',
 
   async load(query: ContextQuery): Promise<ContextSection | null> {
+    const tz = await getSiteTimezone()
     if (query.emails.length === 0) return null
 
     const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
@@ -43,8 +45,8 @@ export const quotesAdapter: ContextAdapter = {
       id: r.id as string,
       title: (r.quote_number as string) || 'Quote',
       detail: detailLine(
-        shortDate(r.created_at),
-        r.expires_at ? `runs out ${shortDate(r.expires_at)}` : null,
+        shortDate(r.created_at, tz),
+        r.expires_at ? `runs out ${shortDate(r.expires_at, tz)}` : null,
       ),
       status: humanStatus(r.status),
       at: toDate(r.created_at),
@@ -82,6 +84,7 @@ export const quotesAdapter: ContextAdapter = {
    *  this does not hide the settled ones: a conversation about a quote that was
    *  turned down is exactly the conversation somebody wants it attached to. */
   async suggest(kind, term, query): Promise<LinkSuggestion[]> {
+    const tz = await getSiteTimezone()
     if (kind !== 'quote') return []
     const trimmed = term.trim()
     const like = likeTerm(trimmed)
@@ -108,7 +111,7 @@ export const quotesAdapter: ContextAdapter = {
       reference: (r.quote_number as string) || '',
       label: `Quote ${(r.quote_number as string) || ''}`.trim(),
       href: `m/quote-for-shop/quotes/${r.id as string}`,
-      detail: detailLine((r.customer_name as string) || null, shortDate(r.created_at)),
+      detail: detailLine((r.customer_name as string) || null, shortDate(r.created_at, tz)),
       status: humanStatus(r.status),
     })).filter((row) => row.reference.length > 0)
   },

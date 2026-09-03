@@ -15,6 +15,9 @@ type Props = {
   unread: boolean
   assigneeUserId: string | null
   staff: Array<{ id: string; name: string }>
+  /** The site's timezone, so "tomorrow morning" is nine o'clock here rather
+   *  than nine o'clock UTC. */
+  timezone: string
 }
 
 /** Now, written the way a datetime-local box writes it: local time, minutes,
@@ -26,7 +29,7 @@ function localNow(): string {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`
 }
 
-export function ThreadActions({ threadId, status, unread, assigneeUserId, staff }: Props) {
+export function ThreadActions({ threadId, status, unread, assigneeUserId, staff, timezone }: Props) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -145,7 +148,7 @@ export function ThreadActions({ threadId, status, unread, assigneeUserId, staff 
 
       {snoozing && (
         <div className="uin-thread-actions" id="uin-snooze-panel">
-          {snoozeOptions(new Date()).map((option) => (
+          {snoozeOptions(new Date(), timezone).map((option) => (
             <button
               key={option.id}
               type="button"

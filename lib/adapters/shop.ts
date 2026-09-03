@@ -4,6 +4,7 @@ import type {
 } from './types'
 import { SECTION_LIMIT, SUGGEST_LIMIT } from './types'
 import { detailLine, humanStatus, inList, likeTerm, money, shortDate, toDate } from './format'
+import { getSiteTimezone } from '@/lib/config/timezone'
 
 // What the shop knows about this person: their orders, newest first.
 //
@@ -21,6 +22,7 @@ export const shopAdapter: ContextAdapter = {
   linkLabel: 'Order',
 
   async load(query: ContextQuery): Promise<ContextSection | null> {
+    const tz = await getSiteTimezone()
     if (query.emails.length === 0) return null
 
     const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
@@ -42,7 +44,7 @@ export const shopAdapter: ContextAdapter = {
     const items: ContextItem[] = rows.map((r) => ({
       id: r.id as string,
       title: (r.order_number as string) || 'Order',
-      detail: detailLine(money(r.total, r.currency as string), shortDate(r.created_at)),
+      detail: detailLine(money(r.total, r.currency as string), shortDate(r.created_at, tz)),
       status: paymentAwareStatus(r.status, r.payment_status),
       at: toDate(r.created_at),
       href: `m/shop/orders/${r.id as string}`,
@@ -84,6 +86,7 @@ export const shopAdapter: ContextAdapter = {
    * exactly and half of one of them.
    */
   async suggest(kind, term, query): Promise<LinkSuggestion[]> {
+    const tz = await getSiteTimezone()
     if (kind !== 'order') return []
     const trimmed = term.trim()
     const like = likeTerm(trimmed)
@@ -113,7 +116,7 @@ export const shopAdapter: ContextAdapter = {
       detail: detailLine(
         (r.customer_name as string) || null,
         money(r.total, r.currency as string),
-        shortDate(r.created_at),
+        shortDate(r.created_at, tz),
       ),
       status: paymentAwareStatus(r.status, r.payment_status),
     })).filter((row) => row.reference.length > 0)

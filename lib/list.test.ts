@@ -156,21 +156,46 @@ describe('formatWhen', () => {
   const now = new Date('2026-08-28T15:00:00Z')
 
   it('shows a clock for today and a date for last year', () => {
-    expect(formatWhen(new Date('2026-08-28T09:30:00Z'), now)).toMatch(/\d{2}:\d{2}/)
-    expect(formatWhen(new Date('2025-01-05T09:30:00Z'), now)).toMatch(/2025/)
+    expect(formatWhen(new Date('2026-08-28T09:30:00Z'), now, 'Europe/London')).toMatch(/\d{2}:\d{2}/)
+    expect(formatWhen(new Date('2025-01-05T09:30:00Z'), now, 'Europe/London')).toMatch(/2025/)
   })
 
   it('says nothing rather than "Invalid Date" for a conversation with no messages', () => {
-    expect(formatWhen(null, now)).toBe('')
+    expect(formatWhen(null, now, 'Europe/London')).toBe('')
+  })
+
+  it('gives the time in the site timezone, not the server one', () => {
+    // 09:30 UTC is half past ten in a British summer. Rendered on the server's
+    // own clock this said 09:30, an hour before the message actually arrived.
+    expect(formatWhen(new Date('2026-08-28T09:30:00Z'), now, 'Europe/London')).toBe('10:30')
+    expect(formatWhen(new Date('2026-08-28T09:30:00Z'), now, 'UTC')).toBe('09:30')
+  })
+
+  it('counts "today" by the site calendar, so a small-hours message is not filed under yesterday', () => {
+    // 23:30 UTC is already 00:30 on the 29th in London.
+    const justAfterMidnight = new Date('2026-08-28T23:30:00Z')
+    const londonNow = new Date('2026-08-29T08:00:00Z')
+    expect(formatWhen(justAfterMidnight, londonNow, 'Europe/London')).toBe('00:30')
+    // In UTC the same instant belongs to the previous day, so it reads as a weekday.
+    expect(formatWhen(justAfterMidnight, londonNow, 'UTC')).toBe('Fri')
   })
 })
 
 describe('snoozeOptions', () => {
   it('offers three answers, all of them in the future', () => {
     const now = new Date('2026-08-28T15:00:00Z')
-    const options = snoozeOptions(now)
+    const options = snoozeOptions(now, 'Europe/London')
     expect(options).toHaveLength(3)
     for (const option of options) expect(option.until.getTime()).toBeGreaterThan(now.getTime())
+  })
+
+  it('brings a thread back at nine in the morning here, not nine UTC', () => {
+    const now = new Date('2026-08-28T15:00:00Z')
+    const tomorrow = snoozeOptions(now, 'Europe/London').find((o) => o.id === 'tomorrow')!
+    // 08:00 UTC is 09:00 British Summer Time.
+    expect(tomorrow.until.toISOString()).toBe('2026-08-29T08:00:00.000Z')
+    const week = snoozeOptions(now, 'Europe/London').find((o) => o.id === 'week')!
+    expect(week.until.toISOString()).toBe('2026-09-04T08:00:00.000Z')
   })
 })
 

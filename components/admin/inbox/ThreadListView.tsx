@@ -50,6 +50,9 @@ type Props = {
   canManage: boolean
   searching: boolean
   now: Date
+  /** The site's timezone, handed down by the server-rendered panel so this
+   *  list and the thread beside it never disagree about what time it is. */
+  timezone: string
 }
 
 const CHANNEL_ICONS: Record<string, React.ReactNode> = {
@@ -73,7 +76,7 @@ function ChannelBadge({ channel }: { channel: string }) {
 }
 
 export function ThreadListView({
-  base, params, rows, total, page, openThreadId, staffById, neverSynced, canManage, searching, now,
+  base, params, rows, total, page, openThreadId, staffById, neverSynced, canManage, searching, now, timezone,
 }: Props) {
   const router = useRouter()
   const pages = pageCount(total, PER_PAGE)
@@ -254,7 +257,7 @@ export function ThreadListView({
                         one of those. */}
                     {assignee && <span className="uin-tag"><span className="uin-tag-text">{assignee}</span></span>}
                   </span>
-                  <span>{formatWhen(row.lastMessageAt, now)}</span>
+                  <span>{formatWhen(row.lastMessageAt, now, timezone)}</span>
                 </span>
               </Link>
             </li>

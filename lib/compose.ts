@@ -1,5 +1,6 @@
 import { nanoid } from 'nanoid'
 import { sanitizeEmailHtml } from '@/lib/sanitize'
+import { formatInSiteTimezone } from '@/lib/config/timezone'
 import { normaliseAddress, addressDomain, isValidAddress } from './addresses'
 import { CUSTOM_TAG_HEADER, READ_RECEIPT_HEADER, customTagFor } from './receipts'
 import { htmlToText } from './html'
@@ -185,12 +186,18 @@ function escapeHtml(value: string): string {
 
 /** "On 3 March 2026 at 14:05, Jane Smith wrote:" - the line every mail client
  *  puts above quoted text, so a customer's own client folds it away. */
-export function attributionLine(original: {
-  sentAt: Date
-  fromName: string | null
-  fromAddress: string | null
-}): string {
-  const when = original.sentAt.toLocaleString('en-GB', {
+export function attributionLine(
+  original: {
+    sentAt: Date
+    fromName: string | null
+    fromAddress: string | null
+  },
+  timezone: string,
+): string {
+  // This line goes out in an email with the site's name on it, quoting a time
+  // back at the person who sent it. Formatted on the server's clock it says UTC,
+  // which for most of the year is an hour before they actually pressed send.
+  const when = formatInSiteTimezone(original.sentAt, timezone, {
     day: 'numeric',
     month: 'long',
     year: 'numeric',
@@ -214,8 +221,8 @@ export type QuotedOriginal = {
 /** The original, quoted under a reply. Sanitised again on the way out: it is
  *  still third-party markup, and it is about to be sent somewhere with this
  *  site's name on it. */
-export function quoteForReply(original: QuotedOriginal): { html: string; text: string } {
-  const attribution = attributionLine(original)
+export function quoteForReply(original: QuotedOriginal, timezone: string): { html: string; text: string } {
+  const attribution = attributionLine(original, timezone)
   const html = original.bodyHtml
     ? sanitizeEmailHtml(original.bodyHtml)
     : `<p>${escapeHtml(original.bodyText ?? '').replace(/\n/g, '<br />')}</p>`
@@ -235,10 +242,12 @@ export function quoteForReply(original: QuotedOriginal): { html: string; text: s
  * this site sending as a domain it does not own, which fails DMARC and costs
  * the site its sending reputation (E12).
  */
-export function quoteForForward(original: QuotedOriginal): { html: string; text: string } {
+export function quoteForForward(original: QuotedOriginal, timezone: string): { html: string; text: string } {
   const rows: Array<[string, string]> = [
     ['From', [original.fromName, original.fromAddress].filter(Boolean).join(' ') || 'unknown'],
-    ['Date', original.sentAt.toLocaleString('en-GB')],
+    ['Date', formatInSiteTimezone(original.sentAt, timezone, {
+      day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    })],
     ['Subject', original.subject ?? '(no subject)'],
     ['To', original.toAddresses.join(', ') || 'unknown'],
   ]
