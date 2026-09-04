@@ -1,6 +1,6 @@
 {
   "name": "unified-inbox",
-  "version": "0.1.43",
+  "version": "0.1.44",
   "tablePrefix": "uin_",
   "description": "Every conversation with every customer and supplier in one place - email, live chat, contact form, calls and texts - with your own records beside them.",
   "requiresCoreVersion": "0.5.1470",
@@ -58,6 +58,13 @@
       "serverOnly": true,
       "import": "./lib/outbound-identity",
       "component": "unifiedInboxOutboundIdentity"
+    },
+    {
+      "point": "core.outbound-email-record",
+      "id": "unified-inbox",
+      "serverOnly": true,
+      "import": "./lib/outbound-record",
+      "component": "unifiedInboxOutboundRecord"
     }
   ],
   "consumesConversationProviders": true,

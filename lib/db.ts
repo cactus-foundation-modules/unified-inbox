@@ -1445,7 +1445,9 @@ export type OutboundMessageInput = {
   snippet: string
   hasAttachments: boolean
   sizeBytes: number | null
-  authorUserId: string
+  /** Null for a message no person typed - a module's automatic mail, kept in
+   *  the inbox it went out from so the reply has something to sit under. */
+  authorUserId: string | null
 }
 
 export type OutboundMessageRow = {

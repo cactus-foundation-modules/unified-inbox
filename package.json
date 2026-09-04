@@ -1,6 +1,6 @@
 {
   "name": "cactus-module-unified-inbox",
-  "version": "0.1.43",
+  "version": "0.1.44",
   "description": "Unified Inbox - every conversation with every customer and supplier in one place, for Cactus sites",
   "license": "MIT",
   "private": true
