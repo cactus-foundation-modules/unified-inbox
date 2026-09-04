@@ -95,6 +95,28 @@ describe('routeToInbox', () => {
     expect(routeToInbox({ to: ['nobody@elsewhere.com'] }, inboxes.slice(0, 2)))
       .toEqual({ inboxId: null, matchedOn: 'none' })
   })
+
+  it('gives the folder its post when the folder owns everything in it', () => {
+    // The email dragged into the purchasing folder by hand, addressed to an
+    // older address of the owner's that this site has never served.
+    expect(routeToInbox({ to: ['chris@dwoffice.furniture'] }, inboxes.slice(0, 2), 'marcus'))
+      .toEqual({ inboxId: 'marcus', matchedOn: 'folder' })
+  })
+
+  it('lets a named address beat the folder it was found in', () => {
+    expect(routeToInbox({ to: ['hi@deskwell.co.uk'] }, inboxes, 'marcus'))
+      .toEqual({ inboxId: 'hi', matchedOn: 'to' })
+  })
+
+  it('lets the folder beat the catch-all', () => {
+    expect(routeToInbox({ to: ['nobody@elsewhere.com'] }, inboxes, 'marcus'))
+      .toEqual({ inboxId: 'marcus', matchedOn: 'folder' })
+  })
+
+  it('ignores a folder owner that is not one of the inboxes being routed to', () => {
+    expect(routeToInbox({ to: ['nobody@elsewhere.com'] }, inboxes.slice(0, 2), 'gone'))
+      .toEqual({ inboxId: null, matchedOn: 'none' })
+  })
 })
 
 describe('routeSentToInbox', () => {
@@ -294,6 +316,31 @@ describe('placeMessage', () => {
       headers: { to: ['"Emma Scott" <Emma@Deskwell.co.uk>'] },
       inboxes,
     })).toEqual({ direction: 'in', routing: { inboxId: 'emma', matchedOn: 'to' } })
+  })
+
+  it('gives a stranger\u2019s email to the inbox that owns the folder it was filed in', () => {
+    expect(placeMessage({
+      inSentFolder: false,
+      fromAddress: 'supplier@example.com',
+      ownAddresses,
+      headers: { to: ['chris@dwoffice.furniture'] },
+      inboxes: [chris, emma],
+      folderInboxId: 'emma',
+    })).toEqual({ direction: 'in', routing: { inboxId: 'emma', matchedOn: 'folder' } })
+  })
+
+  it('does not turn our own mail into a colleague\u2019s post just by where it sits', () => {
+    // Owning a folder settles WHOSE conversation a message joins, never which
+    // way it faces. A reply we sent, filed in a folder that owns its post, is
+    // still something we sent.
+    expect(placeMessage({
+      inSentFolder: false,
+      fromAddress: 'chris@deskwell.co.uk',
+      ownAddresses,
+      headers: { to: ['customer@example.com'] },
+      inboxes,
+      folderInboxId: 'emma',
+    })).toEqual({ direction: 'out', routing: { inboxId: 'chris', matchedOn: 'from' } })
   })
 
   // The live regression, 2 September 2026. chris@deskwell.co.uk wrote to

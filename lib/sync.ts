@@ -53,6 +53,7 @@ import {
   backfillFloor,
   backfillRange,
   filterNewUids,
+  folderOwnersFor,
   forwardRange,
   makeDeadline,
   outOfTime,
@@ -230,6 +231,7 @@ export async function syncConnection(
     const settings = await getSettings()
     const floor = backfillFloor(settings.backfillMonths)
     const routing = routableInboxes(allInboxes, mine)
+    const folderOwners = folderOwnersFor(mine)
     const ownAddresses = new Set([
       ...mine.map((i) => normaliseAddress(i.address)),
       normaliseAddress(connection.imapUsername),
@@ -252,6 +254,7 @@ export async function syncConnection(
         deadline,
         floor,
         routing,
+        folderInboxId: folderOwners.get(folder.path.toLowerCase()) ?? null,
         ownAddresses,
         discardUnrouted: connection.discardUnrouted,
         siteSendingAddress,
@@ -330,6 +333,9 @@ type FolderContext = {
   deadline: number
   floor: Date
   routing: RoutableInbox[]
+  /** The inbox that owns everything in this folder, when one has been told it
+   *  does. Null for every folder that routes by address alone. */
+  folderInboxId: string | null
   ownAddresses: Set<string>
   /** This account is set to drop mail addressed to none of the site's own
    *  addresses, rather than keep it out of the way in Unrouted. */
@@ -725,6 +731,7 @@ async function fileMessage(
     ownAddresses: ctx.ownAddresses,
     headers: { deliveredTo, to, cc },
     inboxes: ctx.routing,
+    folderInboxId: ctx.folderInboxId,
   })
 
   const automated = classifyAutomated({

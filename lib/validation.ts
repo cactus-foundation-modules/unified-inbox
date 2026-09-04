@@ -10,6 +10,7 @@ export const InboxBody = z.object({
   imapFolder: z.string().min(1).max(255).optional(),
   sentFolder: z.string().max(255).nullable().optional(),
   isCatchAll: z.boolean().optional(),
+  folderOwnsMail: z.boolean().optional(),
   sendTransport: z.enum(['brevo', 'smtp']).optional(),
   brevoApiKey: z.string().nullable().optional(),
   smtpHost: z.string().max(255).nullable().optional(),

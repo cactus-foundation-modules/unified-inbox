@@ -4,6 +4,7 @@ import {
   backfillFloor,
   backfillRange,
   filterNewUids,
+  folderOwnersFor,
   forwardRange,
   planFolders,
   outOfTime,
@@ -215,5 +216,30 @@ describe('the tick fits inside the slice it is given', () => {
     const mailWasQuick = started + 2_000
     const deadline = Math.min(mailWasQuick + PROVIDER_BUDGET_MS, started + CRON_TICK_DEADLINE_MS)
     expect(deadline).toBe(mailWasQuick + PROVIDER_BUDGET_MS)
+  })
+})
+
+describe('folderOwnersFor', () => {
+  const owning = (id: string, imapFolder: string, folderOwnsMail = true) =>
+    ({ id, imapFolder, folderOwnsMail })
+
+  it('keys a claimed folder by its name in lower case', () => {
+    expect(folderOwnersFor([owning('purchasing', 'Purchasing')]))
+      .toEqual(new Map([['purchasing', 'purchasing']]))
+  })
+
+  it('ignores an inbox that has not claimed its folder', () => {
+    expect(folderOwnersFor([owning('sales', 'INBOX', false)])).toEqual(new Map())
+  })
+
+  it('lets nobody own a folder two addresses have both claimed', () => {
+    // Filing a customer's mail on a coin toss is worse than not filing it, so
+    // the folder claims nothing and the addresses decide as they always did.
+    const owners = folderOwnersFor([owning('a', 'Shared'), owning('b', 'shared')])
+    expect(owners.get('shared')).toBeNull()
+  })
+
+  it('ignores a folder name that is nothing but spaces', () => {
+    expect(folderOwnersFor([owning('blank', '   ')])).toEqual(new Map())
   })
 })

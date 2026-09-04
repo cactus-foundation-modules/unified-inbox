@@ -38,6 +38,7 @@ export type Inbox = {
   imapFolder: string
   sentFolder: string | null
   isCatchAll: boolean
+  folderOwnsMail: boolean
   sendTransport: 'brevo' | 'smtp'
   hasBrevoKey: boolean
   smtpHost: string | null

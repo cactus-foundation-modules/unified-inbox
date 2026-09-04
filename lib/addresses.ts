@@ -52,17 +52,27 @@ export type RoutingDecision = {
   inboxId: string | null
   /** Which header settled it, for the "why did this land here?" question that
    *  always follows a message turning up in the wrong place. */
-  matchedOn: 'delivered-to' | 'to' | 'cc' | 'from' | 'catch-all' | 'none'
+  matchedOn: 'delivered-to' | 'to' | 'cc' | 'from' | 'folder' | 'catch-all' | 'none'
 }
 
 /**
  * Which inbox a message belongs to (D11): the delivered-to address wins, then
- * the To line, then the Cc line, then the catch-all. Nothing else - no sender
- * rules, no subject rules, and no guessing.
+ * the To line, then the Cc line, then the folder it was found in where that
+ * folder has been told it owns its post, then the catch-all. Nothing else - no
+ * sender rules, no subject rules, and no guessing.
+ *
+ * `folderInboxId` is the inbox that reads the folder this message was found in,
+ * and only ever set when that inbox has "everything in this folder is mine"
+ * turned on. It sits below the address passes deliberately: an email that names
+ * one of our addresses outright belongs to that address whichever folder
+ * somebody has since dragged it into. It sits above the catch-all for the same
+ * reason - a folder somebody files by hand is a stronger statement than a
+ * sweep-up rule that was never about this message at all.
  */
 export function routeToInbox(
   headers: { deliveredTo?: string[]; to?: string[]; cc?: string[] },
-  inboxes: RoutableInbox[]
+  inboxes: RoutableInbox[],
+  folderInboxId?: string | null
 ): RoutingDecision {
   const byAddress = new Map(inboxes.map((i) => [normaliseAddress(i.address), i]))
   const passes: Array<[RoutingDecision['matchedOn'], string[]]> = [
@@ -75,6 +85,10 @@ export function routeToInbox(
       const inbox = byAddress.get(normaliseAddress(address))
       if (inbox) return { inboxId: inbox.id, matchedOn }
     }
+  }
+  if (folderInboxId) {
+    const owner = inboxes.find((i) => i.id === folderInboxId)
+    if (owner) return { inboxId: owner.id, matchedOn: 'folder' }
   }
   const catchAll = inboxes.find((i) => i.isCatchAll)
   return catchAll
@@ -93,14 +107,15 @@ export function routeToInbox(
 export function routeSentToInbox(
   fromAddresses: string[],
   headers: { deliveredTo?: string[]; to?: string[]; cc?: string[] },
-  inboxes: RoutableInbox[]
+  inboxes: RoutableInbox[],
+  folderInboxId?: string | null
 ): RoutingDecision {
   const byAddress = new Map(inboxes.map((i) => [normaliseAddress(i.address), i]))
   for (const address of fromAddresses) {
     const inbox = byAddress.get(normaliseAddress(address))
     if (inbox) return { inboxId: inbox.id, matchedOn: 'from' }
   }
-  return routeToInbox(headers, inboxes)
+  return routeToInbox(headers, inboxes, folderInboxId)
 }
 
 /**
@@ -174,27 +189,35 @@ export function placeMessage(input: {
   ownAddresses: Iterable<string>
   headers: { deliveredTo?: string[]; to?: string[]; cc?: string[] }
   inboxes: RoutableInbox[]
+  /** The inbox that reads the folder this copy was found in, when that inbox
+   *  owns its folder's post. Never enough on its own to make a message somebody
+   *  else's post: it is not in NAMED_RECIPIENT, so a message from one of our
+   *  own addresses stays outbound and is simply filed where it was found. */
+  folderInboxId?: string | null
 }): MessagePlacement {
   const from = input.fromAddress ? normaliseAddress(input.fromAddress) : null
 
   if (input.inSentFolder) {
     return {
       direction: 'out',
-      routing: routeSentToInbox(from ? [from] : [], input.headers, input.inboxes),
+      routing: routeSentToInbox(from ? [from] : [], input.headers, input.inboxes, input.folderInboxId),
     }
   }
 
   const own = new Set(Array.from(input.ownAddresses, normaliseAddress))
   if (from === null || !own.has(from)) {
-    return { direction: 'in', routing: routeToInbox(input.headers, input.inboxes) }
+    return { direction: 'in', routing: routeToInbox(input.headers, input.inboxes, input.folderInboxId) }
   }
 
-  const colleague = routeToInbox(withoutSender(input.headers, from), input.inboxes)
+  const colleague = routeToInbox(withoutSender(input.headers, from), input.inboxes, input.folderInboxId)
   if (NAMED_RECIPIENT.includes(colleague.matchedOn)) {
     return { direction: 'in', routing: colleague }
   }
 
-  return { direction: 'out', routing: routeSentToInbox([from], input.headers, input.inboxes) }
+  return {
+    direction: 'out',
+    routing: routeSentToInbox([from], input.headers, input.inboxes, input.folderInboxId),
+  }
 }
 
 /** One inbox's stake in a message, and which way the message reads from there. */

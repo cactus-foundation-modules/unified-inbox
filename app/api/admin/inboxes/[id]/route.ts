@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
-import { addressTakenBy, deleteInbox, getInbox, updateInbox } from '@/modules/unified-inbox/lib/db'
+import { adoptUnroutedFolderMail, addressTakenBy, deleteInbox, getInbox, updateInbox } from '@/modules/unified-inbox/lib/db'
 import { isValidAddress } from '@/modules/unified-inbox/lib/addresses'
 import { InboxPatchBody } from '@/modules/unified-inbox/lib/validation'
 import { cleanSignatureHtml } from '@/modules/unified-inbox/lib/signature'
@@ -14,7 +14,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   if (!await hasPermission(user, 'unifiedinbox.manage')) return errorResponse('Forbidden', 403)
 
   const { id } = await params
-  if (!await getInbox(id)) return errorResponse('That inbox no longer exists.', 404)
+  const before = await getInbox(id)
+  if (!before) return errorResponse('That inbox no longer exists.', 404)
 
   const parsed = InboxPatchBody.safeParse(await request.json().catch(() => null))
   if (!parsed.success) return errorResponse('Those inbox details do not look right.')
@@ -32,7 +33,17 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       : {}),
   })
   if (!inbox) return errorResponse('That inbox no longer exists.', 404)
-  return NextResponse.json({ inbox, senderWarning: await senderWarningFor(inbox) })
+
+  // Switching the folder rule ON also sweeps up what is already sitting in that
+  // folder with nowhere to go. Somebody turning this on has a specific email in
+  // mind, and that email was collected before the setting existed - a message
+  // is read once and never asked about again, so nothing else would ever go
+  // back for it.
+  const adopted = inbox.folderOwnsMail && !before.folderOwnsMail
+    ? await adoptUnroutedFolderMail(inbox.id)
+    : 0
+
+  return NextResponse.json({ inbox, adopted, senderWarning: await senderWarningFor(inbox) })
 }
 
 export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {

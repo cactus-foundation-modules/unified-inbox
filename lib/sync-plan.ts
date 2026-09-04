@@ -86,6 +86,31 @@ export function planFolders(input: {
   return out
 }
 
+/** The two fields the answer below depends on. Deliberately not `Inbox`: this
+ *  file is the arithmetic of a sync and has no business importing a row type. */
+export type FolderOwning = { id: string; imapFolder: string; folderOwnsMail: boolean }
+
+/**
+ * Which inbox claims a folder outright, keyed by the folder's path in lower
+ * case because a mail server's own casing and the owner's typing rarely agree.
+ *
+ * Two addresses pointed at the same folder with this on cannot both own it, and
+ * guessing between them would file a customer's mail somewhere at random, so
+ * the folder owns nothing in that case and routing falls back to the addresses
+ * exactly as it did before. The settings screen has no way to warn about it
+ * yet; the quiet no-op is the safe half of the answer.
+ */
+export function folderOwnersFor(inboxes: FolderOwning[]): Map<string, string | null> {
+  const owners = new Map<string, string | null>()
+  for (const inbox of inboxes) {
+    if (!inbox.folderOwnsMail) continue
+    const key = inbox.imapFolder.trim().toLowerCase()
+    if (!key) continue
+    owners.set(key, owners.has(key) ? null : inbox.id)
+  }
+  return owners
+}
+
 export type SyncCursor = {
   uidvalidity: number | null
   lastSeenUid: number

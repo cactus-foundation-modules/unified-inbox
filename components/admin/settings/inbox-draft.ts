@@ -11,6 +11,7 @@ export function blankInbox() {
     imapFolder: 'INBOX',
     sentFolder: '',
     isCatchAll: false,
+    folderOwnsMail: false,
     sendTransport: 'brevo' as 'brevo' | 'smtp',
     brevoApiKey: '',
     smtpHost: '',

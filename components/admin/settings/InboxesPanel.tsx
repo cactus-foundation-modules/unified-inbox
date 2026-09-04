@@ -94,6 +94,7 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
       imapFolder: inbox.imapFolder,
       sentFolder: inbox.sentFolder ?? '',
       isCatchAll: inbox.isCatchAll,
+      folderOwnsMail: inbox.folderOwnsMail,
       sendTransport: inbox.sendTransport,
       brevoApiKey: '',
       smtpHost: inbox.smtpHost ?? '',
@@ -121,6 +122,7 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
       imapFolder: draft.imapFolder || 'INBOX',
       sentFolder: draft.sentFolder || null,
       isCatchAll: draft.isCatchAll,
+      folderOwnsMail: draft.folderOwnsMail,
       sendTransport: draft.sendTransport,
       smtpHost: draft.smtpHost || null,
       smtpPort: draft.smtpPort ? Number(draft.smtpPort) : null,
@@ -137,7 +139,7 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
       ...(draft.brevoApiKey ? { brevoApiKey: draft.brevoApiKey } : {}),
       ...(draft.smtpPassword ? { smtpPassword: draft.smtpPassword } : {}),
     }
-    type Saved = { inbox?: Inbox; senderWarning?: string | null }
+    type Saved = { inbox?: Inbox; adopted?: number; senderWarning?: string | null }
     const saved = editing === 'new'
       ? await call('/inboxes', { method: 'POST', body: JSON.stringify(body) }) as Saved | null
       : await call(`/inboxes/${editing}`, { method: 'PATCH', body: JSON.stringify(body) }) as Saved | null
@@ -160,6 +162,16 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
     // building yet, which is a different question and one worth answering while
     // the person who can fix it is still here (E15).
     setSenderWarning(saved.senderWarning ?? null)
+    // Turning the folder rule on moves what was already sitting there. Said out
+    // loud, because the whole reason somebody turns it on is one email they
+    // cannot find, and silence leaves them wondering whether it worked.
+    const adopted = saved.adopted ?? 0
+    if (adopted > 0) {
+      setMessage({
+        tone: 'ok',
+        text: `Inbox saved. ${adopted === 1 ? '1 conversation that was' : `${adopted} conversations that were`} already in that folder ${adopted === 1 ? 'has' : 'have'} been moved into it.`,
+      })
+    }
     setEditing(null)
   }
 
@@ -270,6 +282,12 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
               placeholder="Sent Messages"
             />
           </FieldRow>
+          <CheckField
+            label="Everything in that folder belongs to this address"
+            checked={draft.folderOwnsMail}
+            onChange={(folderOwnsMail) => setDraft({ ...draft, folderOwnsMail })}
+            hint="For a folder you fill yourself. Anything sitting in it is collected, even when it was sent to some older address of yours. Mail that names one of your other addresses still goes to that one."
+          />
           <CheckField
             label="Anything that does not match another address lands here"
             checked={draft.isCatchAll}
@@ -468,6 +486,7 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
               title={inbox.name}
               badges={<>
                 {inbox.isCatchAll && <Chip tone="info">Catch-all</Chip>}
+                {inbox.folderOwnsMail && <Chip tone="info">Whole folder</Chip>}
                 {rows.length > 0 && <Chip tone="plain">{rows.length === 1 ? '1 person' : `${rows.length} people`}</Chip>}
                 {owners.length > 0 && (
                   <Chip tone="info">

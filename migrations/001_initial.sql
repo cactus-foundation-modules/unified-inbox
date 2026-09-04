@@ -54,6 +54,10 @@ CREATE TABLE IF NOT EXISTS "uin_inboxes" (
     "sent_folder"              TEXT,
     -- Anything that cannot be routed to a named address lands in the catch-all.
     "is_catch_all"             BOOLEAN      NOT NULL DEFAULT false,
+    -- Claim everything sitting in the folder above, whoever it was addressed
+    -- to. For the mailbox where the post is sorted by hand rather than by the
+    -- server, and the To line is somebody's old address.
+    "folder_owns_mail"         BOOLEAN      NOT NULL DEFAULT false,
     -- 'brevo' | 'smtp'
     "send_transport"           TEXT         NOT NULL DEFAULT 'brevo',
     -- NULL means "use the site's own Brevo key".

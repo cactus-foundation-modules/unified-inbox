@@ -240,6 +240,7 @@ function mapInbox(r: Record<string, unknown>): Inbox {
     imapFolder: (r.imap_folder as string) ?? 'INBOX',
     sentFolder: (r.sent_folder as string | null) ?? null,
     isCatchAll: !!r.is_catch_all,
+    folderOwnsMail: !!r.folder_owns_mail,
     sendTransport: (r.send_transport as SendTransport) ?? 'brevo',
     hasBrevoKey: !!r.brevo_api_key_encrypted,
     smtpHost: (r.smtp_host as string | null) ?? null,
@@ -287,6 +288,7 @@ export type InboxInput = {
   imapFolder?: string
   sentFolder?: string | null
   isCatchAll?: boolean
+  folderOwnsMail?: boolean
   sendTransport?: SendTransport
   brevoApiKey?: string | null
   smtpHost?: string | null
@@ -307,11 +309,13 @@ export async function createInbox(data: InboxInput): Promise<Inbox> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     INSERT INTO "uin_inboxes"
       ("name", "address", "connection_id", "imap_folder", "sent_folder", "is_catch_all",
+       "folder_owns_mail",
        "send_transport", "brevo_api_key_encrypted", "smtp_host", "smtp_port", "smtp_username",
        "smtp_password_encrypted", "from_name", "signature_kind", "signature", "signature_html",
        "signature_puck", "append_to_sent", "colour", "sort_order")
     VALUES (${data.name}, ${normaliseAddress(data.address)}, ${data.connectionId ?? null},
             ${data.imapFolder ?? 'INBOX'}, ${data.sentFolder ?? null}, ${data.isCatchAll ?? false},
+            ${data.folderOwnsMail ?? false},
             ${data.sendTransport ?? 'brevo'}, ${optionalSecret(data.brevoApiKey) ?? null},
             ${data.smtpHost ?? null}, ${data.smtpPort ?? null}, ${data.smtpUsername ?? null},
             ${optionalSecret(data.smtpPassword) ?? null}, ${data.fromName ?? null},
@@ -331,6 +335,7 @@ export async function updateInbox(id: string, data: Partial<InboxInput>): Promis
   if (data.imapFolder !== undefined) sets.push(Prisma.sql`"imap_folder" = ${data.imapFolder}`)
   if (data.sentFolder !== undefined) sets.push(Prisma.sql`"sent_folder" = ${data.sentFolder}`)
   if (data.isCatchAll !== undefined) sets.push(Prisma.sql`"is_catch_all" = ${data.isCatchAll}`)
+  if (data.folderOwnsMail !== undefined) sets.push(Prisma.sql`"folder_owns_mail" = ${data.folderOwnsMail}`)
   if (data.sendTransport !== undefined) sets.push(Prisma.sql`"send_transport" = ${data.sendTransport}`)
   if (data.smtpHost !== undefined) sets.push(Prisma.sql`"smtp_host" = ${data.smtpHost}`)
   if (data.smtpPort !== undefined) sets.push(Prisma.sql`"smtp_port" = ${data.smtpPort}`)
@@ -1398,6 +1403,59 @@ export async function collectionStats(): Promise<CollectionStat[]> {
     lastRunAt: (r.last_run_at as Date | null) ?? null,
     lastError: (r.last_error as string | null) ?? null,
   }))
+}
+
+/**
+ * Hands an inbox the mail already sitting in its folder with nowhere to go.
+ *
+ * Turning "everything in that folder belongs to this address" on settles how
+ * mail is filed FROM NOW ON, and the message that made somebody go looking for
+ * the setting is by definition already collected - dragged into the folder
+ * yesterday, filed under Not filed, and never read again: a message is parsed
+ * once and its location remembered, so no later sweep gets a second opinion on
+ * it. Without this, the owner turns the setting on and the email they turned it
+ * on for is still missing.
+ *
+ * Deliberately narrow. Only conversations with NO inbox at all are adopted -
+ * anything already filed under an address stays where it is - and only where
+ * this connection has a message in this inbox's own folder. `provider_module`
+ * conversations (live chat, the contact form) are not email and are left alone.
+ *
+ * Returns how many conversations moved, which the settings screen says out loud
+ * rather than leaving the owner to guess whether anything happened.
+ */
+export async function adoptUnroutedFolderMail(inboxId: string): Promise<number> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    UPDATE "uin_threads" t
+       SET "inbox_id" = i."id",
+           "updated_at" = now()
+      FROM "uin_inboxes" i
+     WHERE i."id" = ${inboxId}
+       AND i."connection_id" IS NOT NULL
+       AND t."inbox_id" IS NULL
+       AND t."provider_module" IS NULL
+       AND EXISTS (
+             SELECT 1
+               FROM "uin_messages" m
+              WHERE m."thread_id" = t."id"
+                AND m."connection_id" = i."connection_id"
+                AND lower(m."imap_folder") = lower(i."imap_folder")
+           )
+    RETURNING t."id"
+  `
+  if (rows.length === 0) return 0
+
+  // The record of how each one was filed, brought into line with the answer it
+  // would get today. Left as 'none' they would go on counting towards the "post
+  // nobody is reading" figure on the settings screen for ever.
+  const ids = rows.map((r) => r.id)
+  await prisma.$executeRaw`
+    UPDATE "uin_messages"
+       SET "routed_on" = 'folder'
+     WHERE "routed_on" = 'none'
+       AND "thread_id" IN (${Prisma.join(ids)})
+  `
+  return rows.length
 }
 
 /** Mail that reached the account but matched no inbox and had no catch-all to

@@ -150,6 +150,8 @@ export type Inbox = {
   imapFolder: string
   sentFolder: string | null
   isCatchAll: boolean
+  /** Claim everything found in `imapFolder`, whoever it was addressed to. */
+  folderOwnsMail: boolean
   sendTransport: SendTransport
   hasBrevoKey: boolean
   smtpHost: string | null
