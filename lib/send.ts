@@ -43,7 +43,7 @@ import { htmlToText } from './html'
 import { buildRawMessage } from './mime'
 import { appendToSent } from './append'
 import { chooseSignatureSource, renderInboxSignature } from './signature'
-import { deliver, sendingIdentity, transportForInbox, type SendableMessage } from './transport'
+import { deliver, replyToWorthSending, sendingIdentity, transportForInbox, type SendableMessage } from './transport'
 
 // ---------------------------------------------------------------------------
 // Sending.
@@ -332,7 +332,7 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
     cc: prepared.cc,
     from: identity,
     transport: await transportForInbox(inbox),
-    replyTo: inbox.address,
+    replyTo: replyToWorthSending({ from: identity, replyTo: inbox.address }),
     subject: prepared.subject,
     html: body.html,
     text: body.text,
@@ -582,7 +582,7 @@ export async function retrySend(messageId: string): Promise<SendResult> {
     cc: message.ccAddresses,
     from: identity,
     transport: await transportForInbox(inbox),
-    replyTo: inbox.address,
+    replyTo: replyToWorthSending({ from: identity, replyTo: inbox.address }),
     subject: message.subject ?? '(no subject)',
     html: message.bodyHtml ?? '',
     text: message.bodyText ?? htmlToText(message.bodyHtml ?? ''),

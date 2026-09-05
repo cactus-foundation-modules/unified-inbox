@@ -239,21 +239,29 @@ export const ContactImportBody = z.object({
 // is still refused by the database rather than stored wrong.
 // ---------------------------------------------------------------------------
 
-/** The clock: when it may send, and how fast. Every field optional because the
- *  When step saves one box at a time. */
+/**
+ * The clock: when it may send, and how fast.
+ *
+ * EVERY BOX ON THE WHEN SECTION MAY BE LEFT EMPTY, and null is how an empty box
+ * arrives. Null is not "leave it as it was" - undefined is that. Null is the
+ * person saying "no restriction", and the route turns each one into the widest
+ * value the column will take: midnight to midnight, no cap, the standing pace.
+ */
 export const CampaignWindowBody = z.object({
-  /** "08:00", site time. Turned into minutes past midnight on the server. */
-  startTime: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
-  endTime: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
+  /** "08:00", site time. Turned into minutes past midnight on the server.
+   *  Null means no restriction on the time of day. */
+  startTime: z.string().regex(/^\d{1,2}:\d{2}$/).nullable().optional(),
+  endTime: z.string().regex(/^\d{1,2}:\d{2}$/).nullable().optional(),
   weekdaysOnly: z.boolean().optional(),
   /** Dates to sit out, "YYYY-MM-DD". Christmas, the August bank holiday, the
    *  week the office is shut. */
   skipDates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(60).optional(),
-  intervalSeconds: z.number().int().min(20).max(3600).optional(),
-  jitterSeconds: z.number().int().min(0).max(600).optional(),
+  /** Null falls back to the standing pace: there is no such thing as no gap. */
+  intervalSeconds: z.number().int().min(20).max(3600).nullable().optional(),
+  jitterSeconds: z.number().int().min(0).max(600).nullable().optional(),
   dailyCap: z.number().int().min(1).max(100_000).nullable().optional(),
   rampEnabled: z.boolean().optional(),
-  rampStart: z.number().int().min(1).max(100_000).optional(),
+  rampStart: z.number().int().min(1).max(100_000).nullable().optional(),
 })
 
 /** One step: the message, or one of the chases after it. */
@@ -300,6 +308,19 @@ export const CampaignStateBody = z.object({
 /** Building the list, or adding the people who have appeared since. */
 export const CampaignAudienceBody = z.object({
   mode: z.enum(['rebuild', 'topUp']),
+})
+
+/** Sending the whole thing again, to everybody, including the people who have
+ *  already had it. `confirm` is not ceremony: it is the difference between a
+ *  request somebody meant and a request some other tab made on their behalf. */
+export const CampaignRestartBody = z.object({
+  confirm: z.literal(true),
+})
+
+/** One waiting person, written to now because somebody pressed the button on
+ *  the progress table rather than waiting for the clock. */
+export const CampaignSendNowBody = z.object({
+  recipientId: z.string().min(1).max(64),
 })
 
 /** Sending yourself one, which is what unlocks the start button. */

@@ -2,7 +2,7 @@ import { getSiteUrlOrNull } from '@/lib/config/env'
 import { assembleBody, messageIdHeader, outgoingHeaders, replySubject } from '../compose'
 import { plainTextToHtml } from '../scheduled'
 import { renderInboxSignature } from '../signature'
-import { sendingIdentity, type SendableMessage } from '../transport'
+import { replyToWorthSending, sendingIdentity, type SendableMessage } from '../transport'
 import type { Inbox } from '../types'
 import { personalise } from './personalise'
 import { unsubscribeFooter, unsubscribeHeaders, unsubscribeUrl } from './unsubscribe'
@@ -147,8 +147,10 @@ export async function buildCampaignMessage(ctx: CampaignMessageContext): Promise
       transport: ctx.transport,
       // Replies come back to the address it went out as, which is what makes a
       // campaign reply turn into an ordinary conversation on the next
-      // collection rather than vanishing.
-      replyTo: inbox.address,
+      // collection rather than vanishing. That is the From line's job, though,
+      // not a header of its own: a Reply-To repeating the sender says nothing
+      // and costs a mark on the spam scorers.
+      replyTo: replyToWorthSending({ from: sendingIdentity(inbox), replyTo: inbox.address }),
       subject,
       html: body.html,
       text: body.text,

@@ -76,7 +76,7 @@ export function SuppressionsPanel({ onBack }: { onBack: () => void }) {
       {error && <div className="alert alert-danger" role="alert">{error}</div>}
       {notice && <div className="alert alert-info" role="status">{notice}</div>}
 
-      <div className="uin-camp-step">
+      <div className="uin-camp-section">
         <h3>Add one <small>Somebody who has asked you directly</small></h3>
         <div className="uin-camp-row">
           <div className="uin-camp-field" style={{ flex: '2 1 16rem' }}>
@@ -97,7 +97,7 @@ export function SuppressionsPanel({ onBack }: { onBack: () => void }) {
         </span>
       </div>
 
-      <div className="uin-camp-step">
+      <div className="uin-camp-section">
         <div className="uin-camp-row">
           <div className="uin-camp-field" style={{ flex: '2 1 14rem' }}>
             <input

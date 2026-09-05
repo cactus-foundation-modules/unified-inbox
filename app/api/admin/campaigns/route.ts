@@ -4,7 +4,8 @@ import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { getSiteTimezone } from '@/lib/config/timezone.server'
 import { canReplyToInbox } from '@/modules/unified-inbox/lib/access'
-import { DEFAULT_WINDOW, forecastFinish } from '@/modules/unified-inbox/lib/campaigns/window'
+import { describeCampaignFault } from '@/modules/unified-inbox/lib/campaigns/faults'
+import { OPEN_WINDOW, forecastFinish } from '@/modules/unified-inbox/lib/campaigns/window'
 import {
   campaignTally,
   createCampaign,
@@ -55,7 +56,7 @@ export async function POST(request: NextRequest) {
   if (!await hasPermission(user, 'unifiedinbox.campaigns')) return errorResponse('Forbidden', 403)
 
   const parsed = CampaignBody.safeParse(await request.json().catch(() => null))
-  if (!parsed.success) return errorResponse('That campaign could not be saved.')
+  if (!parsed.success) return errorResponse(describeCampaignFault(parsed.error))
   const data = parsed.data
 
   // Sending from an address is the same grant as replying from it. A campaign
@@ -83,5 +84,5 @@ export async function POST(request: NextRequest) {
       }))
     : [{ stepIndex: 0, waitDays: null, subject: null, body: '' }])
 
-  return NextResponse.json({ ok: true, id, defaults: DEFAULT_WINDOW })
+  return NextResponse.json({ ok: true, id, defaults: OPEN_WINDOW })
 }

@@ -6,6 +6,7 @@ import { draftHref } from '@/modules/unified-inbox/lib/drafts'
 import { describeSendAt } from '@/modules/unified-inbox/lib/scheduled'
 import { BackIcon, ClockIcon, InboundIcon, NoteIcon, OutboundIcon, PaperclipIcon, TickIcon } from './icons'
 import { MessageBody } from './MessageBody'
+import { MessageText } from './MessageText'
 import { RetryButton } from './RetryButton'
 import { ThreadActions } from './ThreadActions'
 import { DeleteMessageButton } from './MessageActions'
@@ -202,21 +203,6 @@ function MessageHeader({ message, staffById, now, timezone }: {
       </span>
       <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
     </div>
-  )
-}
-
-function MessageText({ text }: { text: string }) {
-  const { body, quoted } = splitQuotedText(text)
-  return (
-    <>
-      <pre className="uin-msg-text">{body}</pre>
-      {quoted && (
-        <details style={{ marginTop: '0.75rem' }}>
-          <summary className="uin-chip uin-summary">Show the earlier messages</summary>
-          <pre className="uin-msg-text" style={{ marginTop: '0.5rem', color: 'var(--color-text-secondary)' }}>{quoted}</pre>
-        </details>
-      )}
-    </>
   )
 }
 

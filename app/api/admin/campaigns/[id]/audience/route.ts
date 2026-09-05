@@ -4,7 +4,7 @@ import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { getSiteTimezone } from '@/lib/config/timezone.server'
 import { buildAudienceFor, previewAudienceFor, topUpAudienceFor } from '@/modules/unified-inbox/lib/campaigns/build'
-import { campaignTally, getCampaign } from '@/modules/unified-inbox/lib/campaigns/store'
+import { campaignTally, getCampaign, setCampaignStatus } from '@/modules/unified-inbox/lib/campaigns/store'
 import { forecastFinish, nextSlot } from '@/modules/unified-inbox/lib/campaigns/window'
 import { CampaignAudienceBody } from '@/modules/unified-inbox/lib/validation'
 
@@ -76,5 +76,22 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
 
   const summary = await topUpAudienceFor(campaign, campaign.startAt ?? new Date())
-  return NextResponse.json({ ok: true, summary })
+
+  // A campaign marks itself finished the moment its queue empties, and the
+  // runner only ever looks at running ones - so topping a finished campaign up
+  // would otherwise add people who sit there saying "Waiting" for ever with
+  // nothing on earth due to look at them again. Adding somebody to a finished
+  // campaign is somebody saying it is not finished.
+  //
+  // Paused and stopped are left alone on purpose: both of those are a person's
+  // decision, and a top-up is not a way to overturn it.
+  // Asked of the queue rather than of what this top-up added, so a campaign
+  // already stuck in that state - finished, with people waiting on it from an
+  // earlier top-up - is put right by pressing the button rather than staying
+  // stuck because today's press happened to add nobody new.
+  const after = await campaignTally(id)
+  const restarted = campaign.status === 'done' && after.queued + after.sending > 0
+  if (restarted) await setCampaignStatus(id, 'running', { startedAt: new Date() })
+
+  return NextResponse.json({ ok: true, summary, restarted })
 }

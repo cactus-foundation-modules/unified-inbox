@@ -119,6 +119,46 @@ export async function topUpAudienceFor(
   return summarise(built)
 }
 
+/**
+ * Send the whole thing again, to everybody, including the people who have
+ * already had it.
+ *
+ * For the campaign somebody runs at a test mailbox twenty times while they get
+ * the wording right, and for the annual reminder that goes to the same list
+ * every September. It is a knife, and the screen holds it by the handle: it is
+ * only offered on a campaign that has FINISHED, and only behind a warning that
+ * says in so many words that people will get a second copy.
+ *
+ * THE OLD ROWS GO FIRST, AND THAT ORDER IS THE WHOLE FUNCTION. Two reasons, and
+ * both of them bite silently:
+ *
+ * The cooldown is asked of `uin_campaign_sends` by address, across every
+ * campaign - so this campaign's own sends, from the run that finished ten
+ * minutes ago, would exclude every single person it just wrote to, and the
+ * rebuild would come back with nobody on it. `buildAudienceFor` asks that
+ * question BEFORE it clears anything, so clearing has to happen before it is
+ * called rather than inside it.
+ *
+ * And the send rows carry a UNIQUE on (recipient, step), which is what makes a
+ * duplicate impossible. Keeping the old recipient rows would therefore mean the
+ * second run quietly sent nobody anything - every message would hit that index
+ * and be skipped as already sent. New recipient rows are what make a second
+ * copy possible at all.
+ *
+ * The cost, which the screen has to say out loud: the send rows cascade off the
+ * recipients, so the record of what went out in the previous run goes with
+ * them. What does NOT go is anybody's unsubscribe - suppressions are their own
+ * table, they outlive the campaign, and the rebuild leaves those people out
+ * exactly as it did the first time.
+ */
+export async function restartAudienceFor(
+  campaign: Campaign,
+  startAt: Date,
+): Promise<AudienceSummary> {
+  await clearRecipients(campaign.id)
+  return await buildAudienceFor(campaign, startAt)
+}
+
 /** What the Who step shows before anything is written down: the same decision,
  *  without the rows. */
 export async function previewAudienceFor(campaign: Campaign): Promise<AudienceSummary> {

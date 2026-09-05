@@ -30,7 +30,9 @@ type Props = {
   categories: CampaignCategory[]
   /** Which campaign is open, from the address bar. */
   campaignId: string | null
-  /** Which step of it, or 'suppressions' for the do-not-email list. */
+  /** 'edit', 'progress', or 'suppressions' for the do-not-email list. Links
+   *  made before the editor became one page carry who/what/when/watch, so
+   *  anything that is not 'progress' opens the wording. */
   view: string | null
   /** The address a pinger can be pointed at, with its key already in it. Shown
    *  once, on the campaign that is running, because the pace of the whole
@@ -77,7 +79,7 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
     }
     setCreating(false)
     setNewName('')
-    go({ campaign: result.data.id, view: 'who' })
+    go({ campaign: result.data.id, view: 'edit' })
   }, [go, inboxes, newName])
 
   // Anything running keeps the screen honest: the counts move while somebody
@@ -96,9 +98,10 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
           campaignId={campaignId}
           inboxes={inboxes}
           categories={categories}
-          step={view ?? 'who'}
+          view={view === 'progress' || view === 'watch' ? 'progress' : 'edit'}
           tickUrl={tickUrl}
-          onStep={(next) => go({ campaign: campaignId, view: next })}
+          onView={(next) => go({ campaign: campaignId, view: next })}
+          onStatusChanged={load}
           onClose={() => { void load(); go({ campaign: null, view: null }) }}
         />
       </>
@@ -126,7 +129,7 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
       {error && <div className="alert alert-danger" role="alert">{error}</div>}
 
       {creating && (
-        <div className="uin-camp-step">
+        <div className="uin-camp-section">
           <h3>What is this one called? <small>Only you see this</small></h3>
           <div className="uin-camp-row">
             <div className="uin-camp-field" style={{ flex: '2 1 16rem' }}>
@@ -171,7 +174,7 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
                 row={row}
                 timezone={timezone}
                 inbox={inboxes.find((i) => i.id === row.inboxId) ?? null}
-                onOpen={() => go({ campaign: row.id, view: 'who' })}
+                onOpen={() => go({ campaign: row.id, view: row.status === 'draft' ? 'edit' : 'progress' })}
                 onChanged={load}
               />
             </li>

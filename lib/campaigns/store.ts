@@ -17,6 +17,7 @@ import type {
 } from './types'
 import { RECIPIENT_STATES } from './types'
 import type { AudienceCandidate } from './audience'
+import { OPEN_WINDOW } from './window'
 
 // ---------------------------------------------------------------------------
 // Every read and write against the campaign tables, so the raw column names
@@ -183,9 +184,22 @@ export async function createCampaign(data: {
   inboxId: string | null
   createdBy: string
 }): Promise<string> {
+  // The clock is written out rather than left to the column defaults, which are
+  // office hours on weekdays. A new campaign opens with every When box empty,
+  // and empty has to mean what it says.
   const rows = await prisma.$queryRaw<{ id: string }[]>`
-    INSERT INTO "uin_campaigns" ("name", "inbox_id", "created_by")
-    VALUES (${data.name}, ${data.inboxId}, ${data.createdBy})
+    INSERT INTO "uin_campaigns" (
+      "name", "inbox_id", "created_by",
+      "window_start_minute", "window_end_minute", "weekdays_only",
+      "interval_seconds", "jitter_seconds", "daily_cap",
+      "ramp_enabled", "ramp_start"
+    )
+    VALUES (
+      ${data.name}, ${data.inboxId}, ${data.createdBy},
+      ${OPEN_WINDOW.startMinute}, ${OPEN_WINDOW.endMinute}, ${OPEN_WINDOW.weekdaysOnly},
+      ${OPEN_WINDOW.intervalSeconds}, ${OPEN_WINDOW.jitterSeconds}, ${OPEN_WINDOW.dailyCap},
+      ${OPEN_WINDOW.rampEnabled}, ${OPEN_WINDOW.rampStart}
+    )
     RETURNING "id"
   `
   return rows[0]!.id
@@ -258,6 +272,31 @@ export async function setCampaignStatus(
            "pause_reason" = ${running ? null : (options?.pauseReason ?? null)},
            "started_at" = COALESCE("started_at", ${options?.startedAt ?? null}),
            "finished_at" = ${options?.finishedAt ?? null},
+           "updated_at" = now()
+     WHERE "id" = ${id}
+  `
+}
+
+/**
+ * Back to a draft that has never run, so it can be sent all over again.
+ *
+ * `setCampaignStatus` cannot do this: it holds `started_at` with a COALESCE, on
+ * purpose, so that pausing and resuming never rewrites when a campaign first
+ * went out. A restart is the one case where that IS what is meant - this is a
+ * new run of the same wording, and the old run's dates belong to the old run.
+ *
+ * `tested_at` is deliberately left alone. Somebody who has already sent
+ * themselves a test of this exact wording has done the thing the check exists
+ * to make them do, and making them do it twice teaches them to click past it.
+ */
+export async function resetCampaignForNewRun(id: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "uin_campaigns"
+       SET "status" = 'draft',
+           "pause_kind" = NULL,
+           "pause_reason" = NULL,
+           "started_at" = NULL,
+           "finished_at" = NULL,
            "updated_at" = now()
      WHERE "id" = ${id}
   `
@@ -655,6 +694,59 @@ export async function claimNextRecipient(
     RETURNING *
   `
   return rows[0] ? mapRecipient(rows[0]) : null
+}
+
+/**
+ * One named person, taken out of the queue to be written to now.
+ *
+ * The same claim the runner makes, aimed rather than taken off the top: state
+ * has to still be 'queued', so two people both pressing Send now get one send
+ * and one "that one has already gone" rather than two copies.
+ */
+export async function claimRecipient(
+  campaignId: string,
+  recipientId: string,
+  now: Date,
+): Promise<CampaignRecipient | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    UPDATE "uin_campaign_recipients"
+       SET "state" = 'sending',
+           "claimed_at" = ${now}
+     WHERE "id" = ${recipientId}
+       AND "campaign_id" = ${campaignId}
+       AND "state" = 'queued'
+    RETURNING *
+  `
+  return rows[0] ? mapRecipient(rows[0]) : null
+}
+
+/**
+ * The lane, taken whether or not its clock has come round.
+ *
+ * Only ever for somebody standing at the screen pressing Send now - which is
+ * the whole point of the button, and the one rule it is allowed to break. It
+ * still respects a live claim, so a manual send can never overlap a run: the
+ * gap between two messages leaving one address is the thing that keeps the
+ * domain out of trouble, and only the WAIT is being skipped here, never the
+ * one-at-a-time.
+ */
+export async function claimLaneNow(
+  inboxId: string,
+  now: Date,
+  staleBefore: Date,
+): Promise<boolean> {
+  await prisma.$executeRaw`
+    INSERT INTO "uin_campaign_lanes" ("inbox_id", "next_send_at")
+    VALUES (${inboxId}, ${now})
+    ON CONFLICT ("inbox_id") DO NOTHING
+  `
+  const claimed = await prisma.$executeRaw`
+    UPDATE "uin_campaign_lanes"
+       SET "claimed_at" = ${now}
+     WHERE "inbox_id" = ${inboxId}
+       AND ("claimed_at" IS NULL OR "claimed_at" < ${staleBefore})
+  `
+  return claimed > 0
 }
 
 /** Claims from a run that died between taking somebody and settling them. Put

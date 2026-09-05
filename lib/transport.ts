@@ -28,9 +28,11 @@ export type SendableMessage = {
   from: { name: string | null; address: string }
   /** The inbox's own sending account, or null for the site's. */
   transport: EmailTransport | null
-  /** The inbox again, so a reply comes back here even if a receiving server
-   *  rewrites the sender - which some do when a domain is not fully set up. */
-  replyTo: string
+  /** Where answers should go, when that is somewhere other than the sender -
+   *  and null when it is not, which for this module is every ordinary message.
+   *  See replyToWorthSending: a Reply-To repeating the From address says
+   *  nothing and costs a mark on every spam scorer worth checking against. */
+  replyTo: string | null
   subject: string
   html: string
   text: string
@@ -55,6 +57,26 @@ export type SendOutcome =
  */
 export function sendingIdentity(inbox: Inbox): { name: string | null; address: string } {
   return { name: inbox.fromName?.trim() || inbox.name || null, address: inbox.address }
+}
+
+/**
+ * The Reply-To worth putting on a message, which is none at all when it would
+ * only be the From address written out a second time.
+ *
+ * Every send from this module answers as the inbox and points Reply-To at the
+ * inbox, so in practice that is every message: the header said nothing, and a
+ * redundant Reply-To is one more small mark against a message on every spam
+ * scorer an owner is likely to check their mail against.
+ *
+ * Core drops it on the way out for the same reason. This exists so that the
+ * copy filed in the mailbox's own Sent folder matches what actually left -
+ * a Sent copy carrying a header the real message did not is a small lie that
+ * somebody eventually debugs.
+ */
+export function replyToWorthSending(message: Pick<SendableMessage, 'from' | 'replyTo'>): string | null {
+  const replyTo = message.replyTo?.trim()
+  if (!replyTo) return null
+  return replyTo.toLowerCase() === message.from.address.trim().toLowerCase() ? null : replyTo
 }
 
 /**
@@ -117,7 +139,7 @@ export async function deliver(message: SendableMessage): Promise<SendOutcome> {
       ...(message.to.length > 1 || message.cc.length
         ? { cc: [...message.to.slice(1), ...message.cc] }
         : {}),
-      replyTo: message.replyTo,
+      ...(message.replyTo ? { replyTo: message.replyTo } : {}),
       subject: message.subject,
       html: message.html,
       text: message.text,

@@ -59,11 +59,26 @@ const FRAME_STYLES = `
   details.uin-quote > div { margin-top: 0.75rem; border-left: 3px solid #e2ded7; padding-left: 0.75rem; }
 `
 
-/** Tells the page around it how tall the message turned out to be, so the frame
- *  can be exactly its own height instead of a fixed box with a scrollbar inside
- *  a scrollbar. It is the only script in the document and it carries a nonce,
- *  so anything that somehow survived the sanitiser still cannot run. */
-function resizeScript(nonce: string): string {
+/**
+ * The frame's one script. It carries a nonce nothing else has, so anything that
+ * somehow survived the sanitiser still cannot run. Two jobs.
+ *
+ * HOW TALL IT TURNED OUT TO BE, so the frame is exactly its own height instead
+ * of a fixed box with a scrollbar inside a scrollbar.
+ *
+ * WHERE A LINK ACTUALLY GOES. Every link in a stranger's email is a link
+ * somebody else wrote, and the words on it are theirs too - "your invoice" over
+ * a web address in another country is the whole of how phishing works. So a
+ * click does not follow the link: it hands the address back to the page around
+ * the frame, which puts it on screen in full and lets the reader decide. The
+ * DOM's own `href` property is read rather than the attribute, because that is
+ * the absolute address the browser would actually visit.
+ *
+ * The markup still carries target="_blank" underneath. If this script never
+ * runs - a blocked script, an extension - a link that does nothing at all is a
+ * message that reads as broken, and a working link is better than a dead one.
+ */
+function frameScript(nonce: string): string {
   return `<script nonce="${nonce}">(function(){
   function send(){
     var h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
@@ -74,6 +89,23 @@ function resizeScript(nonce: string): string {
   document.addEventListener('toggle', send, true);
   setTimeout(send, 60);
   setTimeout(send, 400);
+
+  document.addEventListener('click', function(event){
+    if (event.defaultPrevented) return;
+    // Left button only. A middle-click or a cmd-click is somebody deliberately
+    // asking for a new tab, and target="_blank" already does that.
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var node = event.target;
+    while (node && node.nodeName !== 'A') node = node.parentNode;
+    if (!node || !node.getAttribute('href')) return;
+    event.preventDefault();
+    parent.postMessage({
+      uinLink: {
+        href: String(node.href || node.getAttribute('href') || ''),
+        text: String(node.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 300)
+      }
+    }, '*');
+  }, true);
 })();</script>`
 }
 
@@ -118,7 +150,7 @@ export function buildMessageDocument({ html, nonce, collapseQuoted = true }: Mes
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>${FRAME_STYLES}</style></head>
-<body>${content}${resizeScript(nonce)}</body></html>`
+<body>${content}${frameScript(nonce)}</body></html>`
 }
 
 /**

@@ -14,7 +14,10 @@ import {
   advanceRecipient,
   campaignTally,
   claimLane,
+  claimLaneNow,
   claimNextRecipient,
+  claimRecipient,
+  getCampaign,
   hasRepliedSince,
   laneNextSendAt,
   listRunnableCampaigns,
@@ -266,6 +269,97 @@ async function runOneCampaign(
   }
 
   return { sent, failed, skipped, moreDue: true }
+}
+
+/**
+ * One person, written to now, because somebody at the screen said so.
+ *
+ * The button on the progress table. It is the SAME send as every other send -
+ * same claim, same duplicate guard, same bounce handling - and it goes through
+ * `sendToRecipient` for exactly the reason the note at the top of this file
+ * gives: a second sending path is a second set of bugs, and the second one
+ * always sends the duplicate.
+ *
+ * What it skips is the WAIT: the sending window, the daily allowance and the
+ * lane's own clock. What it does not skip is one-at-a-time - a run holding the
+ * address is left alone - and it puts the gap back on the lane afterwards, so
+ * pressing it does not land a second message a moment later.
+ *
+ * Draft campaigns are refused. Everything that stands between a draft and two
+ * thousand emails - the test send, the unsubscribe footer, the address records
+ * - is checked at start, and a button that sends one real email without any of
+ * that is a way round the lot of it.
+ */
+export async function sendOneRecipientNow(
+  campaignId: string,
+  recipientId: string,
+): Promise<{ ok: true; outcome: SendVerdict['kind'] } | { ok: false; error: string }> {
+  const campaign = await getCampaign(campaignId)
+  if (!campaign) return { ok: false, error: 'That campaign is no longer here.' }
+  if (campaign.status === 'draft') {
+    return {
+      ok: false,
+      error: 'This one has not been started yet. Start it, and it will go out on its own - '
+        + 'sending one by hand first would be a way round the checks that happen when you press start.',
+    }
+  }
+  if (campaign.status === 'done' || campaign.status === 'stopped') {
+    return { ok: false, error: 'This one is over, so nothing further goes out from it.' }
+  }
+  if (!campaign.inboxId) {
+    return { ok: false, error: 'The address this was sending from has been removed.' }
+  }
+  const inbox = await getInbox(campaign.inboxId)
+  if (!inbox) return { ok: false, error: 'The address this was sending from is no longer here.' }
+
+  const now = new Date()
+  const claimedLane = await claimLaneNow(
+    campaign.inboxId,
+    now,
+    new Date(now.getTime() - STALE_CLAIM_MS),
+  )
+  if (!claimedLane) {
+    return { ok: false, error: 'Something is going out from that address this second. Try again in a moment.' }
+  }
+
+  const [steps, timezone, settings, site] = await Promise.all([
+    listSteps(campaign.id),
+    getSiteTimezone(),
+    getSettings(),
+    getSiteEmailContext(),
+  ])
+
+  let sentSomething = false
+  try {
+    const recipient = await claimRecipient(campaign.id, recipientId, now)
+    if (!recipient) {
+      return { ok: false, error: 'That one is not waiting any more - it has gone, or it is going out right now.' }
+    }
+
+    const verdict = await sendToRecipient(recipient, {
+      campaign,
+      steps,
+      inbox,
+      ctx: {
+        now,
+        deadline: Date.now() + CAMPAIGN_BUDGET_MS,
+        timezone,
+        siteName: site.siteName,
+        postalAddress: settings.campaignFooterAddress,
+        trackOpens: settings.trackOpens,
+      },
+    })
+    sentSomething = verdict.kind === 'sent' || verdict.kind === 'failed'
+    return { ok: true, outcome: verdict.kind }
+  } finally {
+    if (sentSomething) {
+      const gap = gapAfterSend(campaign.window) * 1000
+      const earliest = new Date(Date.now() + gap)
+      await releaseLane(campaign.inboxId, nextSlot(earliest, campaign.window, timezone) ?? earliest)
+    } else {
+      await abandonLane(campaign.inboxId)
+    }
+  }
 }
 
 type SendVerdict =

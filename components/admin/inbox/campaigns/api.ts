@@ -149,10 +149,25 @@ export const campaignApi = {
     ),
 
   buildAudience: (id: string, mode: 'rebuild' | 'topUp') =>
-    send<{ summary: AudienceSummaryView }>(`${BASE}/campaigns/${id}/audience`, {
+    send<{ summary: AudienceSummaryView; restarted?: boolean }>(`${BASE}/campaigns/${id}/audience`, {
       method: 'POST',
       body: JSON.stringify({ mode }),
     }),
+
+  /** Send the whole thing again, to everybody, including the people who have
+   *  already had it. Comes back as a draft, so it still has to be started. */
+  restart: (id: string) =>
+    send<{ summary: AudienceSummaryView }>(`${BASE}/campaigns/${id}/restart`, {
+      method: 'POST',
+      body: JSON.stringify({ confirm: true }),
+    }),
+
+  /** One waiting person, written to now rather than when the clock says so. */
+  sendNow: (id: string, recipientId: string) =>
+    send<{ outcome: 'sent' | 'failed' | 'skipped' | 'paused' }>(
+      `${BASE}/campaigns/${id}/recipients/send-now`,
+      { method: 'POST', body: JSON.stringify({ recipientId }) },
+    ),
 
   state: (id: string, action: 'start' | 'pause' | 'resume' | 'stop', acceptWarnings = false) =>
     send<{ firstGoesAt?: string | null; finishesAbout?: string | null }>(`${BASE}/campaigns/${id}/state`, {

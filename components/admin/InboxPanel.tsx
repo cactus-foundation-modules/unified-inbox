@@ -770,17 +770,17 @@ export async function UnifiedInboxPanel({
   if (params.campaignsOnly) {
     if (!canCampaign) {
       return (
-        <>
+        <div className="uin-page">
           <InboxStyles />
           {tabs}
           <div className="alert alert-danger">You do not have permission to send campaigns.</div>
-        </>
+        </div>
       )
     }
     const siteUrl = getSiteUrlOrNull()
     const tickToken = siteUrl ? await ensureCampaignTickToken() : null
     return (
-      <>
+      <div className="uin-page">
         <InboxStyles />
         {tabs}
         <CampaignsPanel
@@ -794,12 +794,20 @@ export async function UnifiedInboxPanel({
             ? `${siteUrl}/api/m/unified-inbox/cron/campaigns?key=${tickToken}`
             : null}
         />
-      </>
+      </div>
     )
   }
 
   return (
-    <>
+    // Everything this module puts on the page lives in one box that cannot be
+    // wider than the page it is on. Every region inside already handles its own
+    // overflow - the tab strips scroll, the rows end in an ellipsis, the tables
+    // sit in their own scroller - so what this catches is bleed rather than
+    // content: one stray element a few hundred pixels too wide used to give the
+    // WHOLE admin page a horizontal scrollbar and a screenful of nothing to the
+    // right of it. `clip` rather than `hidden` on purpose: hidden would make
+    // this a scroll container and kill the sticky reading frame inside it.
+    <div className="uin-page">
       <InboxStyles />
       {tabs}
 
@@ -929,7 +937,7 @@ export async function UnifiedInboxPanel({
           something somebody does while looking at the list, and the list is
           still there underneath when it closes. */}
       {composePane}
-    </>
+    </div>
   )
 }
 

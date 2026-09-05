@@ -2,6 +2,7 @@ import { getSiteUrlOrNull } from '@/lib/config/env'
 import { isEncryptionKeyUsable } from '@/lib/crypto/secrets'
 import { unknownTags, tagsWithoutFallback } from './personalise'
 import { checkDomainRecords, domainForPreflight, type PreflightFinding } from './preflight'
+import { isAllDay } from './window'
 import type { Campaign, CampaignStep, CampaignTally } from './types'
 import type { Inbox } from '../types'
 
@@ -77,7 +78,7 @@ export async function assessReadiness(input: {
 
   // ---- who it goes to ----
   if (tally.total === 0) {
-    problems.push('Nobody is on the list yet. Choose who it goes to on the Who step.')
+    problems.push('Nobody is on the list yet. Pick who it goes to under "Who it goes to", then save.')
   } else if (tally.queued === 0) {
     problems.push('Everybody on the list has already been written to, has replied, or was left out.')
   }
@@ -110,6 +111,28 @@ export async function assessReadiness(input: {
   }
 
   // ---- the shape of the run ----
+  //
+  // Nothing here stops it. A campaign with no hours set is a perfectly ordinary
+  // thing to want - a reminder that should go the moment it is due - and the
+  // person running the business is entitled to decide that a Sunday morning is
+  // fine. They are not entitled to decide it by accident, which is what an
+  // empty box with no warning against it would be.
+  const allDay = isAllDay(campaign.window)
+  const allWeek = !campaign.window.weekdaysOnly
+  if (allDay && allWeek) {
+    warnings.push(
+      'No sending hours or days are set, so this can go out at three in the morning on a Sunday. '
+      + 'Fine for a reminder. A mailshot that lands then reads like a machine, which is the one thing this is trying not to do.',
+    )
+  } else if (allDay) {
+    warnings.push(
+      'No sending hours are set, so this can go out at three in the morning. '
+      + 'Fine for a reminder; less so for anything somebody is meant to read and reply to.',
+    )
+  } else if (allWeek) {
+    warnings.push('Weekends are left in, so some of this will land on a Saturday or Sunday.')
+  }
+
   if (campaign.window.intervalSeconds < 30) {
     warnings.push(
       `One every ${campaign.window.intervalSeconds} seconds is quick for a mailbox that normally sends a handful a day. `

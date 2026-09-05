@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { LinkPeek, type PeekedLink } from './LinkPeek'
 
 // An email's own HTML, rendered in a frame of its own (E16).
 //
@@ -60,6 +61,9 @@ export function MessageBody({ messageId, hasRemoteImages }: Props) {
   // for the other. Held this way round so that changing address clears it
   // without a second render to do the clearing.
   const [failedSrc, setFailedSrc] = useState<string | null>(null)
+  /** The link somebody has just clicked inside the message, waiting to be
+   *  looked at. The frame does not follow it - see LinkPeek for why. */
+  const [peek, setPeek] = useState<PeekedLink | null>(null)
   const heard = useRef(false)
 
   const onMessage = useCallback((event: MessageEvent) => {
@@ -67,10 +71,24 @@ export function MessageBody({ messageId, hasRemoteImages }: Props) {
     // same-origin access is the whole point - so identity comes from the window
     // the message arrived from being this frame's.
     if (!frame.current || event.source !== frame.current.contentWindow) return
-    const value = (event.data as { uinFrameHeight?: unknown } | null)?.uinFrameHeight
-    if (typeof value !== 'number' || !Number.isFinite(value)) return
-    heard.current = true
-    setHeight(Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.ceil(value))))
+    const data = event.data as { uinFrameHeight?: unknown; uinLink?: unknown } | null
+
+    const value = data?.uinFrameHeight
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      heard.current = true
+      setHeight(Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.ceil(value))))
+      return
+    }
+
+    // Everything in here came out of a stranger's email, so it is read as two
+    // strings and nothing else - no shape is trusted, no length is assumed.
+    const link = data?.uinLink as { href?: unknown; text?: unknown } | undefined
+    if (link && typeof link.href === 'string' && link.href !== '') {
+      setPeek({
+        href: link.href.slice(0, 4000),
+        text: typeof link.text === 'string' ? link.text.slice(0, 300) : '',
+      })
+    }
   }, [])
 
   useEffect(() => {
@@ -98,6 +116,8 @@ export function MessageBody({ messageId, hasRemoteImages }: Props) {
 
   return (
     <div>
+      <LinkPeek link={peek} onClose={() => setPeek(null)} />
+
       {hasRemoteImages && !showImages && (
         <div
           className="alert alert-info"

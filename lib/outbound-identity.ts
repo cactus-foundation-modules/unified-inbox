@@ -9,9 +9,12 @@ import { sendingIdentity, transportForInbox } from './transport'
 //
 // The answer is the inbox a site has chosen on that module's own settings tab,
 // dressed exactly as a human reply from that inbox would be: its address, its
-// name on replies, its own sending account where it has one, and a Reply-To
-// pointing back at it so the answer comes home even when a receiving server
-// rewrites the sender.
+// name on replies, and its own sending account where it has one.
+//
+// No Reply-To. It would only ever be the From address written out a second
+// time, which says nothing and costs a mark on every spam scorer an owner is
+// likely to check their mail against. Core drops a redundant one on the way
+// out in any case; not setting it is simply the honest version.
 //
 // That last part is the entire point. A purchase order that goes out as
 // accounts@ is answered to accounts@, and the supplier's reply lands in the
@@ -41,7 +44,6 @@ async function identityFor(moduleName: string): Promise<OutboundEmailIdentity | 
   const transport = await transportForInbox(inbox)
   return {
     from: { address, ...(name ? { name } : {}) },
-    replyTo: address,
     ...(transport ? { transport } : {}),
   }
 }

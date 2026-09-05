@@ -30,6 +30,23 @@
 // --color-surface-raised to see the pattern already in use.
 
 const CSS = `
+/* ---- the page this module is given ------------------------------------- */
+/* ONE BOX, NEVER WIDER THAN THE PAGE.
+   Core's admin content column is a stretched flex item, so anything inside it
+   that is too wide does not get clipped or scrolled - it makes the WHOLE admin
+   page scroll sideways, and what a reader then finds out there is a screenful
+   of background. Every region in this stylesheet already deals with its own
+   overflow (the tab strips scroll, the rows end in an ellipsis, the message
+   body is an iframe, wide tables sit in .uin-camp-scroll), so a box round the
+   lot of it clips bleed rather than content.
+   Clip rather than hidden, and it matters: hidden would make this a scroll
+   container, and the reading frame inside is position:sticky, which sticks to
+   the nearest scroll container. Clip does not create one. */
+.uin-page {
+  max-width: 100%;
+  overflow-x: clip;
+}
+
 /* ---- the tabs along the top -------------------------------------------- */
 /* The label inside core's tab. It is stretched back over the tab's own padding
    with negative margins, so taking hold anywhere on an address picks up the
@@ -696,7 +713,18 @@ const CSS = `
 .uin-msg-note .uin-msg-when,
 .uin-msg-out .uin-msg-when { color: var(--color-text-secondary); }
 .uin-msg-body { padding: 0.75rem; }
-.uin-msg-text { margin: 0; white-space: pre-wrap; font: inherit; font-size: 0.9375rem; line-height: 1.55; color: var(--color-text); }
+/* pre-wrap keeps the sender's own line breaks and wraps at spaces - but a
+   three-hundred character tracking link has no spaces in it, and without
+   somewhere to break it the message is wider than the screen. */
+.uin-msg-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: var(--color-text);
+}
 .uin-frame { width: 100%; border: 0; display: block; background: var(--color-surface); }
 .uin-msg-foot {
   display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
@@ -722,6 +750,32 @@ const CSS = `
    already a flex row, so this stays inside it and out of the message body. */
 .uin-msg-actions { display: flex; gap: 0.5rem; align-items: center; margin-left: auto; }
 .uin-attachment:hover { border-color: var(--color-border-strong); color: var(--color-text); text-decoration: none; }
+
+/* ---- where a link actually goes ----------------------------------------- */
+/* The address is the whole point of the panel, so it is the biggest thing in
+   it, it wraps at any character - a tracking link is four hundred characters of
+   no spaces - and it can be selected, because copying it into something that
+   checks addresses is a perfectly sensible next move. */
+.uin-peek .uin-modal-body { display: grid; gap: 0.65rem; }
+.uin-peek-host { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem; }
+.uin-peek-host b { font-size: 1.0625rem; font-weight: 600; word-break: break-all; }
+.uin-peek-said { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem; font-size: 0.875rem; }
+.uin-peek-url {
+  display: block;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  user-select: all;
+  max-height: 9rem;
+  overflow-y: auto;
+}
 
 /* ---- small blocks the whole screen shares ------------------------------- */
 /* Four of these had grown a private copy in four components, which is four
@@ -1297,9 +1351,10 @@ const CSS = `
 .uin-timeline-row .uin-ctx-sub { grid-area: sub; }
 /* ---- campaigns ---------------------------------------------------------- */
 /* The same email to a great many people, slowly. The screen is a list of
-   campaigns, and one campaign is four steps down one column - Who, What, When,
-   Watch - because that is the order somebody thinks in and because a form with
-   four sections is a form that can be checked one section at a time. */
+   campaigns, and one campaign is ONE FORM down one column - who, what, when -
+   with one save bar pinned to the bottom of it. It used to be four tabs with
+   three save buttons and a fourth button that turned the audience into rows,
+   and nobody could tell which button did what. */
 .uin-camp-head {
   display: flex; flex-wrap: wrap; gap: 0.75rem;
   align-items: center; justify-content: space-between;
@@ -1356,8 +1411,8 @@ const CSS = `
 }
 .uin-camp-legend b { color: var(--color-text); font-weight: 600; }
 
-/* One campaign, in four steps. */
-.uin-camp-step {
+/* One section of the form. */
+.uin-camp-section {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md, 0.5rem);
   background: var(--color-surface);
@@ -1365,13 +1420,55 @@ const CSS = `
   display: grid; gap: 0.75rem;
   margin-bottom: 0.9rem;
 }
-.uin-camp-step > h3 {
-  margin: 0; font-size: 0.9375rem; display: flex; align-items: baseline; gap: 0.5rem;
+.uin-camp-section[data-tone="problem"] { border-color: var(--color-danger); }
+.uin-camp-section[data-tone="warning"] { border-color: var(--color-warning); }
+.uin-camp-section > h3 {
+  margin: 0; font-size: 0.9375rem; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem;
 }
-.uin-camp-step > h3 small { font-weight: 400; color: var(--color-text-muted); font-size: 0.8125rem; }
+.uin-camp-section > h3 small { font-weight: 400; color: var(--color-text-muted); font-size: 0.8125rem; }
+
+/* A block inside a section - one of the follow-ups, the sign-off boxes, the
+   test send. Ruled off rather than boxed, so a section still reads as one
+   thing with one save behind it. */
+.uin-camp-part { display: grid; gap: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--color-border); }
+.uin-camp-section > .uin-camp-part:first-of-type { padding-top: 0; border-top: 0; }
+.uin-camp-part-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; }
+.uin-camp-part-head strong { font-size: 0.875rem; }
+.uin-camp-part-head .btn { margin-left: auto; }
+
+/* How many people this comes to. The one number on the page somebody actually
+   reads, so it is not a hint. */
+.uin-camp-count { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem; font-size: 0.875rem; }
+.uin-camp-count b { font-size: 1.25rem; font-weight: 600; }
+.uin-camp-count > span { color: var(--color-text-muted); }
+
+/* The detail somebody only wants when they want it: who was left out and why,
+   how it reads, what keeps it ticking over. */
+.uin-camp-why {
+  border: 1px solid var(--color-border); border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-surface-raised); padding: 0.6rem 0.75rem;
+  display: grid; gap: 0.6rem; font-size: 0.875rem;
+}
+.uin-camp-why > summary { cursor: pointer; color: var(--color-text-muted); font-size: 0.8125rem; }
+.uin-camp-why[open] > summary { margin-bottom: 0.15rem; }
+
+/* THE ONE SAVE BAR. Pinned to the bottom of the panel, same place on every
+   status and on both halves of the screen, because "where do I save this" is
+   the question this whole screen was rebuilt to stop anybody asking. */
+.uin-camp-bar-actions {
+  position: sticky; bottom: 0; z-index: 2;
+  display: flex; flex-wrap: wrap; gap: 0.75rem;
+  align-items: center; justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-surface);
+  box-shadow: 0 -2px 8px rgb(0 0 0 / 0.06);
+}
+.uin-camp-bar-actions > .uin-camp-hint { flex: 1 1 12rem; font-size: 0.8125rem; color: var(--color-text-muted); }
 .uin-camp-field { display: grid; gap: 0.3rem; }
 .uin-camp-field > label { font-size: 0.8125rem; font-weight: 600; }
-.uin-camp-field > .uin-camp-hint { font-size: 0.8125rem; color: var(--color-text-muted); }
+.uin-camp-hint { font-size: 0.8125rem; color: var(--color-text-muted); }
 .uin-camp-row { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; }
 .uin-camp-row > .uin-camp-field { flex: 1 1 10rem; min-width: 0; }
 .uin-camp-check { display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.875rem; }

@@ -5,9 +5,10 @@ import { errorResponse } from '@/lib/utils'
 import { getSiteTimezone } from '@/lib/config/timezone.server'
 import { canReplyToInbox } from '@/modules/unified-inbox/lib/access'
 import { getInbox, getSettings } from '@/modules/unified-inbox/lib/db'
-import { decideSendAt } from '@/modules/unified-inbox/lib/scheduled'
+import { decideSendAt, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
+import { describeCampaignFault } from '@/modules/unified-inbox/lib/campaigns/faults'
 import { assessReadiness } from '@/modules/unified-inbox/lib/campaigns/readiness'
-import { clockToMinute, forecastFinish, isCalendarDate } from '@/modules/unified-inbox/lib/campaigns/window'
+import { OPEN_WINDOW, clockToMinute, forecastFinish, isCalendarDate } from '@/modules/unified-inbox/lib/campaigns/window'
 import {
   campaignTally,
   deleteCampaign,
@@ -95,7 +96,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   if (!campaign) return errorResponse('That campaign is no longer here.', 404)
 
   const parsed = CampaignPatchBody.safeParse(await request.json().catch(() => null))
-  if (!parsed.success) return errorResponse('That change could not be saved.')
+  if (!parsed.success) return errorResponse(describeCampaignFault(parsed.error))
   const data = parsed.data
   const isDraft = campaign.status === 'draft'
 
@@ -113,31 +114,46 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
   // The start time is a wall clock with no zone on it, exactly as the composer's
   // own "send later" box is, and it means what the site's clock says.
+  //
+  // A time that has been and gone is only a refusal when somebody has just
+  // typed it. The whole form saves in one press now, so the box on a campaign
+  // set up last week arrives here on every save with the same past value in it,
+  // and refusing that would leave an old campaign that cannot be saved at all.
+  // Unchanged means untouched, and untouched means left exactly as it is.
   let startAt: Date | null | undefined
   if (data.startAt !== undefined) {
     if (data.startAt === null) {
       startAt = null
     } else {
       const decision = decideSendAt(data.startAt, new Date(), timezone)
-      if (!decision.ok) return errorResponse(decision.reason)
-      startAt = decision.at
+      if (decision.ok) {
+        startAt = decision.at
+      } else if (campaign.startAt === null
+        || toWallClock(campaign.startAt, timezone) !== data.startAt.trim()) {
+        return errorResponse(decision.reason)
+      }
     }
   }
 
-  const window = data.window
+  // Every box on the When section may be left empty. An empty one arrives as
+  // null and means "no restriction", so it is widened to whatever the column's
+  // widest sensible value is - never quietly turned back into office hours.
+  const w = data.window
+  const window = w
     ? {
-        ...(data.window.startTime !== undefined
-          ? { startMinute: clockToMinute(data.window.startTime) ?? 480 } : {}),
-        ...(data.window.endTime !== undefined
-          ? { endMinute: clockToMinute(data.window.endTime) ?? 1020 } : {}),
-        ...(data.window.weekdaysOnly !== undefined ? { weekdaysOnly: data.window.weekdaysOnly } : {}),
-        ...(data.window.skipDates !== undefined
-          ? { skipDates: data.window.skipDates.filter(isCalendarDate) } : {}),
-        ...(data.window.intervalSeconds !== undefined ? { intervalSeconds: data.window.intervalSeconds } : {}),
-        ...(data.window.jitterSeconds !== undefined ? { jitterSeconds: data.window.jitterSeconds } : {}),
-        ...(data.window.dailyCap !== undefined ? { dailyCap: data.window.dailyCap } : {}),
-        ...(data.window.rampEnabled !== undefined ? { rampEnabled: data.window.rampEnabled } : {}),
-        ...(data.window.rampStart !== undefined ? { rampStart: data.window.rampStart } : {}),
+        ...(w.startTime !== undefined
+          ? { startMinute: w.startTime === null ? 0 : (clockToMinute(w.startTime) ?? 0) } : {}),
+        ...(w.endTime !== undefined
+          ? { endMinute: w.endTime === null ? 1440 : (clockToMinute(w.endTime) ?? 1440) } : {}),
+        ...(w.weekdaysOnly !== undefined ? { weekdaysOnly: w.weekdaysOnly } : {}),
+        ...(w.skipDates !== undefined
+          ? { skipDates: w.skipDates.filter(isCalendarDate) } : {}),
+        ...(w.intervalSeconds !== undefined
+          ? { intervalSeconds: w.intervalSeconds ?? OPEN_WINDOW.intervalSeconds } : {}),
+        ...(w.jitterSeconds !== undefined ? { jitterSeconds: w.jitterSeconds ?? 0 } : {}),
+        ...(w.dailyCap !== undefined ? { dailyCap: w.dailyCap } : {}),
+        ...(w.rampEnabled !== undefined ? { rampEnabled: w.rampEnabled } : {}),
+        ...(w.rampStart !== undefined ? { rampStart: w.rampStart ?? OPEN_WINDOW.rampStart } : {}),
       }
     : undefined
 

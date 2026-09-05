@@ -393,9 +393,14 @@ describe('sendMessage - the sending identity (D3)', () => {
     })
   })
 
-  it('still sets Reply-To, so an answer comes back here even if a server rewrites the sender', async () => {
+  it('writes no Reply-To when it would only repeat the address it is sent from', async () => {
+    // Which is every ordinary message from this module: an inbox answers as
+    // itself. A Reply-To saying "answer the sender" says nothing, and every
+    // spam scorer an owner is likely to check their mail against marks a
+    // message down for carrying one.
     await sendMessage(baseRequest())
-    expect(transport.deliver.mock.calls[0]![0].replyTo).toBe('hi@deskwell.co.uk')
+    expect(transport.deliver.mock.calls[0]![0].from.address).toBe('hi@deskwell.co.uk')
+    expect(transport.deliver.mock.calls[0]![0].replyTo).toBeNull()
   })
 })
 

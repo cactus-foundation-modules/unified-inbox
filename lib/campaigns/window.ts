@@ -36,8 +36,9 @@ const MAX_DAYS_AHEAD = 730
 
 const DAY_MS = 86_400_000
 
-/** The sensible defaults a new campaign opens with: office hours, weekdays, a
- *  minute and a half between messages. */
+/** Office hours on weekdays, a minute and a half apart. The shape most people
+ *  end up with, and the fixture the clock's own tests are written against - but
+ *  NOT what a new campaign opens with. See OPEN_WINDOW. */
 export const DEFAULT_WINDOW: SendWindow = {
   startMinute: 8 * 60,
   endMinute: 17 * 60,
@@ -48,6 +49,38 @@ export const DEFAULT_WINDOW: SendWindow = {
   dailyCap: null,
   rampEnabled: false,
   rampStart: 50,
+}
+
+/**
+ * What a brand-new campaign opens with: nothing decided.
+ *
+ * Every box on the When step is empty, and empty means no restriction - midnight
+ * to midnight, seven days a week. A screen that arrives with 08:00 and 17:00
+ * already typed into it is a screen making a decision on somebody's behalf and
+ * then hiding it behind a value they did not choose; the honest version is a
+ * blank box and a warning on the way out of the door.
+ *
+ * The gap between messages is the exception, and stays at ninety seconds,
+ * because it is a pace rather than a gate: there is no such thing as "no gap",
+ * and the whole point of the feature is that it does not arrive as a burst.
+ */
+export const OPEN_WINDOW: SendWindow = {
+  startMinute: 0,
+  endMinute: 1440,
+  weekdaysOnly: false,
+  skipDates: [],
+  intervalSeconds: 90,
+  jitterSeconds: 0,
+  dailyCap: null,
+  rampEnabled: false,
+  rampStart: 50,
+}
+
+/** Whether this window restricts the time of day at all. Midnight to midnight
+ *  is what an empty pair of time boxes saves as, and it is worth a warning
+ *  rather than a silent three-in-the-morning mailshot. */
+export function isAllDay(window: SendWindow): boolean {
+  return window.startMinute <= 0 && window.endMinute >= 1440
 }
 
 /** "YYYY-MM-DD" as the day of the week, 0 for Sunday. Parsed as UTC on purpose:
