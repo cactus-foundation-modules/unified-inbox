@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { errorResponse } from '@/lib/utils'
 import { sweepAbandonedUploads, sweepRetention, sweepStalledSends } from '@/modules/unified-inbox/lib/retention'
 import { pruneDeliveries } from '@/modules/unified-inbox/lib/webhooks-db'
+import { getSettings } from '@/modules/unified-inbox/lib/db'
+import { pruneCampaignLogs } from '@/modules/unified-inbox/lib/campaigns/store'
 
 // The daily tidy: the retention window, and the people it leaves holding
 // nothing.
@@ -47,12 +49,23 @@ export async function GET(request: NextRequest) {
   // draft holding one keeps it for as long as the draft lives.
   const uploads = await sweepAbandonedUploads()
 
+  // The send-by-send ledger of campaigns that finished long ago. The recipient
+  // rows are what hold a name, an address and a company, so those are what go;
+  // the campaign itself stays, because "we sent that in March" is a fact about
+  // the business rather than about a person. Batched like everything else here,
+  // so four years of it catches up over a few nights.
+  const settings = await getSettings()
+  const campaignCutoff = new Date()
+  campaignCutoff.setMonth(campaignCutoff.getMonth() - settings.campaignLogMonths)
+  const campaignRows = await pruneCampaignLogs(campaignCutoff, 500)
+
   return NextResponse.json({
     ok: true,
     stalledSends,
     webhookAttempts,
     abandonedUploads: uploads.removed,
     abandonedUploadFailures: uploads.failures,
+    campaignRows,
     ...retention,
   })
 }

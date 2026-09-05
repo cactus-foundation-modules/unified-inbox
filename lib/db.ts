@@ -10,6 +10,8 @@ import { DRAFT_MODES, DRAFT_SEND_STATES, isSignatureKind } from './types'
 import type {
   AttachmentFetchMode,
   Connection,
+  ContactCategory,
+  ContactOrigin,
   DiscoveredFolder,
   Draft,
   DraftAttachment,
@@ -22,6 +24,7 @@ import type {
   Organisation,
   Person,
   PersonIdentity,
+  PostalAddress,
   RecordLink,
   SendTransport,
   SignatureKind,
@@ -565,6 +568,9 @@ const DEFAULT_SETTINGS: UnifiedInboxSettings = {
   trackOpens: false,
   requestReadReceipts: false,
   autoCheckSeconds: null,
+  campaignCooldownDays: 7,
+  campaignLogMonths: 24,
+  campaignFooterAddress: null,
 }
 
 export async function getSettings(): Promise<UnifiedInboxSettings> {
@@ -610,6 +616,16 @@ export async function getSettings(): Promise<UnifiedInboxSettings> {
     autoCheckSeconds: r.auto_check_seconds === null || r.auto_check_seconds === undefined
       ? null
       : Number(r.auto_check_seconds),
+    // A week for a row written before the column existed, which is the same
+    // answer a fresh install gets: a guard that arrives switched off in an
+    // update is a guard nobody knows they are missing.
+    campaignCooldownDays: r.campaign_cooldown_days === null || r.campaign_cooldown_days === undefined
+      ? 7
+      : Number(r.campaign_cooldown_days),
+    campaignLogMonths: r.campaign_log_months === null || r.campaign_log_months === undefined
+      ? 24
+      : Number(r.campaign_log_months),
+    campaignFooterAddress: (r.campaign_footer_address as string | null) ?? null,
   }
 }
 
@@ -633,6 +649,9 @@ export async function updateSettings(data: Partial<UnifiedInboxSettings>): Promi
   if (data.trackOpens !== undefined) sets.push(Prisma.sql`"track_opens" = ${data.trackOpens}`)
   if (data.requestReadReceipts !== undefined) sets.push(Prisma.sql`"request_read_receipts" = ${data.requestReadReceipts}`)
   if (data.autoCheckSeconds !== undefined) sets.push(Prisma.sql`"auto_check_seconds" = ${data.autoCheckSeconds}`)
+  if (data.campaignCooldownDays !== undefined) sets.push(Prisma.sql`"campaign_cooldown_days" = ${data.campaignCooldownDays}`)
+  if (data.campaignLogMonths !== undefined) sets.push(Prisma.sql`"campaign_log_months" = ${data.campaignLogMonths}`)
+  if (data.campaignFooterAddress !== undefined) sets.push(Prisma.sql`"campaign_footer_address" = ${data.campaignFooterAddress}`)
   if (sets.length === 0) return getSettings()
 
   await prisma.$executeRaw`
@@ -3061,10 +3080,21 @@ function mapPerson(r: Record<string, unknown>): Person {
   return {
     id: r.id as string,
     displayName: (r.display_name as string | null) ?? null,
+    firstName: (r.first_name as string | null) ?? null,
+    lastName: (r.last_name as string | null) ?? null,
+    jobTitle: (r.job_title as string | null) ?? null,
+    website: (r.website as string | null) ?? null,
     primaryEmail: (r.primary_email as string | null) ?? null,
     organisationId: (r.organisation_id as string | null) ?? null,
     organisationName: (r.organisation_name as string | null) ?? null,
     notes: (r.notes as string | null) ?? null,
+    origin: ((r.origin as string | null) ?? 'mail') as ContactOrigin,
+    addressLine1: (r.address_line1 as string | null) ?? null,
+    addressLine2: (r.address_line2 as string | null) ?? null,
+    addressCity: (r.address_city as string | null) ?? null,
+    addressCounty: (r.address_county as string | null) ?? null,
+    addressPostcode: (r.address_postcode as string | null) ?? null,
+    addressCountry: (r.address_country as string | null) ?? null,
     mergedIntoId: (r.merged_into_id as string | null) ?? null,
     createdAt: r.created_at as Date,
     updatedAt: r.updated_at as Date,
@@ -3072,7 +3102,10 @@ function mapPerson(r: Record<string, unknown>): Person {
 }
 
 const PERSON_SELECT = Prisma.sql`
-  p."id", p."display_name", p."primary_email", p."organisation_id", p."notes",
+  p."id", p."display_name", p."first_name", p."last_name", p."job_title", p."website",
+  p."primary_email", p."organisation_id", p."notes", p."origin",
+  p."address_line1", p."address_line2", p."address_city", p."address_county",
+  p."address_postcode", p."address_country",
   p."merged_into_id", p."created_at", p."updated_at", o."name" AS organisation_name`
 
 /** One person, following a merge to whoever they were merged into. Somebody
@@ -3101,33 +3134,72 @@ export async function getPerson(id: string, depth = 0): Promise<Person | null> {
   return person
 }
 
-export type PersonListRow = Person & { identityCount: number; threadCount: number }
+export type PersonListRow = Person & {
+  identityCount: number
+  threadCount: number
+  /** The first number on record, for the contacts list. Numbers live in the
+   *  identities table rather than on the person (see 025_contacts.sql), so a
+   *  list that wants to show one has to go and get it. */
+  phone: string | null
+}
 
-/** The people directory: everybody we have met, newest first, minus anybody who
- *  lost a merge. */
+/** How the contacts list is ordered. By surname is what an address book does;
+ *  by when we last heard from them is what an inbox does, and both screens read
+ *  this one query. */
+export type PeopleSort = 'name' | 'recent'
+
+/** The people directory: everybody we have met, minus anybody who lost a merge.
+ *
+ *  Ordering by name puts the ones with no surname last rather than first. A
+ *  contacts list that opens on twenty blanks looks broken, and the ones with no
+ *  name yet are exactly the ones somebody is least likely to be looking for. */
 export async function listPeople(opts: {
   search?: string | null
   page: number
   perPage: number
+  sort?: PeopleSort
+  organisationId?: string | null
+  /** Only the contacts wearing this label. */
+  categoryId?: string | null
 }): Promise<{ rows: PersonListRow[]; total: number }> {
   const term = opts.search?.trim()
-  const where = term
-    ? Prisma.sql`p."merged_into_id" IS NULL AND (
+  const clauses: Prisma.Sql[] = [Prisma.sql`p."merged_into_id" IS NULL`]
+  if (term) {
+    clauses.push(Prisma.sql`(
         p."display_name" ILIKE ${`%${term}%`}
+        OR p."first_name" ILIKE ${`%${term}%`}
+        OR p."last_name" ILIKE ${`%${term}%`}
         OR p."primary_email" ILIKE ${`%${term}%`}
+        OR p."job_title" ILIKE ${`%${term}%`}
+        OR p."address_postcode" ILIKE ${`%${term}%`}
+        OR p."address_city" ILIKE ${`%${term}%`}
         OR o."name" ILIKE ${`%${term}%`}
         OR EXISTS (SELECT 1 FROM "uin_person_identities" i
-                    WHERE i."person_id" = p."id" AND i."value" ILIKE ${`%${term}%`}))`
-    : Prisma.sql`p."merged_into_id" IS NULL`
+                    WHERE i."person_id" = p."id" AND i."value" ILIKE ${`%${term}%`}))`)
+  }
+  if (opts.organisationId) clauses.push(Prisma.sql`p."organisation_id" = ${opts.organisationId}`)
+  if (opts.categoryId) {
+    clauses.push(Prisma.sql`EXISTS (SELECT 1 FROM "uin_person_categories" pc
+                                     WHERE pc."person_id" = p."id"
+                                       AND pc."category_id" = ${opts.categoryId})`)
+  }
+  const where = Prisma.join(clauses, ' AND ')
+
+  const order = opts.sort === 'name'
+    ? Prisma.sql`p."last_name" ASC NULLS LAST, p."first_name" ASC NULLS LAST, p."display_name" ASC NULLS LAST`
+    : Prisma.sql`p."updated_at" DESC`
 
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT ${PERSON_SELECT},
            (SELECT COUNT(*) FROM "uin_person_identities" i WHERE i."person_id" = p."id") AS identity_count,
-           (SELECT COUNT(*) FROM "uin_threads" t WHERE t."person_id" = p."id") AS thread_count
+           (SELECT COUNT(*) FROM "uin_threads" t WHERE t."person_id" = p."id") AS thread_count,
+           (SELECT i."value" FROM "uin_person_identities" i
+             WHERE i."person_id" = p."id" AND i."kind" = 'phone'
+             ORDER BY i."created_at" ASC LIMIT 1) AS phone
       FROM "uin_people" p
       LEFT JOIN "uin_organisations" o ON o."id" = p."organisation_id"
      WHERE ${where}
-     ORDER BY p."updated_at" DESC
+     ORDER BY ${order}
      LIMIT ${opts.perPage} OFFSET ${(opts.page - 1) * opts.perPage}
   `
   const counted = await prisma.$queryRaw<{ count: bigint }[]>`
@@ -3141,6 +3213,7 @@ export async function listPeople(opts: {
       ...mapPerson(r),
       identityCount: Number(r.identity_count ?? 0),
       threadCount: Number(r.thread_count ?? 0),
+      phone: (r.phone as string | null) ?? null,
     })),
     total: Number(counted[0]?.count ?? 0),
   }
@@ -3162,30 +3235,82 @@ export async function findPersonByIdentity(matchValues: string[]): Promise<strin
   return row.merged_into_id ?? row.person_id
 }
 
+/** Everything an address book card holds beyond the name, all of it optional.
+ *  `undefined` means "leave it as it was" and `null` means "clear it", which is
+ *  the difference between a form that saved two fields and a form that wiped
+ *  the other eleven. */
+export type PersonDetails = Partial<PostalAddress> & {
+  firstName?: string | null
+  lastName?: string | null
+  jobTitle?: string | null
+  website?: string | null
+}
+
+/** The columns a person's own details live in, written once and used by both
+ *  the insert and the update - a field added to one and forgotten in the other
+ *  is a field that saves on the edit form and vanishes on the new one. */
+const PERSON_DETAIL_COLUMNS: ReadonlyArray<[keyof PersonDetails, string]> = [
+  ['firstName', 'first_name'],
+  ['lastName', 'last_name'],
+  ['jobTitle', 'job_title'],
+  ['website', 'website'],
+  ['addressLine1', 'address_line1'],
+  ['addressLine2', 'address_line2'],
+  ['addressCity', 'address_city'],
+  ['addressCounty', 'address_county'],
+  ['addressPostcode', 'address_postcode'],
+  ['addressCountry', 'address_country'],
+]
+
 export async function createPerson(data: {
   displayName: string | null
   primaryEmail: string | null
   organisationId: string | null
+  notes?: string | null
+  origin?: ContactOrigin
+  details?: PersonDetails
 }): Promise<string> {
+  const columns: Prisma.Sql[] = [
+    Prisma.sql`"display_name"`, Prisma.sql`"primary_email"`,
+    Prisma.sql`"organisation_id"`, Prisma.sql`"notes"`, Prisma.sql`"origin"`,
+  ]
+  const values: Prisma.Sql[] = [
+    Prisma.sql`${data.displayName}`, Prisma.sql`${data.primaryEmail}`,
+    Prisma.sql`${data.organisationId}`, Prisma.sql`${data.notes ?? null}`,
+    Prisma.sql`${data.origin ?? 'mail'}`,
+  ]
+  for (const [key, column] of PERSON_DETAIL_COLUMNS) {
+    const value = data.details?.[key]
+    if (value === undefined) continue
+    columns.push(Prisma.raw(`"${column}"`))
+    values.push(Prisma.sql`${value}`)
+  }
   const rows = await prisma.$queryRaw<{ id: string }[]>`
-    INSERT INTO "uin_people" ("display_name", "primary_email", "organisation_id")
-    VALUES (${data.displayName}, ${data.primaryEmail}, ${data.organisationId})
+    INSERT INTO "uin_people" (${Prisma.join(columns, ', ')})
+    VALUES (${Prisma.join(values, ', ')})
     RETURNING "id"
   `
   return rows[0]!.id
 }
 
-export async function updatePerson(id: string, data: {
+export async function updatePerson(id: string, data: PersonDetails & {
   displayName?: string | null
   primaryEmail?: string | null
   organisationId?: string | null
   notes?: string | null
+  origin?: ContactOrigin
 }): Promise<void> {
   const sets: Prisma.Sql[] = []
   if (data.displayName !== undefined) sets.push(Prisma.sql`"display_name" = ${data.displayName}`)
   if (data.primaryEmail !== undefined) sets.push(Prisma.sql`"primary_email" = ${data.primaryEmail}`)
   if (data.organisationId !== undefined) sets.push(Prisma.sql`"organisation_id" = ${data.organisationId}`)
   if (data.notes !== undefined) sets.push(Prisma.sql`"notes" = ${data.notes}`)
+  if (data.origin !== undefined) sets.push(Prisma.sql`"origin" = ${data.origin}`)
+  for (const [key, column] of PERSON_DETAIL_COLUMNS) {
+    const value = data[key]
+    if (value === undefined) continue
+    sets.push(Prisma.sql`${Prisma.raw(`"${column}"`)} = ${value}`)
+  }
   if (sets.length === 0) return
   await prisma.$executeRaw`
     UPDATE "uin_people" SET ${Prisma.join(sets, ', ')}, "updated_at" = now() WHERE "id" = ${id}
@@ -3205,12 +3330,16 @@ export async function addIdentity(data: {
   value: string
   matchValue: string
   source: string | null
-}): Promise<void> {
-  await prisma.$executeRaw`
+}): Promise<boolean> {
+  const written = await prisma.$executeRaw`
     INSERT INTO "uin_person_identities" ("person_id", "kind", "value", "match_value", "source")
     VALUES (${data.personId}, ${data.kind}, ${data.value}, ${data.matchValue}, ${data.source})
     ON CONFLICT ("value") DO NOTHING
   `
+  // Whether the row went in, which is what the contacts screen needs to tell
+  // "saved" apart from "somebody else already holds that address" - the one
+  // case where nothing happening is the correct behaviour and a silent one.
+  return written > 0
 }
 
 function mapIdentity(r: Record<string, unknown>): PersonIdentity {
@@ -3237,6 +3366,19 @@ export async function deleteIdentity(id: string): Promise<void> {
   await prisma.$executeRaw`DELETE FROM "uin_person_identities" WHERE "id" = ${id}`
 }
 
+/** The same, said with the person as well.
+ *
+ *  Which is the point: an identity id typed into the address bar must not take
+ *  a way of reaching somebody else off them, so the person is part of the WHERE
+ *  rather than something checked first and trusted after. Returns whether a row
+ *  actually went. */
+export async function deleteIdentityForPerson(personId: string, id: string): Promise<boolean> {
+  const removed = await prisma.$executeRaw`
+    DELETE FROM "uin_person_identities" WHERE "id" = ${id} AND "person_id" = ${personId}
+  `
+  return removed > 0
+}
+
 // ---------------------------------------------------------------------------
 // Organisations. One per mail domain, and only for domains that mean something:
 // a free provider is somebody's mailbox host, not a company.
@@ -3255,19 +3397,151 @@ export async function findOrCreateOrganisation(domain: string, name: string): Pr
   return rows[0]!.id
 }
 
-export async function getOrganisation(id: string): Promise<Organisation | null> {
-  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT * FROM "uin_organisations" WHERE "id" = ${id}
-  `
-  const r = rows[0]
-  if (!r) return null
+function mapOrganisation(r: Record<string, unknown>): Organisation {
   return {
     id: r.id as string,
     name: r.name as string,
     domain: (r.domain as string | null) ?? null,
+    email: (r.email as string | null) ?? null,
+    phone: (r.phone as string | null) ?? null,
+    website: (r.website as string | null) ?? null,
+    notes: (r.notes as string | null) ?? null,
+    origin: ((r.origin as string | null) ?? 'mail') as ContactOrigin,
+    addressLine1: (r.address_line1 as string | null) ?? null,
+    addressLine2: (r.address_line2 as string | null) ?? null,
+    addressCity: (r.address_city as string | null) ?? null,
+    addressCounty: (r.address_county as string | null) ?? null,
+    addressPostcode: (r.address_postcode as string | null) ?? null,
+    addressCountry: (r.address_country as string | null) ?? null,
     createdAt: r.created_at as Date,
     updatedAt: r.updated_at as Date,
   }
+}
+
+export async function getOrganisation(id: string): Promise<Organisation | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_organisations" WHERE "id" = ${id}
+  `
+  return rows[0] ? mapOrganisation(rows[0]) : null
+}
+
+export type OrganisationListRow = Organisation & { peopleCount: number }
+
+/** The organisations directory, by name, with how many contacts each one has.
+ *  The count is what makes "Acme Ltd" and "Acme Limited" - the two an import
+ *  can leave behind - visible enough to be merged by hand. */
+export async function listOrganisations(opts: {
+  search?: string | null
+  page: number
+  perPage: number
+}): Promise<{ rows: OrganisationListRow[]; total: number }> {
+  const term = opts.search?.trim()
+  const where = term
+    ? Prisma.sql`(g."name" ILIKE ${`%${term}%`} OR g."domain" ILIKE ${`%${term}%`}
+                  OR g."address_postcode" ILIKE ${`%${term}%`} OR g."address_city" ILIKE ${`%${term}%`})`
+    : Prisma.sql`TRUE`
+
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT g.*,
+           (SELECT COUNT(*) FROM "uin_people" p
+             WHERE p."organisation_id" = g."id" AND p."merged_into_id" IS NULL) AS people_count
+      FROM "uin_organisations" g
+     WHERE ${where}
+     ORDER BY g."name" ASC
+     LIMIT ${opts.perPage} OFFSET ${(opts.page - 1) * opts.perPage}
+  `
+  const counted = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(*)::bigint AS count FROM "uin_organisations" g WHERE ${where}
+  `
+  return {
+    rows: rows.map((r) => ({ ...mapOrganisation(r), peopleCount: Number(r.people_count ?? 0) })),
+    total: Number(counted[0]?.count ?? 0),
+  }
+}
+
+/** An organisation by name, case and surrounding space ignored.
+ *
+ *  What an import matches on. A sheet says "Acme Ltd" in two thousand rows and
+ *  means one company, and creating two thousand of them - or one per spelling
+ *  of the same name - is the failure mode of every contacts import there has
+ *  ever been. Merged-away people have no bearing here; organisations do not
+ *  merge. */
+export async function findOrganisationByName(name: string): Promise<Organisation | null> {
+  const clean = name.trim()
+  if (!clean) return null
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_organisations" WHERE lower(btrim("name")) = ${clean.toLowerCase()} LIMIT 1
+  `
+  return rows[0] ? mapOrganisation(rows[0]) : null
+}
+
+/** The columns an organisation's own details live in. Same reasoning as the
+ *  person's list above: one place, so the insert and the update cannot drift. */
+const ORGANISATION_DETAIL_COLUMNS: ReadonlyArray<[keyof OrganisationDetails, string]> = [
+  ['domain', 'domain'],
+  ['email', 'email'],
+  ['phone', 'phone'],
+  ['website', 'website'],
+  ['notes', 'notes'],
+  ['addressLine1', 'address_line1'],
+  ['addressLine2', 'address_line2'],
+  ['addressCity', 'address_city'],
+  ['addressCounty', 'address_county'],
+  ['addressPostcode', 'address_postcode'],
+  ['addressCountry', 'address_country'],
+]
+
+export type OrganisationDetails = Partial<PostalAddress> & {
+  domain?: string | null
+  email?: string | null
+  phone?: string | null
+  website?: string | null
+  notes?: string | null
+}
+
+export async function createOrganisation(data: OrganisationDetails & {
+  name: string
+  origin?: ContactOrigin
+}): Promise<string> {
+  const columns: Prisma.Sql[] = [Prisma.sql`"name"`, Prisma.sql`"origin"`]
+  const values: Prisma.Sql[] = [Prisma.sql`${data.name}`, Prisma.sql`${data.origin ?? 'hand'}`]
+  for (const [key, column] of ORGANISATION_DETAIL_COLUMNS) {
+    const value = data[key]
+    if (value === undefined) continue
+    columns.push(Prisma.raw(`"${column}"`))
+    values.push(Prisma.sql`${value}`)
+  }
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    INSERT INTO "uin_organisations" (${Prisma.join(columns, ', ')})
+    VALUES (${Prisma.join(values, ', ')})
+    RETURNING "id"
+  `
+  return rows[0]!.id
+}
+
+export async function updateOrganisation(id: string, data: OrganisationDetails & {
+  name?: string
+}): Promise<void> {
+  const sets: Prisma.Sql[] = []
+  if (data.name !== undefined) sets.push(Prisma.sql`"name" = ${data.name}`)
+  for (const [key, column] of ORGANISATION_DETAIL_COLUMNS) {
+    const value = data[key]
+    if (value === undefined) continue
+    sets.push(Prisma.sql`${Prisma.raw(`"${column}"`)} = ${value}`)
+  }
+  if (sets.length === 0) return
+  await prisma.$executeRaw`
+    UPDATE "uin_organisations" SET ${Prisma.join(sets, ', ')}, "updated_at" = now()
+     WHERE "id" = ${id}
+  `
+}
+
+/** Removing an organisation. Everybody who was in it keeps their record and
+ *  loses the badge, which the foreign key does on its own - a contact is not
+ *  the company they work for, and deleting a supplier must not delete the
+ *  person who answers the phone there. */
+export async function deleteOrganisation(id: string): Promise<void> {
+  await prisma.$executeRaw`DELETE FROM "uin_organisations" WHERE "id" = ${id}`
 }
 
 /** Everybody at one organisation, for the person page's "who else writes to us
@@ -3284,6 +3558,198 @@ export async function peopleInOrganisation(organisationId: string, exceptPersonI
      LIMIT 12
   `
   return rows.map(mapPerson)
+}
+
+// ---------------------------------------------------------------------------
+// Categories: the label somebody puts on a contact.
+//
+// A company is not a category - a supplier and a customer can both be at Acme
+// Ltd, and the haulier who only telephones has no company here at all - so this
+// is its own small list with its own join table.
+//
+// Matched on the name however it was typed, which is the whole reason the
+// unique index in 026 is on lower(btrim(name)): a file with "Supplier" on one
+// row and "supplier" on the next means one category, and two would be a mess
+// somebody unpicks by hand.
+// ---------------------------------------------------------------------------
+
+function mapCategory(r: Record<string, unknown>): ContactCategory {
+  return {
+    id: r.id as string,
+    name: r.name as string,
+    sortOrder: Number(r.sort_order ?? 0),
+    createdAt: r.created_at as Date,
+    updatedAt: r.updated_at as Date,
+  }
+}
+
+export type CategoryListRow = ContactCategory & { peopleCount: number }
+
+/** Every category, in the order somebody put them in, with how many contacts
+ *  are in each - which is what makes an empty one worth deleting and a typo
+ *  worth renaming. */
+export async function listCategories(): Promise<CategoryListRow[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT c.*,
+           (SELECT COUNT(*) FROM "uin_person_categories" pc
+              JOIN "uin_people" p ON p."id" = pc."person_id"
+             WHERE pc."category_id" = c."id" AND p."merged_into_id" IS NULL) AS people_count
+      FROM "uin_contact_categories" c
+     ORDER BY c."sort_order" ASC, c."name" ASC
+  `
+  return rows.map((r) => ({ ...mapCategory(r), peopleCount: Number(r.people_count ?? 0) }))
+}
+
+export async function getCategory(id: string): Promise<ContactCategory | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_contact_categories" WHERE "id" = ${id}
+  `
+  return rows[0] ? mapCategory(rows[0]) : null
+}
+
+export async function findCategoryByName(name: string): Promise<ContactCategory | null> {
+  const clean = name.trim()
+  if (!clean) return null
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_contact_categories"
+     WHERE lower(btrim("name")) = ${clean.toLowerCase()} LIMIT 1
+  `
+  return rows[0] ? mapCategory(rows[0]) : null
+}
+
+/**
+ * A category by that name, made if there is not one.
+ *
+ * `ON CONFLICT` names no column because the constraint is an expression index -
+ * Postgres will not take `("name")` for a unique index on `lower(btrim("name"))`
+ * - so the conflict is declared the same way the index is. Without it, two
+ * imports running at once would raise rather than settle.
+ */
+export async function findOrCreateCategory(name: string): Promise<string> {
+  const clean = name.trim()
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    INSERT INTO "uin_contact_categories" ("name") VALUES (${clean})
+    ON CONFLICT (lower(btrim("name"))) DO UPDATE SET "updated_at" = now()
+    RETURNING "id"
+  `
+  return rows[0]!.id
+}
+
+export async function createCategory(name: string): Promise<string> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    INSERT INTO "uin_contact_categories" ("name", "sort_order")
+    VALUES (
+      ${name.trim()},
+      (SELECT COALESCE(MAX("sort_order"), -1) + 1 FROM "uin_contact_categories")
+    )
+    RETURNING "id"
+  `
+  return rows[0]!.id
+}
+
+export async function renameCategory(id: string, name: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "uin_contact_categories"
+       SET "name" = ${name.trim()}, "updated_at" = now()
+     WHERE "id" = ${id}
+  `
+}
+
+/** Removing a category. Everybody in it keeps their record and loses the label,
+ *  which the join table's ON DELETE CASCADE does on its own - a category is
+ *  something somebody said ABOUT a contact, never the contact. */
+export async function deleteCategory(id: string): Promise<void> {
+  await prisma.$executeRaw`DELETE FROM "uin_contact_categories" WHERE "id" = ${id}`
+}
+
+/** The order somebody dragged them into. Ids not in the list are left where
+ *  they are, so a category added while the screen was open is not shuffled to
+ *  the front by somebody else's save. */
+export async function reorderCategories(ids: string[]): Promise<void> {
+  if (ids.length === 0) return
+  for (const [index, id] of ids.entries()) {
+    await prisma.$executeRaw`
+      UPDATE "uin_contact_categories" SET "sort_order" = ${index}, "updated_at" = now()
+       WHERE "id" = ${id}
+    `
+  }
+}
+
+/** One contact's categories, in the list's own order. */
+export async function categoriesForPerson(personId: string): Promise<ContactCategory[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT c.* FROM "uin_contact_categories" c
+      JOIN "uin_person_categories" pc ON pc."category_id" = c."id"
+     WHERE pc."person_id" = ${personId}
+     ORDER BY c."sort_order" ASC, c."name" ASC
+  `
+  return rows.map(mapCategory)
+}
+
+/**
+ * The categories on a whole page of contacts, in one query.
+ *
+ * The list draws twenty-five rows and every one of them wants its labels. A
+ * query per row is twenty-five round trips for a screen somebody scrolls past.
+ */
+export async function categoriesForPeople(
+  personIds: string[],
+): Promise<Record<string, string[]>> {
+  if (personIds.length === 0) return {}
+  const rows = await prisma.$queryRaw<{ person_id: string; name: string }[]>`
+    SELECT pc."person_id", c."name"
+      FROM "uin_person_categories" pc
+      JOIN "uin_contact_categories" c ON c."id" = pc."category_id"
+     WHERE pc."person_id" IN (${Prisma.join(personIds)})
+     ORDER BY c."sort_order" ASC, c."name" ASC
+  `
+  const byPerson: Record<string, string[]> = {}
+  for (const row of rows) {
+    const list = byPerson[row.person_id]
+    if (list) list.push(row.name)
+    else byPerson[row.person_id] = [row.name]
+  }
+  return byPerson
+}
+
+/**
+ * Which categories one contact is in, set outright.
+ *
+ * A replace rather than a merge, because that is what a card full of ticks
+ * means: what is ticked is what they are in. The delete names the ids that are
+ * staying rather than clearing the lot and writing them back, so a category
+ * somebody was already in keeps the date it was put on.
+ */
+export async function setPersonCategories(personId: string, categoryIds: string[]): Promise<void> {
+  if (categoryIds.length === 0) {
+    await prisma.$executeRaw`DELETE FROM "uin_person_categories" WHERE "person_id" = ${personId}`
+    return
+  }
+  await prisma.$executeRaw`
+    DELETE FROM "uin_person_categories"
+     WHERE "person_id" = ${personId}
+       AND "category_id" NOT IN (${Prisma.join(categoryIds)})
+  `
+  for (const categoryId of categoryIds) {
+    await prisma.$executeRaw`
+      INSERT INTO "uin_person_categories" ("person_id", "category_id")
+      VALUES (${personId}, ${categoryId})
+      ON CONFLICT ("person_id", "category_id") DO NOTHING
+    `
+  }
+}
+
+/** Put a contact in some categories without taking them out of any. What an
+ *  import does: a file that says "Supplier" is adding a fact, not stating the
+ *  whole of what somebody is. */
+export async function addPersonCategories(personId: string, categoryIds: string[]): Promise<void> {
+  for (const categoryId of categoryIds) {
+    await prisma.$executeRaw`
+      INSERT INTO "uin_person_categories" ("person_id", "category_id")
+      VALUES (${personId}, ${categoryId})
+      ON CONFLICT ("person_id", "category_id") DO NOTHING
+    `
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -3372,6 +3838,23 @@ export async function threadsForPerson(
     threadListQuery([visible, Prisma.sql`t."person_id" = ${personId}`], 50, 0),
   )
   return rows.map(mapThreadListRow)
+}
+
+/**
+ * How many conversations this person has at all, whoever may read them.
+ *
+ * Asked so that a contact with no conversations is not mistaken for one whose
+ * conversations this reader may not see. The two used to be the same answer,
+ * which was right when the only way to become a person was to write in - and
+ * became wrong the moment somebody could be added by hand, because a contact
+ * typed in this morning has no mail against them and was being hidden from
+ * everybody but an administrator.
+ */
+export async function countThreadsForPerson(personId: string): Promise<number> {
+  const rows = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(*)::bigint AS count FROM "uin_threads" WHERE "person_id" = ${personId}
+  `
+  return Number(rows[0]?.count ?? 0)
 }
 
 export type OutboundLogRow = {
@@ -4252,6 +4735,10 @@ export type PersonErasePreview = {
   /** Automated mail core's own delivery ledger holds for their addresses. Also
    *  not erased, and also said out loud. */
   outboundLogRows: number
+  /** Campaign rows held about them - one per campaign they were on. These DO
+   *  go: they hold a name, an address and a company, which is exactly the sort
+   *  of thing being asked about. */
+  campaignRows: number
 }
 
 export async function personErasePreview(personId: string): Promise<PersonErasePreview | null> {
@@ -4284,6 +4771,15 @@ export async function personErasePreview(personId: string): Promise<PersonEraseP
     ? await prisma.emailLog.count({ where: { toAddress: { in: emails, mode: 'insensitive' } } })
     : 0
 
+  // Campaign rows go with them by foreign key when the person row is removed.
+  // Counted here so the confirmation can say so rather than leaving somebody to
+  // wonder whether a mailshot list still has their name on it.
+  const [campaigns] = await prisma.$queryRaw<Array<{ count: bigint }>>`
+    SELECT COUNT(*)::bigint AS count
+      FROM "uin_campaign_recipients"
+     WHERE "person_id" = ${personId}
+  `
+
   return {
     personId,
     name: person.displayName || person.primaryEmail,
@@ -4294,6 +4790,7 @@ export async function personErasePreview(personId: string): Promise<PersonEraseP
     identities: identities.map((i) => i.value),
     links: links.map((l) => ({ moduleName: l.module_name, label: l.label })),
     outboundLogRows,
+    campaignRows: Number(campaigns?.count ?? 0),
   }
 }
 
@@ -4571,6 +5068,50 @@ export async function ensureBrevoWebhookSecret(): Promise<string> {
      WHERE "id" = 'singleton' AND "brevo_webhook_secret" IS NULL
   `
   return (await getBrevoWebhookSecret()) ?? secret
+}
+
+/**
+ * The key on the campaign tick address, made the first time it is asked for.
+ *
+ * Same arrangement as the Brevo webhook secret above: a long random value that
+ * lives in the address itself, because the free minute-by-minute pingers a site
+ * would point at this cannot set a header. Regenerating it changes the address,
+ * which is the point - it is how a key that has been pasted somewhere public is
+ * taken out of service.
+ */
+export async function ensureCampaignTickToken(): Promise<string> {
+  const existing = await getCampaignTickToken()
+  if (existing) return existing
+  const token = randomBytes(24).toString('hex')
+  await prisma.$executeRaw`
+    INSERT INTO "uin_settings" ("id") VALUES ('singleton') ON CONFLICT ("id") DO NOTHING
+  `
+  await prisma.$executeRaw`
+    UPDATE "uin_settings"
+       SET "campaign_tick_token" = ${token}, "updated_at" = now()
+     WHERE "id" = 'singleton' AND "campaign_tick_token" IS NULL
+  `
+  return (await getCampaignTickToken()) ?? token
+}
+
+export async function getCampaignTickToken(): Promise<string | null> {
+  const rows = await prisma.$queryRaw<{ campaign_tick_token: string | null }[]>`
+    SELECT "campaign_tick_token" FROM "uin_settings" WHERE "id" = 'singleton'
+  `
+  return rows[0]?.campaign_tick_token ?? null
+}
+
+/** A new one, which takes the old address out of service. */
+export async function regenerateCampaignTickToken(): Promise<string> {
+  const token = randomBytes(24).toString('hex')
+  await prisma.$executeRaw`
+    INSERT INTO "uin_settings" ("id") VALUES ('singleton') ON CONFLICT ("id") DO NOTHING
+  `
+  await prisma.$executeRaw`
+    UPDATE "uin_settings" SET "campaign_tick_token" = ${token}, "updated_at" = now()
+     WHERE "id" = 'singleton'
+  `
+  return token
 }
 
 export async function getBrevoWebhookSecret(): Promise<string | null> {

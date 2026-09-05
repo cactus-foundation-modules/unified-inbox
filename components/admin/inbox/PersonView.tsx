@@ -1,11 +1,13 @@
 import Link from 'next/link'
 import type { ContextSection } from '@/modules/unified-inbox/lib/adapters'
 import type { OutboundLogRow, ThreadListRow, PersonEventRow, MergeRow } from '@/modules/unified-inbox/lib/db'
-import type { Person, PersonIdentity, RecordLink } from '@/modules/unified-inbox/lib/types'
+import type { ContactCategory, Person, PersonIdentity, RecordLink } from '@/modules/unified-inbox/lib/types'
 import { channelLabel, formatFull, formatWhen, inboxHref, participantLabel } from '@/modules/unified-inbox/lib/list'
+import { addressLines } from '@/modules/unified-inbox/lib/contacts'
 import { formatInSiteTimezone } from '@/lib/config/timezone'
 import { BackIcon, InboundIcon, OutboundIcon } from './icons'
 import { PersonActionsBar, PersonActionsPanels, PersonActionsProvider } from './PersonActions'
+import { ContactIdentities } from './ContactIdentities'
 import { ContextRail } from './ContextRail'
 
 // One person, and everything about them the hub can honestly show.
@@ -31,6 +33,8 @@ type Props = {
   links: RecordLink[]
   events: PersonEventRow[]
   merges: MergeRow[]
+  /** The labels on them, in the list's own order. */
+  categories: ContactCategory[]
   alsoHere: Person[]
   staffById: Record<string, string>
   canEdit: boolean
@@ -83,10 +87,11 @@ function describeEvent(event: PersonEventRow): string {
 
 export function PersonView({
   adminPath, base, params, person, identities, threads, outbound, sections, links,
-  events, merges, alsoHere, staffById, canEdit, canManage, now, timezone,
+  events, merges, categories, alsoHere, staffById, canEdit, canManage, now, timezone,
 }: Props) {
   const timeline = buildTimeline(threads, outbound)
   const name = person.displayName || person.primaryEmail || 'Somebody'
+  const postal = addressLines(person)
   const knownSince = formatDay(person.createdAt, timezone)
   const cappedThreads = threads.length >= THREAD_CAP
   const cappedOutbound = outbound.length >= OUTBOUND_CAP
@@ -98,8 +103,7 @@ export function PersonView({
   return (
     <PersonActionsProvider
       personId={person.id}
-      displayName={person.displayName}
-      notes={person.notes}
+      editHref={inboxHref(base, params, { person: person.id, edit: '1' })}
       identities={identities.map((i) => ({ id: i.id, value: i.value, kind: i.kind }))}
       merges={merges.map((m) => ({ id: m.id, loserName: m.loserName }))}
       canManage={canManage}
@@ -115,15 +119,29 @@ export function PersonView({
           </Link>
           <h2 className="uin-thread-subject">{name}</h2>
           <div className="uin-thread-meta">
-            {person.organisationName && <span>{person.organisationName}</span>}
+            {person.jobTitle && <span>{person.jobTitle}</span>}
+            {person.organisationName && (
+              <span>{person.jobTitle ? <>&middot; </> : null}{person.organisationName}</span>
+            )}
             <span>
-              {person.organisationName ? <>&middot; </> : null}
+              {person.jobTitle || person.organisationName ? <>&middot; </> : null}
               {cappedThreads
                 ? `${THREAD_CAP}+ conversations`
                 : `${threads.length} conversation${threads.length === 1 ? '' : 's'}`}
             </span>
             {knownSince && <span>&middot; known since {knownSince}</span>}
           </div>
+          {categories.length > 0 && (
+            /* Under the name rather than in it: what somebody IS called and
+               what somebody has been FILED as are two different lines. */
+            <div className="uin-row-tags">
+              {categories.map((category) => (
+                <span className="uin-tag" key={category.id}>
+                  <span className="uin-tag-text">{category.name}</span>
+                </span>
+              ))}
+            </div>
+          )}
           {/* Only the buttons live up here, beside their name. What they open
               is below, where it is free to be as tall as it needs. */}
           {canEdit && <PersonActionsBar />}
@@ -135,21 +153,20 @@ export function PersonView({
             <div className="uin-person-main">
               <section className="uin-ctx-block">
                 <h3 className="uin-ctx-heading">How we reach them</h3>
-                <ul className="uin-ctx-list">
-                  {identities.map((identity) => (
-                    <li key={identity.id} className="uin-ctx-row">
-                      <div className="uin-ctx-main">
-                        <span>{identity.value}</span>
-                        {identity.kind !== 'email' && (
-                          <span className="uin-tag">{channelLabel(identity.kind)}</span>
-                        )}
-                      </div>
-                    </li>
-                  ))}
-                  {identities.length === 0 && (
-                    <li className="uin-ctx-row"><span className="uin-ctx-sub">Nothing on record yet.</span></li>
-                  )}
-                </ul>
+                <ContactIdentities
+                  personId={person.id}
+                  identities={identities.map((i) => ({
+                    id: i.id, kind: i.kind, value: i.value, source: i.source,
+                  }))}
+                  canEdit={canEdit}
+                />
+                {person.website && (
+                  <p className="uin-ctx-sub">
+                    <a href={person.website} rel="noreferrer noopener nofollow" target="_blank">
+                      {person.website}
+                    </a>
+                  </p>
+                )}
                 {alsoHere.length > 0 && (
                   <p className="uin-ctx-sub">
                     Also at {person.organisationName}:{' '}
@@ -164,6 +181,17 @@ export function PersonView({
                   </p>
                 )}
               </section>
+
+              {postal.length > 0 && (
+                <section className="uin-ctx-block">
+                  <h3 className="uin-ctx-heading">Where they are</h3>
+                  {/* An address on the lines it is posted on. Nobody reads a
+                      postcode out of a comma-separated run. */}
+                  <address className="uin-ctx-sub uin-postal">
+                    {postal.map((line) => <span key={line}>{line}</span>)}
+                  </address>
+                </section>
+              )}
 
               {person.notes && (
                 <section className="uin-ctx-block">

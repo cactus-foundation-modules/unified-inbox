@@ -34,6 +34,26 @@ export type InboxParams = {
   /** The "Sent" tab: everything that has left, across every address this person
    *  may read. Takes the same slot for the same reason. */
   sentOnly: boolean
+  /** The "Contacts" tab: the address book rather than the post. Takes the same
+   *  slot as an inbox because it is the same choice - what the list on the left
+   *  is a list of. */
+  contactsOnly: boolean
+  /** The "Campaigns" tab: the same email to a great many people. Same slot
+   *  again, and the same reason. */
+  campaignsOnly: boolean
+  /** Which campaign is open, if any. */
+  campaignId: string | null
+  /** Which half of the address book is being listed. Only read on the Contacts
+   *  tab, where the two are the same people seen from either end. */
+  contactsView: ContactsView
+  /** The organisation whose own card is open, if any. */
+  organisationId: string | null
+  /** The label the contacts list is narrowed to, if any. */
+  categoryId: string | null
+  /** Bringing an address book in from a file. */
+  importing: boolean
+  /** Whether the open card is being corrected rather than read. */
+  editingContact: boolean
   status: StatusFilter
   unreadOnly: boolean
   /** A user id, the literal 'unassigned', or null for no filter. */
@@ -52,7 +72,13 @@ export type InboxParams = {
   personId: string | null
 }
 
+export type ContactsView = 'people' | 'organisations'
+
 const STATUSES: StatusFilter[] = ['open', 'snoozed', 'done', 'all']
+
+/** What "start a new one" is written as in the address. A word rather than a
+ *  blank, so a link that dropped its value cannot be mistaken for it. */
+export const NEW_CONTACT = 'new'
 
 /**
  * The query string, read defensively. A mistyped ?page= once reached a database
@@ -70,13 +96,21 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
   return {
     inboxId:
       !isChannel && inbox && inbox !== 'all' && inbox !== 'none' && inbox !== 'drafts'
-        && inbox !== 'sent'
+        && inbox !== 'sent' && inbox !== 'contacts' && inbox !== 'campaigns'
         ? inbox
         : null,
     providerModule: channel.length > 0 ? channel : null,
     unroutedOnly: inbox === 'none',
     draftsOnly: inbox === 'drafts',
     sentOnly: inbox === 'sent',
+    contactsOnly: inbox === 'contacts',
+    campaignsOnly: inbox === 'campaigns',
+    campaignId: sp.campaign ? sp.campaign : null,
+    contactsView: sp.view === 'organisations' ? 'organisations' : 'people',
+    organisationId: sp.org ? sp.org : null,
+    categoryId: sp.cat ? sp.cat : null,
+    importing: sp.import === '1',
+    editingContact: sp.edit === '1',
     status: rawStatus && STATUSES.includes(rawStatus) ? rawStatus : 'open',
     unreadOnly: sp.unread === '1',
     assignee: sp.assignee ? sp.assignee : null,

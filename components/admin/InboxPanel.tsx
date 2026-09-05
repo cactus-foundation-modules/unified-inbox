@@ -4,10 +4,14 @@ import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { prisma } from '@/lib/db/prisma'
 import { getSiteTimezone } from '@/lib/config/timezone.server'
+import { getSiteUrlOrNull } from '@/lib/config/env'
 import { canReplyToInbox, canViewInbox, replyableInboxIds, visibleInboxIds } from '@/modules/unified-inbox/lib/access'
 import {
   attachmentsForThread,
   countDrafts,
+  categoriesForPeople,
+  categoriesForPerson,
+  countThreadsForPerson,
   defaultInboxIdFor,
   countThreads,
   draftForThread,
@@ -16,12 +20,17 @@ import {
   getPerson,
   getSettings,
   getThreadDetail,
+  getOrganisation,
   linksForPerson,
   linksForThread,
+  ensureCampaignTickToken,
   listConnections,
   listDrafts,
   listIdentities,
+  listCategories,
   listInboxes,
+  listOrganisations,
+  listPeople,
   listPersonEvents,
   listThreadEvents,
   listThreadMessages,
@@ -29,6 +38,7 @@ import {
   countSentMessages,
   listThreads,
   outboundLogForAddresses,
+  peopleCount,
   peopleInOrganisation,
   setThreadRead,
   statusCounts,
@@ -46,11 +56,19 @@ import { MIN_LEAD_MS, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
 import { addressesForPerson, buildContextQuery } from '@/modules/unified-inbox/lib/identity'
 import { ContextRail } from './inbox/ContextRail'
 import { PersonView } from './inbox/PersonView'
+import { ContactsToolbar } from './inbox/ContactsToolbar'
+import { ContactsListView } from './inbox/ContactsListView'
+import { OrganisationsListView } from './inbox/OrganisationsListView'
+import { ContactCard } from './inbox/ContactCard'
+import { OrganisationCard, EMPTY_ORGANISATION } from './inbox/OrganisationCard'
+import { ContactImport } from './inbox/ContactImport'
+import { joinCategories, splitName } from '@/modules/unified-inbox/lib/contacts'
 import { replyRecipients } from '@/modules/unified-inbox/lib/compose'
-import { chooseSendingInbox, effectiveInboxParam, inboxHref, parseInboxParams, PER_PAGE } from '@/modules/unified-inbox/lib/list'
+import { chooseSendingInbox, effectiveInboxParam, inboxHref, NEW_CONTACT, parseInboxParams, PER_PAGE } from '@/modules/unified-inbox/lib/list'
 import { providerForModule, visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
 import { InboxStyles } from './inbox/styles'
 import { InboxTabs } from './inbox/InboxTabs'
+import { CampaignsPanel } from './inbox/campaigns/CampaignsPanel'
 import { StatusTabs } from './inbox/StatusTabs'
 import { Filters } from './inbox/Filters'
 import { ThreadListView } from './inbox/ThreadListView'
@@ -97,6 +115,10 @@ export async function UnifiedInboxPanel({
   // Both composers hand it straight to the date box as its floor.
   const minSendAt = toWallClock(new Date(new Date().getTime() + MIN_LEAD_MS), timezone)
   const canEditLinks = canManage || await hasPermission(user, 'unifiedinbox.reply')
+  // Its own grant. Renaming a folder and emailing five thousand customers are
+  // not the same act, and a site that gives somebody the first has not thereby
+  // given them the second.
+  const canCampaign = await hasPermission(user, 'unifiedinbox.campaigns')
 
   // Anything whose snooze has elapsed is open again by the time the list is
   // drawn. Doing it here rather than on a tick means a conversation is back the
@@ -145,7 +167,14 @@ export async function UnifiedInboxPanel({
   // The tab has to survive every link on this screen, or following one lands on
   // whichever tab the host happens to render first.
   const carried: Record<string, string> = { tab: 'unified-inbox' }
-  for (const key of ['inbox', 'status', 'unread', 'assignee', 'q', 'page', 'id', 'person'] as const) {
+  for (const key of [
+    'inbox', 'status', 'unread', 'assignee', 'q', 'page', 'id', 'person',
+    // The address book's own: which half of it, whose card is open, whether the
+    // card is being edited, and whether the importer is up.
+    'view', 'org', 'edit', 'import', 'cat',
+    // Which campaign is open, and which of its four steps.
+    'campaign',
+  ] as const) {
     const value = chosen[key]
     if (value) carried[key] = value
   }
@@ -212,7 +241,7 @@ export async function UnifiedInboxPanel({
   const settings = await getSettings()
   // The status tabs count what is behind them given everything else already
   // chosen, so they come from the same filters with the status left out.
-  const listing = params.draftsOnly || params.sentOnly
+  const listing = params.draftsOnly || params.sentOnly || params.contactsOnly || params.campaignsOnly
   const [rows, total, statuses] = listing
     ? [[] as Awaited<ReturnType<typeof listThreads>>, 0, {} as Record<string, number>]
     : await Promise.all([listThreads(filters), countThreads(filters), statusCounts(filters)])
@@ -225,34 +254,115 @@ export async function UnifiedInboxPanel({
     && inboxes.length > 0
     && (connections.length === 0 || connections.every((c) => !c.lastSyncAt))
 
+  // ---- the address book -------------------------------------------------
+  //
+  // The count rides on the tab row and is asked for on every render, which is
+  // one cheap COUNT; the lists themselves are only fetched when the Contacts tab
+  // is the one open, the same as Drafts and Sent above.
+  // Both counts in one query - one of them rides on the hub's own tab row, so
+  // it is asked for on every render either way and there is no sense in two.
+  const { people: contactCount, organisations: organisationCount } = await peopleCount()
+  const showingOrganisations = params.contactsOnly && params.contactsView === 'organisations'
+  const [contacts, contactsTotal] = params.contactsOnly && !showingOrganisations
+    ? await listPeople({
+        search: params.search,
+        page: params.page,
+        perPage: PER_PAGE,
+        // Surname order, because that is what an address book is for. The
+        // conversation lists order by when something last happened; a contacts
+        // list ordered that way is a list nobody can find anybody in.
+        sort: 'name',
+        organisationId: params.organisationId,
+        categoryId: params.categoryId,
+      }).then((r) => [r.rows, r.total] as const)
+    : [[] as Awaited<ReturnType<typeof listPeople>>['rows'], 0]
+  // The labels: the whole list for the filter row, and the page's own in one
+  // query rather than one per row.
+  const categoryList = params.contactsOnly || params.campaignsOnly ? await listCategories() : []
+  const contactCategories = contacts.length > 0
+    ? await categoriesForPeople(contacts.map((c) => c.id))
+    : {}
+  const [organisations, organisationsTotal] = params.contactsOnly && showingOrganisations
+    ? await listOrganisations({ search: params.search, page: params.page, perPage: PER_PAGE })
+        .then((r) => [r.rows, r.total] as const)
+    : [[] as Awaited<ReturnType<typeof listOrganisations>>['rows'], 0]
+
   // ---- one person's own page, if the address asks for one ----------------
   //
   // It takes the same place on the screen as a conversation, because it answers
   // the same question about the same human from a different angle: what have we
   // said to each other, and what does the rest of the site know about them.
   let personPane: React.ReactNode = null
-  if (params.personId && !params.composing) {
+  if (params.personId === NEW_CONTACT && !params.composing) {
+    // A blank card. Writing in the address book is the same grant as answering
+    // somebody, so anybody who may reply may add a contact.
+    personPane = canEditLinks
+      ? <ContactCard base={base} params={carried} personId={null} initial={{}} />
+      : cannotWriteInTheBook()
+  } else if (params.personId && !params.composing) {
     const person = await getPerson(params.personId)
     if (!person) {
       personPane = personNotHere()
     } else {
       const personThreads = await threadsForPerson(person.id, visibleIds, canManage, channelModules)
-      if (personThreads.length === 0 && !canManage) {
-        // A person's page is reachable by anybody who may read the inbox, so it
-        // needs the same gate the conversations themselves have. Otherwise
-        // somebody who can only open hi@ learns the name, the addresses and the
-        // subject lines of a supplier who has only ever written to accounts@ -
-        // which is the breach in E17 wearing a different hat.
+      // A person's page is reachable by anybody who may read the inbox, so it
+      // needs the same gate the conversations themselves have. Otherwise
+      // somebody who can only open hi@ learns the name, the addresses and the
+      // subject lines of a supplier who has only ever written to accounts@ -
+      // which is the breach in E17 wearing a different hat.
+      //
+      // Having no conversations THIS READER may see and having none at all are
+      // two different answers, and they are asked apart. They used to be one
+      // question, which was right while the only way to become a contact was to
+      // write in - and became wrong the moment somebody could be added by hand,
+      // because a contact typed in this morning has no mail against them and
+      // was hidden from everybody but an administrator.
+      const hidden = personThreads.length === 0
+        && !canManage
+        && await countThreadsForPerson(person.id) > 0
+      if (hidden) {
         personPane = personNotHere()
+      } else if (params.editingContact && canEditLinks) {
+        // Somebody the post introduced us to may never have had their name
+        // split, so the card opens with a first and last worked out from what
+        // we do have rather than with two empty boxes.
+        const split = splitName(person.displayName)
+        // Their labels have to arrive filled in, or the picker shows every one
+        // of them unticked and saving the card would take the lot off.
+        const worn = await categoriesForPerson(person.id)
+        personPane = (
+          <ContactCard
+            base={base}
+            params={carried}
+            personId={person.id}
+            initial={{
+              firstName: person.firstName ?? split.firstName,
+              lastName: person.lastName ?? split.lastName,
+              jobTitle: person.jobTitle ?? '',
+              organisation: person.organisationName ?? '',
+              categories: joinCategories(worn.map((c) => c.name)),
+              email: person.primaryEmail ?? '',
+              website: person.website ?? '',
+              addressLine1: person.addressLine1 ?? '',
+              addressLine2: person.addressLine2 ?? '',
+              addressCity: person.addressCity ?? '',
+              addressCounty: person.addressCounty ?? '',
+              addressPostcode: person.addressPostcode ?? '',
+              addressCountry: person.addressCountry ?? '',
+              notes: person.notes ?? '',
+            }}
+          />
+        )
       } else {
       const query = await buildContextQuery(person.id)
-      const [identities, sections, links, events, merges, alsoHere, addresses] =
+      const [identities, sections, links, events, merges, worn, alsoHere, addresses] =
         await Promise.all([
           listIdentities(person.id),
           query ? loadContext(user, query) : Promise.resolve([]),
           linksForPerson(person.id),
           listPersonEvents(person.id),
           canManage ? undoableMerges(person.id) : Promise.resolve([]),
+          categoriesForPerson(person.id),
           person.organisationId
             ? peopleInOrganisation(person.organisationId, person.id)
             : Promise.resolve([]),
@@ -276,6 +386,7 @@ export async function UnifiedInboxPanel({
           links={links}
           events={events}
           merges={merges}
+          categories={worn}
           alsoHere={alsoHere}
           staffById={staffById}
           canEdit={canEditLinks}
@@ -286,6 +397,74 @@ export async function UnifiedInboxPanel({
       )
       }
     }
+  }
+
+  // ---- an organisation's own card, and the importer -----------------------
+  //
+  // Both take the same place on the screen as a conversation does, for the same
+  // reason the person page does: they are the thing being looked at, and the
+  // list on the left is still the list they came from.
+  let organisationPane: React.ReactNode = null
+  if (params.contactsOnly && params.organisationId === NEW_CONTACT) {
+    organisationPane = canEditLinks
+      ? (
+        <OrganisationCard
+          base={base}
+          params={carried}
+          organisationId={null}
+          initial={EMPTY_ORGANISATION}
+          peopleCount={0}
+          canDelete={false}
+        />
+      )
+      : cannotWriteInTheBook()
+  } else if (params.contactsOnly && params.organisationId && showingOrganisations) {
+    const organisation = await getOrganisation(params.organisationId)
+    organisationPane = organisation
+      ? (
+        <OrganisationCard
+          base={base}
+          params={carried}
+          organisationId={organisation.id}
+          initial={{
+            name: organisation.name,
+            domain: organisation.domain ?? '',
+            email: organisation.email ?? '',
+            phone: organisation.phone ?? '',
+            website: organisation.website ?? '',
+            addressLine1: organisation.addressLine1 ?? '',
+            addressLine2: organisation.addressLine2 ?? '',
+            addressCity: organisation.addressCity ?? '',
+            addressCounty: organisation.addressCounty ?? '',
+            addressPostcode: organisation.addressPostcode ?? '',
+            addressCountry: organisation.addressCountry ?? '',
+            notes: organisation.notes ?? '',
+          }}
+          peopleCount={organisations.find((o) => o.id === organisation.id)?.peopleCount ?? 0}
+          canDelete={canManage}
+        />
+      )
+      : (
+        <div className="uin-empty">
+          <strong>That organisation is not here</strong>
+          It may have been removed since this list was drawn.
+        </div>
+      )
+  }
+
+  let importPane: React.ReactNode = null
+  if (params.contactsOnly && params.importing) {
+    // Bringing two thousand contacts in on one press is a wider act than
+    // correcting one of them, and an import run against the wrong column
+    // mapping is the easiest way there is to make a mess of an address book.
+    importPane = canManage
+      ? <ContactImport base={base} params={carried} />
+      : (
+        <div className="uin-empty">
+          <strong>You cannot import contacts</strong>
+          Bringing a whole address book in is something whoever looks after the site does.
+        </div>
+      )
   }
 
   // ---- the conversation on the right, if the address asks for one ---------
@@ -537,48 +716,111 @@ export async function UnifiedInboxPanel({
     ? 'drafts'
     : params.sentOnly
       ? 'sent'
-      : params.unroutedOnly
-        ? 'none'
-        : params.providerModule
-          ? `m:${params.providerModule}`
-          : params.inboxId
+      : params.contactsOnly
+        ? 'contacts'
+        : params.campaignsOnly
+          ? 'campaigns'
+          : params.unroutedOnly
+            ? 'none'
+            : params.providerModule
+              ? `m:${params.providerModule}`
+              : params.inboxId
+
+  // The row of addresses, built once and used by both shapes this screen
+  // takes: the ordinary reading layout, and the campaigns tab, which is one
+  // full-width column rather than a list beside a conversation.
+  const tabs = (
+    <InboxTabs
+      base={base}
+      params={carried}
+      inboxes={inboxes.map((i) => ({
+        id: i.id,
+        name: i.name,
+        address: i.address,
+        count: counts[i.id] ?? 0,
+      }))}
+      channels={channels.map((c) => ({
+        moduleName: c.moduleName,
+        label: c.label,
+        count: counts[`m:${c.moduleName}`] ?? 0,
+      }))}
+      allCount={allUnread}
+      current={currentTab}
+      showUnrouted={canManage}
+      unroutedCount={counts[''] ?? 0}
+      showDrafts={sendable.length > 0 || draftCount > 0}
+      draftCount={draftCount}
+      contactCount={contactCount}
+      showCampaigns={canCampaign}
+      /* Write a message rides beside the search on the status row below. The
+         status row is not drawn on Drafts and Sent, so on those two the
+         button falls back to the end of the addresses. */
+      composeHref={listing && !params.contactsOnly ? composeHref : null}
+      defaultInboxId={pinnedInboxId}
+      canReorder={canManage}
+      canCheckNow={canManage && connections.length > 0}
+      autoCheckSeconds={settings.autoCheckSeconds}
+    />
+  )
+
+  // The campaigns tab takes the whole width. Nothing on it is a conversation,
+  // so the list-and-reading-pane layout below has nothing to put in either
+  // half - and the address a pinger can be pointed at is minted here, on the
+  // one screen that explains what it is for.
+  if (params.campaignsOnly) {
+    if (!canCampaign) {
+      return (
+        <>
+          <InboxStyles />
+          {tabs}
+          <div className="alert alert-danger">You do not have permission to send campaigns.</div>
+        </>
+      )
+    }
+    const siteUrl = getSiteUrlOrNull()
+    const tickToken = siteUrl ? await ensureCampaignTickToken() : null
+    return (
+      <>
+        <InboxStyles />
+        {tabs}
+        <CampaignsPanel
+          base={base}
+          params={carried}
+          inboxes={sendable.map((i) => ({ id: i.id, name: i.name, address: i.address }))}
+          categories={categoryList.map((c) => ({ id: c.id, name: c.name }))}
+          campaignId={params.campaignId}
+          view={searchParams.view ?? null}
+          tickUrl={siteUrl && tickToken
+            ? `${siteUrl}/api/m/unified-inbox/cron/campaigns?key=${tickToken}`
+            : null}
+        />
+      </>
+    )
+  }
 
   return (
     <>
       <InboxStyles />
-      <InboxTabs
-        base={base}
-        params={carried}
-        inboxes={inboxes.map((i) => ({
-          id: i.id,
-          name: i.name,
-          address: i.address,
-          count: counts[i.id] ?? 0,
-        }))}
-        channels={channels.map((c) => ({
-          moduleName: c.moduleName,
-          label: c.label,
-          count: counts[`m:${c.moduleName}`] ?? 0,
-        }))}
-        allCount={allUnread}
-        current={currentTab}
-        showUnrouted={canManage}
-        unroutedCount={counts[''] ?? 0}
-        showDrafts={sendable.length > 0 || draftCount > 0}
-        draftCount={draftCount}
-        /* Write a message rides beside the search on the status row below. The
-           status row is not drawn on Drafts and Sent, so on those two the
-           button falls back to the end of the addresses. */
-        composeHref={listing ? composeHref : null}
-        defaultInboxId={pinnedInboxId}
-        canReorder={canManage}
-        canCheckNow={canManage && connections.length > 0}
-        autoCheckSeconds={settings.autoCheckSeconds}
-      />
+      {tabs}
 
       {/* Nothing above Drafts or Sent: where a conversation stands, and who it
           is assigned to, are questions about messages that have arrived. A
           message nobody has sent yet, or one already gone, has neither. */}
+      {params.contactsOnly && (
+        <ContactsToolbar
+          base={base}
+          params={carried}
+          view={params.contactsView}
+          search={params.search}
+          peopleCount={contactCount}
+          organisationCount={organisationCount}
+          canEdit={canEditLinks}
+          canImport={canManage}
+          categories={categoryList.map((c) => ({ id: c.id, name: c.name, people: c.peopleCount }))}
+          categoryId={params.categoryId}
+        />
+      )}
+
       {!listing && (
         <>
           <StatusTabs
@@ -604,11 +846,38 @@ export async function UnifiedInboxPanel({
 
       <div
         className="uin"
-        data-thread={params.personId || params.threadId ? 'open' : 'closed'}
+        data-thread={
+          params.personId || params.threadId || organisationPane || importPane ? 'open' : 'closed'
+        }
         data-context={contextRail ? 'on' : 'off'}
       >
         <div className="uin-listpane">
-          {params.draftsOnly ? (
+          {params.contactsOnly ? (
+            showingOrganisations ? (
+              <OrganisationsListView
+                base={base}
+                params={carried}
+                rows={organisations}
+                total={organisationsTotal}
+                page={params.page}
+                openOrganisationId={params.organisationId}
+                searching={!!params.search}
+                canEdit={canEditLinks}
+              />
+            ) : (
+              <ContactsListView
+                base={base}
+                params={carried}
+                rows={contacts}
+                categories={contactCategories}
+                total={contactsTotal}
+                page={params.page}
+                openPersonId={params.personId}
+                searching={!!params.search}
+                canEdit={canEditLinks}
+              />
+            )
+          ) : params.draftsOnly ? (
             <DraftListView
               base={base}
               params={carried}
@@ -652,7 +921,7 @@ export async function UnifiedInboxPanel({
           )}
         </div>
 
-        {cannotComposePane ?? personPane ?? threadPane}
+        {cannotComposePane ?? importPane ?? organisationPane ?? personPane ?? threadPane}
         {contextRail}
       </div>
 
@@ -670,6 +939,20 @@ export async function UnifiedInboxPanel({
 function reasonThereIsNobody(channel: string): string {
   if (channel !== 'email') return 'Nobody is attached to this one yet.'
   return 'Nobody is attached to this one. That happens with automatic mail, and with anything from one of your own addresses.'
+}
+
+/** Reading the address book and writing in it are different grants, and a
+ *  screen that offers a form somebody may not post is worse than one that says
+ *  so. Only ever reached by typing the address in - the buttons that open these
+ *  cards are not offered without the grant. */
+function cannotWriteInTheBook() {
+  return (
+    <div className="uin-empty">
+      <strong>You cannot add contacts</strong>
+      You can read the address book, but adding to it needs the same permission as answering
+      somebody. Whoever looks after the site can give you it.
+    </div>
+  )
 }
 
 /** Said the same way whether the person has genuinely gone or is simply not

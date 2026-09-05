@@ -1,6 +1,6 @@
 {
   "name": "unified-inbox",
-  "version": "0.1.45",
+  "version": "0.1.46",
   "tablePrefix": "uin_",
   "description": "Every conversation with every customer and supplier in one place - email, live chat, contact form, calls and texts - with your own records beside them.",
   "requiresCoreVersion": "0.5.1470",
@@ -8,7 +8,8 @@
   "permissions": [
     "unifiedinbox.view",
     "unifiedinbox.reply",
-    "unifiedinbox.manage"
+    "unifiedinbox.manage",
+    "unifiedinbox.campaigns"
   ],
   "navEntries": [],
   "settingsTabs": [
@@ -91,9 +92,20 @@
     {
       "path": "/api/m/unified-inbox/cron/scheduled-send",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/m/unified-inbox/cron/campaigns",
+      "schedule": "*/5 * * * *"
     }
   ],
   "teardown": [
+    "uin_campaign_sends",
+    "uin_campaign_recipients",
+    "uin_campaign_categories",
+    "uin_campaign_steps",
+    "uin_campaign_lanes",
+    "uin_suppressions",
+    "uin_campaigns",
     "uin_attachments",
     "uin_delivery_events",
     "uin_messages",
@@ -112,6 +124,8 @@
     "uin_user_default_inbox",
     "uin_inboxes",
     "uin_connections",
+    "uin_person_categories",
+    "uin_contact_categories",
     "uin_person_merges",
     "uin_person_identities",
     "uin_people",

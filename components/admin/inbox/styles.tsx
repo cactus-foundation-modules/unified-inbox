@@ -1200,6 +1200,78 @@ const CSS = `
 .uin-ctx-picker button:disabled { cursor: default; opacity: 0.6; }
 .uin-ctx-picker .uin-ctx-main { font-weight: 600; }
 
+/* ---- a contact's card ---------------------------------------------------
+   The form behind New contact, Edit their details and the importer. It reuses
+   the composer's field rows (.uin-fields above) so an address book line and a
+   Cc line are the same object, and adds only what a card needs on top: the
+   headings between runs of rows, the one box that is a paragraph, and the tick
+   the importer needs. Every colour is a token - a card is chrome. */
+.uin-card { display: grid; gap: 1.25rem; min-width: 0; max-width: 46rem; }
+.uin-card-section { display: grid; gap: 0.5rem; min-width: 0; }
+.uin-card-notes { display: grid; gap: 0.35rem; min-width: 0; }
+.uin-card-notes > label {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.uin-card-notes textarea {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 0.5rem 0.625rem;
+  font: inherit;
+  font-size: 0.875rem;
+  resize: vertical;
+}
+/* The one control on this screen with a sentence attached rather than a word,
+   so the tick sits at the top of it rather than halfway down a paragraph. */
+.uin-card-check {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: start;
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+.uin-card-check input { margin-top: 0.2rem; }
+/* A postal address on the lines it is posted on. The address element is italic
+   by default in every browser, which a delivery address is not. */
+.uin-postal { display: grid; font-style: normal; }
+
+/* ---- category chips on a card -------------------------------------------
+   Ticks in the shape of chips, so what a contact is filed under reads as the
+   same object on the card as it does on the row and in the filter above the
+   list. Pressed is said two ways over - the fill and the border both move -
+   because a single tint is not a state anybody should have to notice, and
+   aria-pressed carries it to a screen reader either way. */
+.uin-categories { flex-wrap: wrap; align-items: center; gap: 0.4rem; padding: 0.3rem 0; }
+.uin-category-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; min-width: 0; }
+.uin-category-chip {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-raised);
+  color: var(--color-text-secondary);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.uin-category-chip:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-border-strong); }
+.uin-category-chip:disabled { cursor: default; opacity: 0.6; }
+.uin-category-chip[aria-pressed="true"] {
+  background: var(--color-primary-subtle);
+  border-color: var(--color-primary);
+  color: var(--color-text);
+  font-weight: 600;
+}
+.uin-category-new { display: flex; align-items: center; gap: 0.35rem; min-width: 0; }
+.uin-category-new input { min-width: 8rem; }
+
 /* ---- one person --------------------------------------------------------- */
 .uin-person { display: grid; gap: 1rem; align-items: start; min-width: 0; }
 /* Two columns once the page itself is wide enough for two, which is not the
@@ -1223,6 +1295,156 @@ const CSS = `
 .uin-timeline-icon { grid-area: icon; color: var(--color-text-muted); line-height: 1; padding-top: 0.15rem; }
 .uin-timeline-row .uin-ctx-main { grid-area: main; }
 .uin-timeline-row .uin-ctx-sub { grid-area: sub; }
+/* ---- campaigns ---------------------------------------------------------- */
+/* The same email to a great many people, slowly. The screen is a list of
+   campaigns, and one campaign is four steps down one column - Who, What, When,
+   Watch - because that is the order somebody thinks in and because a form with
+   four sections is a form that can be checked one section at a time. */
+.uin-camp-head {
+  display: flex; flex-wrap: wrap; gap: 0.75rem;
+  align-items: center; justify-content: space-between;
+  margin-bottom: 0.9rem;
+}
+.uin-camp-head h2 { margin: 0; font-size: 1.05rem; }
+.uin-camp-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+
+.uin-camp-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
+.uin-camp-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-surface);
+  padding: 0.9rem 1rem;
+  display: grid; gap: 0.6rem;
+}
+.uin-camp-card[data-state="running"] { border-left: 3px solid var(--color-success); }
+.uin-camp-card[data-state="paused"] { border-left: 3px solid var(--color-warning); }
+.uin-camp-card[data-state="draft"] { border-left: 3px solid var(--color-border-strong, var(--color-border)); }
+.uin-camp-card-top { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; justify-content: space-between; }
+.uin-camp-name {
+  font-weight: 600; font-size: 1rem; color: var(--color-text);
+  background: none; border: 0; padding: 0; cursor: pointer; text-align: left;
+}
+.uin-camp-name:hover { text-decoration: underline; }
+.uin-camp-meta { color: var(--color-text-muted); font-size: 0.8125rem; display: flex; flex-wrap: wrap; gap: 0.75rem; }
+
+/* The status word. Quiet: the progress bar is what the eye should land on. */
+.uin-camp-pill {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  font-size: 0.75rem; font-weight: 600; letter-spacing: 0.01em;
+  padding: 0.15rem 0.5rem; border-radius: 999px;
+  background: var(--color-surface-raised); color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+}
+.uin-camp-pill[data-state="running"] { color: var(--color-success); }
+.uin-camp-pill[data-state="paused"] { color: var(--color-warning); }
+.uin-camp-pill[data-state="stopped"], .uin-camp-pill[data-state="done"] { color: var(--color-text-muted); }
+
+/* How far along it is. One bar, sent against the whole list, with the settled
+   states stacked in it so a fortnight of sending reads at a glance. */
+.uin-camp-bar {
+  display: flex; height: 0.5rem; border-radius: 999px; overflow: hidden;
+  background: var(--color-surface-raised); border: 1px solid var(--color-border);
+}
+.uin-camp-bar span { display: block; height: 100%; }
+.uin-camp-bar span[data-kind="done"] { background: var(--color-text-muted); }
+.uin-camp-bar span[data-kind="replied"] { background: var(--color-success); }
+.uin-camp-bar span[data-kind="bad"] { background: var(--color-danger); }
+.uin-camp-bar span[data-kind="off"] { background: var(--color-warning); }
+.uin-camp-legend {
+  display: flex; flex-wrap: wrap; gap: 0.75rem;
+  font-size: 0.8125rem; color: var(--color-text-muted);
+}
+.uin-camp-legend b { color: var(--color-text); font-weight: 600; }
+
+/* One campaign, in four steps. */
+.uin-camp-step {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-surface);
+  padding: 1rem;
+  display: grid; gap: 0.75rem;
+  margin-bottom: 0.9rem;
+}
+.uin-camp-step > h3 {
+  margin: 0; font-size: 0.9375rem; display: flex; align-items: baseline; gap: 0.5rem;
+}
+.uin-camp-step > h3 small { font-weight: 400; color: var(--color-text-muted); font-size: 0.8125rem; }
+.uin-camp-field { display: grid; gap: 0.3rem; }
+.uin-camp-field > label { font-size: 0.8125rem; font-weight: 600; }
+.uin-camp-field > .uin-camp-hint { font-size: 0.8125rem; color: var(--color-text-muted); }
+.uin-camp-row { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; }
+.uin-camp-row > .uin-camp-field { flex: 1 1 10rem; min-width: 0; }
+.uin-camp-check { display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.875rem; }
+.uin-camp-check input { margin-top: 0.2rem; }
+
+/* The labels somebody picks the audience from. */
+.uin-camp-cats { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.uin-camp-cat {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  border: 1px solid var(--color-border); border-radius: 999px;
+  padding: 0.2rem 0.6rem; font-size: 0.8125rem; cursor: pointer;
+  background: var(--color-surface-raised);
+}
+.uin-camp-cat[data-on="1"] { border-color: var(--color-primary); color: var(--color-primary); }
+
+/* The merge tags, as a row of buttons that type themselves into the box. */
+.uin-camp-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.uin-camp-tag {
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.75rem;
+  border: 1px dashed var(--color-border); border-radius: 0.35rem;
+  padding: 0.15rem 0.4rem; background: var(--color-surface-raised);
+  color: var(--color-text-muted); cursor: pointer;
+}
+.uin-camp-tag:hover { color: var(--color-text); border-style: solid; }
+
+/* What it will look like, for three real people off the list. */
+.uin-camp-preview {
+  border: 1px solid var(--color-border); border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-surface-raised); padding: 0.75rem; display: grid; gap: 0.4rem;
+}
+.uin-camp-preview-to { font-size: 0.75rem; color: var(--color-text-muted); }
+.uin-camp-preview-subject { font-weight: 600; }
+.uin-camp-preview-body { white-space: pre-wrap; font-size: 0.875rem; }
+
+/* Problems stop it. Warnings can be pressed past. */
+.uin-camp-checks { display: grid; gap: 0.4rem; margin: 0; padding: 0; list-style: none; }
+.uin-camp-checks li {
+  display: grid; grid-template-columns: 1.1rem minmax(0, 1fr); gap: 0.5rem;
+  font-size: 0.875rem; align-items: start;
+}
+.uin-camp-checks li[data-level="problem"] { color: var(--color-danger); }
+.uin-camp-checks li[data-level="warning"] { color: var(--color-warning); }
+
+/* The Watch table. */
+.uin-camp-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+.uin-camp-table th {
+  text-align: left; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--color-text-muted); font-weight: 600;
+  padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--color-border);
+}
+.uin-camp-table td { padding: 0.45rem 0.5rem; border-bottom: 1px solid var(--color-border); }
+.uin-camp-table tr:last-child td { border-bottom: 0; }
+.uin-camp-table td[data-state] { white-space: nowrap; }
+.uin-camp-table td[data-state="replied"] { color: var(--color-success); }
+.uin-camp-table td[data-state="bounced"], .uin-camp-table td[data-state="failed"],
+.uin-camp-table td[data-state="complained"] { color: var(--color-danger); }
+.uin-camp-table td[data-state="unsubscribed"], .uin-camp-table td[data-state="skipped"] { color: var(--color-warning); }
+.uin-camp-scroll { overflow-x: auto; }
+
+/* The state filter above the table. */
+.uin-camp-filters { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.6rem; }
+
+/* The line that says which clock is driving it, under the progress bar. */
+.uin-camp-clock {
+  font-size: 0.8125rem; color: var(--color-text-muted);
+  display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+}
+.uin-camp-clock code {
+  font-size: 0.75rem; background: var(--color-surface-raised);
+  border: 1px solid var(--color-border); border-radius: 0.3rem; padding: 0.1rem 0.35rem;
+  word-break: break-all;
+}
+
 `
 
 export function InboxStyles() {

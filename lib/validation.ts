@@ -141,3 +141,175 @@ export const NoteBody = z.object({
   text: z.string().min(1).max(20_000),
   mentions: z.array(z.string().min(1)).max(20).optional(),
 })
+
+// ---------------------------------------------------------------------------
+// Contacts.
+//
+// One schema for the new card and the edit, so a field cannot be saved through
+// one of them that the other would have refused. Every field is optional
+// because a card with nothing on it but a phone number is a perfectly good
+// contact - what the routes refuse is a card with nothing on it at all.
+// ---------------------------------------------------------------------------
+
+/** A single line of somebody's details. Generous, but not unbounded: a value
+ *  longer than this is a paste that went wrong rather than an address. */
+const line = z.string().trim().max(300)
+
+export const ContactBody = z.object({
+  firstName: line.optional(),
+  lastName: line.optional(),
+  jobTitle: line.optional(),
+  organisation: line.optional(),
+  /** The labels, comma separated, as the one box on the card writes them.
+   *  Left out means "leave whatever is on them alone"; sent empty means "none
+   *  of them", which is a thing somebody can mean. */
+  categories: z.string().trim().max(600).optional(),
+  email: line.optional(),
+  phone: line.optional(),
+  website: line.optional(),
+  addressLine1: line.optional(),
+  addressLine2: line.optional(),
+  addressCity: line.optional(),
+  addressCounty: line.optional(),
+  addressPostcode: line.optional(),
+  addressCountry: line.optional(),
+  notes: z.string().trim().max(4000).optional(),
+})
+
+/** A way of reaching somebody, added to a card by hand. 'chat' is not offered:
+ *  a chat identity is issued by the service that owns the chat and typing one
+ *  in would attach a conversation to the wrong person. */
+export const IdentityBody = z.object({
+  kind: z.enum(['email', 'phone']),
+  value: z.string().trim().min(1).max(300),
+})
+
+export const OrganisationBody = z.object({
+  name: z.string().trim().min(1).max(200),
+  domain: line.nullable().optional(),
+  email: line.nullable().optional(),
+  phone: line.nullable().optional(),
+  website: line.nullable().optional(),
+  notes: z.string().trim().max(4000).nullable().optional(),
+  addressLine1: line.nullable().optional(),
+  addressLine2: line.nullable().optional(),
+  addressCity: line.nullable().optional(),
+  addressCounty: line.nullable().optional(),
+  addressPostcode: line.nullable().optional(),
+  addressCountry: line.nullable().optional(),
+})
+
+export const OrganisationPatchBody = OrganisationBody.partial()
+
+/** A label on a contact. Short on purpose: a category is a word or three, and
+ *  a sentence in this box is a note that has ended up in the wrong field. */
+export const CategoryBody = z.object({
+  name: z.string().trim().min(1).max(80),
+})
+
+/** The order the categories are listed in: every id, once, in the order they
+ *  should appear. Capped well above any plausible number so a runaway list is
+ *  a refusal rather than a very long run of UPDATEs. */
+export const CategoryOrderBody = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(200),
+})
+
+/** What the import screen posts: the rows it read out of the file and what it
+ *  decided each column was. The file itself never leaves the browser - it is
+ *  parsed there so the mapping step has something to show, and sending the rows
+ *  rather than the file means the server applies exactly what was previewed. */
+export const ContactImportBody = z.object({
+  /** One entry per column, in the file's own order. '' is "leave this column
+   *  out", which is the honest answer for most of what Outlook exports. */
+  columns: z.array(z.string().max(60)).max(200),
+  rows: z.array(z.array(z.string().max(5000)).max(200)).max(5000),
+  updateExisting: z.boolean().default(false),
+  /** One category for everybody in the file, on top of whatever a category
+   *  column says. "These four hundred are all hauliers" is a thing somebody
+   *  knows about the file rather than something written in it. */
+  categoryName: z.string().trim().max(80).nullable().optional(),
+})
+
+// ---------------------------------------------------------------------------
+// Campaigns.
+//
+// One schema for the create and the edit, so a campaign cannot be saved through
+// one of them with a value the other would have refused - and every bound here
+// matches a CHECK constraint in migration 027, so a value that gets past this
+// is still refused by the database rather than stored wrong.
+// ---------------------------------------------------------------------------
+
+/** The clock: when it may send, and how fast. Every field optional because the
+ *  When step saves one box at a time. */
+export const CampaignWindowBody = z.object({
+  /** "08:00", site time. Turned into minutes past midnight on the server. */
+  startTime: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
+  endTime: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
+  weekdaysOnly: z.boolean().optional(),
+  /** Dates to sit out, "YYYY-MM-DD". Christmas, the August bank holiday, the
+   *  week the office is shut. */
+  skipDates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(60).optional(),
+  intervalSeconds: z.number().int().min(20).max(3600).optional(),
+  jitterSeconds: z.number().int().min(0).max(600).optional(),
+  dailyCap: z.number().int().min(1).max(100_000).nullable().optional(),
+  rampEnabled: z.boolean().optional(),
+  rampStart: z.number().int().min(1).max(100_000).optional(),
+})
+
+/** One step: the message, or one of the chases after it. */
+export const CampaignStepBody = z.object({
+  stepIndex: z.number().int().min(0).max(3),
+  /** Days after the step before it. Null only on step 0. */
+  waitDays: z.number().int().min(1).max(90).nullable().optional(),
+  /** Null on a chase means "Re: whatever the message said". */
+  subject: z.string().max(500).nullable().optional(),
+  /** As typed, not as HTML: what goes back into the box has to be what came out
+   *  of it, and the markup is made at the moment of sending. */
+  body: z.string().max(100_000),
+})
+
+export const CampaignBody = z.object({
+  name: z.string().trim().min(1).max(200),
+  inboxId: z.string().min(1).nullable().optional(),
+  includeSignature: z.boolean().optional(),
+  includeUnsubscribe: z.boolean().optional(),
+  copyToSent: z.boolean().optional(),
+  excludeColleagues: z.boolean().optional(),
+  /** The labels it goes to. Empty means the whole address book, which is what
+   *  "everyone" on the Who step asks for. */
+  categoryIds: z.array(z.string().min(1)).max(50).optional(),
+  /** The wall clock it may start at - "2026-09-08T08:00", with no zone on it,
+   *  read against the SITE's zone on the server. */
+  startAt: z.string().max(40).nullable().optional(),
+  window: CampaignWindowBody.optional(),
+  steps: z.array(CampaignStepBody).min(1).max(4).optional(),
+})
+
+export const CampaignPatchBody = CampaignBody.partial()
+
+/** Start, pause, resume, stop. Separate from the edit so that changing what a
+ *  campaign says and changing whether it is sending are two different requests
+ *  with two different answers. */
+export const CampaignStateBody = z.object({
+  action: z.enum(['start', 'pause', 'resume', 'stop']),
+  /** Set when somebody has read the warnings and meant it anyway. Only ever
+   *  gets past warnings - a problem is a problem. */
+  acceptWarnings: z.boolean().optional(),
+})
+
+/** Building the list, or adding the people who have appeared since. */
+export const CampaignAudienceBody = z.object({
+  mode: z.enum(['rebuild', 'topUp']),
+})
+
+/** Sending yourself one, which is what unlocks the start button. */
+export const CampaignTestBody = z.object({
+  to: z.string().trim().min(3).max(255),
+  stepIndex: z.number().int().min(0).max(3).default(0),
+})
+
+/** An address nobody may write to again, added by hand. */
+export const SuppressionBody = z.object({
+  address: z.string().trim().min(3).max(255),
+  note: z.string().trim().max(500).nullable().optional(),
+})

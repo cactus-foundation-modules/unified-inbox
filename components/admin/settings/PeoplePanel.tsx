@@ -1,8 +1,9 @@
 'use client'
 
 import { useId, useState } from 'react'
-import type { Caller, Inbox, Settings } from './types'
+import type { Caller, ContactCategoryRow, Inbox, Settings } from './types'
 import { CheckField, FieldGroup, FieldRow, FormActions, MUTED, Panel } from './ui'
+import { CategoriesSection } from './CategoriesSection'
 
 // ---------------------------------------------------------------------------
 // People: who the messages are from, and how a number written in one gets
@@ -17,10 +18,11 @@ function linesToList(value: string): string[] {
   )]
 }
 
-export function PeoplePanel({ settings, inboxes, counts, busy, call }: {
+export function PeoplePanel({ settings, inboxes, counts, categories, busy, call }: {
   settings: Settings
   inboxes: Inbox[]
   counts: { people: number; organisations: number }
+  categories: ContactCategoryRow[]
   busy: boolean
   call: Caller
 }) {
@@ -87,8 +89,9 @@ export function PeoplePanel({ settings, inboxes, counts, busy, call }: {
       title="People and companies"
       blurb={<>
         Messages from the same person are gathered together so you can see everything they have ever
-        said in one place. It is deliberately simple: who somebody is, how to reach them, and which
-        company their address belongs to. Nothing more than that - it is not a CRM.
+        said in one place. What is held about them - names, numbers, an address, a category or two -
+        is on the <strong>Contacts</strong> tab of the inbox itself. This is where the rules behind
+        it live: who counts as a colleague, and what your own reference numbers look like.
       </>}
     >
       <p className="field-hint" style={{ margin: '0 0 1.25rem' }}>
@@ -131,6 +134,8 @@ export function PeoplePanel({ settings, inboxes, counts, busy, call }: {
           </span>
         </div>
       </FieldGroup>
+
+      <CategoriesSection categories={categories} busy={busy} call={call} />
 
       <FieldGroup
         title="Spotting references"

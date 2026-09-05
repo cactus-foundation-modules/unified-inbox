@@ -238,6 +238,19 @@ export type UnifiedInboxSettings = {
    *  receipt. Most ignore it; the ones that do not ask the reader first, which
    *  is the honest version of the same question. */
   requestReadReceipts: boolean
+  /** How many days must pass before any campaign may write to the same address
+   *  again. A guard rather than a preference, and site-wide rather than per
+   *  campaign for exactly that reason: a rule one campaign can opt out of stops
+   *  being a rule. Zero switches it off. */
+  campaignCooldownDays: number
+  /** How long a finished campaign's send-by-send log is kept. The conversations
+   *  it started are ordinary mail and live under the retention window; this is
+   *  the ledger behind them. */
+  campaignLogMonths: number
+  /** Who the campaign mail is from, in the sense the law means: a place, under
+   *  the unsubscribe link. Null until somebody fills it in, and a campaign will
+   *  not start without it while the footer is switched on. */
+  campaignFooterAddress: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -245,13 +258,39 @@ export type UnifiedInboxSettings = {
 // organisation their mail domain belongs to. Nothing else - see D15.
 // ---------------------------------------------------------------------------
 
-export type Person = {
+/** Where a record came from: worked out from the post, typed in by hand, or
+ *  brought in from a file. Worth knowing - a contact somebody typed is one they
+ *  meant, and one the mail pass invented from a From line is a guess. */
+export type ContactOrigin = 'mail' | 'hand' | 'import'
+
+export const CONTACT_ORIGINS: readonly ContactOrigin[] = ['mail', 'hand', 'import']
+
+/** A postal address, in the parts a British envelope has. Shared by a person
+ *  and an organisation, which have the same one. */
+export type PostalAddress = {
+  addressLine1: string | null
+  addressLine2: string | null
+  addressCity: string | null
+  addressCounty: string | null
+  addressPostcode: string | null
+  addressCountry: string | null
+}
+
+export type Person = PostalAddress & {
   id: string
+  /** The one name everything shows, kept in step with the two boxes below on
+   *  every save. Still the fallback for somebody the mail pass met before the
+   *  contacts screen existed and whose name has never been split. */
   displayName: string | null
+  firstName: string | null
+  lastName: string | null
+  jobTitle: string | null
+  website: string | null
   primaryEmail: string | null
   organisationId: string | null
   organisationName: string | null
   notes: string | null
+  origin: ContactOrigin
   /** Set when this person lost a merge. Everything that lists people hides
    *  these, and opening one sends you to whoever they were merged into. */
   mergedIntoId: string | null
@@ -271,10 +310,32 @@ export type PersonIdentity = {
   createdAt: Date
 }
 
-export type Organisation = {
+export type Organisation = PostalAddress & {
   id: string
   name: string
+  /** What the mail pass matches on. Null for one somebody added by hand: the
+   *  haulier who only ever telephones has no mail domain to know. */
   domain: string | null
+  email: string | null
+  phone: string | null
+  website: string | null
+  notes: string | null
+  origin: ContactOrigin
+  createdAt: Date
+  updatedAt: Date
+}
+
+/**
+ * A label somebody puts on a contact: "Supplier", "Trade customer", "Haulier".
+ *
+ * Not a pipeline and not a stage. Nothing moves between these on its own,
+ * nothing else on the site reads them, and a contact can be in several at once
+ * because a contact legitimately is several things at once.
+ */
+export type ContactCategory = {
+  id: string
+  name: string
+  sortOrder: number
   createdAt: Date
   updatedAt: Date
 }

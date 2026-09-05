@@ -183,6 +183,7 @@ export function UnifiedInboxSettingsTab() {
             settings={data.settings}
             inboxes={data.inboxes}
             counts={data.people}
+            categories={data.categories}
             busy={busy}
             call={call}
           />

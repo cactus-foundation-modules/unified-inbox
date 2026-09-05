@@ -2,11 +2,19 @@
 
 import { createContext, useCallback, useContext, useState } from 'react'
 import type { ReactNode } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ConfirmDialog } from './ConfirmDialog'
 
-// Correcting a person: their name, a note about them, and the two operations
-// that move addresses about.
+// What can be done to a person beyond correcting their card: the two operations
+// that move addresses about, and the two that answer a request from the person
+// themselves.
+//
+// Correcting the card itself is not here. It used to be - a name box and a note
+// box, which was everything a person had - and it stayed here for exactly as
+// long as those were the only two things worth changing. An address book has
+// fourteen, so the card lives on its own screen (ContactCard) and this offers a
+// link to it. Two forms for one record is two forms that drift.
 //
 // Merging is the thing people regret, so it is the thing this screen works
 // hardest at. It asks before it does it, it says exactly what will happen, and
@@ -44,8 +52,9 @@ type ErasePreview = {
 
 type Props = {
   personId: string
-  displayName: string | null
-  notes: string | null
+  /** Where the full card is. A link rather than a panel, because the card is a
+   *  screenful and a header is not somewhere to put a form. */
+  editHref: string
   identities: Identity[]
   merges: Merge[]
   canManage: boolean
@@ -87,16 +96,9 @@ type PersonActionsApi = {
   identities: Identity[]
   merges: Merge[]
   canManage: boolean
+  editHref: string
   busy: boolean
   error: string
-  editing: boolean
-  toggleEditing: () => void
-  closeEditing: () => void
-  name: string
-  setName: (value: string) => void
-  note: string
-  setNote: (value: string) => void
-  save: () => void
   merging: boolean
   toggleMerging: () => void
   closeMerging: () => void
@@ -135,14 +137,11 @@ function usePersonActions(): PersonActionsApi {
 }
 
 export function PersonActionsProvider({
-  personId, displayName, notes, identities, merges, canManage, children,
+  personId, editHref, identities, merges, canManage, children,
 }: Props) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [editing, setEditing] = useState(false)
-  const [name, setName] = useState(displayName ?? '')
-  const [note, setNote] = useState(notes ?? '')
 
   const [merging, setMerging] = useState(false)
   const [query, setQuery] = useState('')
@@ -178,15 +177,6 @@ export function PersonActionsProvider({
       setBusy(false)
     }
   }, [router])
-
-  async function save() {
-    const ok = await call(`/api/m/unified-inbox/people/${personId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ displayName: name.trim() || null, notes: note.trim() || null }),
-    })
-    if (ok) setEditing(false)
-  }
 
   async function search() {
     setBusy(true)
@@ -275,16 +265,9 @@ export function PersonActionsProvider({
     identities,
     merges,
     canManage,
+    editHref,
     busy,
     error,
-    editing,
-    toggleEditing: () => setEditing((v) => !v),
-    closeEditing: () => setEditing(false),
-    name,
-    setName,
-    note,
-    setNote,
-    save: () => { void save() },
     merging,
     toggleMerging: () => setMerging((v) => !v),
     closeMerging: () => setMerging(false),
@@ -330,10 +313,7 @@ export function PersonActionsBar() {
   const a = usePersonActions()
   return (
     <div className="uin-thread-actions">
-      <button type="button" className="btn btn-secondary btn-sm" disabled={a.busy}
-              onClick={a.toggleEditing} aria-expanded={a.editing} aria-controls={PANELS_ID}>
-        {a.editing ? 'Stop editing' : 'Edit their details'}
-      </button>
+      <Link className="btn btn-secondary btn-sm" href={a.editHref}>Edit their details</Link>
       {a.canManage && (
         <>
           <button type="button" className="btn btn-secondary btn-sm" disabled={a.busy}
@@ -372,7 +352,6 @@ export function PersonActionsPanels() {
   // Nothing open and nothing wrong: no block at all, rather than an empty one
   // holding the timeline down by the height of a gap.
   const anything = !!a.error
-    || a.editing
     || !!a.mergeCandidate
     || a.eraseAsked
     || (a.canManage && (a.merges.length > 0 || a.merging || a.splitting || (a.erasing && !!a.preview)))
@@ -394,21 +373,6 @@ export function PersonActionsPanels() {
               </button>
             </p>
           ))}
-        </div>
-      )}
-
-      {a.editing && (
-        <div className="uin-ctx-add uin-ctx-add-stacked">
-          <label htmlFor="uin-person-name">Their name</label>
-          <input id="uin-person-name" value={a.name} disabled={a.busy}
-                 onChange={(e) => a.setName(e.target.value)} placeholder="As you would write it" />
-          <label htmlFor="uin-person-note">A note about them</label>
-          <textarea id="uin-person-note" value={a.note} rows={3} disabled={a.busy}
-                    onChange={(e) => a.setNote(e.target.value)} />
-          <div className="uin-thread-actions">
-            <button type="button" className="btn btn-primary btn-sm" disabled={a.busy} onClick={a.save}>Save</button>
-            <button type="button" className="uin-chip" disabled={a.busy} onClick={a.closeEditing}>Cancel</button>
-          </div>
         </div>
       )}
 

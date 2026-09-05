@@ -8,6 +8,7 @@ import { isEncryptionKeyUsable } from '@/lib/crypto/secrets'
 import {
   collectionStats,
   getSettings,
+  listCategories,
   peopleCount,
   listAllInboxAccess,
   listUserDefaultInboxes,
@@ -30,7 +31,7 @@ export async function GET() {
   if (!user) return errorResponse('Not authenticated', 401)
   if (!await hasPermission(user, 'unifiedinbox.manage')) return errorResponse('Forbidden', 403)
 
-  const [connections, inboxes, access, defaults, settings, collection, unrouted, people, clashes, retention, users] = await Promise.all([
+  const [connections, inboxes, access, defaults, settings, collection, unrouted, people, categories, clashes, retention, users] = await Promise.all([
     listConnections(),
     listInboxes(),
     listAllInboxAccess(),
@@ -39,6 +40,7 @@ export async function GET() {
     collectionStats(),
     unroutedCount(),
     peopleCount(),
+    listCategories(),
     mailboxClashes(),
     retentionPreview(),
     prisma.user.findMany({
@@ -67,6 +69,10 @@ export async function GET() {
     // treats as one of the site's own domains - so the exclusion rule can be
     // checked rather than guessed at.
     people,
+    // The labels contacts can be filed under, with how many are in each -
+    // enough for somebody to see an empty one worth deleting and a typo worth
+    // renaming without opening the address book itself.
+    categories: categories.map((c) => ({ id: c.id, name: c.name, people: c.peopleCount })),
     // Mailboxes something else on this site is already watching. Collecting one
     // of those as well would file every email twice, so it is not collected -
     // and the screen has to say so, or an address that quietly never checks

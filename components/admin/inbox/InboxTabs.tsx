@@ -49,8 +49,15 @@ type Props = {
   channels: TabChannel[]
   /** Every unread conversation this person can see, for the All tab. */
   allCount: number
-  /** Which tab is on: an inbox id, `m:<module>`, 'none', 'drafts', or null for All. */
+  /** Which tab is on: an inbox id, `m:<module>`, 'none', 'drafts', 'sent',
+   *  'contacts', or null for All. */
   current: string | null
+  /** How many people are in the address book, beside the Contacts tab. */
+  contactCount: number
+  /** Whether this person may write campaigns. Its own grant: somebody who may
+   *  rename a folder is not, by that fact, somebody who may email five thousand
+   *  customers. */
+  showCampaigns: boolean
   /** Whether conversations that landed in no inbox are this person's to see. */
   showUnrouted: boolean
   unroutedCount: number
@@ -95,8 +102,8 @@ function Count({ value, word = 'unread' }: { value: number; word?: string }) {
 
 export function InboxTabs({
   base, params, inboxes, channels, allCount, current, showUnrouted, unroutedCount,
-  showDrafts, draftCount, composeHref, defaultInboxId, canReorder, canCheckNow,
-  autoCheckSeconds,
+  showDrafts, draftCount, contactCount, showCampaigns, composeHref, defaultInboxId,
+  canReorder, canCheckNow, autoCheckSeconds,
 }: Props) {
   const router = useRouter()
   const [notice, setNotice] = useState<CheckNowNotice | null>(null)
@@ -162,7 +169,12 @@ export function InboxTabs({
   // Changing tab always goes back to page one and drops whichever conversation
   // was open - it belongs to the tab being left.
   const link = (inbox: string | null) =>
-    inboxHref(base, params, { inbox, page: null, id: null, person: null, compose: null, draft: null })
+    inboxHref(base, params, {
+      inbox, page: null, id: null, person: null, compose: null, draft: null,
+      // The address book's own params go with the tab that owns them. Left on,
+      // an organisation card stayed pinned open beside the morning's post.
+      org: null, view: null, edit: null, import: null, cat: null,
+    })
 
   // Only the addresses that are actually in the row can be dragged, and the
   // pinned one is not one of them: it is where it is because it is this
@@ -280,6 +292,29 @@ export function InboxTabs({
         <span className="uin-tab" title="Messages you have started and not sent">
           <span className="uin-tab-name">Drafts</span>
           <Count value={draftCount} word="saved" />
+        </span>
+      ),
+    }] : []),
+    {
+      // The address book rather than the post. Last of the everyday tabs and
+      // ahead of Not filed, which only an administrator sees at all.
+      key: 'contacts',
+      href: link('contacts'),
+      active: current === 'contacts',
+      label: (
+        <span className="uin-tab" title="Everybody you deal with, and how to reach them">
+          <span className="uin-tab-name">Contacts</span>
+          <Count value={contactCount} word="contacts" />
+        </span>
+      ),
+    },
+    ...(showCampaigns ? [{
+      key: 'campaigns',
+      href: link('campaigns'),
+      active: current === 'campaigns',
+      label: (
+        <span className="uin-tab" title="The same email to a great many people, sent slowly">
+          <span className="uin-tab-name">Campaigns</span>
         </span>
       ),
     }] : []),

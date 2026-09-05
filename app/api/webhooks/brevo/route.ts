@@ -2,6 +2,8 @@ import { timingSafeEqual } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { getBrevoWebhookSecret, getSettings, recordDeliveryEvent } from '@/modules/unified-inbox/lib/db'
 import { normaliseBrevoEvent } from '@/modules/unified-inbox/lib/receipts'
+import { applyCampaignEvent } from '@/modules/unified-inbox/lib/campaigns/events'
+import { sendIdFromTag } from '@/modules/unified-inbox/lib/campaigns/message'
 
 // ---------------------------------------------------------------------------
 // Where Brevo tells us what became of a reply.
@@ -38,8 +40,13 @@ export async function POST(request: NextRequest) {
   // Switched off since the webhook was registered - reconciling should have
   // removed it, but a key that was rejected that day leaves one behind, and a
   // site that has said no should not quietly keep collecting.
+  //
+  // Campaign BOUNCES are the one exception and are taken either way. Watching
+  // whether somebody opened an email is tracking and is off until a site asks
+  // for it; being told an address does not exist is the mail system reporting a
+  // failure, and a site that ignores those goes on writing to dead addresses
+  // until its own domain is the thing being blocked.
   const settings = await getSettings()
-  if (!settings.trackOpens) return NextResponse.json({ ok: true, ignored: 'not-collecting' })
 
   const body = await request.json().catch(() => null)
   const events = Array.isArray(body) ? body : [body]
@@ -49,6 +56,15 @@ export async function POST(request: NextRequest) {
     const normalised = normaliseBrevoEvent(entry)
     if (!normalised) continue
     try {
+      // A campaign send carries its own tag, so one is told from an ordinary
+      // reply without looking anything up.
+      const campaignSendId = sendIdFromTag(normalised.messageId)
+      if (campaignSendId) {
+        if (normalised.event.kind !== 'bounced' && !settings.trackOpens) continue
+        if (await applyCampaignEvent(campaignSendId, normalised.event)) filed += 1
+        continue
+      }
+      if (!settings.trackOpens) continue
       const recorded = await recordDeliveryEvent(normalised.messageId, {
         ...normalised.event,
         source: 'brevo',

@@ -80,6 +80,35 @@ the same human collapse into one story.
   and both go straight back to the site's usual address if this module is
   removed.
 
+- **Contacts.** An address book, under its own tab beside the post. Everybody
+  who writes in appears in it on their own; you can also add somebody yourself,
+  which is the only way the haulier who never emails is ever going to be in
+  there. Each card holds a first and last name, a job title, the organisation
+  they work for, as many addresses and numbers as they actually use, a website,
+  a postal address and a note. Organisations get a card of their own with the
+  same details, and a mail domain, so the next person who writes in from that
+  company joins them automatically.
+- **Categories.** The labels you file contacts under - Supplier, Trade
+  customer, Haulier, whatever suits. Tick them on a contact's card, or type a
+  new one there and then; the row of them above the list narrows it to one in a
+  press. A contact can be in several at once, because a contact often is
+  several things at once. Renaming and removing them is under **Settings ->
+  Unified Inbox -> People**, and removing one keeps everybody who was in it -
+  they simply stop showing the label. It is not a pipeline: nothing moves
+  between them on its own and nothing else on the site reads them.
+- **Bringing an address book in.** Point it at a CSV out of Outlook, Google
+  Contacts, a spreadsheet or whatever the contacts are in now, and it shows you
+  each column with its best guess at what it is - change any of them, leave out
+  the ones you do not want, look at the first few rows as they would be saved,
+  and bring them in. A category column is understood - several to a cell, split
+  on commas or semicolons - and there is a box for putting everybody in the file
+  in one category besides, for when what they have in common is the file rather
+  than anything written in it. Somebody already here is left exactly as they are
+  unless you say otherwise, an address that belongs to somebody else stays with
+  them, one company named a thousand times over is one organisation rather than
+  a thousand, and an import only ever adds a label - it never takes one off. The
+  file is read on your own computer and never uploaded.
+
 Live chat, contact form enquiries, calls and texts join the same screen in the
 versions after this one, along with the panel of your own records beside each
 conversation.
@@ -103,8 +132,8 @@ hour on a paid hosting plan, and once a day on the free one.
 | Key | What it allows |
 |---|---|
 | `unifiedinbox.view` | Read the conversations in the inboxes shared with you |
-| `unifiedinbox.reply` | Reply to them |
-| `unifiedinbox.manage` | Set up mail accounts, inboxes and who can read them |
+| `unifiedinbox.reply` | Reply to them, add or correct a contact, and make a category |
+| `unifiedinbox.manage` | Set up mail accounts, inboxes and who can read them, import an address book, remove an organisation, rename or remove a category |
 
 ## Telling something else when the post arrives
 

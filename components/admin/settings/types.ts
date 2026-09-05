@@ -84,6 +84,9 @@ export type Settings = {
 
 export type StaffMember = { id: string; name: string; email: string }
 
+/** One label contacts can be filed under, and how many are wearing it. */
+export type ContactCategoryRow = { id: string; name: string; people: number }
+
 export type CollectionStat = {
   connectionId: string
   folders: number
@@ -109,6 +112,7 @@ export type Payload = {
    *  about it. One per mail account, never more. */
   warnings: Array<{ connectionId: string; message: string }>
   people: { people: number; organisations: number }
+  categories: ContactCategoryRow[]
   /** What the window would remove on its next pass, and what is being held back
    *  only because it is attached to one of the site's own records. Null when no
    *  window is set, which is where every site starts. */
