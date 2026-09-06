@@ -1,56 +1,16 @@
 'use client'
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Composer, type ComposerMode } from './Composer'
+import { useEffect, useRef } from 'react'
+import { Composer } from './Composer'
+import { useComposerOpen } from './composer-open'
+import { alignToTop } from './pane-scroll'
 import type { DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
+import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 
-// Whether the writing box is open, and which of the three it opened as.
-//
-// It used to be neither question: the box was always there, under every
-// conversation, whether anybody wanted to write or not. Which puts a form
-// between the reader and the messages on a screen opened nine times out of ten
-// to read something, and pushes the newest message off the top of a short one.
-//
-// What opens it is the reply icon on a message, or Reply to all or Forward on
-// that message's own menu - beside the words being answered, which is where a
-// mail program has always put them. The box itself opens beside the newest
-// message. Two places, one answer, so the answer lives here rather than in
-// either of them.
-//
-// A half-written draft opens the box on the way in. A draft nobody can see is
-// a draft nobody finishes.
-
-type Opened = { mode: ComposerMode; at: number } | null
-
-type ComposerOpenValue = {
-  opened: Opened
-  /** Presses the same button twice to close it, a different one to switch. */
-  toggle: (mode: ComposerMode) => void
-}
-
-const ComposerOpenContext = createContext<ComposerOpenValue | null>(null)
-
-export function useComposerOpen(): ComposerOpenValue {
-  const value = useContext(ComposerOpenContext)
-  if (!value) throw new Error('Used outside a ComposerOpenProvider')
-  return value
-}
-
-export function ComposerOpenProvider({
-  initialMode, children,
-}: { initialMode: ComposerMode | null; children: ReactNode }) {
-  const [opened, setOpened] = useState<Opened>(initialMode ? { mode: initialMode, at: 0 } : null)
-
-  // `at` counts presses, so pressing Forward while a forward is already open
-  // still reaches the composer as a fresh instruction rather than as no change
-  // at all. Which matters once somebody has switched mode inside the box.
-  const toggle = useCallback((mode: ComposerMode) => {
-    setOpened((current) => (current?.mode === mode ? null : { mode, at: (current?.at ?? 0) + 1 }))
-  }, [])
-
-  const value = useMemo(() => ({ opened, toggle }), [opened, toggle])
-  return <ComposerOpenContext.Provider value={value}>{children}</ComposerOpenContext.Provider>
-}
+// Where the writing box appears, once somebody has asked for one. Whether it is
+// open at all lives in composer-open.tsx, which both this and the box itself
+// read.
+export { ComposerOpenProvider, useComposerOpen } from './composer-open'
 
 type SlotProps = {
   threadId: string
@@ -67,6 +27,10 @@ type SlotProps = {
   replySubject: string
   forwardSubject: string
   draft: DraftForComposer | null
+  /** Whether this person may put anything out of the catalogue on a message. */
+  canAddProducts: boolean
+  /** What the draft was carrying out of it, already looked up. */
+  draftProducts: ProductChoice[]
   timezone: string
 }
 
@@ -85,6 +49,11 @@ export function ComposerSlot(props: SlotProps) {
   // and left the reader where they were, looking at the message they had just
   // answered, with no sign anything had happened. So the pane comes to the box.
   //
+  // To the TOP of the box, under the header, rather than merely far enough to
+  // have it on the screen: `block: 'nearest'` stopped the moment the bottom
+  // edge appeared, which left the message being answered filling most of the
+  // pane and the box you had just asked for wedged along the bottom of it.
+  //
   // `at` counts presses, so switching from Reply to Forward brings it back into
   // view as well. Not on the way in, though: a half-written draft opens the box
   // on arrival, and scrolling to it there would fight the pane's own opening
@@ -98,8 +67,7 @@ export function ComposerSlot(props: SlotProps) {
     if (at === null) return
     const box = slot.current
     if (!box) return
-    const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    box.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'nearest' })
+    alignToTop(box, true)
   }, [at, mode])
 
   if (!opened) return null

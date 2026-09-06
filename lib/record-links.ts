@@ -18,6 +18,8 @@ const RECORD_TYPE_LABELS: Record<string, string> = {
   order: 'Order',
   'purchase-order': 'Purchase order',
   quote: 'Quote',
+  product: 'Product',
+  variation: 'Variation',
 }
 
 export function recordLabel(link: RecordLink): string {
@@ -35,6 +37,13 @@ export function recordHref(link: RecordLink): string | null {
   }
   if (link.moduleName === 'quote-for-shop' && link.recordType === 'quote') {
     return `m/quote-for-shop/quotes/${link.recordId}`
+  }
+  // A variation is a product row of the shop's own - a hidden child of the
+  // listing it belongs to - so it opens in the same editor its parent does.
+  // Nothing here needs to know how the two are joined, which is exactly as much
+  // as this module is allowed to know about variations.
+  if (link.moduleName === 'shop' && (link.recordType === 'product' || link.recordType === 'variation')) {
+    return `m/shop/products/${link.recordId}`
   }
   return null
 }

@@ -21,7 +21,7 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
 
   // A link hangs off a conversation, and a conversation lives in an inbox with
   // its own guest list. Somebody who cannot open it must not be able to change
-  // what is attached to it either.
+  // what its context is either.
   if (link.threadId) {
     const thread = await getThreadDetail(link.threadId)
     const allowed = thread ? await canOpenThread(user, thread) : false

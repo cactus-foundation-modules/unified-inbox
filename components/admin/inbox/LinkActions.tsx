@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ConfirmDialog } from './ConfirmDialog'
 
-// Taking a link off, and putting one on by hand.
+// Taking a piece of context off a conversation, and putting one on by hand.
 //
 // The first of these is what makes automatic linking acceptable at all: every
 // link we worked out ourselves says so on its face and comes off in one click.
@@ -41,7 +41,7 @@ export function LinkActions({
         // allowed to" and "it went wrong", which reads as the button being
         // broken in one case and as nothing at all in the other.
         setError(response.status === 401 || response.status === 403
-          ? 'You are not allowed to change what is attached here.'
+          ? 'You are not allowed to change the context here.'
           : 'That would not come off. Try again in a moment.')
         return
       }
@@ -72,7 +72,7 @@ export function LinkActions({
       <ConfirmDialog
         open={asking}
         title="Take this off?"
-        body={`${label} stops being attached to this ${where}. The record itself stays exactly where it is, and you can attach it again afterwards.`}
+        body={`${label} stops being context for this ${where}. The record itself stays exactly where it is, and you can add it again afterwards.`}
         confirmLabel="Take it off"
         destructive
         busy={busy}
@@ -99,7 +99,7 @@ function shorten(value: string, max = 24): string {
 }
 
 /**
- * Putting a record on a conversation.
+ * Putting a record on a conversation as context.
  *
  * Typing the number was the whole of this to begin with, and it assumed
  * somebody had the number. The supplier answering a purchase order does not
@@ -155,7 +155,7 @@ export function AddLink({
     return () => clearTimeout(timer)
   }, [open, kind, term, threadId])
 
-  async function attach(reference: string) {
+  async function add(reference: string) {
     if (!reference.trim()) return
     setBusy(true)
     setError('')
@@ -166,7 +166,7 @@ export function AddLink({
         body: JSON.stringify({ kind, reference }),
       })
       if (!response.ok) {
-        setError((await response.json().catch(() => null))?.error ?? 'That did not attach.')
+        setError((await response.json().catch(() => null))?.error ?? 'That could not be added.')
         return
       }
       setTerm('')
@@ -179,17 +179,17 @@ export function AddLink({
     }
   }
 
-  // Nothing on this site keeps records anybody attaches by hand - no shop, no
-  // purchasing, or no permission to see either. An invitation to attach
-  // something that could only ever answer "nothing has that number" is worse
-  // than no invitation.
+  // Nothing on this site keeps records anybody adds by hand - no shop, no
+  // purchasing, or no permission to see either. An invitation to add something
+  // that could only ever answer "nothing has that number" is worse than no
+  // invitation.
   if (kinds.length === 0) return null
 
   if (!open) {
     return (
       <button type="button" className="uin-chip"
               onClick={() => { setSearching(true); setOpen(true) }}>
-        Attach something
+        Add context
       </button>
     )
   }
@@ -223,12 +223,12 @@ export function AddLink({
         placeholder="Number, name or address"
         onChange={(e) => { setTerm(e.target.value); setSearching(true) }}
         // Return takes the record at the top of the list, because that is the
-        // one somebody typing "12" is looking at. Attaching the raw "12" is
+        // one somebody typing "12" is looking at. Adding the raw "12" is
         // still there, on the button that says so in as many words.
         onKeyDown={(e) => {
           if (e.key !== 'Enter') return
           e.preventDefault()
-          void attach(first ? first.reference : typed)
+          void add(first ? first.reference : typed)
         }}
       />
 
@@ -246,7 +246,7 @@ export function AddLink({
         <ul className="uin-ctx-picker">
           {results.map((r) => (
             <li key={r.reference}>
-              <button type="button" disabled={busy} onClick={() => attach(r.reference)}>
+              <button type="button" disabled={busy} onClick={() => add(r.reference)}>
                 <span className="uin-ctx-main">
                   <span>{r.label}</span>
                   {r.status && <span className="uin-tag">{r.status}</span>}
@@ -261,7 +261,7 @@ export function AddLink({
           {searching
             ? 'Looking...'
             : typed
-              ? 'Nothing here matches that. Attach it by its number if you know it is right.'
+              ? 'Nothing here matches that. Add it by its number if you know it is right.'
               : 'Nothing to choose from yet.'}
         </p>
       )}
@@ -269,10 +269,10 @@ export function AddLink({
       <div className="uin-ctx-add-actions">
         {typed && (
           <button type="button" className="btn btn-primary btn-sm" disabled={busy}
-                  onClick={() => attach(typed)}>
+                  onClick={() => add(typed)}>
             {/* Whatever was pasted in there is not allowed to set how wide the
                 rail is. */}
-            Attach {shorten(typed)}
+            Add {shorten(typed)}
           </button>
         )}
         <button type="button" className="uin-chip" disabled={busy}

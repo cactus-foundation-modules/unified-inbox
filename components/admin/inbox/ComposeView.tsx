@@ -16,18 +16,20 @@ import {
 } from '@/modules/unified-inbox/lib/drafts'
 import { plainTextToHtml, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
 import { AttachmentChips, AttachmentPicker, plainReason, type Attachment } from './AttachmentPicker'
+import { ProductChips, ProductPicker, productKey } from './ProductPicker'
 import { AttachmentDropNotice, AttachmentDropOverlay } from './AttachmentDropChrome'
 import { useAttachmentDrop } from './useAttachmentDrop'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Dropdown } from './Dropdown'
 import { PendingSend } from './PendingSend'
 import { RecipientField } from './RecipientField'
-import { RichText } from './RichText'
+import { RichText, RichTextBox, RichTextTools } from './RichText'
 import { ScheduleNotice } from './ScheduleNotice'
 import { SendLaterPanel } from './SendLaterPanel'
 import { SnoozePanel } from './SnoozePanel'
-import { AlarmIcon, CloseIcon, PaperclipIcon } from './icons'
+import { CloseIcon, PaperclipIcon, TagIcon } from './icons'
 import type { DraftSendState } from '@/modules/unified-inbox/lib/types'
+import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 
 // Writing a brand new message, rather than answering one somebody else started.
 //
@@ -83,11 +85,18 @@ type Props = {
   defaultInboxId: string | null
   /** The draft being finished, when the address named one. */
   draft: DraftForComposer | null
+  /** Whether this person can put anything out of the catalogue on a message:
+   *  the site sells something, and they are allowed to see what. Worked out on
+   *  the server, because the answer is a permission rather than a preference. */
+  canAddProducts: boolean
+  /** The products the draft was carrying, already looked up - names, pictures
+   *  and today's prices. The draft itself remembers only which. */
+  draftProducts: ProductChoice[]
   timezone: string
 }
 
 export function ComposeView({
-  base, params, inboxes, defaultInboxId, draft, timezone,
+  base, params, inboxes, defaultInboxId, draft, canAddProducts, draftProducts, timezone,
 }: Props) {
   const router = useRouter()
   const [inboxId, setInboxId] = useState(draft?.inboxId ?? defaultInboxId ?? '')
@@ -109,14 +118,21 @@ export function ComposeView({
     (draft?.attachments ?? []).map((file) => ({ ...file, sizeBytes: file.sizeBytes ?? null })),
   )
   const [picking, setPicking] = useState(false)
+  // What the message carries out of the catalogue. Held as whole products
+  // rather than as references, because the chips have to say what they are -
+  // but only the references are ever sent, and what a customer reads is built
+  // on the server from what the shop says at that moment.
+  const [products, setProducts] = useState<ProductChoice[]>(draftProducts)
+  const [pickingProduct, setPickingProduct] = useState(false)
   // Which job is in flight, rather than merely that one is: a button that says
   // "Saving..." while somebody is sending is a button telling a small lie.
   const [busyWith, setBusyWith] = useState<'send' | 'save' | 'discard' | null>(null)
   const busy = busyWith !== null
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
-  // Which question is on screen: leaving with something unsaved, or throwing a
-  // saved draft away. Two different losses, two different sentences.
+  // Which question is on screen: whether to keep what has been typed, or
+  // whether to throw a draft that was already saved away. Two different losses,
+  // two different sentences.
   const [asking, setAsking] = useState<'leave' | 'discard' | null>(null)
   // Held rather than read from the address, because the first save mints it and
   // the second must land on the same row - four presses of Save are one draft.
@@ -180,13 +196,16 @@ export function ComposeView({
     || subject.trim().length > 0
     || htmlHasWriting(text)
     || attachments.length > 0
+    || products.length > 0
   )
 
   const leave = useCallback(() => { router.push(closeHref) }, [closeHref, router])
 
-  /** Every way out that is not Send: Escape, the cross, Cancel. Half a written
+  /** Every way out that is not Send: Escape and the cross. Half a written
    *  message is not something to lose to one keystroke, so when there is
-   *  something to lose the question is asked first. */
+   *  something to lose the question is asked first - and the question offers to
+   *  KEEP it, which is what somebody closing a half-written message nearly
+   *  always wants and what the old two-answer version could not do. */
   const askToLeave = useCallback(() => {
     if (hasUnsaved) setAsking('leave')
     else leave()
@@ -316,6 +335,7 @@ export function ComposeView({
           attachments: attachments.map(({ key, url, filename, contentType }) => ({
             key, url, filename, contentType,
           })),
+          products: products.map(({ moduleName, kind, id }) => ({ moduleName, kind, id })),
           idempotencyKey: token.current,
           draftId: draftId ?? undefined,
         }),
@@ -360,13 +380,17 @@ export function ComposeView({
       inFlight.current = false
       setBusyWith(null)
     }
-  }, [attachments, base, bcc, cc, draftId, inboxId, params, router, subject, text, to])
+  }, [attachments, base, bcc, cc, draftId, inboxId, params, products, router, subject, text, to])
 
   /** Puts the screenful down as a draft, with or without a time on it. One
    *  request for both, because a scheduled message IS a draft with a departure
    *  time - two requests would leave a window where the writing was saved and
-   *  the time was not. */
-  const save = useCallback(async (wallClock?: string | null, followUp?: number | null) => {
+   *  the time was not.
+   *
+   *  Says whether it saved, because the cross in the corner offers to keep the
+   *  message and then close - and closing on a save that did not happen is the
+   *  loss the question was asked to prevent. */
+  const save = useCallback(async (wallClock?: string | null, followUp?: number | null): Promise<boolean> => {
     const payload = {
       id: draftId ?? undefined,
       inboxId: inboxId || null,
@@ -380,6 +404,7 @@ export function ComposeView({
       attachments: attachments.map(({ key, url, filename, contentType, sizeBytes }) => ({
         key, url, filename, contentType, sizeBytes,
       })),
+      products: products.map(({ moduleName, kind, id }) => ({ moduleName, kind, id })),
       // Undefined is dropped by JSON.stringify, which is what "leave whatever
       // time is on it" looks like on the wire. A string sets one, null takes
       // it off.
@@ -390,9 +415,9 @@ export function ComposeView({
     }
     if (!isWorthSaving(payload)) {
       setError('There is nothing to save yet.')
-      return
+      return false
     }
-    if (inFlight.current) return
+    if (inFlight.current) return false
     inFlight.current = true
     setBusyWith('save')
     setError('')
@@ -406,7 +431,7 @@ export function ComposeView({
       const data = await response.json().catch(() => null)
       if (!response.ok) {
         setError(plainReason(data?.error, 'That draft could not be saved.'))
-        return
+        return false
       }
       if (data?.id) setDraftId(data.id as string)
       // What came back rather than what was asked for: the server decides what
@@ -428,13 +453,15 @@ export function ComposeView({
         : 'Saved. It is waiting under Drafts.')
       // The Drafts tab carries a count, and it is drawn on the server.
       router.refresh()
+      return true
     } catch {
       setError('The site could not be reached. Nothing was saved.')
+      return false
     } finally {
       inFlight.current = false
       setBusyWith(null)
     }
-  }, [attachments, bcc, cc, draftId, inboxId, router, subject, text, to])
+  }, [attachments, bcc, cc, draftId, inboxId, products, router, subject, text, to])
 
   const discard = useCallback(async () => {
     if (!draftId) {
@@ -489,6 +516,16 @@ export function ComposeView({
         </div>
 
         <div className="uin-modal-body">
+          {/* The provider rather than a plain box: the words are drawn in the
+              middle of this and the buttons that format them are drawn on the
+              strip along the bottom, and both have to mean the same box. */}
+          <RichText
+            id="uin-new-text"
+            value={text}
+            onChange={(html) => { setText(html); setDirty(true); setNote('') }}
+            placeholder="Write your message"
+            label="Your message"
+          >
           <div className="uin-composer">
             {/* Who it is from, who it is to and what it is about are four short
                 answers, so they are four short lines with the label beside the
@@ -619,13 +656,7 @@ export function ComposeView({
             </div>
 
             <div className="uin-compose-message">
-              <RichText
-                id="uin-new-text"
-                aria-label="Your message"
-                value={text}
-                onChange={(html) => { setText(html); setDirty(true); setNote('') }}
-                placeholder="Write your message"
-              />
+              <RichTextBox />
             </div>
 
             <AttachmentDropNotice
@@ -658,10 +689,15 @@ export function ComposeView({
             {error && <div className="alert alert-danger" role="alert">{error}</div>}
             {note && !error && <div className="alert alert-success" role="status">{note}</div>}
 
-            {/* The same strip the reply box has, for the same reason: the two
-                icons on the left are things you do TO the message, the buttons
-                on the right are the ways it leaves, and the gap between them
-                keeps the two from reading as one row of six. */}
+            {/* The same strip the reply box has, for the same reason: what you
+                do TO the message is on the left - the files, the catalogue, when
+                it leaves, and the six formatting buttons that used to sit above
+                the words - the ways it leaves are on the right, and the gap
+                between them keeps the two from reading as one long row.
+
+                Narrow, the send buttons wrap as a pair and stay hard right, and
+                if only one of them fits it is Send now that keeps the first
+                line. See uin-send-group in styles.tsx. */}
             <div className="uin-composer-row uin-composer-actions">
               <button
                 type="button"
@@ -673,11 +709,25 @@ export function ComposeView({
               >
                 {PaperclipIcon}
               </button>
+              {canAddProducts && (
+                <button
+                  type="button"
+                  className="uin-icon-btn"
+                  title="Put something you sell on this message"
+                  aria-label="Put something you sell on this message"
+                  onClick={() => setPickingProduct(true)}
+                  disabled={busy}
+                >
+                  {TagIcon}
+                </button>
+              )}
+              <RichTextTools />
+
+              {/* Words rather than an alarm clock, the same as the reply box. */}
               <Dropdown
-                className="uin-icon-btn"
-                label={AlarmIcon}
-                ariaLabel="Send it later"
-                title="Send it later"
+                className="btn btn-secondary btn-sm"
+                label={'Send Later'}
+                title={waiting ? 'Change when this goes out' : 'Choose when this goes out'}
                 width={280}
                 panelClassName="uin-menu-snooze"
                 disabled={busy}
@@ -690,6 +740,7 @@ export function ComposeView({
                   onCancelTimer={() => { setPendingSendAt(null); void save(null) }}
                 />
               </Dropdown>
+
               <AttachmentChips
                 attachments={attachments}
                 disabled={busy}
@@ -698,15 +749,23 @@ export function ComposeView({
                   setDirty(true)
                 }}
               />
+              <ProductChips
+                products={products}
+                disabled={busy}
+                onRemove={(key) => {
+                  setProducts((prev) => prev.filter((p) => productKey(p) !== key))
+                  setDirty(true)
+                }}
+              />
 
               <span className="uin-composer-gap" />
 
-              {/* A message with a time on it has already been decided about.
-                  Send and Save both contradict that decision - one would post
-                  it now and the other would look like the way to keep it, which
-                  it is not - so while it waits, the notice above is the whole of
-                  what is left to do: move it, or cancel the timer. */}
-              {draftId ? (
+              {/* A message with a time on it has already been decided about, so
+                  while it waits the notice above is the whole of what is left to
+                  do: move it, or cancel the timer. Cancel has gone from this row
+                  altogether - the cross in the corner is the way out, and it
+                  offers to keep what was typed rather than binning it. */}
+              {draftId && (
                 <button
                   type="button"
                   className="uin-chip"
@@ -715,75 +774,54 @@ export function ComposeView({
                 >
                   {busyWith === 'discard' ? 'Throwing it away...' : 'Throw the draft away'}
                 </button>
-              ) : (
-                <Link
-                  className="uin-chip"
-                  href={closeHref}
-                  onClick={(event) => {
-                    if (!hasUnsaved || opensElsewhere(event)) return
-                    event.preventDefault()
-                    setAsking('leave')
-                  }}
-                >
-                  Cancel
-                </Link>
               )}
 
-              {!waiting && (
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => { void save() }}
-                  disabled={busy}
-                >
-                  {busyWith === 'save' ? 'Saving...' : 'Save as a draft'}
-                </button>
-              )}
+              <span className="uin-send-group">
+                {!waiting && pendingSendAt && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => { void save(toWallClock(pendingSendAt, timezone), pendingFollowUp) }}
+                    disabled={busy}
+                  >
+                    {busyWith === 'save' ? 'Saving...' : 'Save it for then'}
+                  </button>
+                )}
 
-              {!waiting && pendingSendAt && (
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => { void save(toWallClock(pendingSendAt, timezone), pendingFollowUp) }}
-                  disabled={busy}
-                >
-                  Send later
-                </button>
-              )}
+                {/* No "Send later & snooze" up here, and there cannot be one: a
+                    message that has not gone yet has not started a conversation,
+                    and there is nothing to put to sleep. The chase on the line
+                    above is what covers that case - it brings the conversation
+                    back after the message has actually left. */}
+                {!waiting && (
+                  <Dropdown
+                    className="btn btn-secondary btn-sm"
+                    label={'Send & snooze'}
+                    align="end"
+                    width={280}
+                    panelClassName="uin-menu-snooze"
+                    disabled={busy}
+                  >
+                    <SnoozePanel
+                      timezone={timezone}
+                      busy={busy}
+                      title="Send it, then sleep until"
+                      onSnooze={(until) => { void submit(until) }}
+                    />
+                  </Dropdown>
+                )}
 
-              {/* No "Send later & snooze" up here, and there cannot be one: a
-                  message that has not gone yet has not started a conversation,
-                  and there is nothing to put to sleep. The chase on the line
-                  above is what covers that case - it brings the conversation
-                  back after the message has actually left. */}
-              {!waiting && (
-                <Dropdown
-                  className="btn btn-secondary btn-sm"
-                  label={'Send & snooze'}
-                  align="end"
-                  width={280}
-                  panelClassName="uin-menu-snooze"
-                  disabled={busy}
-                >
-                  <SnoozePanel
-                    timezone={timezone}
-                    busy={busy}
-                    title="Send it, then sleep until"
-                    onSnooze={(until) => { void submit(until) }}
-                  />
-                </Dropdown>
-              )}
-
-              {!waiting && (
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  onClick={() => { void submit() }}
-                  disabled={busy}
-                >
-                  {busyWith === 'send' ? 'Sending...' : 'Send now'}
-                </button>
-              )}
+                {!waiting && (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={() => { void submit() }}
+                    disabled={busy}
+                  >
+                    {busyWith === 'send' ? 'Sending...' : 'Send now'}
+                  </button>
+                )}
+              </span>
             </div>
 
             {picking && (
@@ -798,19 +836,59 @@ export function ComposeView({
                 }}
               />
             )}
+
+            {/* Left open after a pick, unlike the file list. Quoting somebody
+                three chairs is one errand, and shutting the catalogue between
+                each of them is three trips back into it. */}
+            {pickingProduct && (
+              <ProductPicker
+                chosen={products}
+                onClose={() => setPickingProduct(false)}
+                onPick={(item) => {
+                  setProducts((prev) =>
+                    prev.some((p) => productKey(p) === productKey(item)) ? prev : [...prev, item],
+                  )
+                  setDirty(true)
+                }}
+              />
+            )}
           </div>
+          </RichText>
         </div>
       </div>
 
+      {/* Three answers, because the question has three. It used to have two,
+          and the first of them - "Leave it" - threw away a screenful of typing
+          without ever using the word. */}
       <ConfirmDialog
         open={asking === 'leave'}
-        title="Leave this message?"
-        body="What you have written is not saved anywhere yet, and closing loses it. Save it as a draft first if you want it back."
-        confirmLabel="Leave it"
+        title="Keep this as a draft?"
+        body="Nothing here has been sent. It can wait under Drafts until you come back to it."
+        confirmLabel="Save it as a draft"
         cancelLabel="Keep writing"
-        destructive
-        onCancel={() => setAsking(null)}
-        onConfirm={() => { setAsking(null); leave() }}
+        busy={busy}
+        other={{
+          label: 'Throw it away',
+          destructive: true,
+          onClick: () => {
+            setAsking(null)
+            setDirty(false)
+            // A draft saved earlier goes with it; one never saved has nothing
+            // to delete, and the dialog simply closes.
+            if (draftId) void discard()
+            else leave()
+          },
+        }}
+        onCancel={() => { if (!busy) setAsking(null) }}
+        onConfirm={() => {
+          void save().then((ok) => {
+            setAsking(null)
+            // A save that did not happen leaves the screen where it is, with
+            // the reason on it. Closing anyway would be the exact loss this
+            // question was asked to prevent.
+            if (ok) leave()
+          })
+        }}
       />
 
       <ConfirmDialog

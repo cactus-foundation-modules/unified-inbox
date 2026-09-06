@@ -2,8 +2,8 @@ import { NextResponse } from 'next/server'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
-import { canReplyToInbox, replyableInboxIds } from '@/modules/unified-inbox/lib/access'
-import { allInboxIds, discardDraftAfterSend, getThread } from '@/modules/unified-inbox/lib/db'
+import { canReplyToInbox } from '@/modules/unified-inbox/lib/access'
+import { discardDraftAfterSend, getThread } from '@/modules/unified-inbox/lib/db'
 import { applyFollowUpAfterSend } from '@/modules/unified-inbox/lib/follow-up'
 import { htmlToText } from '@/modules/unified-inbox/lib/html'
 import { sendMessage } from '@/modules/unified-inbox/lib/send'
@@ -65,9 +65,7 @@ export async function POST(request: Request) {
       authorName: user.displayName ?? null,
     })
     if (!result.ok) return errorResponse(result.reason, 400)
-    const discarded = await discardDraftAfterSend(
-      body.draftId, user.id, await replyableInboxIds(user, await allInboxIds()),
-    )
+    const discarded = await discardDraftAfterSend(body.draftId, user.id)
     // A draft written with a chase on it is chased whoever sends it, and by
     // hand as much as on the clock - pressing Send an hour early is still
     // sending it.
@@ -96,16 +94,12 @@ export async function POST(request: Request) {
   // The draft it was written in, now that the message has genuinely gone. A
   // draft that outlives its own send is the reply somebody sends again next
   // week, having found it still sitting in the list.
-  const discarded = await discardDraftAfterSend(
-    body.draftId, user.id, await replyableInboxIds(user, await allInboxIds()),
-  )
+  const discarded = await discardDraftAfterSend(body.draftId, user.id)
 
   // And the chase it was written with, if it was written with one. It goes to
-  // whoever WROTE it rather than to whoever pressed Send: on a shared address a
-  // colleague can finish somebody else's message, and the person waiting on an
-  // answer is the one who asked the question. Skipped when the same press
-  // arrives twice - the second one sent nothing, and the conversation has
-  // already been put to sleep.
+  // whoever wrote it, which is whoever pressed Send - a draft is only ever its
+  // author's. Skipped when the same press arrives twice: the second one sent
+  // nothing, and the conversation has already been put to sleep.
   if (discarded && !result.alreadySent) await applyFollowUpAfterSend(discarded, result.threadId, new Date())
 
   return NextResponse.json({

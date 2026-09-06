@@ -7,6 +7,7 @@ import { toE164 } from '@/lib/phone'
 import { inboxHref } from '@/modules/unified-inbox/lib/list'
 import { plainReason } from './AttachmentPicker'
 import { ComposeCancel, ComposeModal } from './ComposeModal'
+import { ContactPhoneField } from './ContactPhoneField'
 
 // Ringing somebody.
 //
@@ -29,6 +30,9 @@ import { ComposeCancel, ComposeModal } from './ComposeModal'
 // here: core's toE164 puts the country code on as the box is left, and the same
 // sum is done again on the way in (see ../../../app/api/calls/route.ts) rather
 // than trusting a browser to have done it.
+//
+// And a name is typed as often as a number, which is why the box you say who to
+// ring in offers the address book underneath it - see ContactPhoneField.
 //
 // The call itself is recorded by whoever placed it and comes back to this hub
 // as a phone conversation. Nothing is written down here, so there is nothing to
@@ -129,7 +133,7 @@ export function CallView({
 
   return (
     <ComposeModal
-      title="A call"
+      title="Make a call"
       closeHref={closeHref}
       guard={guard}
       noun="call"
@@ -138,21 +142,20 @@ export function CallView({
       {({ askToLeave }) => (
         <>
           <div className="uin-fields">
-            <div className="uin-field-row uin-field-row--stack">
+            <div className="uin-field-row">
               <label htmlFor="uin-call-to">Ring</label>
               <div className="uin-field-control">
-                <input
+                <ContactPhoneField
                   id="uin-call-to"
-                  type="tel"
                   value={to}
-                  onChange={(e) => { setTo(e.target.value); setError(''); setNote('') }}
-                  onBlur={(e) => tidy(e.target.value, setTo)}
-                  placeholder="020 8138 0512"
-                  autoComplete="off"
+                  onChange={(next) => { setTo(next); setError(''); setNote('') }}
+                  onPick={(phone) => {
+                    setTo(toE164(phone, diallingCode) ?? phone)
+                    setError('')
+                    setNote('')
+                  }}
+                  placeholder="A name, or 020 8138 0512"
                 />
-                <span className="uin-field-hint">
-                  Their number. A number without a country code is taken as {diallingCode}.
-                </span>
               </div>
             </div>
 
@@ -188,10 +191,10 @@ export function CallView({
                   autoComplete="tel"
                 />
                 <span className="uin-field-hint">
-                  Your phone rings first. Answer it, press any key, and you are put through.{' '}
-                  {defaultCallMeAt
-                    ? <>Filled in from <Link href={accountHref}>your account</Link>; change it here for this call only.</>
-                    : <>Put your number on <Link href={accountHref}>your account</Link> and it will be filled in next time.</>}
+                  Your phone rings first. Answer it, press any key, and you are put through.
+                  {!defaultCallMeAt && (
+                    <> Put your number on <Link href={accountHref}>your account</Link> and it will be filled in next time.</>
+                  )}
                 </span>
               </div>
             </div>
@@ -200,11 +203,11 @@ export function CallView({
           {error && <div className="alert alert-danger" role="alert">{error}</div>}
           {note && !error && <div className="alert alert-success" role="status">{note}</div>}
 
-          <div className="uin-composer-row">
-            <button type="button" className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
-              {busy ? 'Ringing...' : 'Ring them'}
-            </button>
+          <div className="uin-composer-row uin-composer-row--end">
             <ComposeCancel closeHref={closeHref} guard={guard} askToLeave={askToLeave} />
+            <button type="button" className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
+              {busy ? 'Ringing...' : 'Place call'}
+            </button>
           </div>
         </>
       )}

@@ -207,7 +207,6 @@ describe.runIf(shouldRun)('files dropped onto a message, against a real database
     await lib.saveDraft({
       id: null,
       authorUserId: emma,
-      replyableInboxIds: [inboxId],
       inboxId,
       threadId: null,
       mode: 'new',

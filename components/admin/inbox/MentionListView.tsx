@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import type { MentionRow } from '@/modules/unified-inbox/lib/db'
-import { channelLabel, formatWhen, inboxHref, initialsFor, pageCount, PER_PAGE } from '@/modules/unified-inbox/lib/list'
+import { channelLabel, formatFull, formatWhen, inboxHref, initialsFor, pageCount, PER_PAGE } from '@/modules/unified-inbox/lib/list'
 import { AtIcon, InboundIcon } from './icons'
 import { Avatar } from './Avatar'
 import { MentionActions } from './MentionActions'
@@ -159,11 +159,15 @@ export function MentionListView({
                     )}
                     {row.status === 'snoozed' && row.snoozeUntil && (
                       <span className="uin-tag uin-tag-snoozed">
-                        <span className="uin-tag-text">Back {formatWhen(row.snoozeUntil, now, timezone)}</span>
+                        <span className="uin-tag-text" title={formatFull(row.snoozeUntil, timezone)}>
+                          Back {formatWhen(row.snoozeUntil, now, timezone)}
+                        </span>
                       </span>
                     )}
                   </span>
-                  <span>{formatWhen(row.createdAt, now, timezone)}</span>
+                  <span title={formatFull(row.createdAt, timezone)}>
+                    {formatWhen(row.createdAt, now, timezone)}
+                  </span>
                 </span>
               </Link>
               {/* Outside the link, for the same reason the tick boxes in the

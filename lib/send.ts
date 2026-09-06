@@ -16,6 +16,7 @@ import {
   recordLink,
   reopenForRetry,
   settleDelivery,
+  threadHasLink,
   getMessage,
   getSettings,
   listAttachmentsForMessage,
@@ -37,6 +38,9 @@ import {
   type ReplyMode,
 } from './compose'
 import { normaliseAddress, isValidAddress } from './addresses'
+import { resolveProducts } from './products'
+import { renderProductTable, renderProductText } from './products/render'
+import type { ProductRef } from './products/types'
 import { getSiteTimezone } from '@/lib/config/timezone.server'
 import { normaliseSubject, buildSnippet, cleanMessageId } from './threading'
 import { htmlToText } from './html'
@@ -92,6 +96,10 @@ export type SendRequest = {
     filename: string
     contentType: string | null
   }>
+  /** Things out of the site's own catalogue to print under the writing. Held as
+   *  references and read from the owning module HERE, so what a customer is
+   *  quoted is what the shop says at the moment the message leaves. */
+  products?: ProductRef[]
   /** Carry the attachments of the message being answered or forwarded. */
   includeOriginalAttachments?: boolean
   /** The message being replied to or forwarded, when it is not the newest. */
@@ -238,8 +246,17 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
   const ownInboxId = sendingInboxIsSomebodysOwn ? null : await defaultInboxIdFor(request.authorUserId)
   const ownInbox = ownInboxId && ownInboxId !== inbox.id ? await getInbox(ownInboxId) : null
 
+  // The catalogue items, as they stand this minute. Read before the message row
+  // is written, because it is also what gets attached to the conversation
+  // afterwards and one read answers both.
+  const products = await resolveProducts(request.products ?? [])
+  const choices = products.map((p) => p.choice)
+
   const body = assembleBody({
     bodyHtml: request.bodyHtml,
+    products: choices.length > 0
+      ? { html: renderProductTable(choices), text: renderProductText(choices) }
+      : null,
     // Rendered rather than read: the inbox's signature may be rich text, pasted
     // markup or a stack of email blocks, and only one place knows how to turn
     // each of those into an email.
@@ -331,6 +348,27 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
       recordType: request.link.recordType,
       recordId: request.link.recordId,
       label: request.link.label,
+      confidence: 100,
+      linkedBy: 'user',
+    })
+  }
+
+  // Everything that was printed on it, now attached to the conversation - the
+  // same row a purchase order or an order sits on, because "what is this thread
+  // about" is one question and the answer to it is one line. Checked first
+  // rather than left to the insert: two messages quoting the same chair are one
+  // chair on the conversation, not two rows of the same name.
+  for (const product of products) {
+    if (await threadHasLink(threadId, product.link.moduleName, product.link.recordType, product.link.recordId)) {
+      continue
+    }
+    await recordLink({
+      threadId,
+      personId: null,
+      moduleName: product.link.moduleName,
+      recordType: product.link.recordType,
+      recordId: product.link.recordId,
+      label: product.link.label,
       confidence: 100,
       linkedBy: 'user',
     })

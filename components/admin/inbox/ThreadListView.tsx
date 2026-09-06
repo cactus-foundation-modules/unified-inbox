@@ -7,6 +7,7 @@ import type { ThreadListRow } from '@/modules/unified-inbox/lib/db'
 import {
   avatarHref,
   channelLabel,
+  formatFull,
   formatWhen,
   inboxHref,
   initialsFor,
@@ -124,7 +125,6 @@ export function ThreadListView({
   const onScreen = useMemo(() => new Set(rows.map((r) => r.id)), [rows])
   const picked = useMemo(() => selected.filter((id) => onScreen.has(id)), [selected, onScreen])
   const pickedSet = useMemo(() => new Set(picked), [picked])
-  const allPicked = rows.length > 0 && picked.length === rows.length
 
   const clearPicked = useCallback(() => {
     anchorRef.current = null
@@ -322,30 +322,6 @@ export function ThreadListView({
 
       {error && <div className="alert alert-danger" role="alert" style={{ margin: '0.5rem 0.75rem' }}>{error}</div>}
 
-      <div className="uin-bulk uin-bulk-all">
-        <label className="uin-pick-all">
-          <input
-            type="checkbox"
-            checked={allPicked}
-            // Ticked none of them, ticked some of them, ticked the lot: the box
-            // says which without anybody having to count the rows.
-            ref={(el) => { if (el) el.indeterminate = picked.length > 0 && !allPicked }}
-            onChange={() => {
-              anchorRef.current = null
-              setSelected(allPicked ? [] : rows.map((r) => r.id))
-            }}
-          />
-          Select everything on this page
-        </label>
-        {/* Said once, quietly, above the list: a way of picking things that
-            leaves no mark on the screen is a way of picking things nobody
-            finds. */}
-        <span className="uin-bulk-hint">
-          or shift-click a second conversation to take everything between the two,
-          cmd-click to add one at a time
-        </span>
-      </div>
-
       <ul className="uin-list">
         {rows.map((row, index) => {
           const who = participantLabel(row)
@@ -450,7 +426,12 @@ export function ThreadListView({
                       </span>
                     )}
                   </span>
-                  <span>{formatWhen(row.lastMessageAt, now, timezone)}</span>
+                  {/* Short enough to fit the column, with the whole date and
+                      time in the little yellow box for anybody working out
+                      exactly when. */}
+                  <span title={formatFull(row.lastMessageAt, timezone)}>
+                    {formatWhen(row.lastMessageAt, now, timezone)}
+                  </span>
                 </span>
               </Link>
             </li>

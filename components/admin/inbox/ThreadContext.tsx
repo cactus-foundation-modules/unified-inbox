@@ -1,10 +1,10 @@
 import type { LinkKind } from '@/modules/unified-inbox/lib/linking'
 import type { RecordLink } from '@/modules/unified-inbox/lib/types'
 import type { LinkKindChoice } from './LinkActions'
-import { AttachedRecords } from './AttachedRecords'
+import { ContextRecords } from './ContextRecords'
 
-// What the conversation is about - the records attached to it - directly under
-// the buttons, where the conversation's own header is.
+// What the conversation is about - the records that give it context - directly
+// under the buttons, where the conversation's own header is.
 //
 // It used to be the first block of the panel beside the messages, which on any
 // window narrower than 1500px is a panel UNDER the messages: the answer to
@@ -20,9 +20,16 @@ import { AttachedRecords } from './AttachedRecords'
 export type ThreadContextView = {
   /** The admin root, so a stored link becomes a real address. */
   adminPath: string
+  /** What on the site the conversation came from, when its channel says so -
+   *  the name of the form it was typed into, say. It sits with the attached
+   *  records because it answers the same question they do, and it is NOT one of
+   *  them: nobody attached it, it does not open anything, and it cannot be
+   *  taken off, because taking it off would be claiming the enquiry came from
+   *  somewhere else. */
+  sourceLabel: string | null
   links: RecordLink[]
   canEditLinks: boolean
-  /** What may be attached here at all: the record kinds whose module is
+  /** What may be added here at all: the record kinds whose module is
    *  installed and whose records this viewer may see. */
   linkKinds: LinkKindChoice[]
   /** Which of them the picker opens on, decided from what the inbox is used
@@ -35,18 +42,19 @@ type Props = ThreadContextView & {
 }
 
 export function ThreadContext({
-  threadId, adminPath, links, canEditLinks, linkKinds, defaultLinkKind,
+  threadId, adminPath, sourceLabel, links, canEditLinks, linkKinds, defaultLinkKind,
 }: Props) {
-  // Nothing attached and nothing that could be, on a site that keeps no records
-  // anybody could attach. Then there is no block, rather than a bordered strip
-  // with nothing in it.
-  if (links.length === 0 && !(canEditLinks && linkKinds.length > 0)) return null
+  // Nothing attached, nothing to say about where it came from, and nothing that
+  // could be attached on a site that keeps no records anybody could attach.
+  // Then there is no block, rather than a bordered strip with nothing in it.
+  if (!sourceLabel && links.length === 0 && !(canEditLinks && linkKinds.length > 0)) return null
 
   return (
     <div className="uin-thread-ctx">
-      <AttachedRecords
+      <ContextRecords
         threadId={threadId}
         adminPath={adminPath}
+        sourceLabel={sourceLabel}
         links={links}
         canEdit={canEditLinks}
         kinds={linkKinds}

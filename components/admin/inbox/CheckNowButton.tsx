@@ -29,6 +29,11 @@ type Props = {
   /** Where the outcome goes. The row this sits in owns the space for it: an
    *  alert inside a strip of tabs would take the row apart. */
   onResult: (notice: CheckNowNotice | null) => void
+  /** When a check came back having actually opened the accounts, so the line
+   *  beside this button can say when the mail was last collected. Called by the
+   *  rounds that run on their own too: those say nothing else, and the clock
+   *  moving on is the only sign of them anybody wants. */
+  onChecked: (at: number) => void
   /** Seconds between checks that run on their own while this page is open and
    *  in front of somebody, or null for none. Never below the route's minute of
    *  cooldown - the settings screen will not offer it and the route would
@@ -36,7 +41,7 @@ type Props = {
   autoSeconds: number | null
 }
 
-export function CheckNowButton({ onResult, autoSeconds }: Props) {
+export function CheckNowButton({ onResult, onChecked, autoSeconds }: Props) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
 
@@ -54,6 +59,7 @@ export function CheckNowButton({ onResult, autoSeconds }: Props) {
       })
       const body = await response.json().catch(() => null)
       if (response.ok) {
+        onChecked(Date.now())
         // A check nobody asked for says nothing at all, even when it collected
         // something. New mail announcing itself in a strip across the top of
         // the list is a notice about a thing that is already on screen,
@@ -74,7 +80,7 @@ export function CheckNowButton({ onResult, autoSeconds }: Props) {
       // spinning for the rest of the visit.
       setBusy(false)
     }
-  }, [onResult, router])
+  }, [onResult, onChecked, router])
 
   // Held in a ref so the timer below can call the current one without being
   // torn down and rebuilt - a re-created interval never reaches the end of its

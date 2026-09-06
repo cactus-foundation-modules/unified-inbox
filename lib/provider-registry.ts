@@ -161,6 +161,35 @@ export async function visibleProviderChannels(user: SessionUser): Promise<Provid
 }
 
 /**
+ * Every channel on the site and what it is called, whoever is asking.
+ *
+ * The settings screen asks this rather than `visibleProviderChannels`: whether
+ * a channel appears in the rail is one decision for the whole site, so the list
+ * to make it from has to be the whole site's. It is gated on
+ * `unifiedinbox.manage` where it is used, and knowing that a site has a contact
+ * form is a long way from reading what anybody wrote in one.
+ */
+export async function allProviderChannels(): Promise<Array<{ moduleName: string; label: string }>> {
+  const entries = await providerEntries()
+  if (entries.length === 0) return []
+  const components = moduleExtensionPointComponents[CONVERSATION_PROVIDER_POINT] ?? {}
+
+  const channels: Array<{ moduleName: string; label: string }> = []
+  const seen = new Set<string>()
+  for (const entry of entries) {
+    if (seen.has(entry.moduleName)) continue
+    const provider = components[entry.id]
+    if (!isProvider(provider)) continue
+    seen.add(entry.moduleName)
+    channels.push({
+      moduleName: entry.moduleName,
+      label: typeof provider.label === 'string' && provider.label.trim() ? provider.label : entry.moduleName,
+    })
+  }
+  return channels
+}
+
+/**
  * The permission one channel's conversations answer to, if it declares one.
  *
  * `known: false` means no installed module publishes that channel any more -

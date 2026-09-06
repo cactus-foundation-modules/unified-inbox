@@ -6,9 +6,15 @@ import { inboxHref } from '@/modules/unified-inbox/lib/list'
 import { campaignApi, when, type CampaignListRow } from './api'
 import { CampaignEditor } from './CampaignEditor'
 import { CampaignTicker } from './CampaignTicker'
+import { MegaphoneIcon } from '../icons'
 import { SuppressionsPanel } from './SuppressionsPanel'
 
 // The Campaigns tab.
+//
+// Laid out the way the post is, because it is the same shape: every campaign
+// down the list column, the one that is open in the reading pane beside it.
+// It was a full-width form with a Back button on top of it, which meant that
+// glancing at what another campaign was doing cost you the one you were in.
 //
 // Everything on it is fetched rather than server-rendered, which is the one
 // place this module departs from the rest of the hub - and it is deliberate. A
@@ -17,8 +23,12 @@ import { SuppressionsPanel } from './SuppressionsPanel'
 // that from the query string would mean a full page refresh every ninety
 // seconds, and the tab it lives in belongs to core.
 //
-// The address bar still carries which campaign is open and which step, so a
-// colleague can be sent a link and the back button behaves.
+// The address bar still carries which campaign is open, so a colleague can be
+// sent a link and the back button behaves.
+//
+// It renders TWO grid children of the frame - the list column and the reading
+// pane - out of one fragment, so the frame above can stay the same three
+// columns the inbox has.
 
 export type CampaignInbox = { id: string; name: string; address: string }
 export type CampaignCategory = { id: string; name: string }
@@ -30,9 +40,10 @@ type Props = {
   categories: CampaignCategory[]
   /** Which campaign is open, from the address bar. */
   campaignId: string | null
-  /** 'edit', 'progress', or 'suppressions' for the do-not-email list. Links
-   *  made before the editor became one page carry who/what/when/watch, so
-   *  anything that is not 'progress' opens the wording. */
+  /** Only 'suppressions' means anything now: the do-not-email list is the one
+   *  thing on this screen that is not a campaign. Links made before the editor
+   *  became one page carry who/what/when/watch/progress, and every one of them
+   *  now opens the campaign itself, which is where all of that lives. */
   view: string | null
   /** The address a pinger can be pointed at, with its key already in it. Shown
    *  once, on the campaign that is running, because the pace of the whole
@@ -79,191 +90,183 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
     }
     setCreating(false)
     setNewName('')
-    go({ campaign: result.data.id, view: 'edit' })
+    go({ campaign: result.data.id, view: null })
   }, [go, inboxes, newName])
 
   // Anything running keeps the screen honest: the counts move while somebody
   // watches, and the ticker below is what actually moves them.
   const anyRunning = (rows ?? []).some((row) => row.status === 'running')
-
-  if (view === 'suppressions') {
-    return <SuppressionsPanel onBack={() => go({ view: null, campaign: null })} />
-  }
-
-  if (campaignId) {
-    return (
-      <>
-        {anyRunning && <CampaignTicker onTick={load} />}
-        <CampaignEditor
-          campaignId={campaignId}
-          inboxes={inboxes}
-          categories={categories}
-          view={view === 'progress' || view === 'watch' ? 'progress' : 'edit'}
-          tickUrl={tickUrl}
-          onView={(next) => go({ campaign: campaignId, view: next })}
-          onStatusChanged={load}
-          onClose={() => { void load(); go({ campaign: null, view: null }) }}
-        />
-      </>
-    )
-  }
+  const suppressing = view === 'suppressions'
 
   return (
     <>
-      {anyRunning && <CampaignTicker onTick={load} />}
+      <div className="uin-col">
+        <div className="uin-col-head">
+          <div className="uin-col-title">
+            <h2>Campaigns</h2>
+            <span className="uin-col-total">
+              {rows === null ? '' : rows.length === 1 ? '1 campaign' : `${rows.length.toLocaleString('en-GB')} campaigns`}
+            </span>
+          </div>
 
-      <div className="uin-camp-head">
-        <h2>Campaigns</h2>
-        <div className="uin-camp-actions">
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => go({ view: 'suppressions' })}>
-            Do-not-email list
-          </button>
-          {inboxes.length > 0 && (
-            <button type="button" className="btn btn-primary btn-sm" onClick={() => setCreating(true)}>
-              New campaign
+          <div className="uin-camp-actions">
+            {inboxes.length > 0 && (
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => setCreating(true)}>
+                New campaign
+              </button>
+            )}
+            <button
+              type="button"
+              className={`btn btn-sm ${suppressing ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => go({ campaign: null, view: suppressing ? null : 'suppressions' })}
+            >
+              Do-not-email list
             </button>
-          )}
-        </div>
-      </div>
+          </div>
 
-      {error && <div className="alert alert-danger" role="alert">{error}</div>}
-
-      {creating && (
-        <div className="uin-camp-section">
-          <h3>What is this one called? <small>Only you see this</small></h3>
-          <div className="uin-camp-row">
-            <div className="uin-camp-field" style={{ flex: '2 1 16rem' }}>
+          {/* Naming it happens where the list is, because that is what it adds
+              a row to. It opens on the right the moment it is named. */}
+          {creating && (
+            <div className="uin-camp-new">
+              <label className="sr-only" htmlFor="uin-camp-new-name">What this campaign is called - only you see it</label>
               <input
+                id="uin-camp-new-name"
                 className="form-control"
                 value={newName}
                 autoFocus
                 placeholder="September chair offer"
                 onChange={(event) => setNewName(event.target.value)}
-                onKeyDown={(event) => { if (event.key === 'Enter') void create() }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void create()
+                  if (event.key === 'Escape') setCreating(false)
+                }}
               />
+              <div className="uin-camp-actions">
+                <button type="button" className="btn btn-primary btn-sm" onClick={() => void create()}>Start writing it</button>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setCreating(false)}>Cancel</button>
+              </div>
             </div>
-            <button type="button" className="btn btn-primary btn-sm" onClick={() => void create()}>Start writing it</button>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setCreating(false)}>Cancel</button>
+          )}
+
+          {anyRunning && <CampaignTicker onTick={load} />}
+        </div>
+
+        <div className="uin-col-scroll">
+          {error && <div className="alert alert-danger" role="alert">{error}</div>}
+
+          {inboxes.length === 0 && (
+            <div className="uin-empty">
+              <strong>No address to send from</strong>
+              You need an address you are allowed to send from before you can write a campaign.
+              Ask whoever looks after the site to give you one.
+            </div>
+          )}
+
+          {rows === null && inboxes.length > 0 && <div className="uin-empty">Looking&hellip;</div>}
+
+          {rows !== null && rows.length === 0 && inboxes.length > 0 && !creating && (
+            <div className="uin-empty">
+              <strong>No campaigns yet</strong>
+              A campaign sends the same email to a list of your contacts, one at a time, slowly, inside working
+              hours - so it reads as a person writing rather than a mailshot. Write one and see.
+            </div>
+          )}
+
+          {rows !== null && rows.length > 0 && (
+            <ul className="uin-list">
+              {rows.map((row) => (
+                <li key={row.id} className="uin-list-item">
+                  <CampaignRow
+                    row={row}
+                    timezone={timezone}
+                    inbox={inboxes.find((i) => i.id === row.inboxId) ?? null}
+                    open={row.id === campaignId}
+                    onOpen={() => go({ campaign: row.id, view: null })}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
+      {suppressing ? (
+        <div className="uin-read uin-camp-pane">
+          <SuppressionsPanel onBack={() => go({ campaign: null, view: null })} />
+        </div>
+      ) : campaignId ? (
+        <div className="uin-read uin-camp-pane">
+          <CampaignEditor
+            campaignId={campaignId}
+            inboxes={inboxes}
+            categories={categories}
+            tickUrl={tickUrl}
+            onStatusChanged={load}
+            onClose={() => { void load(); go({ campaign: null, view: null }) }}
+          />
+        </div>
+      ) : (
+        <div className="uin-read">
+          <div className="uin-nothing">
+            {MegaphoneIcon}
+            <strong>Nothing open</strong>
+            Pick a campaign to see who it goes to, what it says, when it goes and how far it has got -
+            all on the one page.
           </div>
         </div>
-      )}
-
-      {inboxes.length === 0 && (
-        <div className="uin-empty">
-          <strong>No address to send from</strong>
-          You need an address you are allowed to send from before you can write a campaign.
-          Ask whoever looks after the site to give you one.
-        </div>
-      )}
-
-      {rows === null && inboxes.length > 0 && <div className="uin-empty">Looking&hellip;</div>}
-
-      {rows !== null && rows.length === 0 && inboxes.length > 0 && !creating && (
-        <div className="uin-empty">
-          <strong>No campaigns yet</strong>
-          A campaign sends the same email to a list of your contacts, one at a time, slowly, inside working
-          hours - so it reads as a person writing rather than a mailshot. Write one and see.
-        </div>
-      )}
-
-      {rows !== null && rows.length > 0 && (
-        <ul className="uin-camp-list">
-          {rows.map((row) => (
-            <li key={row.id}>
-              <CampaignCard
-                row={row}
-                timezone={timezone}
-                inbox={inboxes.find((i) => i.id === row.inboxId) ?? null}
-                onOpen={() => go({ campaign: row.id, view: row.status === 'draft' ? 'edit' : 'progress' })}
-                onChanged={load}
-              />
-            </li>
-          ))}
-        </ul>
       )}
     </>
   )
 }
 
-function CampaignCard({
-  row, timezone, inbox, onOpen, onChanged,
+/** One campaign in the list: what it is called, where it stands, and how far
+ *  along it is. Nothing else. Pausing it, stopping it and sending it again are
+ *  in the pane beside it, where the campaign they are about is open - a row
+ *  that carries its own buttons is a row somebody presses by accident. */
+function CampaignRow({
+  row, timezone, inbox, open, onOpen,
 }: {
   row: CampaignListRow
   timezone: string
   inbox: CampaignInbox | null
+  open: boolean
   onOpen: () => void
-  onChanged: () => void
 }) {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-
-  const act = async (action: 'pause' | 'resume' | 'stop') => {
-    setBusy(true)
-    setError('')
-    const result = await campaignApi.state(row.id, action)
-    setBusy(false)
-    if (!result.ok && !result.needsAcceptance) {
-      setError(result.error)
-      return
-    }
-    onChanged()
-  }
-
   const sent = row.tally.done + row.tally.replied + row.tally.bounced
     + row.tally.complained + row.tally.failed + row.tally.unsubscribed
-  const total = Math.max(1, row.tally.total - row.tally.skipped)
+  const onTheList = row.tally.total - row.tally.skipped
+  const total = Math.max(1, onTheList)
   const pct = (value: number) => `${Math.round((value / total) * 100)}%`
 
   return (
-    <div className="uin-camp-card" data-state={row.status}>
-      <div className="uin-camp-card-top">
-        <button type="button" className="uin-camp-name" onClick={onOpen}>{row.name}</button>
+    <button
+      type="button"
+      className="uin-camp-item"
+      aria-current={open ? 'true' : undefined}
+      onClick={onOpen}
+    >
+      <span className="uin-camp-item-top">
+        <span className="uin-camp-item-name">{row.name}</span>
         <span className="uin-camp-pill" data-state={row.status}>{statusWord(row)}</span>
-      </div>
+      </span>
 
-      <div className="uin-camp-bar" role="img" aria-label={`${sent} of ${total} sent`}>
+      <span className="uin-camp-bar" role="img" aria-label={`${sent} of ${onTheList} sent`}>
         <span data-kind="done" style={{ width: pct(row.tally.done) }} />
         <span data-kind="replied" style={{ width: pct(row.tally.replied) }} />
         <span data-kind="bad" style={{ width: pct(row.tally.bounced + row.tally.complained + row.tally.failed) }} />
         <span data-kind="off" style={{ width: pct(row.tally.unsubscribed) }} />
-      </div>
+      </span>
 
-      <div className="uin-camp-legend">
-        <span><b>{sent.toLocaleString('en-GB')}</b> of {(row.tally.total - row.tally.skipped).toLocaleString('en-GB')} sent</span>
+      <span className="uin-camp-item-meta">
+        <span><b>{sent.toLocaleString('en-GB')}</b> of {onTheList.toLocaleString('en-GB')} sent</span>
         {row.tally.replied > 0 && <span><b>{row.tally.replied.toLocaleString('en-GB')}</b> replied</span>}
         {row.tally.bounced + row.tally.complained > 0 && (
           <span><b>{(row.tally.bounced + row.tally.complained).toLocaleString('en-GB')}</b> did not arrive</span>
         )}
-        {row.tally.unsubscribed > 0 && <span><b>{row.tally.unsubscribed.toLocaleString('en-GB')}</b> unsubscribed</span>}
-      </div>
-
-      <div className="uin-camp-meta">
-        {inbox && <span>From {inbox.address}</span>}
         {row.finishesAbout && <span>Finishes about {when(row.finishesAbout, timezone)}</span>}
-        {row.status === 'paused' && row.pauseReason && <span>{row.pauseReason}</span>}
-      </div>
-
-      {error && <div className="alert alert-danger" role="alert">{error}</div>}
-
-      <div className="uin-camp-actions">
-        <button type="button" className="btn btn-secondary btn-sm" onClick={onOpen}>Open</button>
-        {row.status === 'running' && (
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void act('pause')}>
-            Pause
-          </button>
-        )}
-        {row.status === 'paused' && (
-          <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void act('resume')}>
-            Resume
-          </button>
-        )}
-        {(row.status === 'running' || row.status === 'paused') && (
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void act('stop')}>
-            Stop for good
-          </button>
-        )}
-      </div>
-    </div>
+        {inbox && <span className="uin-camp-item-from">From {inbox.address}</span>}
+      </span>
+    </button>
   )
 }
 

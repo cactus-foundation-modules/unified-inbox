@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import type { LinkKind } from '@/modules/unified-inbox/lib/linking'
 import type { RecordLink } from '@/modules/unified-inbox/lib/types'
@@ -11,20 +11,38 @@ import { AddLink, LinkActions, type LinkKindChoice } from './LinkActions'
 // What this conversation is about, on one line under the actions: "Purchase
 // order PO-0023, Order DW0234".
 //
+// Called context rather than attachments, and deliberately: a message can carry
+// a file, and a conversation can be about an order, and calling both of them an
+// attachment meant nobody could tell from the word which one was meant.
+//
 // One line and never two. The names of the site's own records are the shortest
 // true answer to "what is this thread", so they belong where the subject and
 // the actions are rather than at the bottom of a panel nobody scrolls to - but
 // a conversation with nine orders on it must not push the message itself down
 // the screen. So the line is clipped with an ellipsis and the whole list lives
-// behind the arrow, which is also where anything is attached or taken off.
+// behind the arrow, which is also where anything is added or taken off.
+//
+// The names on that line are the links themselves, not a summary of them.
+// Reading them and then having to open a menu to press one of them was two
+// steps to do the obvious thing with the thing already in front of you. Each
+// one opens in a new tab: the point of following an order from a conversation
+// is to read the order WHILE answering the message, and taking the whole pane
+// off to the shop loses the half-written reply behind it.
 
 type Props = {
   threadId: string
   /** The admin root, so a stored link becomes a real address. */
   adminPath: string
+  /** What on the site the conversation came from, when its channel says so -
+   *  the name of the form it was typed into, say. It sits with the records
+   *  because it answers the same question they do, and it is NOT one of them:
+   *  nobody put it there, it does not open anything, and it cannot be taken
+   *  off, because taking it off would be claiming the enquiry came from
+   *  somewhere else. So it is the one thing on this line that is not a link. */
+  sourceLabel: string | null
   links: RecordLink[]
   canEdit: boolean
-  /** What may be attached here at all: the record kinds whose module is
+  /** What may be added here at all: the record kinds whose module is
    *  installed and whose records this viewer may see. */
   kinds: LinkKindChoice[]
   /** Which of them the picker opens on, decided from what the inbox is used
@@ -33,15 +51,17 @@ type Props = {
 }
 
 /** How wide the menu is drawn, in pixels, so the maths below can keep it on
- *  screen. Kept in step with .uin-attached-menu in styles.tsx. */
+ *  screen. Kept in step with .uin-ctxbar-menu in styles.tsx. */
 const MENU_WIDTH = 300
-/** Roughly what a couple of records and the attach form come to. Only used to
+/** Roughly what a couple of records and the add form come to. Only used to
  *  decide whether to open downwards or up - being a little out costs an early
  *  flip, not a menu off the bottom of the window. */
 const MENU_HEIGHT = 260
 const GAP = 6
 
-export function AttachedRecords({ threadId, adminPath, links, canEdit, kinds, defaultKind }: Props) {
+export function ContextRecords({
+  threadId, adminPath, sourceLabel, links, canEdit, kinds, defaultKind,
+}: Props) {
   const [open, setOpen] = useState(false)
   // Where to draw it, in window coordinates. Fixed rather than absolute,
   // because this row sits in a header that is pinned to the top of a pane which
@@ -52,7 +72,7 @@ export function AttachedRecords({ threadId, adminPath, links, canEdit, kinds, de
   const trigger = useRef<HTMLButtonElement>(null)
   const menu = useRef<HTMLDivElement>(null)
 
-  const canAttach = canEdit && kinds.length > 0
+  const canAdd = canEdit && kinds.length > 0
 
   const place = useCallback(() => {
     const box = trigger.current?.getBoundingClientRect()
@@ -88,9 +108,9 @@ export function AttachedRecords({ threadId, adminPath, links, canEdit, kinds, de
       }
     }
     // Scrolling the page moves the arrow out from under the menu, so the menu
-    // goes away. Scrolling INSIDE it does not - the list of records to attach
-    // is a scrolling list, and a menu that shuts itself the moment somebody
-    // scrolls the thing they came to read is a menu nobody can use.
+    // goes away. Scrolling INSIDE it does not - the list of records to add is a
+    // scrolling list, and a menu that shuts itself the moment somebody scrolls
+    // the thing they came to read is a menu nobody can use.
     const dismiss = (event: Event) => {
       if (menu.current?.contains(event.target as Node)) return
       setOpen(false)
@@ -108,28 +128,45 @@ export function AttachedRecords({ threadId, adminPath, links, canEdit, kinds, de
   }, [close, open])
 
   // Nothing on it and nothing that could go on it - no shop, no purchasing, or
-  // no permission to see either. A row saying "nothing attached" beside an
-  // arrow that opens an empty menu is a row that only ever wastes a line.
-  if (links.length === 0 && !canAttach) return null
+  // no permission to see either. A row saying "no context" beside an arrow that
+  // opens an empty menu is a row that only ever wastes a line.
+  if (!sourceLabel && links.length === 0 && !canAdd) return null
 
-  const summary = links.length > 0
-    ? links.map(recordLabel).join(', ')
-    : 'Nothing attached'
+  const parts = sourceLabel ? [sourceLabel, ...links.map(recordLabel)] : links.map(recordLabel)
+  const summary = parts.length > 0 ? parts.join(', ') : 'No context yet'
 
   return (
-    <div className="uin-attached" ref={wrap}>
+    <div className="uin-ctxbar" ref={wrap}>
       {/* The title carries the whole list, because the line itself may be cut
           short - and being cut short is exactly when somebody wants the rest. */}
-      <span className="uin-attached-line" title={summary}>{summary}</span>
+      <span className="uin-ctxbar-line" title={summary}>
+        {sourceLabel && <span className="uin-ctxbar-source">{sourceLabel}</span>}
+        {links.length > 0
+          ? links.map((link, index) => {
+            const href = recordHref(link)
+            const label = recordLabel(link)
+            return (
+              <Fragment key={link.id}>
+                {(index > 0 || sourceLabel) && ', '}
+                {href ? (
+                  <Link href={`/${adminPath}/${href}`} target="_blank" rel="noreferrer">
+                    {label}
+                  </Link>
+                ) : label}
+              </Fragment>
+            )
+          })
+          : !sourceLabel && summary}
+      </span>
       <button
         type="button"
-        className="uin-attached-more"
+        className="uin-ctxbar-more"
         ref={trigger}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={canAttach
-          ? 'What is attached to this conversation, and attach something'
-          : 'What is attached to this conversation'}
+        aria-label={canAdd
+          ? 'The context on this conversation, and add some'
+          : 'The context on this conversation'}
         onClick={() => {
           if (!open) place()
           setOpen((was) => !was)
@@ -140,12 +177,15 @@ export function AttachedRecords({ threadId, adminPath, links, canEdit, kinds, de
 
       {open && at && (
         <div
-          className="uin-attached-menu"
+          className="uin-ctxbar-menu"
           ref={menu}
           role="dialog"
-          aria-label="Attached to this conversation"
+          aria-label="Context on this conversation"
           style={{ top: at.top, left: at.left }}
         >
+          {sourceLabel && (
+            <p className="uin-ctx-sub">Came from {sourceLabel}.</p>
+          )}
           {links.length > 0 ? (
             <ul className="uin-ctx-list">
               {links.map((link) => {
@@ -155,7 +195,14 @@ export function AttachedRecords({ threadId, adminPath, links, canEdit, kinds, de
                   <li key={link.id} className="uin-ctx-row">
                     <div className="uin-ctx-main">
                       {href ? (
-                        <Link href={`/${adminPath}/${href}`} onClick={() => setOpen(false)}>{label}</Link>
+                        <Link
+                          href={`/${adminPath}/${href}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={() => setOpen(false)}
+                        >
+                          {label}
+                        </Link>
                       ) : (
                         <span>{label}</span>
                       )}
@@ -171,9 +218,9 @@ export function AttachedRecords({ threadId, adminPath, links, canEdit, kinds, de
               })}
             </ul>
           ) : (
-            <p className="uin-ctx-sub">Nothing attached yet.</p>
+            <p className="uin-ctx-sub">No context on this yet.</p>
           )}
-          {canAttach && <AddLink threadId={threadId} kinds={kinds} defaultKind={defaultKind} />}
+          {canAdd && <AddLink threadId={threadId} kinds={kinds} defaultKind={defaultKind} />}
         </div>
       )}
     </div>

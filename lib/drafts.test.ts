@@ -44,6 +44,11 @@ describe('isWorthSaving', () => {
     expect(isWorthSaving({ subject: 'The quote', body: '' })).toBe(true)
     expect(isWorthSaving({ body: '', attachments: [{}] })).toBe(true)
   })
+
+  it('keeps a message that is nothing but two things off the catalogue', () => {
+    // Somebody went and found them, which is the work worth not losing.
+    expect(isWorthSaving({ body: '', products: [{}, {}] })).toBe(true)
+  })
 })
 
 describe('draftRecipientLabel', () => {
@@ -163,23 +168,19 @@ describe('canReadDraft', () => {
   const filed = { authorUserId: 'marcus', inboxId: 'accounts' }
   const loose = { authorUserId: 'marcus', inboxId: null }
 
-  it('lets anybody who can read the address read a draft filed on it', () => {
-    expect(canReadDraft(filed, 'chris', ['accounts', 'hi'])).toBe(true)
+  it('lets the author read their own, filed or not', () => {
+    expect(canReadDraft(filed, 'marcus')).toBe(true)
+    expect(canReadDraft(loose, 'marcus')).toBe(true)
   })
 
-  it('refuses a draft filed on an address this person cannot read', () => {
-    expect(canReadDraft(filed, 'chris', ['hi'])).toBe(false)
+  it('refuses a colleague who can read the address it is filed on', () => {
+    // The whole point. Sharing accounts@ shares what has been sent and what has
+    // arrived, and not what somebody is halfway through typing.
+    expect(canReadDraft(filed, 'chris')).toBe(false)
   })
 
-  it('refuses even the author once they are off that address', () => {
-    // The old rule let an author keep their own draft on an inbox they had been
-    // removed from. It is the address that decides now, for everybody.
-    expect(canReadDraft(filed, 'marcus', ['hi'])).toBe(false)
-  })
-
-  it('keeps a draft with no address to its author', () => {
-    expect(canReadDraft(loose, 'marcus', [])).toBe(true)
-    expect(canReadDraft(loose, 'chris', ['accounts', 'hi'])).toBe(false)
+  it('refuses a colleague a draft filed on no address at all', () => {
+    expect(canReadDraft(loose, 'chris')).toBe(false)
   })
 })
 
@@ -187,24 +188,16 @@ describe('canEditDraft', () => {
   const filed = { authorUserId: 'marcus', inboxId: 'accounts' }
   const loose = { authorUserId: 'marcus', inboxId: null }
 
-  it('lets the author finish their own, whatever they may send from', () => {
-    expect(canEditDraft(filed, 'marcus', [])).toBe(true)
+  it('lets the author finish their own, filed or not', () => {
+    expect(canEditDraft(filed, 'marcus')).toBe(true)
+    expect(canEditDraft(loose, 'marcus')).toBe(true)
   })
 
-  it('lets anybody who may SEND as the address finish a draft filed on it', () => {
-    expect(canEditDraft(filed, 'chris', ['accounts', 'hi'])).toBe(true)
-  })
-
-  it('refuses somebody who may only read the address', () => {
-    // The list handed in is the sendable one. Reading accounts@ and being able
-    // to post as it are different rights, and only the second one is here.
-    expect(canEditDraft(filed, 'chris', ['hi'])).toBe(false)
-  })
-
-  it('keeps a draft with no address to its author, however much they may send as', () => {
-    // No inbox means no guest list to grant sending through: it is answering a
-    // conversation another module owns.
-    expect(canEditDraft(loose, 'chris', ['accounts', 'hi'])).toBe(false)
-    expect(canEditDraft(loose, 'marcus', [])).toBe(true)
+  it('refuses a colleague who may send as the address it is filed on', () => {
+    // Being able to post as accounts@ is not being able to finish somebody
+    // else's sentence and post it. The price is a draft whose author is on
+    // leave waiting for them, which is the price every mail program pays.
+    expect(canEditDraft(filed, 'chris')).toBe(false)
+    expect(canEditDraft(loose, 'chris')).toBe(false)
   })
 })

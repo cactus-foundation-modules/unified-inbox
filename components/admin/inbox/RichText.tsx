@@ -1,6 +1,9 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
+  type ReactNode,
+} from 'react'
 import { LinkIcon, ListIcon, NumberedListIcon, PaletteIcon } from './icons'
 
 // The writing box, with enough formatting to write an email in and no more.
@@ -18,6 +21,14 @@ import { LinkIcon, ListIcon, NumberedListIcon, PaletteIcon } from './icons'
 // the markup email has always been made of - <b>, <i>, <a>, <ul>, <ol>, and a
 // span with a colour on it - and every one of those survives core's email
 // sanitiser, which is what the message is put through on the way out.
+//
+// THE BOX AND ITS BUTTONS ARE TWO COMPONENTS, in one provider. They used to be
+// one, with the buttons stuck above the words - which is where a mail program
+// put them in 1998 and is not where this composer wants them: everything you
+// can do to a message now lives on the one strip along the bottom, beside the
+// paperclip. So the provider holds the box and the commands, RichTextBox draws
+// the words, and RichTextTools draws the buttons wherever the composer puts
+// them. Nothing about the commands changed in the move.
 //
 // Three decisions worth writing down:
 //
@@ -77,6 +88,33 @@ function tidyUrl(raw: string): string | null {
   return null
 }
 
+// Only functions and plain values cross this line. The box and the remembered
+// selection are refs, and a ref handed out of a hook is a thing another
+// component can quietly write to - so the two that need writing to are wrapped
+// in the small operations that do it, and they stay where they were made.
+type RichTextValue = {
+  id: string
+  attach: (el: HTMLDivElement | null) => void
+  emit: () => void
+  exec: (command: string, argument?: string, withCss?: boolean) => void
+  /** Where the caret is now, kept for after the link box has taken the focus
+   *  away. A link applied to a selection the browser has since forgotten goes
+   *  nowhere. */
+  rememberSelection: () => void
+  /** Put the caret back where it was, and say whether anything is selected. */
+  restoreSelection: () => boolean
+  placeholder: string
+  label: string
+}
+
+const RichTextContext = createContext<RichTextValue | null>(null)
+
+function useRichText(): RichTextValue {
+  const value = useContext(RichTextContext)
+  if (!value) throw new Error('Used outside a RichText')
+  return value
+}
+
 type Props = {
   id: string
   /** The markup in the box. Written into it only when it is not already what
@@ -86,28 +124,19 @@ type Props = {
   placeholder: string
   /** Named by something else on the screen, because the label above the box is
    *  the one the rest of the form uses. */
-  'aria-label': string
+  label: string
+  /** The box and the buttons, in whatever order the composer wants them. */
+  children: ReactNode
 }
 
-export function RichText({ id, value, onChange, placeholder, ...rest }: Props) {
-  const box = useRef<HTMLDivElement>(null)
-  const [linking, setLinking] = useState(false)
-  const [url, setUrl] = useState('')
-  const [urlProblem, setUrlProblem] = useState('')
-  /** Where the caret was when the link box was opened. Opening it takes the
-   *  focus out of the writing box, and a link applied to a selection the
-   *  browser has since forgotten goes nowhere. */
+/** Holds the writing box and the commands that act on it. Draw a RichTextBox
+ *  inside it for the words, and a RichTextTools wherever the buttons belong. */
+export function RichText({ id, value, onChange, placeholder, label, children }: Props) {
+  const box = useRef<HTMLDivElement | null>(null)
+  /** Where the caret was when the link box was opened. */
   const savedRange = useRef<Range | null>(null)
 
-  // Only when they differ. Every keystroke already put its own markup in the
-  // box, and writing it back would move the caret to the front of it.
-  useEffect(() => {
-    const el = box.current
-    if (!el) return
-    if (el.innerHTML === value) return
-    // An empty box is genuinely empty, so the placeholder underneath shows.
-    el.innerHTML = value
-  }, [value])
+  const attach = useCallback((el: HTMLDivElement | null) => { box.current = el }, [])
 
   const emit = useCallback(() => {
     const el = box.current
@@ -139,40 +168,50 @@ export function RichText({ id, value, onChange, placeholder, ...rest }: Props) {
     emit()
   }, [emit])
 
-  const openLink = useCallback(() => {
+  const rememberSelection = useCallback(() => {
     const selection = window.getSelection()
     savedRange.current = selection && selection.rangeCount > 0
       ? selection.getRangeAt(0).cloneRange()
       : null
-    setUrlProblem('')
-    setLinking(true)
   }, [])
 
-  const applyLink = useCallback(() => {
-    const tidy = tidyUrl(url)
-    if (!tidy) {
-      setUrlProblem('That does not look like an address. Try something like example.com/prices.')
-      return
-    }
+  const restoreSelection = useCallback(() => {
     const el = box.current
-    if (el && savedRange.current) {
+    const range = savedRange.current
+    if (el && range) {
       el.focus()
       const selection = window.getSelection()
       selection?.removeAllRanges()
-      selection?.addRange(savedRange.current)
+      selection?.addRange(range)
     }
-    // Nothing selected: the address itself is the words, which is what every
-    // mail program does with a link inserted into the middle of a sentence.
     const selection = window.getSelection()
-    if (!selection || selection.isCollapsed) {
-      exec('insertHTML', `<a href="${tidy.replace(/"/g, '&quot;')}">${tidy.replace(/</g, '&lt;')}</a>`)
-    } else {
-      exec('createLink', tidy)
-    }
-    setLinking(false)
-    setUrl('')
-    setUrlProblem('')
-  }, [exec, url])
+    return !!selection && !selection.isCollapsed
+  }, [])
+
+  // Only when they differ. Every keystroke already put its own markup in the
+  // box, and writing it back would move the caret to the front of it. Here
+  // rather than in RichTextBox because this is where the box's ref is made -
+  // the box is drawn by a child, but nothing outside this component writes to
+  // it.
+  useEffect(() => {
+    const el = box.current
+    if (!el) return
+    if (el.innerHTML === value) return
+    // An empty box is genuinely empty, so the placeholder underneath shows.
+    el.innerHTML = value
+  }, [value])
+
+  const api = useMemo<RichTextValue>(
+    () => ({ id, attach, emit, exec, rememberSelection, restoreSelection, placeholder, label }),
+    [attach, emit, exec, id, label, placeholder, rememberSelection, restoreSelection],
+  )
+
+  return <RichTextContext.Provider value={api}>{children}</RichTextContext.Provider>
+}
+
+/** The words themselves. */
+export function RichTextBox() {
+  const { id, attach, emit, exec, placeholder, label } = useRichText()
 
   /** The two shortcuts fingers already know. Everything else is a button: a
    *  keystroke nobody was told about is not a feature. */
@@ -185,7 +224,78 @@ export function RichText({ id, value, onChange, placeholder, ...rest }: Props) {
 
   return (
     <div className="uin-richtext">
-      <div className="uin-richtext-bar" role="toolbar" aria-label="Formatting" aria-controls={id}>
+      <div
+        id={id}
+        ref={attach}
+        className="uin-richtext-box"
+        contentEditable
+        suppressContentEditableWarning
+        role="textbox"
+        aria-multiline="true"
+        aria-label={label}
+        data-placeholder={placeholder}
+        onInput={emit}
+        onBlur={emit}
+        onKeyDown={onKeyDown}
+        // Arbitrary markup off a clipboard brings a web page's layout, its
+        // fonts and its tracking pixels with it. The words are what somebody
+        // meant to paste.
+        onPaste={(event) => {
+          event.preventDefault()
+          const text = event.clipboardData.getData('text/plain')
+          if (text) exec('insertText', text)
+        }}
+      />
+    </div>
+  )
+}
+
+/**
+ * The buttons. Drawn wherever the composer puts them - which is now on the
+ * strip along the bottom, between the paperclip and the ways the message
+ * leaves.
+ *
+ * The colours are behind the palette rather than laid out beside it. Seven
+ * swatches in a row was fine when the strip held two icons; on a strip that
+ * also carries the attachments, the catalogue, the clock and three ways to send
+ * it was seven of the widest things on the line. One press opens them, one
+ * press picks one, and picking one puts them away again - which is what a
+ * colour menu does everywhere else.
+ */
+export function RichTextTools() {
+  const { id, exec, rememberSelection, restoreSelection } = useRichText()
+  const [linking, setLinking] = useState(false)
+  const [url, setUrl] = useState('')
+  const [urlProblem, setUrlProblem] = useState('')
+  const [inking, setInking] = useState(false)
+
+  const openLink = useCallback(() => {
+    rememberSelection()
+    setUrlProblem('')
+    setLinking(true)
+  }, [rememberSelection])
+
+  const applyLink = useCallback(() => {
+    const tidy = tidyUrl(url)
+    if (!tidy) {
+      setUrlProblem('That does not look like an address. Try something like example.com/prices.')
+      return
+    }
+    // Nothing selected: the address itself is the words, which is what every
+    // mail program does with a link inserted into the middle of a sentence.
+    if (restoreSelection()) {
+      exec('createLink', tidy)
+    } else {
+      exec('insertHTML', `<a href="${tidy.replace(/"/g, '&quot;')}">${tidy.replace(/</g, '&lt;')}</a>`)
+    }
+    setLinking(false)
+    setUrl('')
+    setUrlProblem('')
+  }, [exec, restoreSelection, url])
+
+  return (
+    <>
+      <span className="uin-richtext-bar" role="toolbar" aria-label="Formatting" aria-controls={id}>
         <button
           type="button"
           className="uin-icon-btn uin-rt-btn"
@@ -207,24 +317,39 @@ export function RichText({ id, value, onChange, placeholder, ...rest }: Props) {
           <em aria-hidden="true">I</em>
         </button>
 
-        {/* Seven colours in a row rather than behind a menu. It is a colour
-            picker with seven answers - a menu to open before you can see them
-            would be one more press for no more choice. */}
-        <span className="uin-rt-ink" role="group" aria-label="Colour">
-          <span className="uin-rt-ink-icon" aria-hidden="true">{PaletteIcon}</span>
-          {INK.map((ink) => (
-            <button
-              key={ink.id}
-              type="button"
-              className="uin-rt-swatch"
-              style={{ background: ink.value }}
-              title={ink.label}
-              aria-label={ink.label}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => exec('foreColor', ink.value, true)}
-            />
-          ))}
-        </span>
+        {/* The palette on its own, with no frame round it: it is one more icon
+            on a strip of icons, and a box drawn round one of them says it is a
+            different kind of thing when it is not. */}
+        <button
+          type="button"
+          className="uin-icon-btn uin-rt-btn"
+          title="Colour"
+          aria-label="Colour"
+          aria-expanded={inking}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => setInking((was) => !was)}
+        >
+          {PaletteIcon}
+        </button>
+        {inking && (
+          <span className="uin-rt-ink" role="group" aria-label="Colour">
+            {INK.map((ink) => (
+              <button
+                key={ink.id}
+                type="button"
+                className="uin-rt-swatch"
+                style={{ background: ink.value }}
+                title={ink.label}
+                aria-label={ink.label}
+                onMouseDown={(e) => e.preventDefault()}
+                // Shut on the way: a colour is one answer, and a row of
+                // swatches left open across the strip is in the way of the
+                // buttons beside it.
+                onClick={() => { exec('foreColor', ink.value, true); setInking(false) }}
+              />
+            ))}
+          </span>
+        )}
 
         <button
           type="button"
@@ -256,8 +381,11 @@ export function RichText({ id, value, onChange, placeholder, ...rest }: Props) {
         >
           {NumberedListIcon}
         </button>
-      </div>
+      </span>
 
+      {/* Its own line under the strip, because an address box is wider than
+          every button on it. Same box, same words, as when it lived above the
+          message. */}
       {linking && (
         <div className="uin-rt-link">
           <label className="sr-only" htmlFor={`${id}-link`}>Where the link goes</label>
@@ -289,29 +417,6 @@ export function RichText({ id, value, onChange, placeholder, ...rest }: Props) {
           {urlProblem && <span className="uin-rt-link-problem" role="alert">{urlProblem}</span>}
         </div>
       )}
-
-      <div
-        {...rest}
-        id={id}
-        ref={box}
-        className="uin-richtext-box"
-        contentEditable
-        suppressContentEditableWarning
-        role="textbox"
-        aria-multiline="true"
-        data-placeholder={placeholder}
-        onInput={emit}
-        onBlur={emit}
-        onKeyDown={onKeyDown}
-        // Arbitrary markup off a clipboard brings a web page's layout, its
-        // fonts and its tracking pixels with it. The words are what somebody
-        // meant to paste.
-        onPaste={(event) => {
-          event.preventDefault()
-          const text = event.clipboardData.getData('text/plain')
-          if (text) exec('insertText', text)
-        }}
-      />
-    </div>
+    </>
   )
 }

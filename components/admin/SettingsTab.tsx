@@ -5,6 +5,7 @@ import { TabStrip } from '@/components/admin/TabStrip'
 import { WebhooksSection } from './WebhooksSection'
 import { InboxStyles } from './inbox/styles'
 import { API, OFFLINE } from './settings/api'
+import { ChannelsPanel } from './settings/ChannelsPanel'
 import { CollectingPanel } from './settings/CollectingPanel'
 import { ConnectionsPanel } from './settings/ConnectionsPanel'
 import { InboxesPanel } from './settings/InboxesPanel'
@@ -163,6 +164,15 @@ export function UnifiedInboxSettingsTab() {
             call={call}
             setMessage={setMessage}
             reload={load}
+          />
+        )
+      case 'channels':
+        return (
+          <ChannelsPanel
+            settings={data.settings}
+            channels={data.channels ?? []}
+            busy={busy}
+            call={call}
           />
         )
       case 'collecting':

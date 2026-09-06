@@ -1,9 +1,10 @@
 'use client'
 
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { inboxHref } from '@/modules/unified-inbox/lib/list'
 import { plainReason } from './AttachmentPicker'
+import { ColleagueField } from './ColleagueField'
 import { ComposeCancel, ComposeModal } from './ComposeModal'
 
 // Starting a discussion: colleagues only, nothing sent, nobody outside sees it.
@@ -12,19 +13,15 @@ import { ComposeCancel, ComposeModal } from './ComposeModal'
 // wrote. This is the same note with nothing above it - "a word about the
 // Henderson order" without waiting for the Hendersons to write in.
 //
-// To is a list of the site's own addresses rather than a box for typing one,
-// which is the whole difference between this and a message: there is no
-// outside party, and an address that is not one of ours would be a message
-// somebody thought they were sending. Naming several starts one discussion in
-// each - see the route for why one thread cannot honestly belong to two
-// addresses at once.
+// To is colleagues, and In is which of the site's own addresses it sits in.
+// That is the whole difference between this and a message: there is no outside
+// party to write to, only people here to put it to, and the address decides who
+// may read it rather than where it goes. Naming several addresses starts one
+// discussion in each - see the route for why one thread cannot honestly belong
+// to two addresses at once.
 
 export type DiscussionInbox = { id: string; name: string; address: string }
 type StaffMember = { id: string; name: string }
-
-/** How many colleagues are offered as chips before the list gets a box to
- *  narrow it with. Twenty names wrapped across the form is a wall, not a menu. */
-const MENTION_CHIPS = 8
 
 type Props = {
   base: string
@@ -45,7 +42,6 @@ export function DiscussionView({ base, params, inboxes, defaultInboxId, staff }:
   const [subject, setSubject] = useState('')
   const [text, setText] = useState('')
   const [mentions, setMentions] = useState<string[]>([])
-  const [mentionQuery, setMentionQuery] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -56,12 +52,6 @@ export function DiscussionView({ base, params, inboxes, defaultInboxId, staff }:
 
   const closeHref = inboxHref(base, params, {})
   const guard = subject.trim().length > 0 || text.trim().length > 0
-
-  const mentionable = useMemo(() => {
-    const q = mentionQuery.trim().toLowerCase()
-    const matching = q ? staff.filter((s) => s.name.toLowerCase().includes(q)) : staff
-    return { shown: matching.slice(0, MENTION_CHIPS), hidden: Math.max(0, matching.length - MENTION_CHIPS) }
-  }, [mentionQuery, staff])
 
   const toggle = useCallback((id: string) => {
     setChosen((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
@@ -120,7 +110,7 @@ export function DiscussionView({ base, params, inboxes, defaultInboxId, staff }:
 
   return (
     <ComposeModal
-      title="A discussion"
+      title="Start A Discussion"
       closeHref={closeHref}
       guard={guard}
       noun="discussion"
@@ -129,10 +119,25 @@ export function DiscussionView({ base, params, inboxes, defaultInboxId, staff }:
       {({ askToLeave }) => (
         <>
           <div className="uin-fields">
+            {staff.length > 0 && (
+              <div className="uin-field-row">
+                <label htmlFor="uin-discussion-to">To</label>
+                <div className="uin-field-control">
+                  <ColleagueField
+                    id="uin-discussion-to"
+                    colleagues={staff}
+                    chosen={mentions}
+                    onChange={setMentions}
+                    placeholder="Start typing a name"
+                  />
+                </div>
+              </div>
+            )}
+
             <div className="uin-field-row uin-field-row--stack">
-              <span className="uin-field-label" id="uin-discussion-to">To</span>
+              <span className="uin-field-label" id="uin-discussion-in">In</span>
               <div className="uin-field-control">
-                <div className="uin-pick-list" role="group" aria-labelledby="uin-discussion-to">
+                <div className="uin-pick-list" role="group" aria-labelledby="uin-discussion-in">
                   {inboxes.map((inbox) => (
                     <label className="uin-pick" key={inbox.id}>
                       <input
@@ -145,11 +150,11 @@ export function DiscussionView({ base, params, inboxes, defaultInboxId, staff }:
                     </label>
                   ))}
                 </div>
-                <span className="uin-field-hint">
-                  {chosen.length > 1
-                    ? 'Each address gets its own discussion, so each team can answer in their own.'
-                    : 'Whoever can read that address can read the discussion.'}
-                </span>
+                {chosen.length > 1 && (
+                  <span className="uin-field-hint">
+                    Each address gets its own discussion, so each team can answer in their own.
+                  </span>
+                )}
               </div>
             </div>
 
@@ -178,57 +183,13 @@ export function DiscussionView({ base, params, inboxes, defaultInboxId, staff }:
             />
           </div>
 
-          {staff.length > 0 && (
-            <div className="uin-actions">
-              {staff.length > MENTION_CHIPS && (
-                <div className="field">
-                  <label htmlFor="uin-discussion-mention">Let somebody know</label>
-                  <input
-                    id="uin-discussion-mention"
-                    type="search"
-                    value={mentionQuery}
-                    placeholder="Start typing a name"
-                    autoComplete="off"
-                    onChange={(e) => setMentionQuery(e.target.value)}
-                  />
-                </div>
-              )}
-              <div className="uin-composer-row">
-                {staff.length <= MENTION_CHIPS && <span className="uin-recipients">Let somebody know</span>}
-                {mentionable.shown.map((person) => (
-                  <button
-                    key={person.id}
-                    type="button"
-                    className="uin-chip"
-                    aria-pressed={mentions.includes(person.id)}
-                    onClick={() => setMentions((prev) =>
-                      prev.includes(person.id) ? prev.filter((id) => id !== person.id) : [...prev, person.id],
-                    )}
-                  >
-                    {person.name}
-                  </button>
-                ))}
-                {mentionable.shown.length === 0 && (
-                  <span className="uin-recipients">Nobody here goes by that.</span>
-                )}
-                {mentionable.hidden > 0 && (
-                  <span className="uin-recipients">
-                    {mentionable.hidden === 1
-                      ? 'One more. Keep typing to find them.'
-                      : `${mentionable.hidden} more. Keep typing to find them.`}
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
-
           {error && <div className="alert alert-danger" role="alert">{error}</div>}
 
-          <div className="uin-composer-row">
+          <div className="uin-composer-row uin-composer-row--end">
+            <ComposeCancel closeHref={closeHref} guard={guard} askToLeave={askToLeave} />
             <button type="button" className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
               {busy ? 'Starting...' : 'Start the discussion'}
             </button>
-            <ComposeCancel closeHref={closeHref} guard={guard} askToLeave={askToLeave} />
           </div>
         </>
       )}

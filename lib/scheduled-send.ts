@@ -5,6 +5,7 @@ import {
   getThread,
   releaseScheduledClaims,
   releaseStaleScheduledClaims,
+  threadSleep,
 } from './db'
 import { canUserOpenThread, canUserReplyToInbox, userCanReply } from './access'
 import { draftBodyText } from './drafts'
@@ -94,17 +95,22 @@ export async function runDueScheduledSends(options?: {
       moreDue = true
       break
     }
+    // Where the conversation stood before the message went out. Read HERE, on
+    // purpose: a message set to go out on Monday morning on a conversation
+    // somebody has put to sleep until Friday must still be asleep on Tuesday,
+    // and the only moment that is knowable is before the send. See follow-up.ts.
+    const was = draft.threadId ? await threadSleep(draft.threadId) : null
     const outcome = await sendOneScheduled(draft)
     if (outcome.ok) {
       sent += 1
-      // Chase it up, if it was written with a chase on it. Its own failure is
-      // not the send's failure: the message has gone, and a conversation that
-      // stays in Open rather than being put to sleep is a smaller loss than a
-      // message reported as unsent.
-      await applyFollowUpAfterSend(draft, outcome.threadId, new Date())
+      // Chase it up, if it was written with a chase on it, and put back any
+      // sleep it was already having. Its own failure is not the send's failure:
+      // the message has gone, and a conversation that stays in Open rather than
+      // being put to sleep is a smaller loss than a message reported as unsent.
+      await applyFollowUpAfterSend(draft, outcome.threadId, new Date(), was)
       // The message has gone, so the draft it was written in goes with it -
       // exactly as it does when somebody presses Send themselves.
-      await deleteDraft(draft.id, draft.authorUserId, [])
+      await deleteDraft(draft.id, draft.authorUserId)
     } else {
       failed += 1
       await failScheduledDraft(draft.id, outcome.reason)
@@ -190,6 +196,10 @@ async function sendOneScheduled(
       filename: file.filename,
       contentType: file.contentType,
     })),
+    // Read fresh as it goes out, which is the whole reason a draft stores
+    // references rather than prices: a quotation set for Monday morning quotes
+    // Monday morning's catalogue.
+    products: draft.products,
     includeOriginalAttachments: draft.mode === 'forward',
     // The draft's own id, so a claim that somehow ran twice sends one message.
     idempotencyKey: `scheduled-${draft.id}`,

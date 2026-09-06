@@ -133,14 +133,18 @@ describe('audienceForSave', () => {
   })
 })
 
-// A conversation that arrived through another module's channel has no address,
-// so it has no inbox - and reading that as "nobody could place this" is what
-// locks a colleague out of the chats and enquiries on their own screen. These
-// three cases are the whole distinction.
+// A conversation that arrived through another module's channel usually has no
+// address, so it has no inbox - and reading that as "nobody could place this"
+// is what locks a colleague out of the chats and enquiries on their own screen.
+// The exception is a channel that ADDRESSED one: a form whose enquiries were
+// pointed at sales@ is post in sales@, and sales@ decides.
 describe('threadAccessKind', () => {
-  it('sends a channel conversation to the module that owns it, inbox or not', () => {
+  it('sends a channel conversation that was addressed at nothing to its own module', () => {
     expect(threadAccessKind({ inboxId: null, providerModule: 'live-chat' })).toBe('channel')
-    expect(threadAccessKind({ inboxId: 'in1', providerModule: 'contact-form' })).toBe('channel')
+  })
+
+  it('sends a channel conversation that named an inbox to that inbox', () => {
+    expect(threadAccessKind({ inboxId: 'in1', providerModule: 'contact-form' })).toBe('filed')
   })
 
   it('sends a filed email to its inbox guest list', () => {

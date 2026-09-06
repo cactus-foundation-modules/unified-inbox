@@ -4,8 +4,8 @@ import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { sanitizeEmailHtml } from '@/lib/sanitize'
 import { getSiteTimezone } from '@/lib/config/timezone.server'
-import { canOpenThread, canReplyToInbox, replyableInboxIds } from '@/modules/unified-inbox/lib/access'
-import { allInboxIds, getThreadDetail, saveDraft } from '@/modules/unified-inbox/lib/db'
+import { canOpenThread, canReplyToInbox } from '@/modules/unified-inbox/lib/access'
+import { getThreadDetail, saveDraft } from '@/modules/unified-inbox/lib/db'
 import { htmlHasWriting, isWorthSaving } from '@/modules/unified-inbox/lib/drafts'
 import { decideFollowUp, decideSendAt } from '@/modules/unified-inbox/lib/scheduled'
 import { visibleProviderModules } from '@/modules/unified-inbox/lib/provider-registry'
@@ -20,6 +20,10 @@ import { DraftBody } from '@/modules/unified-inbox/lib/validation'
 //
 // A draft on a conversation another module owns has no inbox to check, so the
 // conversation itself is what decides, exactly as answering one does.
+//
+// Whose draft it is, is not checked here at all: saveDraft can only ever find
+// this person's own row to write over, and a request naming somebody else's id
+// writes a new draft of their own instead of touching it.
 //
 // Nothing here goes near a mail server, so there is no ceiling to raise: the
 // bytes of an attachment are not fetched until somebody presses Send.
@@ -39,9 +43,9 @@ export async function POST(request: Request) {
   const cc = body.cc ?? []
   const bcc = body.bcc ?? []
   const attachments = body.attachments ?? []
-  // A draft is markup now, and a draft is not private to whoever wrote it: a
-  // colleague who may read the address may open it, and their browser is what
-  // puts it back in the writing box. So it is cleaned HERE, once, on the way in
+  const products = body.products ?? []
+  // A draft is markup now, and the browser that put it here is what will put it
+  // back into the writing box later. So it is cleaned HERE, once, on the way in
   // - the same allow-list the send path applies at the other end. Cleaning it
   // on the way out instead would leave the stored row a loaded gun for anything
   // that ever read it without remembering to.
@@ -51,7 +55,7 @@ export async function POST(request: Request) {
   // an empty string, and a draft that is nothing but a line break is a row in
   // the Drafts list saying nothing.
   const draftBody = bodyFormat === 'html' && !htmlHasWriting(cleaned) ? '' : cleaned
-  if (!isWorthSaving({ to, cc, bcc, subject: body.subject, body: draftBody, attachments })) {
+  if (!isWorthSaving({ to, cc, bcc, subject: body.subject, body: draftBody, attachments, products })) {
     return errorResponse('There is nothing to save yet.', 400)
   }
 
@@ -111,14 +115,9 @@ export async function POST(request: Request) {
     }
   }
 
-  // Finishing a colleague's draft is allowed on an address this person may send
-  // from, so the save has to know which those are. Its own id is not enough.
-  const sendableIds = await replyableInboxIds(user, await allInboxIds())
-
   const draft = await saveDraft({
     id: body.id ?? null,
     authorUserId: user.id,
-    replyableInboxIds: sendableIds,
     inboxId,
     threadId: thread?.id ?? null,
     mode: body.mode,
@@ -129,6 +128,7 @@ export async function POST(request: Request) {
     body: draftBody,
     bodyFormat,
     attachments,
+    products,
     sendAt,
     followUpMinutes: followUp.minutes,
   })

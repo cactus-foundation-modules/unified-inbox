@@ -11,18 +11,21 @@ import {
 } from '@/modules/unified-inbox/lib/drafts'
 import { plainTextToHtml, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
 import { AttachmentChips, AttachmentPicker, plainReason, type Attachment } from './AttachmentPicker'
+import { ProductChips, ProductPicker, productKey } from './ProductPicker'
 import { AttachmentDropNotice, AttachmentDropOverlay } from './AttachmentDropChrome'
 import { useAttachmentDrop } from './useAttachmentDrop'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Dropdown } from './Dropdown'
 import { PendingSend } from './PendingSend'
 import { RecipientField } from './RecipientField'
-import { RichText } from './RichText'
+import { RichText, RichTextBox, RichTextTools } from './RichText'
 import { ScheduleNotice } from './ScheduleNotice'
 import { SendLaterPanel } from './SendLaterPanel'
 import { SnoozePanel } from './SnoozePanel'
-import { AlarmIcon, CollapseIcon, ExpandIcon, PaperclipIcon } from './icons'
+import { CloseIcon, CollapseIcon, ExpandIcon, PaperclipIcon, TagIcon } from './icons'
+import { useComposerOpen } from './composer-open'
 import type { DraftSendState } from '@/modules/unified-inbox/lib/types'
+import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 
 // The composer: reply, reply to everybody, forward, and an internal note.
 //
@@ -79,6 +82,12 @@ type Props = {
   forwardSubject: string
   /** What this person left in this box last time, if they left anything. */
   draft: DraftForComposer | null
+  /** Whether this person can put anything out of the catalogue on a message:
+   *  the site sells something, and they are allowed to see what. */
+  canAddProducts: boolean
+  /** The products the draft was carrying, already looked up. The draft itself
+   *  remembers only which - the names and the prices are today's. */
+  draftProducts: ProductChoice[]
   /** Which of the three the button at the top of the conversation asked for.
    *  The chips below still change it afterwards - this only says what it opened
    *  as, and what a later press up there changed it to. */
@@ -89,11 +98,25 @@ type Props = {
   timezone: string
 }
 
+/** What the box calls itself, in the strip along its top. It used to be a row
+ *  of four chips that also SWITCHED between them, which was a second door to a
+ *  choice already made on the message being answered - and the commonest way to
+ *  turn a reply into a forward by accident. The choice lives on the message
+ *  now; this only says which one you are writing. */
+const MODE_WORDS: Record<Mode, string> = {
+  reply: 'Reply',
+  'reply-all': 'Reply to all',
+  forward: 'Forward',
+  note: 'Internal note',
+}
+
 export function Composer({
   threadId, inboxId, replyTo, replyAllTo, canReply, canForward, staff,
-  cannotReplyReason, replySubject, forwardSubject, draft, requestedMode, requestedAt, timezone,
+  cannotReplyReason, replySubject, forwardSubject, draft, canAddProducts, draftProducts,
+  requestedMode, requestedAt, timezone,
 }: Props) {
   const router = useRouter()
+  const { close: closeComposer } = useComposerOpen()
   // A saved draft says which of the three it was, and opening the conversation
   // on the wrong one puts a forward's recipients in front of a reply. A draft
   // written before the right to send was taken away is the awkward case: the
@@ -163,6 +186,11 @@ export function Composer({
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
   const [picking, setPicking] = useState(false)
+  // What the reply carries out of the catalogue. Whole products here so the
+  // chips can say what they are; only the references are ever sent, and what
+  // the customer reads is built on the server when Send is pressed.
+  const [products, setProducts] = useState<ProductChoice[]>(draftProducts)
+  const [pickingProduct, setPickingProduct] = useState(false)
   const [asking, setAsking] = useState(false)
   // Where a click was headed when it was caught, or null when nothing was.
   const [leavingTo, setLeavingTo] = useState<string | null>(null)
@@ -202,21 +230,18 @@ export function Composer({
   const [lastRequest, setLastRequest] = useState(requestedAt)
   if (requestedAt !== undefined && requestedAt !== lastRequest) {
     setLastRequest(requestedAt)
-    if (requestedMode) setMode(requestedMode)
-  }
-
-  /** Switching between a reply and a reply to everybody refills the To box,
-   *  because that is the whole of what the two chips mean - unless somebody has
-   *  already edited it, in which case their answer stands and the chip only
-   *  changes what the server quotes. */
-  const changeMode = useCallback((next: Mode) => {
-    setMode(next)
-    setError('')
-    setNote('')
-    if (!recipientsEdited && next !== 'forward' && next !== 'note') {
-      setReplyRecipients(defaultRecipients(next))
+    if (requestedMode) {
+      setMode(requestedMode)
+      setError('')
+      setNote('')
+      // Switching between a reply and a reply to everybody refills the To box,
+      // because that is the whole of what the difference means - unless
+      // somebody has already edited it, in which case their answer stands.
+      if (!recipientsEdited && requestedMode !== 'forward' && requestedMode !== 'note') {
+        setReplyRecipients(defaultRecipients(requestedMode))
+      }
     }
-  }, [defaultRecipients, recipientsEdited])
+  }
 
   const forwarding = mode === 'forward'
   const noting = mode === 'note'
@@ -256,17 +281,6 @@ export function Composer({
   // the same frame, so the disabled button is not on its own enough.
   const inFlight = useRef(false)
 
-  const modes = useMemo(() => {
-    const list: Array<{ id: Mode; label: string }> = []
-    if (canReply) {
-      list.push({ id: 'reply', label: 'Reply' })
-      if (replyAllTo.length > replyTo.length) list.push({ id: 'reply-all', label: 'Reply to all' })
-    }
-    if (canForward) list.push({ id: 'forward', label: 'Forward' })
-    list.push({ id: 'note', label: 'Internal note' })
-    return list
-  }, [canReply, canForward, replyTo.length, replyAllTo.length])
-
   const hasUnsaved = dirty && (
     htmlHasWriting(text)
     || recipientsEdited
@@ -275,6 +289,7 @@ export function Composer({
     || bcc.trim().length > 0
     || subject.trim().length > 0
     || attachments.length > 0
+    || products.length > 0
   )
 
   // Closing the tab on half an answer is the one loss nothing in here can undo,
@@ -422,6 +437,7 @@ export function Composer({
             attachments: attachments.map(({ key, url, filename, contentType }) => ({
               key, url, filename, contentType,
             })),
+            products: products.map(({ moduleName, kind, id }) => ({ moduleName, kind, id })),
             includeOriginalAttachments: mode === 'forward',
             idempotencyKey: token.current,
             draftId: draftId ?? undefined,
@@ -446,6 +462,10 @@ export function Composer({
       setReplyRecipients(defaultRecipients(mode))
       setRecipientsEdited(false)
       setAttachments([])
+      // The catalogue clears with the files, for the same reason: the box is
+      // empty and ready for the next reply, and chips left over from a message
+      // that has already gone are three chairs somebody sends twice.
+      setProducts([])
       setMentions([])
       setMentionQuery('')
       setDirty(false)
@@ -472,7 +492,7 @@ export function Composer({
       setBusyWith(null)
     }
   }, [
-    attachments, bcc, cc, defaultRecipients, draftId, mentions, mode, recipients, router,
+    attachments, bcc, cc, defaultRecipients, draftId, mentions, mode, products, recipients, router,
     subject, text, threadId,
   ])
 
@@ -497,6 +517,12 @@ export function Composer({
       attachments: attachments.map(({ key, url, filename, contentType, sizeBytes }) => ({
         key, url, filename, contentType, sizeBytes,
       })),
+      // A note is a message to colleagues on this site's own screen, and a
+      // catalogue table is for somebody outside it. Anything picked before the
+      // box was switched to a note stays picked and simply does not travel.
+      products: mode === 'note'
+        ? []
+        : products.map(({ moduleName, kind, id }) => ({ moduleName, kind, id })),
       // Undefined is dropped by JSON.stringify, which is exactly what "leave
       // whatever time is on it" has to look like on the wire. A string sets a
       // time, null takes it off.
@@ -552,7 +578,7 @@ export function Composer({
       inFlight.current = false
       setBusyWith(null)
     }
-  }, [attachments, bcc, cc, draftId, mode, recipients, router, subject, text, threadId])
+  }, [attachments, bcc, cc, draftId, mode, products, recipients, router, subject, text, threadId])
 
   const discard = useCallback(async () => {
     if (!draftId) return
@@ -584,6 +610,46 @@ export function Composer({
     }
   }, [draftId, router])
 
+  /** Whether the cross in the corner is asking about the writing before it
+   *  shuts the box. */
+  const [closing, setClosing] = useState(false)
+
+  /** The cross in the corner of the box, and the one on the popped-out window.
+   *  With nothing typed since the last time it was put down it simply shuts;
+   *  with something to lose it asks the one question worth asking - keep it,
+   *  throw it away, or carry on writing - rather than the old question, which
+   *  offered "Leave it" and quietly meant "lose it". */
+  const askToClose = useCallback(() => {
+    if (hasUnsaved) setClosing(true)
+    else closeComposer()
+  }, [closeComposer, hasUnsaved])
+
+  /** Stops the save below being started twice while it is in flight - the
+   *  effect it lives in re-runs whenever anything typed changes. */
+  const leaving = useRef(false)
+
+  // A click on a link that would take the screen somewhere else was caught by
+  // the listener above. It used to raise a dialog asking whether to lose the
+  // reply; now the reply is simply put down as a draft and the click carries
+  // on, which is what every mail program does and what nobody has ever had to
+  // be asked about. Only a save that actually FAILED stops the journey - the
+  // error is on the screen and the writing is still in the box.
+  //
+  // A note is the exception, and gets the question instead: notes are not saved
+  // as drafts - a draft is a message on its way out - so there is nothing to
+  // put it down as, and walking off with it silently would lose it.
+  useEffect(() => {
+    if (noting) return
+    if (!leavingTo || leaving.current) return
+    leaving.current = true
+    void save().then((ok) => {
+      leaving.current = false
+      const going = leavingTo
+      setLeavingTo(null)
+      if (ok && going) router.push(going)
+    })
+  }, [leavingTo, noting, router, save])
+
   /** The chosen departure time in the shape the server reads it in: a wall
    *  clock with no zone on it, meant in the SITE's zone. */
   const pendingWallClock = pendingSendAt ? toWallClock(pendingSendAt, timezone) : null
@@ -613,9 +679,19 @@ export function Composer({
   }
 
   const body = (
+    // The provider rather than a box: the words are drawn in the middle of this
+    // and the buttons that format them are drawn on the strip along the bottom,
+    // and both of them have to be talking about the same box.
+    <RichText
+      id="uin-composer-text"
+      value={text}
+      onChange={(html) => { setText(html); setDirty(true); setNote('') }}
+      placeholder={noting ? 'Something for the others to see' : 'Write your reply'}
+      label={noting ? 'Your note' : 'Your message'}
+    >
     <div className="uin-composer uin-droppable" {...drop.dropProps}>
       <AttachmentDropOverlay dragging={drop.dragging} />
-      {/* Above the chips, and shown whenever there is a reason at all. It used
+      {/* First in the box, and shown whenever there is a reason at all. It used
           to be tied to the mode, which meant it appeared only on modes that are
           not offered when it applies - so the one person who needed it, the one
           left with nothing but Internal note, was the one person who never saw
@@ -624,18 +700,35 @@ export function Composer({
         <div className="alert alert-info">{cannotReplyReason}</div>
       )}
 
-      <div className="uin-composer-modes" role="group" aria-label="What to send">
-        {modes.map((m) => (
+      {/* What this is, and the two ways out of it. The row of chips that used to
+          sit here switched between reply, reply to all, forward and note - a
+          second place to make a choice already made on the message being
+          answered, and the commonest way to send a customer a forward meant for
+          a colleague. Which one it is still has to be SAID, though, so it is
+          said in words. */}
+      <div className="uin-composer-head">
+        <span className="uin-composer-title">{MODE_WORDS[mode]}</span>
+        <span className="uin-composer-head-tools">
           <button
-            key={m.id}
             type="button"
-            className="uin-chip"
-            aria-pressed={mode === m.id}
-            onClick={() => changeMode(m.id)}
+            className="uin-icon-btn"
+            aria-label={poppedOut ? 'Put it back under the conversation' : 'Open it in a window of its own'}
+            title={poppedOut ? 'Put it back' : 'Open it in a window of its own'}
+            onClick={() => setPoppedOut((was) => !was)}
           >
-            {m.label}
+            {poppedOut ? CollapseIcon : ExpandIcon}
           </button>
-        ))}
+          <button
+            type="button"
+            className="uin-icon-btn"
+            aria-label="Close this reply"
+            title="Close this reply"
+            onClick={askToClose}
+            disabled={busy}
+          >
+            {CloseIcon}
+          </button>
+        </span>
       </div>
 
       {noting ? (
@@ -655,9 +748,8 @@ export function Composer({
                 onEnter={onLineEnter(showCc ? 'uin-reply-cc' : showBcc ? 'uin-reply-bcc' : showSubject ? 'uin-reply-subject' : 'uin-composer-text')}
                 placeholder="name@example.com"
               />
-              {/* The three lines nobody usually wants, and the way to make the
-                  box bigger. All four are one press each, and none of them is
-                  taking up a line until it is asked for. */}
+              {/* The three lines nobody usually wants. One press each, and none
+                  of them takes up a line until it is asked for. */}
               <div className="uin-field-links">
                 {!showCc && (
                   <button type="button" className="uin-field-add" onClick={() => setShowCc(true)}>Cc</button>
@@ -679,15 +771,6 @@ export function Composer({
                     Subject
                   </button>
                 )}
-                <button
-                  type="button"
-                  className="uin-icon-btn uin-field-pop"
-                  aria-label={poppedOut ? 'Put it back under the conversation' : 'Open it in a window of its own'}
-                  title={poppedOut ? 'Put it back' : 'Open it in a window of its own'}
-                  onClick={() => setPoppedOut((was) => !was)}
-                >
-                  {poppedOut ? CollapseIcon : ExpandIcon}
-                </button>
               </div>
             </div>
           </div>
@@ -780,13 +863,7 @@ export function Composer({
       )}
 
       <div className="uin-compose-message">
-        <RichText
-          id="uin-composer-text"
-          aria-label={noting ? 'Your note' : 'Your message'}
-          value={text}
-          onChange={(html) => { setText(html); setDirty(true); setNote('') }}
-          placeholder={noting ? 'Something for the others to see' : 'Write your reply'}
-        />
+        <RichTextBox />
       </div>
 
       {noting && staff.length > 0 && (
@@ -869,9 +946,16 @@ export function Composer({
       {note && !error && <div className="alert alert-success" role="status">{note}</div>}
 
       {/* Everything you can do to the message, on one strip along the bottom -
-          the place every mail program has kept it. The two icons on the left are
-          things you do TO the message, the buttons on the right are the ways it
-          leaves, and the gap between them is deliberate. */}
+          the place every mail program has kept it. What you do TO the message
+          is on the left: the files, the catalogue, when it leaves, and the six
+          formatting buttons, which used to sit in a strip of their own above the
+          words and are the same six wherever they are drawn. The ways it leaves
+          are on the right, and the gap between the two groups is deliberate.
+
+          When the column is too narrow for one line, the two send buttons wrap
+          as a pair and stay hard right - and if only one of them fits, it is
+          Send now that keeps the first line, because that is the one somebody
+          came to press. See uin-send-group in styles.tsx for how. */}
       <div className="uin-composer-row uin-composer-actions">
         {!noting && (
           <>
@@ -885,23 +969,50 @@ export function Composer({
             >
               {PaperclipIcon}
             </button>
-            <Dropdown
-              className="uin-icon-btn"
-              label={AlarmIcon}
-              ariaLabel="Send it later"
-              title="Send it later"
-              width={280}
-              panelClassName="uin-menu-snooze"
-              disabled={busy || nobodyToSendTo}
-            >
-              <SendLaterPanel
-                timezone={timezone}
-                busy={busy}
-                scheduled={waiting}
-                onPick={(at) => { setPendingSendAt(at); setError('') }}
-                onCancelTimer={() => { setPendingSendAt(null); void save(null) }}
-              />
-            </Dropdown>
+            {canAddProducts && (
+              <button
+                type="button"
+                className="uin-icon-btn"
+                title="Put something you sell on this message"
+                aria-label="Put something you sell on this message"
+                onClick={() => setPickingProduct(true)}
+                disabled={busy}
+              >
+                {TagIcon}
+              </button>
+            )}
+          </>
+        )}
+
+        <RichTextTools />
+
+        {/* Words in a box rather than a bell nobody could read. It was an alarm
+            clock icon beside the paperclip, which is a picture of a thing
+            rather than the name of one - and the one control on the strip that
+            people asked what it did. The same menu also
+            stands a time back down again, which is why it is still here on a
+            message that is already waiting for one. */}
+        {!noting && (
+          <Dropdown
+            className="btn btn-secondary btn-sm"
+            label={'Send Later'}
+            title={waiting ? 'Change when this goes out' : 'Choose when this goes out'}
+            width={280}
+            panelClassName="uin-menu-snooze"
+            disabled={busy || (!waiting && nobodyToSendTo)}
+          >
+            <SendLaterPanel
+              timezone={timezone}
+              busy={busy}
+              scheduled={waiting}
+              onPick={(at) => { setPendingSendAt(at); setError('') }}
+              onCancelTimer={() => { setPendingSendAt(null); void save(null) }}
+            />
+          </Dropdown>
+        )}
+
+        {!noting && (
+          <>
             <AttachmentChips
               attachments={attachments}
               disabled={busy}
@@ -910,44 +1021,48 @@ export function Composer({
                 setDirty(true)
               }}
             />
+            <ProductChips
+              products={products}
+              disabled={busy}
+              onRemove={(key) => {
+                setProducts((prev) => prev.filter((p) => productKey(p) !== key))
+                setDirty(true)
+              }}
+            />
           </>
         )}
 
         <span className="uin-composer-gap" />
 
-        {/* A reply with a time on it has already been decided about. Send would
-            post it now and Save would look like the way to keep it, which it is
-            not - so while it is waiting, the notice above is the whole of what
-            is left to do: move it, or cancel the timer and have these back. */}
+        {/* A reply with a time on it has already been decided about. Sending it
+            now would contradict that decision, so while it waits the notice
+            above is the whole of what is left to do: move it, or cancel the
+            timer and have the buttons back. */}
         {!noting && draftId && (
           <button type="button" className="uin-chip" onClick={() => setAsking(true)} disabled={busy}>
             {busyWith === 'discard' ? 'Throwing it away...' : 'Throw the draft away'}
           </button>
         )}
-        {!noting && !waiting && (
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => { void save() }}
-            disabled={busy}
-          >
-            {busyWith === 'save' ? 'Saving...' : 'Save as a draft'}
-          </button>
-        )}
 
-        {!noting && !waiting && pendingWallClock && (
-          <>
+        <span className="uin-send-group">
+          {/* Committing the time that was picked off the menu. It does not say
+              "Send later" as well: two buttons a thumb apart with the same words
+              on them is one of them pressed by mistake. */}
+          {!noting && !waiting && pendingWallClock && (
             <button
               type="button"
               className="btn btn-secondary btn-sm"
               onClick={() => { void save(pendingWallClock, pendingFollowUp) }}
               disabled={busy || nobodyToSendTo}
             >
-              Send later
+              {busyWith === 'save' ? 'Saving...' : 'Save it for then'}
             </button>
+          )}
+
+          {!noting && !waiting && (
             <Dropdown
               className="btn btn-secondary btn-sm"
-              label={'Send later & snooze'}
+              label={'Send & snooze'}
               align="end"
               width={280}
               panelClassName="uin-menu-snooze"
@@ -956,51 +1071,29 @@ export function Composer({
               <SnoozePanel
                 timezone={timezone}
                 busy={busy}
-                title="Send it later, then sleep until"
+                title="Send it, then sleep until"
                 onSnooze={(until) => {
-                  void save(pendingWallClock, pendingFollowUp).then((ok) => {
-                    if (ok) void snoozeThread(until)
-                  })
+                  void submit().then((ok) => { if (ok) void snoozeThread(until) })
                 }}
               />
             </Dropdown>
-          </>
-        )}
+          )}
 
-        {!noting && !waiting && (
-          <Dropdown
-            className="btn btn-secondary btn-sm"
-            label={'Send & snooze'}
-            align="end"
-            width={280}
-            panelClassName="uin-menu-snooze"
-            disabled={busy || nobodyToSendTo}
-          >
-            <SnoozePanel
-              timezone={timezone}
-              busy={busy}
-              title="Send it, then sleep until"
-              onSnooze={(until) => {
-                void submit().then((ok) => { if (ok) void snoozeThread(until) })
-              }}
-            />
-          </Dropdown>
-        )}
-
-        {!waiting && (
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            onClick={() => { void submit() }}
-            // Nothing to send to means the server would refuse it anyway, and
-            // finding that out by pressing Send is finding it out too late.
-            disabled={busy || nobodyToSendTo}
-          >
-            {busyWith === 'send'
-              ? (noting ? 'Saving...' : 'Sending...')
-              : noting ? 'Save note' : 'Send now'}
-          </button>
-        )}
+          {!waiting && (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => { void submit() }}
+              // Nothing to send to means the server would refuse it anyway, and
+              // finding that out by pressing Send is finding it out too late.
+              disabled={busy || nobodyToSendTo}
+            >
+              {busyWith === 'send'
+                ? (noting ? 'Saving...' : 'Sending...')
+                : noting ? 'Save note' : 'Send now'}
+            </button>
+          )}
+        </span>
       </div>
 
       {picking && (
@@ -1015,15 +1108,81 @@ export function Composer({
           }}
         />
       )}
+
+      {/* Left open after a pick, unlike the file list: quoting somebody three
+          chairs is one errand, not three trips into the catalogue. */}
+      {pickingProduct && (
+        <ProductPicker
+          chosen={products}
+          onClose={() => setPickingProduct(false)}
+          onPick={(item) => {
+            setProducts((prev) =>
+              prev.some((p) => productKey(p) === productKey(item)) ? prev : [...prev, item],
+            )
+            setDirty(true)
+          }}
+        />
+      )}
     </div>
+    </RichText>
   )
 
   const dialogs = (
     <>
+      {/* Three answers, because the question genuinely has three. It used to
+          have two - "Leave it" and "Keep writing" - and the first of them threw
+          away whatever was in the box while saying nothing about it.
+
+          A note is the exception, and has two: notes are not saved as drafts at
+          all - a draft is a message on its way out, and a note is not one - so
+          offering to keep one would quietly turn it into a reply nobody wrote. */}
+      {noting ? (
+        <ConfirmDialog
+          open={closing}
+          title="Throw this note away?"
+          body="It has not been left on the conversation, and closing loses it."
+          confirmLabel="Throw it away"
+          cancelLabel="Keep writing"
+          destructive
+          onCancel={() => setClosing(false)}
+          onConfirm={() => { setClosing(false); closeComposer() }}
+        />
+      ) : (
+        <ConfirmDialog
+          open={closing}
+          title="Keep this as a draft?"
+          body="Nothing here has been sent. It can wait under Drafts, and here, until you come back to it."
+          confirmLabel="Save it as a draft"
+          cancelLabel="Keep writing"
+          busy={busy}
+          other={{
+            label: 'Throw it away',
+            destructive: true,
+            onClick: () => {
+              setClosing(false)
+              // A draft that was saved earlier goes with it; one that was never
+              // saved has nothing to delete, and the box simply shuts.
+              if (draftId) void discard().then(() => closeComposer())
+              else closeComposer()
+            },
+          }}
+          onCancel={() => { if (!busy) setClosing(false) }}
+          onConfirm={() => {
+            void save().then((ok) => {
+              if (!ok) return
+              setClosing(false)
+              closeComposer()
+            })
+          }}
+        />
+      )}
+
+      {/* Only ever raised on a note, for the reason above: everything else is
+          already saved by the time the screen moves. */}
       <ConfirmDialog
-        open={leavingTo !== null}
-        title="Leave this reply?"
-        body="What you have written is not saved anywhere yet, and moving on loses it. Save it as a draft first if you want it back."
+        open={noting && leavingTo !== null}
+        title="Leave this note?"
+        body="It has not been left on the conversation, and moving on loses it."
         confirmLabel="Leave it"
         cancelLabel="Keep writing"
         destructive
@@ -1068,14 +1227,30 @@ export function Composer({
       >
         <div className="uin-modal-head">
           <h2 className="uin-modal-title">Your reply</h2>
-          <button
-            type="button"
-            className="uin-modal-close"
-            aria-label="Put it back under the conversation"
-            onClick={() => setPoppedOut(false)}
-          >
-            {CollapseIcon}
-          </button>
+          {/* Two different things, and they were one: putting the window back
+              under the conversation is not closing the reply, and a single
+              button cannot mean both. */}
+          <span className="uin-modal-head-tools">
+            <button
+              type="button"
+              className="uin-modal-close"
+              aria-label="Put it back under the conversation"
+              title="Put it back"
+              onClick={() => setPoppedOut(false)}
+            >
+              {CollapseIcon}
+            </button>
+            <button
+              type="button"
+              className="uin-modal-close"
+              aria-label="Close this reply"
+              title="Close this reply"
+              onClick={askToClose}
+              disabled={busy}
+            >
+              {CloseIcon}
+            </button>
+          </span>
         </div>
         <div className="uin-modal-body">{body}</div>
       </div>

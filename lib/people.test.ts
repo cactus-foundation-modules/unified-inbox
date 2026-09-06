@@ -4,6 +4,7 @@ import {
   displayNameFor,
   domainOf,
   identityKey,
+  isOwnSender,
   isPersonalDomain,
   organisationNameFromDomain,
   phoneKey,
@@ -53,6 +54,45 @@ describe('phoneKey', () => {
 
   it('refuses something too short to be a number', () => {
     expect(phoneKey('123')).toBeNull()
+  })
+})
+
+describe('isOwnSender', () => {
+  it('treats anything we sent as ours, whoever it went to', () => {
+    expect(isOwnSender({ direction: 'out', fromAddress: 'hi@deskwell.co.uk' }, gate())).toBe(true)
+  })
+
+  it('treats an internal note as ours - it never left the building', () => {
+    expect(isOwnSender({ direction: 'note', fromAddress: null }, gate())).toBe(true)
+  })
+
+  it('recognises post arriving back at one of our own inboxes', () => {
+    const g = gate({ ownAddresses: new Set(['hi@deskwell.co.uk']) })
+    expect(isOwnSender({ direction: 'in', fromAddress: 'Hi@Deskwell.co.uk' }, g)).toBe(true)
+  })
+
+  it('recognises a colleague writing from their own account address', () => {
+    const g = gate({ staffAddresses: new Set(['chris@elsewhere.com']) })
+    expect(isOwnSender({ direction: 'in', fromAddress: 'chris@elsewhere.com' }, g)).toBe(true)
+  })
+
+  it('recognises anybody at one of our own domains', () => {
+    const g = gate({ ownDomains: ['deskwell.co.uk'] })
+    expect(isOwnSender({ direction: 'in', fromAddress: 'marcus@deskwell.co.uk' }, g)).toBe(true)
+  })
+
+  it('does not recognise a stranger, which is the whole point', () => {
+    const g = gate({ ownDomains: ['deskwell.co.uk'], ownAddresses: new Set(['hi@deskwell.co.uk']) })
+    expect(isOwnSender({ direction: 'in', fromAddress: 'jane@customer.com' }, g)).toBe(false)
+  })
+
+  it('does not recognise a lookalike domain', () => {
+    const g = gate({ ownDomains: ['deskwell.co.uk'] })
+    expect(isOwnSender({ direction: 'in', fromAddress: 'jane@notdeskwell.co.uk' }, g)).toBe(false)
+  })
+
+  it('treats an inbound message with no sender at all as a stranger', () => {
+    expect(isOwnSender({ direction: 'in', fromAddress: null }, gate())).toBe(false)
   })
 })
 

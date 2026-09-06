@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import type { SentMessageRow } from '@/modules/unified-inbox/lib/db'
 import {
+  formatFull,
   formatWhen,
   inboxHref,
   initialsFor,
@@ -134,7 +135,9 @@ export function SentListView({
                       <span className="uin-tag"><span className="uin-tag-text">{inboxName}</span></span>
                     )}
                   </span>
-                  <span>{formatWhen(row.sentAt, now, timezone)}</span>
+                  <span title={formatFull(row.sentAt, timezone)}>
+                    {formatWhen(row.sentAt, now, timezone)}
+                  </span>
                 </span>
               </Link>
             </li>

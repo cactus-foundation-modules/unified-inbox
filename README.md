@@ -85,9 +85,12 @@ the same human collapse into one story.
   became of it where the site is watching. Opening one opens the conversation it
   belongs to.
 - **Drafts.** Save a half-written reply, or a message you have not finished
-  starting, and it waits under the **Drafts** tab until you come back to it. Your own only: a shared address does not mean a shared
-  notepad. A reply goes back under its conversation with the words still in the
-  box; a new message opens where you left it. Sending one clears it away.
+  starting, and it waits under the **Drafts** tab until you come back to it.
+  Your own only: a shared address does not mean a shared notepad, and nobody
+  else can read, finish or throw away what you have started - not even somebody
+  who can send as the same address. A reply goes back under its conversation
+  with the words still in the box; a new message opens where you left it.
+  Sending one clears it away.
 - **Writing one.** Both boxes - the reply under a conversation and the new
   message over the list - open on who it is going to, in a box you can change
   rather than a sentence you cannot. **Cc**, **Bcc** and **Subject** are links

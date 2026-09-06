@@ -63,8 +63,10 @@ import { siteDiallingCode } from '@/lib/phone.server'
 import { attachableKinds, loadContext } from '@/modules/unified-inbox/lib/adapters'
 import { defaultLinkKind } from '@/modules/unified-inbox/lib/link-kinds'
 import { modulesForInbox } from '@/modules/unified-inbox/lib/module-senders'
-import { canEditDraft, forComposer } from '@/modules/unified-inbox/lib/drafts'
+import { forComposer } from '@/modules/unified-inbox/lib/drafts'
+import { canAddProducts as canAddProductsFor, resolveProducts } from '@/modules/unified-inbox/lib/products'
 import { addressesForPerson, buildContextQuery } from '@/modules/unified-inbox/lib/identity'
+import { identityKey, isOwnSender, resolveOwnDomains } from '@/modules/unified-inbox/lib/people'
 import { ContextRail } from './inbox/ContextRail'
 import { PersonView } from './inbox/PersonView'
 import { ContactsToolbar } from './inbox/ContactsToolbar'
@@ -93,7 +95,6 @@ import { ComposeView } from './inbox/ComposeView'
 import { DiscussionView } from './inbox/DiscussionView'
 import { SmsView } from './inbox/SmsView'
 import { CallView } from './inbox/CallView'
-import { DraftReadOnlyView } from './inbox/DraftReadOnlyView'
 
 // The hub's tab on core's Inbox page. One framed box the height of the window,
 // divided into four: the rail of addresses and places to go, the head and list
@@ -153,10 +154,24 @@ export async function UnifiedInboxPanel({
   const visible = new Set(visibleIds)
   const inboxes = allInboxes.filter((i) => visible.has(i.id))
 
+  // The module's own settings, fetched once for the whole screen: which channels
+  // the owner wants to see, whether to keep checking for mail while somebody is
+  // watching, and which end a conversation opens at.
+  const settings = await getSettings()
+
   // The channels another module owns - chat, enquiries, the phone. They sit in
   // no inbox and are not governed by the inbox guest lists: the module that owns
   // each one says who may read it, and this hub honours that answer.
-  const channels = await visibleProviderChannels(user)
+  //
+  // Minus the ones the owner has switched off in Settings. A site that points
+  // every form at a real inbox does not want a Contact form entry listing the
+  // same enquiries a second time. It is a decision about what is on the screen
+  // and nothing else: the conversations are still collected, still opened by a
+  // link and still governed by the same permissions, so switching a channel
+  // back on brings back everything that arrived while it was off.
+  const hiddenChannels = new Set(settings.hiddenChannelModules)
+  const channels = (await visibleProviderChannels(user))
+    .filter((channel) => !hiddenChannels.has(channel.moduleName))
   const channelModules = channels.map((c) => c.moduleName)
 
   if (inboxes.length === 0 && channels.length === 0) {
@@ -211,6 +226,9 @@ export async function UnifiedInboxPanel({
       id: true,
       displayName: true,
       username: true,
+      // Only ever read to recognise a colleague's own address as one of ours -
+      // it is never put on the page.
+      email: true,
       roleId: true,
       role: { select: { isProtected: true } },
     },
@@ -330,13 +348,15 @@ export async function UnifiedInboxPanel({
     ? (folderInbox.ownerUserId ? staffById[folderInbox.ownerUserId] ?? null : null) ?? folderInbox.name
     : null
 
-  // Drafts filed on an address are read by whoever can read that address, the
-  // same as every other message on it, and the query says so rather than the
-  // caller (see lib/db.ts). The count is what the Drafts tab shows; the list
-  // itself is only fetched when that tab is the one open.
-  const draftCount = await countDrafts(user.id, visibleIds)
+  // A draft is its author's and nobody else's, and the query says so rather
+  // than the caller (see lib/db.ts), so neither the list nor the number on the
+  // tab can be talked into counting a colleague's. Null is every one of this
+  // person's, wherever it is filed; a colleague's folder narrows it to the
+  // address that folder names, which is this person's own writing on it. The
+  // list itself is only fetched when that tab is the one open.
+  const draftCount = await countDrafts(user.id)
   const drafts = params.draftsOnly
-    ? await listDrafts(user.id, folderIds, !folderAsked)
+    ? await listDrafts(user.id, folderAsked ? folderIds : null)
     : []
 
   // Everything that has left, across every address this person may read, or out
@@ -398,10 +418,6 @@ export async function UnifiedInboxPanel({
   // Drafts take the list pane's place, so the conversation queries are not run
   // at all rather than run and thrown away.
   const connections = await listConnections()
-  // The module's own settings, fetched once for the whole screen: the tab row
-  // needs them to know whether to keep checking for mail while somebody is
-  // watching, and the conversation pane needs them for which end it opens at.
-  const settings = await getSettings()
   // The status tabs count what is behind them given everything else already
   // chosen, so they come from the same filters with the status left out.
   const listing = params.draftsOnly || params.sentOnly || params.contactsOnly || params.campaignsOnly
@@ -414,6 +430,17 @@ export async function UnifiedInboxPanel({
   // channels are a live chat and an enquiry form has no mail connection to have
   // run, and was being told its inbox had never collected anything - which is
   // true, and beside the point, and points at a screen most readers cannot open.
+  // When the post last arrived, for the line at the foot of the rail. The
+  // newest of the accounts rather than each of them: "Updated" is a fact about
+  // the screen somebody is looking at, not about one mailbox. Milliseconds
+  // rather than a Date, because this crosses into a client component and a
+  // plain number cannot be mangled on the way.
+  const lastCheckedAt = connections.reduce<number | null>((newest, c) => {
+    if (!c.lastSyncAt) return newest
+    const at = c.lastSyncAt.getTime()
+    return newest === null || at > newest ? at : newest
+  }, null)
+
   const neverSynced = !params.providerModule
     && inboxes.length > 0
     && (connections.length === 0 || connections.every((c) => !c.lastSyncAt))
@@ -665,26 +692,55 @@ export async function UnifiedInboxPanel({
       const wasUnread = thread.unread
       if (thread.unread) await setThreadRead(thread.id, false)
 
-      const [messages, files, events, ownDraft, heldDrafts] = await Promise.all([
+      const [messages, files, events, ownDraft, heldDrafts, sellsAnything] = await Promise.all([
         listThreadMessages(thread.id),
         attachmentsForThread(thread.id),
         listThreadEvents(thread.id),
-        draftForThread(thread.id, user.id, sendableIds),
-        // Anything that was queued to this person and stood down when this
-        // arrived. Read through the same visibility rule as every other way of
-        // reaching a draft, so the warning is not a way of learning that a
-        // colleague has one on an address this reader cannot open.
-        draftsHeldByThread(thread.id, user.id, visibleIds),
+        draftForThread(thread.id, user.id),
+        // Anything of this person's own that was queued and stood down when
+        // this arrived. Scoped to them like every other way of reaching a
+        // draft, so the warning is not a way of learning that a colleague had
+        // one waiting.
+        draftsHeldByThread(thread.id, user.id),
+        // Whether there is a catalogue on this site at all, and whether this
+        // person may see it. Asked here rather than in the box, because it is a
+        // permission and the box is in a browser.
+        canAddProductsFor(user),
       ])
+      // What the half-written reply was carrying out of that catalogue, as it
+      // stands today. The draft stores only which - a name and a price a week
+      // old are a name and a price worth reading again.
+      const draftProducts = ownDraft && ownDraft.products.length > 0
+        ? (await resolveProducts(ownDraft.products)).map((p) => p.choice)
+        : []
       const byMessage = new Map<string, AttachmentRow[]>()
       for (const file of files) {
         const list = byMessage.get(file.messageId)
         if (list) list.push(file)
         else byMessage.set(file.messageId, [file])
       }
+      // Which of these messages came from us. Built here from what this page
+      // already holds - the addresses, the colleagues and the settings are all
+      // loaded above - rather than asked per message, so recognising our own
+      // post costs no query at all. See isOwnSender for why it decides whether
+      // the pictures are held back.
+      const ownSenderGate = {
+        ownAddresses: new Set(
+          allInboxes.map((i) => identityKey(i.address)).filter((a): a is string => !!a),
+        ),
+        staffAddresses: new Set(
+          staffRows.map((s) => identityKey(s.email)).filter((a): a is string => !!a),
+        ),
+        ownDomains: resolveOwnDomains(
+          allInboxes.map((i) => i.address),
+          settings.ownDomains,
+          settings.personalDomains,
+        ),
+      }
       const view: ThreadMessageView[] = messages.map((m) => ({
         ...m,
         attachments: byMessage.get(m.id) ?? [],
+        ownSender: isOwnSender(m, ownSenderGate),
       }))
 
       // Which message the pane opens on. Reading newest first it is already the
@@ -842,13 +898,10 @@ export async function UnifiedInboxPanel({
           thread={thread}
           inboxName={threadInbox?.name ?? null}
           otherInboxNames={otherInboxNames}
-          merges={merges.map((merge) => ({
-            id: merge.id,
-            subject: merge.loserSubject,
-            // A Date in props reaches a client component as an empty object.
-            when: formatWhen(merge.createdAt, new Date(), timezone),
-            by: merge.userId ? staffById[merge.userId] ?? null : null,
-          }))}
+          /* Only the id and what it was called: who did it and when are the
+             log's own words, and the log is where the way out of a merge lives
+             now. */
+          merges={merges.map((merge) => ({ id: merge.id, subject: merge.loserSubject }))}
           messages={view}
           events={events}
           staff={threadStaff}
@@ -864,6 +917,8 @@ export async function UnifiedInboxPanel({
           replySubject={replySubjectLine}
           forwardSubject={forwardSubjectLine}
           draft={ownDraft ? forComposer(ownDraft) : null}
+          canAddProducts={sellsAnything}
+          draftProducts={draftProducts}
           newestFirst={settings.newestFirst}
           scrollToMessageId={openOnMessage?.id ?? null}
           showAvatars={settings.showAvatars}
@@ -890,6 +945,7 @@ export async function UnifiedInboxPanel({
           }}
           context={{
             adminPath,
+            sourceLabel: thread.sourceLabel,
             links,
             canEditLinks,
             linkKinds: kindOptions,
@@ -955,8 +1011,12 @@ export async function UnifiedInboxPanel({
         </div>
       )
     } else if (params.composeKind === 'sms') {
+      // The site's dialling code, so a number typed the way people type one -
+      // 07700 900123 - reads as a whole number here, exactly as it does on the
+      // call form. Core's setting, not a constant of this module's.
+      const diallingCode = smsReady ? await siteDiallingCode() : ''
       composePane = smsReady ? (
-        <SmsView base={base} params={carried} defaultTo={knownPhone} />
+        <SmsView base={base} params={carried} defaultTo={knownPhone} diallingCode={diallingCode} />
       ) : (
         <div className="uin-empty">
           <strong>This site cannot send texts</strong>
@@ -999,28 +1059,11 @@ export async function UnifiedInboxPanel({
       )
     }
   } else if (params.composing) {
-    // Only ever one this person may READ, and the query is what decides it
-    // rather than a check afterwards, so a guessed id in the address finds
-    // nothing. Whether they may also change it is the next question down.
-    const editing = params.draftId
-      ? await getDraft(params.draftId, user.id, visibleIds)
-      : null
-    if (editing && !canEditDraft(editing, user.id, sendableIds)) {
-      // Somebody else's. Readable, because it sits on an address this person
-      // can read; not editable, because finishing a colleague's sentence and
-      // posting it over their name is a different favour entirely.
-      composePane = (
-        <DraftReadOnlyView
-          base={base}
-          params={carried}
-          draft={editing}
-          authorName={staffById[editing.authorUserId] ?? 'A colleague'}
-          inboxName={editing.inboxId ? allInboxes.find((i) => i.id === editing.inboxId)?.name ?? null : null}
-          now={new Date()}
-          timezone={timezone}
-        />
-      )
-    } else if (sendable.length > 0) {
+    // Only ever this person's own, and the query is what decides it rather than
+    // a check afterwards, so a colleague's id typed into the address bar finds
+    // nothing at all rather than something to be refused.
+    const editing = params.draftId ? await getDraft(params.draftId, user.id) : null
+    if (sendable.length > 0) {
       composePane = (
         <ComposeView
           base={base}
@@ -1028,6 +1071,10 @@ export async function UnifiedInboxPanel({
           inboxes={sendable.map((i) => ({ id: i.id, name: i.name, address: i.address }))}
           defaultInboxId={chooseSendingInbox(sendableIds, editing?.inboxId ?? params.inboxId)}
           draft={editing ? forComposer(editing) : null}
+          canAddProducts={await canAddProductsFor(user)}
+          draftProducts={editing && editing.products.length > 0
+            ? (await resolveProducts(editing.products)).map((p) => p.choice)
+            : []}
           timezone={timezone}
         />
       )
@@ -1080,7 +1127,10 @@ export async function UnifiedInboxPanel({
   // post you are looking at, not that it is the sent one.
   const folderPrefix = folderOwnerName ? `${folderOwnerName} \u00b7 ` : ''
   const viewTitle = params.draftsOnly
-    ? `${folderPrefix}Drafts`
+    // Never a colleague's name in front of this one: drafts are the reader's
+    // own wherever they are read from, and a heading saying otherwise would be
+    // describing somebody else's writing over the top of their own.
+    ? 'Drafts'
     : params.sentOnly
       ? `${folderPrefix}Sent`
       : params.contactsOnly
@@ -1152,13 +1202,17 @@ export async function UnifiedInboxPanel({
       canReorder={canManage}
       canCheckNow={canManage && connections.length > 0}
       autoCheckSeconds={settings.autoCheckSeconds}
+      lastCheckedAt={lastCheckedAt}
+      timezone={timezone}
     />
   )
 
-  // The campaigns tab takes the whole width. Nothing on it is a conversation,
-  // so the list-and-reading-pane layout below has nothing to put in either
-  // half - and the address a pinger can be pointed at is minted here, on the
-  // one screen that explains what it is for.
+  // Campaigns, laid out the way the post is: every campaign down the middle
+  // column, the one that is open beside it. It used to be a single full-width
+  // form reached through a Back button, which meant that seeing what another
+  // campaign was doing cost leaving the one you were looking at - and the
+  // address a pinger can be pointed at is minted here, on the one screen that
+  // explains what it is for.
   if (params.campaignsOnly) {
     if (!canCampaign) {
       return (
@@ -1179,29 +1233,29 @@ export async function UnifiedInboxPanel({
     return (
       <div className="uin-page">
         <InboxStyles />
-        {/* The rail stays; everything else on this screen is one long form with
-            a save bar of its own pinned to the bottom of it, so it keeps the
-            page's own scroll rather than being put inside a second one. */}
-        {/* No handles on this screen - its only edge is the rail's, and a
-            full-height grab bar down a long form is not worth having - but it
-            still applies the width somebody set in the inbox, or the rail would
-            spring back to its shipped size every time they opened Campaigns. */}
-        <ColumnResizer handles={false} />
-        <div className="uin-app uin-app-wide">
+        {/* The same frame as the inbox, so the rail, the list and the pane are
+            the same widths and the same edges on both screens - and so the
+            handles between them are the ones somebody has already dragged. On a
+            phone it is one pane at a time, exactly as the post is: the list, or
+            the campaign opened from it. */}
+        <div
+          className="uin-app"
+          data-open={params.campaignId || searchParams.view === 'suppressions' ? '1' : '0'}
+          data-context="off"
+        >
           {rail}
-          <div className="uin-read uin-read-pad">
-            <CampaignsPanel
-              base={base}
-              params={carried}
-              inboxes={sendable.map((i) => ({ id: i.id, name: i.name, address: i.address }))}
-              categories={categoryList.map((c) => ({ id: c.id, name: c.name }))}
-              campaignId={params.campaignId}
-              view={searchParams.view ?? null}
-              tickUrl={siteUrl && tickToken
-                ? `${siteUrl}/api/m/unified-inbox/cron/campaigns?key=${tickToken}`
-                : null}
-            />
-          </div>
+          <CampaignsPanel
+            base={base}
+            params={carried}
+            inboxes={sendable.map((i) => ({ id: i.id, name: i.name, address: i.address }))}
+            categories={categoryList.map((c) => ({ id: c.id, name: c.name }))}
+            campaignId={params.campaignId}
+            view={searchParams.view ?? null}
+            tickUrl={siteUrl && tickToken
+              ? `${siteUrl}/api/m/unified-inbox/cron/campaigns?key=${tickToken}`
+              : null}
+          />
+          <ColumnResizer />
         </div>
       </div>
     )
@@ -1264,8 +1318,6 @@ export async function UnifiedInboxPanel({
       inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
       openThreadId={params.threadId}
       openDraftId={params.draftId}
-      staffById={staffById}
-      currentUserId={user.id}
       now={new Date()}
       timezone={timezone}
     />

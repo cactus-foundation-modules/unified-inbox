@@ -2,6 +2,8 @@
 // records; every one of them is mapped into one of these before it leaves
 // lib/db.ts, so nothing outside that file ever handles a raw column name.
 
+import type { ProductRef } from './products/types'
+
 export type SyncStatus = 'ok' | 'error'
 
 export type SendTransport = 'brevo' | 'smtp'
@@ -62,6 +64,11 @@ export type DraftAttachment = {
   sizeBytes: number | null
 }
 
+/** A product on a half-written message. A reference and nothing more - see
+ *  migrations/035_draft_products.sql for why nothing a customer reads is stored
+ *  alongside it. */
+export type DraftProduct = ProductRef
+
 /** A message somebody started and has not sent.
  *
  *  It belongs to its author and to nobody else: a shared inbox has several
@@ -92,6 +99,10 @@ export type Draft = {
    *  a guess at the content. */
   bodyFormat: DraftBodyFormat
   attachments: DraftAttachment[]
+  /** The catalogue items it carries, as references. What each one is called and
+   *  what it costs are read from the owning module when the message is sent, so
+   *  a draft never goes out at a price that has since moved. */
+  products: DraftProduct[]
   /** When it should leave on its own, or null for one that goes when somebody
    *  presses Send. */
   sendAt: Date | null
@@ -307,6 +318,20 @@ export type UnifiedInboxSettings = {
    *  the unsubscribe link. Null until somebody fills it in, and a campaign will
    *  not start without it while the footer is switched on. */
   campaignFooterAddress: string | null
+  /** Channels the owner has switched off: the module names whose entries are
+   *  kept out of the rail, the counts and the lists.
+   *
+   *  It exists because a channel can now address its conversations at one of
+   *  the site's own inboxes. A form that puts every enquiry in sales@ does not
+   *  also want a Contact form entry listing the same enquiries a second time -
+   *  but a site that has not routed anything very much does, so this is a
+   *  decision rather than a rule. Empty is the default and hides nothing.
+   *
+   *  It hides, it does not discard: the conversations are still collected, so
+   *  switching a channel back on brings back everything that arrived while it
+   *  was off. An enquiry addressed at no inbox on a hidden channel has nowhere
+   *  to be seen in this hub, which is what the setting says in as many words. */
+  hiddenChannelModules: string[]
 }
 
 // ---------------------------------------------------------------------------

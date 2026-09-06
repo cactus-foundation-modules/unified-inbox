@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
+import { pinnedHeader, scrollParent } from './pane-scroll'
 
 // Opens a conversation on the message worth reading rather than at the top of
 // it.
@@ -39,30 +40,6 @@ type Props = {
   threadId: string
   /** The `id` attribute of the message to bring to the top of the pane. */
   targetId: string
-}
-
-/** The thing that actually scrolls, walking out from the message.
- *
- *  Not assumed: the reading pane scrolls its own contents on a wide screen, and
- *  on a phone the whole page scrolls instead. Null means the window. */
-function scrollParent(from: HTMLElement): HTMLElement | null {
-  let node = from.parentElement
-  while (node) {
-    const overflow = getComputedStyle(node).overflowY
-    if (overflow === 'auto' || overflow === 'scroll') return node
-    node = node.parentElement
-  }
-  return null
-}
-
-/** How much of the top of the pane the conversation's header is sitting over.
- *  It is pinned there on a wide screen and in the flow on a phone, so this is
- *  asked rather than assumed - aligning a message to the top of a scroller that
- *  has an opaque band across it hides the message's own header. */
-function pinnedHeader(target: HTMLElement): number {
-  const head = target.closest('.uin-thread')?.querySelector('.uin-thread-head')
-  if (!(head instanceof HTMLElement)) return 0
-  return getComputedStyle(head).position === 'sticky' ? head.getBoundingClientRect().height : 0
 }
 
 export function ScrollToMessage({ threadId, targetId }: Props) {

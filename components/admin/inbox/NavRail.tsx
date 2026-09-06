@@ -32,8 +32,7 @@ import { ComposeMenu, type ComposeMenuEntry } from './ComposeMenu'
 // each name earns its keep: on a site with six of them the name is read second
 // and the colour first. "Team inboxes" is colleagues' own post this person has
 // been let in to - covering somebody's mail while they are away, working their
-// diary - and each one opens out into that colleague's Sent, Drafts and
-// Mentioned. Then the channels another module owns, then the three screens that
+// diary - and each one opens out into that colleague's Sent and Mentioned. Then the channels another module owns, then the three screens that
 // are not a list of post at all.
 //
 // Two different things put an address under Yours and they are not the same
@@ -52,9 +51,11 @@ import { ComposeMenu, type ComposeMenuEntry } from './ComposeMenu'
 // Unread counts ride beside the names, because "is there anything new in
 // accounts@" is the question this rail is answering.
 //
-// Fetching new mail sits at the foot of it, under a rule: "has anything come
-// in" is asked of the whole screen rather than of one address, and it is a
-// thing to do rather than a place to go.
+// Fetching new mail sits in a box stuck to the foot of it, under a rule: "has
+// anything come in" is asked of the whole screen rather than of one address,
+// and it is a thing to do rather than a place to go. Beside it is when the post
+// last arrived, because that is the question somebody is really asking when
+// they reach for the button.
 //
 // The addresses can still be dragged into the order somebody wants them in.
 // Dropping saves straight away and the rail moves first: the gesture is over in
@@ -146,6 +147,12 @@ type Props = {
    *  meaningful alongside canCheckNow - the button owns the timer, and there is
    *  no timer without the button. */
   autoCheckSeconds: number | null
+  /** When any mail account was last opened, in milliseconds, or null when none
+   *  ever has been. Read at the foot of the rail as a clock time, and moved on
+   *  by every check this page runs. */
+  lastCheckedAt: number | null
+  /** The site's own timezone, which is the clock that time is told on. */
+  timezone: string
 }
 
 /**
@@ -163,6 +170,31 @@ export function toneFor(id: string): number {
   let hash = 0
   for (let i = 0; i < id.length; i += 1) hash = (hash * 31 + id.charCodeAt(i)) >>> 0
   return (hash % 5) + 1
+}
+
+/**
+ * When the post last arrived, as somebody would say it.
+ *
+ * In the SITE's timezone rather than the browser's, which is what makes this
+ * safe to render on the server and on the client and get the same string twice
+ * - the alternative is a line that is one thing in the HTML and another after
+ * hydration, which React reports as an error and readers see as a flicker. It
+ * is also the more useful clock: a business's post arrives on the business's
+ * time, whatever time zone somebody happens to be reading it in.
+ */
+function updatedLabel(at: number | null, timezone: string): string {
+  if (at === null) return 'never'
+  const clock = new Intl.DateTimeFormat('en-GB', {
+    hour: '2-digit', minute: '2-digit', timeZone: timezone,
+  }).format(at)
+  const day = (ms: number) => new Intl.DateTimeFormat('en-GB', {
+    year: 'numeric', month: '2-digit', day: '2-digit', timeZone: timezone,
+  }).format(ms)
+  // The date only when it was not today. "Updated: 09:14" on a screen somebody
+  // opened this morning is the whole answer; the same line three days later is
+  // a lie by omission.
+  if (day(at) === day(Date.now())) return clock
+  return `${new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: timezone }).format(at)}, ${clock}`
 }
 
 /** One entry's count. Two shapes: the loud one for conversations nobody has
@@ -235,10 +267,19 @@ export function NavRail({
   base, params, inboxes, channels, allCount, current, me, showAvatars, assignedCount, askedCount, assignee,
   showUnrouted, unroutedCount, showDrafts, draftCount, contactCount, showCampaigns, composeHref,
   composeEntries,
-  defaultInboxId, canReorder, canCheckNow, autoCheckSeconds,
+  defaultInboxId, canReorder, canCheckNow, autoCheckSeconds, lastCheckedAt, timezone,
 }: Props) {
   const router = useRouter()
   const [notice, setNotice] = useState<CheckNowNotice | null>(null)
+  // Bumped on every answer, and used as the box's key. Two presses that come
+  // back with the same words are otherwise the same element in the same place,
+  // and an element React does not replace never restarts the fade - the second
+  // answer would arrive already halfway out.
+  const [noticeSeq, setNoticeSeq] = useState(0)
+  const showNotice = useCallback((next: CheckNowNotice | null) => {
+    setNotice(next)
+    setNoticeSeq((seq) => seq + 1)
+  }, [])
   const [order, setOrder] = useState(inboxes)
   // Which colleagues' folders are showing. Held here rather than in the address
   // because it is furniture rather than a place: opening Sam's folders is not
@@ -248,6 +289,26 @@ export function NavRail({
   const [dragId, setDragId] = useState<string | null>(null)
   const [overId, setOverId] = useState<string | null>(null)
   const [error, setError] = useState('')
+
+  // When a check this page ran actually opened the accounts, or null until one
+  // has. Held beside what the server said rather than replacing it, and the
+  // newer of the two is what gets read below: a refresh carrying an older
+  // figure - one account checked while another was not - cannot then wind the
+  // clock back.
+  const [ownCheckedAt, setOwnCheckedAt] = useState<number | null>(null)
+  const checkedAt = Math.max(lastCheckedAt ?? 0, ownCheckedAt ?? 0) || null
+
+  // The answer to a press, gone by itself three seconds later. Only the good
+  // one: an error has to stay until the next press, because somebody has to be
+  // able to read why nothing was collected, and a red box that disappears while
+  // they are looking at the list is worse than no box at all.
+  useEffect(() => {
+    if (!notice || notice.tone !== 'ok') return
+    // 3s of being read plus the fade the stylesheet then runs, so the box is
+    // taken away at the end of the fade rather than part of the way through it.
+    const clear = window.setTimeout(() => setNotice(null), 3450)
+    return () => window.clearTimeout(clear)
+  }, [notice, noticeSeq])
 
   // What the server last told us, so a refresh that genuinely changed the list
   // (an address added, one deleted, somebody else's rearrangement) replaces what
@@ -475,22 +536,25 @@ export function NavRail({
   // ---- colleagues' own post -------------------------------------------
   //
   // Named for the person rather than for the address, and opening out into the
-  // three folders of theirs that are worth reaching from here. Which is a
-  // deliberately short list: their Inbox is the row itself, and Sent, Drafts
-  // and Mentioned are the three a person covering somebody's post actually
-  // opens - "has that quote gone out", "was it half-written", "what has anybody
-  // asked them about". Everything else about the address is still reachable by
-  // standing in it.
+  // two folders of theirs that are worth reaching from here. Which is a
+  // deliberately short list: their Inbox is the row itself, and Sent and
+  // Mentioned are the two a person covering somebody's post actually opens -
+  // "has that quote gone out", "what has anybody asked them about". Everything
+  // else about the address is still reachable by standing in it.
+  //
+  // No Drafts. A draft belongs to whoever wrote it (see lib/drafts.ts), so a
+  // folder under somebody else's name could only ever hold this reader's own
+  // writing, under a heading saying it was theirs.
   //
   // The folders are scoped to THAT address in the query string, so nothing
   // under a colleague's name is ever this reader's own list wearing the
   // colleague's name - the panel resolves the id against the addresses this
   // person may read before it fetches a row (E17).
 
-  /** The three folders under one colleague. Mentioned only where there is
-   *  somebody to have been mentioned: an address whose owner's account has gone
-   *  belongs to nobody, and a list of what nobody has been asked about is a
-   *  heading over an empty box for ever. */
+  /** The folders under one colleague. Mentioned only where there is somebody to
+   *  have been mentioned: an address whose owner's account has gone belongs to
+   *  nobody, and a list of what nobody has been asked about is a heading over an
+   *  empty box for ever. */
   const foldersFor = (inbox: TabInbox): RailItem[] => [
     {
       key: `${inbox.id}:sent`,
@@ -499,14 +563,6 @@ export function NavRail({
       icon: SendIcon,
       name: 'Sent',
       title: `Everything that has left ${inbox.address}`,
-    },
-    {
-      key: `${inbox.id}:drafts`,
-      href: link(`drafts:${inbox.id}`),
-      active: current === `drafts:${inbox.id}`,
-      icon: FileIcon,
-      name: 'Drafts',
-      title: `Messages started on ${inbox.address} and not sent`,
     },
     ...(inbox.ownerUserId ? [{
       key: `${inbox.id}:mentions`,
@@ -577,9 +633,10 @@ export function NavRail({
   return (
     <nav className="uin-rail" aria-label="Inboxes and views">
       {/* Everything that is a place to go, in one box. It is a column on a wide
-          window and one scrolling strip on anything narrower; the notices below
-          stay outside it either way, so an answer to a press is never parked
-          off the end of a strip nobody has scrolled. */}
+          window and one scrolling strip on anything narrower. The box at the
+          foot of it is stuck there rather than sitting at the end of the list,
+          so when the post last arrived - and whatever the last press had to say
+          - is on screen without anybody scrolling for it. */}
       <div className="uin-rail-scroll">
         {/* Who is reading, and the two buttons up here that are not places to
             go. The same arrangement every mail program uses, for the same
@@ -709,22 +766,39 @@ export function NavRail({
 
         {canCheckNow && (
           <div className="uin-rail-foot">
-            <CheckNowButton onResult={setNotice} autoSeconds={autoCheckSeconds} />
+            {/* Whatever the check came back with, in the box the button lives in
+                rather than off under the rail: it is the answer to a press
+                somebody has just made, and it is beside the thing they pressed.
+                Three seconds, then it fades. */}
+            {notice && (
+              <div
+                key={noticeSeq}
+                className="uin-rail-notice"
+                data-fade={notice.tone === 'ok' ? '1' : undefined}
+              >
+                <div className={`alert ${notice.tone === 'ok' ? 'alert-info' : 'alert-danger'}`} role="status">
+                  {notice.text}
+                </div>
+              </div>
+            )}
+            <div className="uin-rail-foot-row">
+              {/* When the post last arrived, which is the question the button
+                  beside it answers. Stuck to the bottom of the rail so it can be
+                  read without scrolling forty conversations to find it. */}
+              <span className="uin-rail-updated">Updated: {updatedLabel(checkedAt, timezone)}</span>
+              <CheckNowButton
+                onResult={showNotice}
+                onChecked={setOwnCheckedAt}
+                autoSeconds={autoCheckSeconds}
+              />
+            </div>
           </div>
         )}
       </div>
 
-      {/* Whatever the check came back with, and whatever a refused rearrangement
-          had to say. Both are answers to a press somebody has just made, so they
-          belong beside the thing that was pressed rather than at the top of the
-          screen. */}
-      {notice && (
-        <div className="uin-rail-notice">
-          <div className={`alert ${notice.tone === 'ok' ? 'alert-info' : 'alert-danger'}`} role="status">
-            {notice.text}
-          </div>
-        </div>
-      )}
+      {/* Whatever a refused rearrangement had to say. It is the answer to a
+          gesture somebody has just made, so it belongs beside the rail rather
+          than at the top of the screen. */}
       {error && (
         <div className="uin-rail-notice">
           <div className="alert alert-danger" role="alert">{error}</div>

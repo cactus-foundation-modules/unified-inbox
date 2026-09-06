@@ -3,7 +3,8 @@ import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { getActiveSmsProvider } from '@/lib/auth/sms'
-import { normaliseSmsNumber } from '@/lib/sms/send'
+import { toE164 } from '@/lib/phone'
+import { siteDiallingCode } from '@/lib/phone.server'
 import { SmsBody } from '@/modules/unified-inbox/lib/validation'
 
 // Sending a text from the inbox.
@@ -36,7 +37,10 @@ export async function POST(request: NextRequest) {
     return errorResponse(parsed.error.issues[0]?.message ?? 'That text could not be read.', 400)
   }
 
-  const to = normaliseSmsNumber(parsed.data.to)
+  // The same sum the box did as it was left, done again here rather than
+  // trusting a browser to have done it - and against the site's own dialling
+  // code, so "07700 900123" means what it means on this site.
+  const to = toE164(parsed.data.to, await siteDiallingCode())
   if (!to) {
     return errorResponse(
       'That does not look like a phone number. Try it in full, e.g. 07700 900123 or +447700900123.',

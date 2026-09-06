@@ -248,7 +248,6 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
     ] as Array<[string, string | null, string]>) {
       await lib.saveDraft({
         authorUserId: author,
-        replyableInboxIds: inboxId ? [inboxId] : [],
         inboxId,
         threadId: null,
         mode: 'new',
@@ -311,37 +310,45 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
     expect(await lib.countSentMessages([], true, [])).toBe(0)
   })
 
-  // The Drafts folder has the same two shapes the Sent one does - across every
-  // address somebody can read, or narrowed to the one a colleague's folder
-  // names - and the narrowing turns OFF the "or my own, filed nowhere" half of
-  // the clause. Both halves are raw SQL and neither is run by anything else.
+  // The Drafts folder has two shapes - every one of this person's, or narrowed
+  // to the address a folder names - and both are raw SQL that nothing else
+  // runs. What they must never do is reach a colleague's, which is what the
+  // shared-address cases below are here to hold down.
   describe('the drafts folder', () => {
-    it('lists anybody\u2019s draft on an address, and this person\u2019s own unfiled ones', async () => {
-      const rows = await lib.listDrafts(chris, [chrisInbox, emmaInbox])
+    it('lists this person\u2019s own, filed and unfiled, and nobody else\u2019s', async () => {
+      const rows = await lib.listDrafts(chris)
       expect(rows.map((r) => r.subject).sort()).toEqual([
         'Half-written, filed nowhere',
         'Half-written, from Chris',
-        'Half-written, from Emma',
       ])
-      expect(await lib.countDrafts(chris, [chrisInbox, emmaInbox])).toBe(3)
+      expect(await lib.countDrafts(chris)).toBe(2)
     })
 
-    it('leaves somebody else\u2019s unfiled draft out of it', async () => {
-      // Emma may read both addresses, so she sees both drafts filed on them -
-      // and not the one Chris started on no address at all.
-      expect(await lib.countDrafts(emma, [chrisInbox, emmaInbox])).toBe(2)
-    })
-
-    it('narrows to one address, without dragging the reader\u2019s own unfiled drafts in', async () => {
-      const rows = await lib.listDrafts(chris, [emmaInbox], false)
+    it('leaves a colleague\u2019s draft out even on an address both can read', async () => {
+      // Emma may read chris@ and does not get what Chris left half-written on
+      // it. Half-written text is not something a shared address shares.
+      const rows = await lib.listDrafts(emma)
       expect(rows.map((r) => r.subject)).toEqual(['Half-written, from Emma'])
-      expect(await lib.countDrafts(chris, [emmaInbox], false)).toBe(1)
-      expect(await lib.countDrafts(chris, [chrisInbox], false)).toBe(1)
+      expect(await lib.countDrafts(emma)).toBe(1)
     })
 
-    it('lists nothing at all when the address asked for is not one they can read', async () => {
-      expect(await lib.listDrafts(chris, [], false)).toEqual([])
-      expect(await lib.countDrafts(chris, [], false)).toBe(0)
+    it('narrows to one address, and still only to this person\u2019s own', async () => {
+      expect(await lib.countDrafts(chris, [chrisInbox])).toBe(1)
+      // Emma's is filed on emma@, which Chris may read - and it stays hers.
+      expect(await lib.listDrafts(chris, [emmaInbox])).toEqual([])
+      // Narrowing to an address leaves out the one filed on no address at all.
+      expect(await lib.countDrafts(chris, [chrisInbox, emmaInbox])).toBe(1)
+    })
+
+    it('lists nothing at all when the list of addresses is empty', async () => {
+      expect(await lib.listDrafts(chris, [])).toEqual([])
+      expect(await lib.countDrafts(chris, [])).toBe(0)
+    })
+
+    it('hands one back by id to its author, and to nobody else', async () => {
+      const mine = (await lib.listDrafts(chris)).find((d) => d.inboxId === chrisInbox)!
+      expect((await lib.getDraft(mine.id, chris))?.subject).toBe('Half-written, from Chris')
+      expect(await lib.getDraft(mine.id, emma)).toBeNull()
     })
   })
 })

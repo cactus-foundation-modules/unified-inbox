@@ -14,7 +14,7 @@ import { LinkActions } from './LinkActions'
 // it is handed them, which is what lets a later stage add a source without
 // touching the screen.
 //
-// Who the conversation is with, and which records are attached to it, are NOT
+// Who the conversation is with, and which records are its context, are NOT
 // here: beside a conversation they are two lines in the conversation's own
 // pinned header (see ThreadContext), because this panel sits under the messages
 // on anything narrower than a very wide window. What is left here is the rest
@@ -26,8 +26,8 @@ type Props = {
   /** The conversation this rail sits beside, when it sits beside one. */
   threadId: string | null
   sections: ContextSection[]
-  /** Records attached to the PERSON. Beside a conversation this is empty and
-   *  the block is not drawn - a conversation's own records are in its header. */
+  /** Records that are context for the PERSON. Beside a conversation this is
+   *  empty and the block is not drawn - a conversation's own are in its header. */
   links: RecordLink[]
   canEditLinks: boolean
 }
@@ -41,7 +41,10 @@ function LinkedRecord({
     <li className="uin-ctx-row">
       <div className="uin-ctx-main">
         {href ? (
-          <Link href={`/${adminPath}/${href}`}>{label}</Link>
+          // New tab, same as the line in a conversation's header: following an
+          // order from somebody's page is reading the order as well as the
+          // page, not instead of it.
+          <Link href={`/${adminPath}/${href}`} target="_blank" rel="noreferrer">{label}</Link>
         ) : (
           <span>{label}</span>
         )}
@@ -60,21 +63,15 @@ export function ContextRail({
   adminPath, threadId, sections, links, canEditLinks,
 }: Props) {
   // The block still stands on a person's page with nothing in it, because
-  // "nothing attached yet" is an answer somebody came looking for. Beside a
+  // "no context yet" is an answer somebody came looking for. Beside a
   // conversation it is not drawn at all: that list is in the header.
-  const showAttached = !threadId && (links.length > 0 || canEditLinks)
-  // Only when the rail has said nothing at all - which means no block above
-  // this one, not merely no records. A person's page gets an "Attached to them
-  // / nothing attached yet" block whether or not anything is attached, and
-  // following that with "nothing else mentions this person" is a second
-  // sentence about the nothing the first has just described.
-  const nothing = !showAttached && sections.length === 0
+  const showContext = !threadId && (links.length > 0 || canEditLinks)
 
   return (
     <aside className="uin-ctx" aria-label={threadId ? 'About this conversation' : 'About this person'}>
-      {showAttached && (
+      {showContext && (
         <section className="uin-ctx-block">
-          <h3 className="uin-ctx-heading">Attached to them</h3>
+          <h3 className="uin-ctx-heading">Context</h3>
           {links.length > 0 ? (
             <ul className="uin-ctx-list">
               {links.map((link) => (
@@ -87,7 +84,7 @@ export function ContextRail({
               ))}
             </ul>
           ) : (
-            <p className="uin-ctx-sub">Nothing attached yet.</p>
+            <p className="uin-ctx-sub">No context yet.</p>
           )}
         </section>
       )}
@@ -115,15 +112,6 @@ export function ContextRail({
           )}
         </section>
       ))}
-
-      {nothing && (
-        <section className="uin-ctx-block">
-          <p className="uin-ctx-sub">
-            Nothing else on the site mentions this person yet. Anything they order, ask for a
-            quote on or get billed for will show up here.
-          </p>
-        </section>
-      )}
     </aside>
   )
 }

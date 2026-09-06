@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import type { Draft } from '@/modules/unified-inbox/lib/types'
-import { formatWhen, initialsFor } from '@/modules/unified-inbox/lib/list'
+import { formatFull, formatWhen, initialsFor } from '@/modules/unified-inbox/lib/list'
 import {
   draftBodyText,
   draftHref,
@@ -11,8 +11,10 @@ import {
 import { scheduleLabel } from '@/modules/unified-inbox/lib/scheduled'
 import { PaperclipIcon, PenIcon } from './icons'
 
-// The Drafts list: what anybody has started on an address you can read, and
-// has not sent.
+// The Drafts list: what you have started and not sent.
+//
+// Yours only. A draft belongs to whoever wrote it (see lib/drafts.ts), so there
+// is no row here to put somebody else's name on, and no need for one.
 //
 // It takes the list pane's place rather than sitting somewhere else on the
 // screen, because it answers the same question the conversation list answers -
@@ -32,24 +34,18 @@ type Props = {
   inboxNames: Record<string, string>
   openThreadId: string | null
   openDraftId: string | null
-  /** Who each colleague is, for the tag on somebody else's row. */
-  staffById: Record<string, string>
-  /** So a row can say whose it is only when it is not the reader's own - a
-   *  badge on every row marks nothing. */
-  currentUserId: string
   now: Date
   timezone: string
 }
 
 export function DraftListView({
-  base, params, drafts, inboxNames, openThreadId, openDraftId, staffById, currentUserId, now, timezone,
+  base, params, drafts, inboxNames, openThreadId, openDraftId, now, timezone,
 }: Props) {
   if (drafts.length === 0) {
     return (
       <div className="uin-empty">
         <strong>Nothing put down half-written</strong>
-        Anything anybody starts and saves rather than sends waits here until somebody comes
-        back to it.
+        Anything you start and save rather than send waits here until you come back to it.
       </div>
     )
   }
@@ -117,21 +113,14 @@ export function DraftListView({
                       {PaperclipIcon}<span className="sr-only">Has an attachment</span>
                     </span>
                   )}
-                  {/* The words go in a span of their own so a long name ends in an
-                      ellipsis rather than being cut off mid-letter. */}
-                  {draft.authorUserId !== currentUserId && (
-                    <span className="uin-tag">
-                      <span className="uin-tag-text">
-                        {staffById[draft.authorUserId] ?? 'Somebody else'}
-                      </span>
-                    </span>
-                  )}
                   {draft.threadId && <span className="uin-tag"><span className="uin-tag-text">Reply</span></span>}
                   {inboxName && (
                     <span className="uin-tag"><span className="uin-tag-text">{inboxName}</span></span>
                   )}
                 </span>
-                <span>{formatWhen(draft.updatedAt, now, timezone)}</span>
+                <span title={formatFull(draft.updatedAt, timezone)}>
+                  {formatWhen(draft.updatedAt, now, timezone)}
+                </span>
               </span>
             </Link>
           </li>

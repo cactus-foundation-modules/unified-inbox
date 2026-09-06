@@ -17,6 +17,7 @@ import {
   unroutedCount,
   updateSettings,
 } from '@/modules/unified-inbox/lib/db'
+import { allProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
 import { reconcileBrevoWebhooks } from '@/modules/unified-inbox/lib/brevo-webhooks'
 import { clashMessage, mailboxClashes } from '@/modules/unified-inbox/lib/reply-catcher-guard'
 import { retentionPreview } from '@/modules/unified-inbox/lib/retention'
@@ -31,7 +32,7 @@ export async function GET() {
   if (!user) return errorResponse('Not authenticated', 401)
   if (!await hasPermission(user, 'unifiedinbox.manage')) return errorResponse('Forbidden', 403)
 
-  const [connections, inboxes, access, defaults, settings, collection, unrouted, people, categories, clashes, retention, users] = await Promise.all([
+  const [connections, inboxes, access, defaults, settings, collection, unrouted, people, categories, clashes, retention, users, channels] = await Promise.all([
     listConnections(),
     listInboxes(),
     listAllInboxAccess(),
@@ -48,6 +49,7 @@ export async function GET() {
       select: { id: true, displayName: true, username: true, email: true },
       orderBy: { username: 'asc' },
     }),
+    allProviderChannels(),
   ])
 
   return NextResponse.json({
@@ -88,6 +90,10 @@ export async function GET() {
       name: u.displayName || u.username,
       email: u.email,
     })),
+    // The channels other modules own, so the owner has something to switch off.
+    // The whole site's list rather than this reader's: whether a channel is on
+    // the screen is one decision for everybody.
+    channels,
     // Without a site encryption key there is nowhere safe to put a mailbox
     // password, so the screen says so rather than saving one in the clear.
     encryptionReady: isEncryptionKeyUsable(),
@@ -130,6 +136,11 @@ const Body = z.object({
   // nobody asked for: an account visited inside that minute is stepped over
   // there anyway, so a shorter interval would buy nothing but function calls.
   autoCheckSeconds: z.number().int().min(60).max(3600).nullable().optional(),
+  // Module names, so bounded the same way a module name is. An id that names no
+  // installed channel is harmless - nothing matches it - and is kept rather than
+  // dropped, so switching a module off and back on again does not silently
+  // un-hide its channel.
+  hiddenChannelModules: z.array(z.string().trim().min(1).max(100)).max(50).optional(),
 })
 
 export async function PATCH(request: NextRequest) {

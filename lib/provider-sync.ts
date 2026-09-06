@@ -7,6 +7,7 @@ import { queueMessageWebhooks } from './webhooks'
 import {
   claimLocalOutbound,
   insertProviderMessage,
+  listInboxes,
   providerThreadState,
   providerWatermarks,
   recordEvent,
@@ -108,6 +109,33 @@ function messageDirection(message: ConversationMessage): 'in' | 'out' | 'note' {
   return message.direction === 'out' || message.direction === 'note' ? message.direction : 'in'
 }
 
+/** What on the site a conversation came from, when its channel says. Trimmed
+ *  and capped, because it is drawn on one line beside the subject and it is
+ *  another module's string. */
+const SOURCE_LABEL_CHARS = 80
+
+function sourceLabelOf(summary: ConversationSummary): string | null {
+  const label = typeof summary.sourceLabel === 'string' ? summary.sourceLabel.trim() : ''
+  if (!label) return null
+  return label.length > SOURCE_LABEL_CHARS ? `${label.slice(0, SOURCE_LABEL_CHARS - 1)}…` : label
+}
+
+/**
+ * Which of our inboxes a conversation was addressed at, if any.
+ *
+ * The id comes back through core's message-destination seam, which is to say
+ * from a page somebody edited weeks ago, and it is only OURS if it is still one
+ * of this site's inboxes: another module may publish destinations of its own,
+ * an inbox gets deleted, a backup gets restored. Anything we do not recognise
+ * is treated as "addressed at nothing", which lands the conversation on its
+ * channel exactly as it did before any of this existed.
+ */
+function addressedInbox(summary: ConversationSummary, ourInboxIds: Set<string>): string | null {
+  const wanted = typeof summary.destinationId === 'string' ? summary.destinationId.trim() : ''
+  if (!wanted) return null
+  return ourInboxIds.has(wanted) ? wanted : null
+}
+
 /**
  * Copy across what one provider has, up to its share of the budget.
  *
@@ -142,6 +170,13 @@ export async function syncProvider(
   const summaries = (page?.items ?? []).filter(usableSummary)
   let opened = 0
 
+  // One read for the whole pass, and only when a channel has actually addressed
+  // something: on every site that has never pointed a form at an inbox this
+  // costs nothing at all.
+  const ourInboxIds = summaries.some((summary) => summary.destinationId)
+    ? new Set((await listInboxes()).map((inbox) => inbox.id))
+    : new Set<string>()
+
   for (const summary of summaries) {
     if (outOfTime() || opened >= PROVIDER_THREAD_LIMIT) break
 
@@ -161,6 +196,8 @@ export async function syncProvider(
       lastMessageAt,
       lastDirection: 'in',
       unread: summary.unread === true,
+      inboxId: addressedInbox(summary, ourInboxIds),
+      sourceLabel: sourceLabelOf(summary),
     })
     outcome.conversations += 1
 

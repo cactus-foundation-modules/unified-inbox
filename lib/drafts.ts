@@ -1,5 +1,7 @@
 import { inboxHref } from './list'
-import type { Draft, DraftAttachment, DraftBodyFormat, DraftSendState } from './types'
+import type {
+  Draft, DraftAttachment, DraftBodyFormat, DraftProduct, DraftSendState,
+} from './types'
 
 // ---------------------------------------------------------------------------
 // Drafts: the pure half.
@@ -35,13 +37,17 @@ export function isWorthSaving(draft: {
   subject?: string | null
   body?: string
   attachments?: unknown[]
+  products?: unknown[]
 }): boolean {
   if ((draft.body ?? '').trim()) return true
   if ((draft.subject ?? '').trim()) return true
   if ((draft.to ?? []).length > 0) return true
   if ((draft.cc ?? []).length > 0) return true
   if ((draft.bcc ?? []).length > 0) return true
-  return (draft.attachments ?? []).length > 0
+  if ((draft.attachments ?? []).length > 0) return true
+  // A message that is nothing but two chairs off the catalogue is still
+  // somebody's work: they went and found them.
+  return (draft.products ?? []).length > 0
 }
 
 /** Who a draft is addressed to, in the one line the list has room for. A
@@ -158,6 +164,10 @@ export type DraftForComposer = {
    *  back in or turn its line breaks into markup first. */
   bodyFormat: DraftBodyFormat
   attachments: DraftAttachment[]
+  /** The catalogue items on it, as references. The composer holds what each one
+   *  is called and what it costs separately, fetched fresh - the draft only
+   *  remembers WHICH. */
+  products: DraftProduct[]
   /** When it goes out on its own, as an ISO stamp. A Date in props arrives at a
    *  client component as an empty object, so it makes the trip as a string. */
   sendAt: string | null
@@ -184,6 +194,7 @@ export function forComposer(draft: Draft): DraftForComposer {
     body: draft.body,
     bodyFormat: draft.bodyFormat,
     attachments: draft.attachments,
+    products: draft.products,
     sendAt: draft.sendAt ? draft.sendAt.toISOString() : null,
     sendState: draft.sendState,
     sendError: draft.sendError,
@@ -195,48 +206,38 @@ export function forComposer(draft: Draft): DraftForComposer {
 // ---------------------------------------------------------------------------
 // Who may see a draft, and who may change one.
 //
-// These used to be the same question and are not any more. A draft filed on one
-// of the site's addresses is now READ by whoever can read that address, exactly
-// as every other message on that address already was - somebody covering for a
-// colleague who is off can see what was half-written to the supplier rather than
-// being told the conversation has nothing pending. A draft with no address on it
-// is answering a conversation another module owns, and there is no guest list to
-// grant sight through, so it stays with the person who wrote it.
+// One question, one answer: a draft belongs to whoever wrote it. Reading it,
+// opening it, changing it, discarding it and sending it are all "is this
+// yours", and sharing the address it is filed on grants none of them.
 //
-// WRITING now follows the same address. Editing, discarding and sending a draft
-// filed on an inbox belong to whoever may SEND from that inbox - a narrower list
-// than the one that may read it. The reply leaves as the address, not as the
-// person who typed it, so the name at the bottom is the inbox's either way; and
-// a draft nobody but its author can finish is a draft that dies with them, which
-// is exactly what happens when the person who wrote it is an agent, or on leave.
-// A draft with no address on it still stays with its author: there is no guest
-// list to grant sending through.
+// A shared inbox shares what has been sent and what has arrived. Half-written
+// text is neither. Somebody typing a price they have not checked yet, or an
+// apology they have not decided to make, gets the privacy those words get in
+// every other mail program - which is what migrations/013_drafts.sql set out to
+// build, and what this is back to after a spell of letting colleagues read and
+// finish each other's.
+//
+// The SQL twin is `draftScope` in lib/db.ts, which is the one that actually
+// keeps anybody out - if you change one, change the other, and the tests below
+// are what will tell you that you did not.
 // ---------------------------------------------------------------------------
 
-/** Whether this person may READ this draft. Mirrors the SQL in `draftScope`
- *  (lib/db.ts) - if you change one, change the other, and the tests below are
- *  what will tell you that you did not. */
+/** Whether this person may READ this draft. */
 export function canReadDraft(
-  draft: { authorUserId: string; inboxId: string | null },
+  draft: { authorUserId: string },
   userId: string,
-  visibleInboxIds: string[],
 ): boolean {
-  if (draft.inboxId) return visibleInboxIds.includes(draft.inboxId)
   return draft.authorUserId === userId
 }
 
-/** Whether this person may change, discard or send this draft. The SQL twin is
- *  `editScope` (lib/db.ts) - if you change one, change the other, and the tests
- *  below are what will tell you that you did not.
- *
- *  Note which list this takes: the inboxes this person may SEND from, not the
- *  wider list they may read. Seeing what was half-written to the supplier and
- *  being able to post it are different rights, and only the second one is here. */
+/** Whether this person may change, discard or send this draft. The same
+ *  question as reading it: a draft nobody else may see is a draft nobody else
+ *  may finish. Kept as its own name because the two are separate ideas that
+ *  happen to have one answer, and the screens read better saying which they
+ *  mean. */
 export function canEditDraft(
-  draft: { authorUserId: string; inboxId: string | null },
+  draft: { authorUserId: string },
   userId: string,
-  replyableInboxIds: string[],
 ): boolean {
-  if (draft.authorUserId === userId) return true
-  return draft.inboxId ? replyableInboxIds.includes(draft.inboxId) : false
+  return draft.authorUserId === userId
 }

@@ -60,12 +60,16 @@ type Props = {
   /** Whether this message has any remote pictures parked in it at all. No
    *  button is offered when there is nothing to show. */
   hasRemoteImages: boolean
+  /** Whether it came from us - anything we sent, a colleague, or one of our own
+   *  domains. The warning is about what a stranger learns from a tracking pixel,
+   *  and there is no stranger here, so our own pictures are simply shown. */
+  ownSender: boolean
 }
 
-export function MessageBody({ messageId, hasRemoteImages }: Props) {
+export function MessageBody({ messageId, hasRemoteImages, ownSender }: Props) {
   const frame = useRef<HTMLIFrameElement | null>(null)
   const [height, setHeight] = useState(OPENING_HEIGHT)
-  const [showImages, setShowImages] = useState(false)
+  const [showImages, setShowImages] = useState(ownSender)
   // Whether the record of what has already been shown has been consulted yet.
   // It is read after mount and never during render: the server has no
   // localStorage, so deciding the frame's address from it on the first render
@@ -123,9 +127,9 @@ export function MessageBody({ messageId, hasRemoteImages }: Props) {
   // been shown says nothing about the next.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- must read localStorage after mount or the client's first render diverges from the server's HTML
-    setShowImages(hasShownImages(messageId))
+    setShowImages(ownSender || hasShownImages(messageId))
     setRestored(true)
-  }, [messageId])
+  }, [messageId, ownSender])
 
   const src = `/api/m/unified-inbox/messages/${encodeURIComponent(messageId)}/body${showImages ? '?images=1' : ''}`
 

@@ -33,29 +33,27 @@ import type { CampaignCategory, CampaignInbox } from './CampaignsPanel'
 // ready and there is nothing unsaved, because a button that refuses when you
 // press it is worse than a button that is not there yet.
 //
-// Watching it go is the one thing that is NOT on this page. It is a table of
-// five thousand rows with its own filters and its own paging, and it answers a
-// different question - "why did that one not get it" - so it lives behind
-// Progress at the top.
+// Watching it go is on this page too, at the foot of it. It was behind a
+// Progress button, which put the wording and what became of it on two screens
+// with a toggle between them - so "did that go?" and "why did that one not get
+// it?" could not be asked without losing sight of what had actually been sent.
+// It only appears once there is somebody on the list: an empty table of five
+// thousand rows is not a thing to show anybody writing their first draft.
 // ---------------------------------------------------------------------------
 
 type Props = {
   campaignId: string
   inboxes: CampaignInbox[]
   categories: CampaignCategory[]
-  /** 'edit' or 'progress'. Anything else is treated as 'edit', which keeps
-   *  links to the old who/what/when steps working. */
-  view: string
   tickUrl: string | null
-  onView: (view: string) => void
   /** Told whenever the campaign might have started or stopped, so the list
-   *  behind this screen - and the ticker that rides on it - keeps up. */
+   *  beside this screen - and the ticker that rides on it - keeps up. */
   onStatusChanged: () => void
   onClose: () => void
 }
 
 export function CampaignEditor({
-  campaignId, inboxes, categories, view, tickUrl, onView, onStatusChanged, onClose,
+  campaignId, inboxes, categories, tickUrl, onStatusChanged, onClose,
 }: Props) {
   const [detail, setDetail] = useState<CampaignDetail | null>(null)
   const [error, setError] = useState('')
@@ -80,9 +78,7 @@ export function CampaignEditor({
       detail={detail}
       inboxes={inboxes}
       categories={categories}
-      progress={view === 'progress'}
       tickUrl={tickUrl}
-      onView={onView}
       onStatusChanged={onStatusChanged}
       onClose={onClose}
       onReload={load}
@@ -91,14 +87,12 @@ export function CampaignEditor({
 }
 
 function Campaign({
-  detail, inboxes, categories, progress, tickUrl, onView, onStatusChanged, onClose, onReload,
+  detail, inboxes, categories, tickUrl, onStatusChanged, onClose, onReload,
 }: {
   detail: CampaignDetail
   inboxes: CampaignInbox[]
   categories: CampaignCategory[]
-  progress: boolean
   tickUrl: string | null
-  onView: (view: string) => void
   onStatusChanged: () => void
   onClose: () => void
   onReload: () => Promise<void>
@@ -193,11 +187,10 @@ function Campaign({
       setNotice(result.data.firstGoesAt
         ? `Away it goes. The first one leaves ${when(result.data.firstGoesAt, timezone)}.`
         : 'Away it goes.')
-      onView('progress')
     }
     await onReload()
     onStatusChanged()
-  }, [campaign.id, onReload, onStatusChanged, onView, timezone])
+  }, [campaign.id, onReload, onStatusChanged, timezone])
 
   /**
    * Start it, saving first if anything is unsaved.
@@ -239,10 +232,9 @@ function Campaign({
       `Back to a draft, with ${result.data.summary.included.toLocaleString('en-GB')} on the list. `
       + 'Nothing has gone out - press Start sending when you are ready.',
     )
-    onView('edit')
     await onReload()
     onStatusChanged()
-  }, [campaign.id, onReload, onStatusChanged, onView])
+  }, [campaign.id, onReload, onStatusChanged])
 
   const sendTest = useCallback(async (to: string): Promise<string | null> => {
     if (!await save()) return 'Nothing was sent, because the campaign could not be saved.'
@@ -273,15 +265,11 @@ function Campaign({
             {detail.finishesAbout && <span>Finishes about {when(detail.finishesAbout, timezone)}</span>}
           </div>
         </div>
-        <div className="uin-camp-actions">
+        {/* One way out, and it only does anything on a phone - where the list
+            column and this pane are the same strip of screen. On anything
+            wider the list is already beside this. */}
+        <div className="uin-camp-actions uin-camp-close">
           <button type="button" className="btn btn-secondary btn-sm" onClick={onClose}>All campaigns</button>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => onView(progress ? 'edit' : 'progress')}
-          >
-            {progress ? 'Back to the wording' : 'Progress'}
-          </button>
         </div>
       </div>
 
@@ -361,83 +349,83 @@ function Campaign({
         </div>
       )}
 
-      {progress
-        ? (
-          <>
-            <CampaignWatch campaignId={campaign.id} detail={detail} onReload={onReload} />
-            {campaign.status !== 'draft' && campaign.status !== 'stopped' && (
-              <div className="uin-camp-section">
-                <h3>
-                  Anybody who has joined since
-                  <small>Nobody already on it is touched, unsubscribes included</small>
-                </h3>
-                <div className="uin-camp-actions">
-                  <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void topUp()}>
-                    Top up the list
-                  </button>
-                  {campaign.status === 'done' && (
-                    <span className="uin-camp-hint">
-                      This one has finished. Adding anybody sets it going again.
-                    </span>
-                  )}
-                </div>
-              </div>
+      <WhoSection
+        draft={draft}
+        detail={detail}
+        inboxes={inboxes}
+        categories={categories}
+        editable={audienceEditable}
+        preview={preview}
+        staleCount={audienceMoved(saved, draft)}
+        onChange={change}
+      />
+
+      <WhatSection
+        draft={draft}
+        detail={detail}
+        firstLocked={firstLocked}
+        onChange={change}
+        onTest={sendTest}
+      />
+
+      <WhenSection draft={draft} detail={detail} tickUrl={tickUrl} onChange={change} />
+
+      {(readiness.problems.length > 0 || readiness.warnings.length > 0) && !settled && (
+        <section className="uin-camp-section" data-tone={ready ? 'warning' : 'problem'}>
+          <h3>
+            Before it can go
+            <small>
+              {readiness.problems.length > 0
+                ? `${readiness.problems.length} to sort out`
+                : 'Nothing stopping it - read these first'}
+            </small>
+          </h3>
+          <ul className="uin-camp-checks">
+            {readiness.problems.map((problem) => (
+              <li key={problem} data-level="problem"><span aria-hidden="true">&times;</span><span>{problem}</span></li>
+            ))}
+            {readiness.warnings.map((warning) => (
+              <li key={warning} data-level="warning"><span aria-hidden="true">!</span><span>{warning}</span></li>
+            ))}
+          </ul>
+          {dirty && (
+            <span className="uin-camp-hint">
+              This list was worked out from the last save, so it does not know about what you have just typed.
+            </span>
+          )}
+        </section>
+      )}
+
+      {/* What became of it, under what was written - not behind a button beside
+          it. Held back until there is a list to look at, because a table of
+          nobody under a half-written draft is a screen asking to be scrolled
+          past. */}
+      {tally.total > 0 && (
+        <CampaignWatch campaignId={campaign.id} detail={detail} onReload={onReload} />
+      )}
+
+      {campaign.status !== 'draft' && campaign.status !== 'stopped' && (
+        <div className="uin-camp-section">
+          <h3>
+            Anybody who has joined since
+            <small>Nobody already on it is touched, unsubscribes included</small>
+          </h3>
+          <div className="uin-camp-actions">
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void topUp()}>
+              Top up the list
+            </button>
+            {campaign.status === 'done' && (
+              <span className="uin-camp-hint">
+                This one has finished. Adding anybody sets it going again.
+              </span>
             )}
-          </>
-        )
-        : (
-          <>
-            <WhoSection
-              draft={draft}
-              detail={detail}
-              inboxes={inboxes}
-              categories={categories}
-              editable={audienceEditable}
-              preview={preview}
-              staleCount={audienceMoved(saved, draft)}
-              onChange={change}
-            />
+          </div>
+        </div>
+      )}
 
-            <WhatSection
-              draft={draft}
-              detail={detail}
-              firstLocked={firstLocked}
-              onChange={change}
-              onTest={sendTest}
-            />
-
-            <WhenSection draft={draft} detail={detail} tickUrl={tickUrl} onChange={change} />
-
-            {(readiness.problems.length > 0 || readiness.warnings.length > 0) && !settled && (
-              <section className="uin-camp-section" data-tone={ready ? 'warning' : 'problem'}>
-                <h3>
-                  Before it can go
-                  <small>
-                    {readiness.problems.length > 0
-                      ? `${readiness.problems.length} to sort out`
-                      : 'Nothing stopping it - read these first'}
-                  </small>
-                </h3>
-                <ul className="uin-camp-checks">
-                  {readiness.problems.map((problem) => (
-                    <li key={problem} data-level="problem"><span aria-hidden="true">&times;</span><span>{problem}</span></li>
-                  ))}
-                  {readiness.warnings.map((warning) => (
-                    <li key={warning} data-level="warning"><span aria-hidden="true">!</span><span>{warning}</span></li>
-                  ))}
-                </ul>
-                {dirty && (
-                  <span className="uin-camp-hint">
-                    This list was worked out from the last save, so it does not know about what you have just typed.
-                  </span>
-                )}
-              </section>
-            )}
-          </>
-        )}
-
-      {/* The one bar. Same place, every status, whichever half of the screen is
-          showing - so "where do I save this" is never a question. */}
+      {/* The one bar. Same place on every status, pinned to the foot of the
+          pane - so "where do I save this" is never a question, however far down
+          the progress table somebody has scrolled. */}
       <div className="uin-camp-bar-actions">
         <span className="uin-camp-hint">
           {settled
@@ -472,11 +460,9 @@ function Campaign({
               them - there was simply no button, so a form that looked editable
               silently was not. Who it goes to and the first message stay locked
               by the sections themselves. */}
-          {!progress && (
-            <button type="button" className="btn btn-primary btn-sm" disabled={busy || !dirty} onClick={() => void save()}>
-              {busy ? 'Saving…' : 'Save'}
-            </button>
-          )}
+          <button type="button" className="btn btn-primary btn-sm" disabled={busy || !dirty} onClick={() => void save()}>
+            {busy ? 'Saving…' : 'Save'}
+          </button>
           {ready && (campaign.status === 'draft' || campaign.status === 'paused') && (
             <button
               type="button"

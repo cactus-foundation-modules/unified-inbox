@@ -353,10 +353,17 @@ export type ThreadShape = {
   absorbedInboxIds?: string[]
 }
 
-/** Pure half, so the distinction above is a test rather than a memory. */
+/** Pure half, so the distinction above is a test rather than a memory.
+ *
+ *  An address beats a channel, and the order matters. A channel can now say
+ *  where its conversations belong - the person who built the page pointed that
+ *  form's enquiries at sales@ - and once one has, it is post that arrived at
+ *  sales@ and the guest list on sales@ is the honest answer to who may read it.
+ *  A channel that addressed nothing still decides for itself, which is every
+ *  chat, every call and every form nobody has pointed anywhere. */
 export function threadAccessKind(thread: ThreadShape): 'filed' | 'channel' | 'unfiled' {
-  if (thread.providerModule) return 'channel'
   if (effectiveInboxIds(thread).length > 0) return 'filed'
+  if (thread.providerModule) return 'channel'
   return 'unfiled'
 }
 

@@ -86,23 +86,30 @@ const CSS = `
    page itself, so no pane can be painted over another.
 
    THE HEIGHT IS THE SCREEN MINUS THE PADDING CORE PUTS ROUND IT, NOT THE SCREEN.
-   Core's admin content column is padded --space-8 (32px) top and bottom, so a
-   frame a whole screen tall makes the page 64px taller than the window and the
+   A frame a whole screen tall makes the page taller than the window and the
    whole admin scrolls by an inch - enough to bounce the mail program under a
    trackpad flick, not enough to reveal anything, which is the worst of both.
    Take the padding off the height and the document is exactly one screen: the
    frame rests where it is drawn, nothing scrolls, and the sticky below only
    comes into play on a site where core has put a tab strip above us.
+
+   AND IT IS --space-4, NOT --space-8. An ordinary admin page is padded
+   --space-8 (32px), and this rule was written against that number - but core
+   recognises the inbox as its own kind of screen and pads it
+   --space-4 --space-3 instead (.admin-content--tight in globals.css: a mail
+   reader fills what it is given, so half the air, top and sides). Subtracting
+   32px twice from a column only inset 16px left a 32px band of empty ground
+   below the frame that nothing could be dragged into and nothing explained.
    The sticky offset matches the same padding for the same reason - stuck at a
    different inset to where it rests would make the frame jump on the first
-   scroll. Below 900px core is on --space-4 instead, but so is this rule: it
-   never applies there. */
+   scroll. Below 769px core drops to --space-2, but so does this rule: it never
+   applies there. */
 @media (min-width: 900px) {
   .uin-app {
     position: sticky;
-    top: var(--space-8, 2rem);
-    height: calc(100vh - var(--space-8, 2rem) * 2);
-    height: calc(100svh - var(--space-8, 2rem) * 2);
+    top: var(--space-4, 1rem);
+    height: calc(100vh - var(--space-4, 1rem) * 2);
+    height: calc(100svh - var(--space-4, 1rem) * 2);
     min-height: 30rem;
     grid-template-areas: "rail rail" "list read" "list ctx";
     grid-template-columns: minmax(17rem, 26rem) minmax(0, 1.7fr);
@@ -218,10 +225,10 @@ const CSS = `
   .uin-resize-line { transition: none; }
 }
 
-/* The campaigns screen, which is not a list beside a conversation and has a
-   save bar of its own pinned to the bottom of it. It keeps the rail and drops
-   everything else: a fixed-height scroller round a long form is a second
-   scrollbar inside the page's own. */
+/* The rail and one full-width notice, and nothing else. All that is left on
+   this variant is the "you cannot send campaigns" screen: campaigns themselves
+   are a list beside a pane now, in the ordinary frame above, so they have the
+   same three columns and the same draggable edges the post has. */
 .uin-app-wide {
   position: static;
   height: auto;
@@ -229,12 +236,8 @@ const CSS = `
   grid-template-areas: "rail" "read";
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
-  /* Nothing in here may be a scroll container. The campaign form's save bar is
-     stuck to the bottom of the page, and a sticky thing sticks to the nearest
-     scroller - put one round it and the bar sits at the bottom of the form
-     instead, which is exactly where it would be if it were not stuck at all.
-     Clip on one axis with visible on the other is the one combination that
-     trims bleed without making a scroller. */
+  /* Clip on one axis with visible on the other is the one combination that
+     trims bleed without making a scroller round content that has none. */
   overflow-x: clip;
   overflow-y: visible;
 }
@@ -243,8 +246,8 @@ const CSS = `
   .uin-app-wide {
     grid-template-areas: "rail read";
     /* The same rail width the inbox has, so it does not change size on the way
-       between the two screens. There is no handle on this one to change it
-       with; ColumnResizer is mounted here only to apply what was stored. */
+       between screens. There is no handle on this one to change it with;
+       ColumnResizer is mounted here only to apply what was stored. */
     grid-template-columns: var(--uin-rail) minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
   }
@@ -289,7 +292,9 @@ const CSS = `
   gap: 0.6rem;
   min-width: 0;
   min-height: 0;
-  padding: 0.625rem;
+  /* No padding at the bottom: the box stuck down there supplies its own, and a
+     gap under it is a strip the list scrolls through in plain sight. */
+  padding: 0.625rem 0.625rem 0;
   overflow-y: auto;
 }
 @media (min-width: 1200px) {
@@ -319,11 +324,18 @@ const CSS = `
   }
   .uin-rail-list { flex-direction: row; gap: 0.15rem; }
   .uin-rail-foot {
+    /* Lying down there is nothing to stick to: the strip scrolls sideways and
+       the box is simply the last thing along it. */
+    position: static;
+    flex-direction: row;
+    align-items: center;
     margin: 0;
     padding: 0 0 0 0.4rem;
     border-top: 0;
     border-left: 1px solid var(--color-border);
   }
+  .uin-rail-updated { flex: none; }
+  .uin-rail-foot .uin-rail-notice { max-width: 18rem; }
   .uin-rail-item { padding-block: 0.3rem; }
   .uin-rail-notice { padding: 0 0.5rem 0.45rem; }
   /* Lying down there is no room for a tree, so a colleague's folders run along
@@ -608,15 +620,35 @@ const CSS = `
    and muted does not clear AA on the raised ground it lands on when hovered. */
 .uin-compose-menu-hint { font-size: 0.6875rem; color: var(--color-text-secondary); }
 
-/* ---- fetching new mail, at the foot of the rail ------------------------- */
+/* ---- fetching new mail, in a box stuck to the foot of the rail ---------- */
+/* Stuck rather than sitting at the end of the list. "When did this last look
+   for anything" is asked while somebody is reading the list, and an answer
+   parked below forty conversations is one they have to go and find. Its own
+   ground, so the list passes behind it rather than through it. */
 .uin-rail-foot {
+  position: sticky;
+  bottom: 0;
   margin-top: auto;
-  padding-top: 0.5rem;
+  padding: 0.5rem 0 0.625rem;
   border-top: 1px solid var(--color-border);
+  background: var(--color-bg);
   display: flex;
-  align-items: center;
-  gap: 0.4rem;
+  flex-direction: column;
+  gap: 0.35rem;
   flex: none;
+  z-index: 1;
+}
+.uin-rail-foot-row { display: flex; align-items: center; gap: 0.4rem; }
+/* Muted and small: when the post last arrived is a fact about the screen, and
+   the button beside it is the thing to do about it. */
+.uin-rail-updated {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .uin-refresh {
   flex: none;
@@ -643,11 +675,24 @@ const CSS = `
 @media (prefers-reduced-motion: reduce) {
   .uin-refresh[data-busy="1"] svg { animation: none; }
 }
-/* Whatever the check came back with. Inside the rail on a narrow window it
-   would be a paragraph in a strip of links, so it is only ever drawn under the
-   rail where the rail is a column. */
+/* Whatever the check came back with, and whatever a refused rearrangement had
+   to say. The first sits inside the stuck box below the rail's own padding, the
+   second under the rail entirely - hence the padding here and none in there. */
 .uin-rail-notice { flex: none; font-size: 0.75rem; padding: 0 0.625rem 0.625rem; }
+.uin-rail-foot .uin-rail-notice { padding: 0; }
 .uin-rail-notice .alert { margin: 0; padding: 0.4rem 0.5rem; font-size: 0.75rem; }
+/* Three seconds of being read, then out. One animation that holds the line at
+   full and only fades over its last half second, rather than a second piece of
+   state in the component saying when to start: the box is taken away at the end
+   of the fade, and holding at nothing until then stops it flashing back for the
+   frame in between. */
+.uin-rail-notice[data-fade="1"] { animation: uin-notice-out 3.45s ease-out forwards; }
+@keyframes uin-notice-out { 0%, 87% { opacity: 1; } 100% { opacity: 0; } }
+/* Something appearing and going away again on its own is already movement; the
+   fade on the end of it is the part somebody can be made ill by, so it goes. */
+@media (prefers-reduced-motion: reduce) {
+  .uin-rail-notice[data-fade="1"] { animation: none; }
+}
 
 /* ---- somebody else's draft, open for reading --------------------------- */
 /* Label beside value rather than above it: there are three of them at most and
@@ -755,7 +800,19 @@ const CSS = `
   font-weight: 650;
 }
 .uin-tab[aria-current="true"]:hover { background: var(--color-surface-raised); }
-.uin-tab-count { font-size: 0.6875rem; font-weight: 600; color: var(--color-text-muted); }
+/* The count is smaller than the word beside it, so its own line box is
+   shorter, and where it sat inside that box was left to the inherited
+   leading. Given its own one-line box and centred on the row, the digits
+   sit level with the middle of the label instead of floating in leading. */
+.uin-tab-count {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  line-height: 1;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
 .uin-tab[aria-current="true"] .uin-tab-count { color: var(--color-text-secondary); }
 /* How much is in the list altogether, at the far end. It is an answer to the
    row rather than one more thing to press, so it is the quietest thing in it. */
@@ -897,62 +954,6 @@ const CSS = `
 }
 .uin-bulk-count { font-size: 0.75rem; font-weight: 600; }
 
-/* What a merged conversation is made of, under the controls in its header.
-   Deliberately quiet: it is a note about how the conversation came to be, not
-   a thing that has just happened, and it sits on every merged conversation for
-   ever. Tokens throughout - this is chrome, and chrome that hard-codes a colour
-   is chrome that is wrong in one of the two themes. */
-.uin-merged-from {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  margin-top: 0.5rem;
-  padding: 0.45rem 0.6rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm, 0.35rem);
-  background: var(--color-bg);
-  font-size: 0.75rem;
-  color: var(--color-text-muted);
-}
-.uin-merged-from-title { font-weight: 600; color: var(--color-text); }
-.uin-merged-from-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.uin-merged-from-list li {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  align-items: center;
-}
-/* Takes what room there is and gives it back when the row has to wrap, so a
-   long subject never pushes the way out off the end of the line. */
-.uin-merged-from-what {
-  flex: 1 1 8rem;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text);
-}
-.uin-merged-from-when { color: var(--color-text-muted); }
-.uin-bulk-all { padding: 0.35rem 0.65rem; }
-/* The how-to beside the select-all box. Quieter than the words it follows, and
-   left to wrap onto a line of its own where the column is too narrow to hold
-   both - the bar wraps already, and a hint cut off mid-word helps nobody. */
-.uin-bulk-hint { font-size: 0.75rem; color: var(--color-text-muted); }
-.uin-pick-all {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.75rem;
-  color: var(--color-text-muted);
-  cursor: pointer;
-}
 /* The row that picks a time of your own choosing, under the three ready-made
    ones. Kept on its own line: a date box is not a chip and lining it up with
    them makes both look wrong. */
@@ -1312,12 +1313,19 @@ const CSS = `
   .uin-thread-actions { flex: 1 1 100%; margin-left: 0; }
 }
 /* Two lines of it, then an ellipsis. The three controls and the way out share
-   this line now, so a subject that used to run the width of the pane gives up
+   this line, so a subject that used to run the width of the pane gives up
    whatever they need - but a supplier's "Sales Order 0000966554 - PO-00012" is
    two lines rather than one truncated at "Sales Order 00009...", which is a
-   subject you cannot tell from the next one. */
+   subject you cannot tell from the next one. Longer than two lines and it ends
+   in an ellipsis with the whole of it in the little yellow box.
+
+   'flex-basis: 0' rather than 'auto', and that one word is the whole of why the
+   controls used to end up on a line BELOW the subject: with 'auto' the subject
+   asks for as much width as its words want, which on a long one is more than
+   the row has, and the row obliges by wrapping everything else off the end of
+   it. From zero it takes what is left instead. */
 .uin-thread-subject {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   margin: 0;
   font-size: 1rem;
@@ -1447,7 +1455,7 @@ const CSS = `
   padding-top: 0.4rem;
   border-top: 1px solid var(--color-border);
 }
-.uin-attached {
+.uin-ctxbar {
   display: flex;
   align-items: center;
   gap: 0.25rem;
@@ -1455,7 +1463,7 @@ const CSS = `
 }
 /* Secondary rather than muted: these are the site's own record numbers, which
    is real information, and muted measures under AA in dark mode. */
-.uin-attached-line {
+.uin-ctxbar-line {
   flex: 1 1 auto;
   min-width: 0;
   white-space: nowrap;
@@ -1464,7 +1472,26 @@ const CSS = `
   font-size: 0.75rem;
   color: var(--color-text-secondary);
 }
-.uin-attached-more {
+/* The record names on that line ARE the links. Underlined rather than coloured:
+   at this size, on a strip that sits over the messages, a row of accent-coloured
+   names reads as a warning rather than as somewhere to go - and an underline is
+   the one link cue that survives being told apart from the plain text beside it
+   without colour doing the work. */
+.uin-ctxbar-line a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--color-border-strong);
+}
+.uin-ctxbar-line a:hover,
+.uin-ctxbar-line a:focus-visible {
+  color: var(--color-text);
+  text-decoration-color: currentColor;
+}
+/* Where the conversation came from is not a link and must not look like one:
+   nobody put it there and there is nothing to open. */
+.uin-ctxbar-source { text-decoration: none; }
+.uin-ctxbar-more {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -1478,19 +1505,19 @@ const CSS = `
   color: var(--color-text-secondary);
   cursor: pointer;
 }
-.uin-attached-more:hover {
+.uin-ctxbar-more:hover {
   background: var(--color-surface-raised);
   border-color: var(--color-border);
   color: var(--color-text);
 }
-.uin-attached-more svg { width: 14px; height: 14px; }
-.uin-attached-more[aria-expanded="true"] svg { transform: rotate(180deg); }
+.uin-ctxbar-more svg { width: 14px; height: 14px; }
+.uin-ctxbar-more[aria-expanded="true"] svg { transform: rotate(180deg); }
 /* Fixed, and drawn at the very top of the stack, for the same reason as the
    compose menu: the header it hangs off is pinned inside a pane that scrolls
    its own contents, so a menu positioned inside that pane is a menu clipped by
-   it. Its width is repeated in MENU_WIDTH in AttachedRecords.tsx - keep the two
+   it. Its width is repeated in MENU_WIDTH in ContextRecords.tsx - keep the two
    in step or the menu stops lining up with the arrow it opened from. */
-.uin-attached-menu {
+.uin-ctxbar-menu {
   position: fixed;
   z-index: 10000;
   width: 300px;
@@ -1698,6 +1725,14 @@ const CSS = `
   font-size: 0.75rem;
   color: var(--color-text-muted);
 }
+/* One line of the log can be acted on: a merge that can still be taken apart
+   again. The button sits on the end of the sentence that records it rather than
+   in a panel of its own up in the header, which is where it used to live and
+   where it sat on every merged conversation for ever, saying the same thing.
+   The line wraps rather than pushing the button off the end. */
+.uin-log li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; }
+.uin-log-undo { font-size: 0.6875rem; }
+.uin-log-error { color: var(--color-destructive-hover); }
 
 /* ---- composer ----------------------------------------------------------- */
 /* The box you write a reply in, under the conversation it answers. One outline
@@ -1727,14 +1762,28 @@ const CSS = `
   color: var(--color-text);
 }
 .uin-composer textarea:focus { outline: none; box-shadow: none; }
-/* Which of the three is being written. A row of small chips at the very top,
-   above the words, because it changes who the message is addressed to. */
-.uin-composer-modes {
-  display: flex; flex-wrap: wrap; gap: 0.3rem;
-  padding: 0.5rem 0.625rem;
+/* What is being written, and the two ways out of it: the name of the thing on
+   the left, the window-of-its-own and the cross hard against the right. It was
+   a row of four chips that SWITCHED between reply, reply to all, forward and
+   note - a second place to make a choice already made on the message being
+   answered. The choice went back to the message; the label stayed, because a
+   box that does not say whether it is a forward is a box that sends one. */
+.uin-composer-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem 0.35rem 0.625rem;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface-raised);
 }
+.uin-composer-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.uin-composer-head-tools { flex: none; display: inline-flex; align-items: center; gap: 0.15rem; }
 /* Everything you can do to the message, on one strip along the bottom - the
    place every mail program has kept it. */
 .uin-composer-row {
@@ -1744,6 +1793,9 @@ const CSS = `
   background: var(--color-surface-raised);
 }
 .uin-composer-row:first-child { border-top: 0; }
+/* The strip on a short form, where the answer to it is the button on the right
+   and the way out sits beside it - the order every dialog on this site keeps. */
+.uin-composer-row--end { justify-content: flex-end; }
 
 /* ---- dragging a file onto a message ------------------------------------- */
 /* The target is whatever box the composer hangs this on, so it only has to
@@ -1862,10 +1914,12 @@ const CSS = `
   padding-inline: 0;
   background: none;
 }
-.uin-modal .uin-composer-modes {
+.uin-modal .uin-composer-head {
   padding-inline: 0;
   background: none;
 }
+/* The two crosses on a popped-out reply: put it back, and close it. */
+.uin-modal-head-tools { display: inline-flex; align-items: center; gap: 0.15rem; }
 .uin-modal .uin-composer textarea { padding-inline: 0; }
 /* A new message gets a definite height so the box you write in can take up
    whatever the four lines above it do not, rather than sitting at a polite
@@ -2045,6 +2099,34 @@ const CSS = `
    row, or a Cc line appearing underneath would shove it sideways. */
 .uin-recipient-field { position: relative; flex: 1 1 auto; min-width: 0; display: flex; }
 .uin-recipient-field input { flex: 1 1 auto; min-width: 0; }
+
+/* The To line on a discussion: the colleagues already on it as tokens, and a
+   box on the end of them to find the next one. It wraps rather than scrolls -
+   six names on a line you have to drag sideways is six names you cannot check -
+   and it is the corner the menu below is measured from. */
+.uin-people {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0;
+}
+/* The box never shrinks below something you can read a name in, so a full line
+   of tokens pushes it onto the next one instead of squeezing it to a slot. */
+.uin-people > input { flex: 1 1 8rem; min-width: 8rem; }
+/* The cross is a button here rather than a decoration, so it needs the chrome
+   taking off it - a chip with a grey pill inside it reads as two things. */
+.uin-person-chip .uin-chip-clear-x {
+  border: 0;
+  background: none;
+  padding: 0 0 0 0.1rem;
+  color: inherit;
+  cursor: pointer;
+}
+.uin-person-chip .uin-chip-clear-x:hover { color: var(--color-text); }
 .uin-suggestions {
   position: absolute;
   z-index: 3;
@@ -2253,7 +2335,7 @@ const CSS = `
    shared blocks: the two are the same weight, so whichever is written last is
    the one that counts, and this one has to be able to answer back. */
 .uin-ctx-add-stacked { grid-template-columns: minmax(0, 1fr); }
-/* The collapsed "attach something" chip is a button, not a field: in a grid
+/* The collapsed "add context" chip is a button, not a field: in a grid
    card it would otherwise stretch the full width and read as an input box. */
 .uin-ctx-block > .uin-chip { justify-self: start; }
 .uin-ctx-add input, .uin-ctx-add select, .uin-ctx-add textarea { min-width: 0; width: 100%; }
@@ -2302,6 +2384,43 @@ const CSS = `
 }
 .uin-ctx-picker button:disabled { cursor: default; opacity: 0.6; }
 .uin-ctx-picker .uin-ctx-main { font-weight: 600; }
+
+/* ---- the catalogue picker ----------------------------------------------
+   The record picker above, with a photograph in front of each row and the
+   variations of a listing folded in under it. Every colour is a token: this is
+   admin chrome, and the only place in this module allowed real colours is the
+   markup that leaves in an email.
+
+   The picker is taller than the record one on purpose. A listing opened up puts
+   its variations inside the same scrolling box, and a box that held five rows
+   would show a listing and two of its eight colours. */
+.uin-product-picker { max-height: 22rem; }
+.uin-product-row { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+.uin-product-words { display: grid; gap: 0.15rem; min-width: 0; }
+/* Fixed at both ends so a picture that has not arrived, or one that never will,
+   leaves the names in a straight line rather than ragged. */
+.uin-product-thumb {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 0.375rem;
+  border: 1px solid var(--color-border);
+  object-fit: cover;
+  background: var(--color-bg-subtle);
+}
+.uin-product-thumb-empty { display: block; }
+/* "Choose one of eight", under the listing it belongs to and indented past the
+   photograph so it reads as part of that row rather than as the next one. */
+.uin-product-open { margin: 0 0 0.35rem 3rem; }
+.uin-product-variations {
+  list-style: none;
+  margin: 0 0 0.35rem 3rem;
+  padding: 0;
+  display: grid;
+  gap: 0.1rem;
+  border-left: 2px solid var(--color-border);
+}
+.uin-product-variations button { padding-left: 0.6rem; }
 /* ---- a contact's card ---------------------------------------------------
    The form behind New contact, Edit their details and the importer. It reuses
    the composer's field rows (.uin-fields above) so an address book line and a
@@ -2413,18 +2532,40 @@ const CSS = `
 .uin-timeline-row .uin-ctx-sub { grid-area: sub; }
 
 /* ---- campaigns ---------------------------------------------------------- */
-/* The same email to a great many people, slowly. The screen is a list of
-   campaigns, and one campaign is ONE FORM down one column - who, what, when -
-   with one save bar pinned to the bottom of it.
+/* The same email to a great many people, slowly. The screen is the mail
+   program's own shape: every campaign down the list column, the one that is
+   open in the pane beside it as ONE FORM - who, what, when, then what became
+   of it - with one save bar pinned to the foot of the pane.
    Sections are ruled off rather than boxed. They used to be four outlined cards
    inside an outlined pane, each holding outlined blocks holding outlined
    fields, which is the whole of what made this screen feel like paperwork. */
+
+/* The pane a campaign, or the do-not-email list, is read in. It is the reading
+   pane of the frame, so it brings its own scroll: the head pins to the top of
+   it and the save bar to the bottom, and the form runs between them. Both are
+   pulled out to the pane's edges by the padding they cancel, because a pinned
+   band with a stripe of ground either side of it is a band things scroll behind
+   rather than under. */
+.uin-read.uin-camp-pane { display: block; padding: 0.875rem; }
+
 .uin-camp-head {
   display: flex; flex-wrap: wrap; gap: 0.75rem;
   align-items: flex-start; justify-content: space-between;
-  padding-bottom: 0.75rem;
-  margin-bottom: 0.75rem;
+  padding: 0.75rem 0.875rem;
+  margin: -0.875rem -0.875rem 0.875rem;
   border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+/* Pinned only where the pane scrolls its own contents. Below that the whole
+   page scrolls and a pinned band would take a third of a phone's screen. */
+@media (min-width: 900px) {
+  .uin-camp-head { position: sticky; top: 0; z-index: 3; }
+}
+/* The way back to the list, which on anything wider than a phone is already on
+   screen beside this - so the button is there for the one width where it is
+   the only way out. */
+@media (min-width: 900px) {
+  .uin-camp-close { display: none; }
 }
 .uin-camp-head-main { display: grid; gap: 0.3rem; min-width: 0; flex: 1 1 16rem; }
 /* The name, typed where it is read. Borderless until it is hovered or focused,
@@ -2453,24 +2594,50 @@ const CSS = `
 .uin-camp-name-input::placeholder { color: var(--color-text-muted); font-weight: 400; }
 .uin-camp-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
 
-.uin-camp-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
-.uin-camp-card {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md, 0.5rem);
+/* Naming a new one happens in the head of the list, because that is what it
+   adds a row to. */
+.uin-camp-new { display: grid; gap: 0.4rem; }
+
+/* One campaign in the list. A row, like every other list in this module: the
+   whole of it is the target, the open one is tinted and has the same bar down
+   its left edge a chosen conversation has. What it is doing is a stripe rather
+   than a sentence - a column this narrow has no room for a sentence, and a
+   stripe is read faster anyway. */
+.uin-camp-item {
+  flex: 1 1 auto; min-width: 0;
+  display: grid; gap: 0.35rem;
+  padding: 0.6rem 0.75rem;
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  border-radius: 0;
   background: var(--color-surface);
-  padding: 0.75rem 0.875rem;
-  display: grid; gap: 0.5rem;
+  font: inherit;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
 }
-.uin-camp-card:hover { border-color: var(--color-border-strong); }
-.uin-camp-card[data-state="running"] { border-left: 3px solid var(--color-success); }
-.uin-camp-card[data-state="paused"] { border-left: 3px solid var(--color-warning); }
-.uin-camp-card[data-state="draft"] { border-left: 3px solid var(--color-border-strong, var(--color-border)); }
-.uin-camp-card-top { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; justify-content: space-between; }
-.uin-camp-name {
-  font-weight: 650; font-size: 0.9375rem; color: var(--color-text);
-  background: none; border: 0; padding: 0; cursor: pointer; text-align: left;
+.uin-list-item:last-child > .uin-camp-item { border-bottom: 0; }
+.uin-camp-item:hover { background: var(--color-surface-raised); }
+.uin-camp-item[aria-current="true"] {
+  background: var(--color-primary-subtle);
+  box-shadow: inset 2px 0 0 0 var(--color-primary);
 }
-.uin-camp-name:hover { text-decoration: underline; }
+.uin-camp-item-top { display: flex; gap: 0.5rem; align-items: baseline; justify-content: space-between; min-width: 0; }
+.uin-camp-item-name {
+  font-weight: 650; font-size: 0.8125rem; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* What has happened to it so far, under the bar. Muted grey clears AA on the
+   plain surface but not on the two tinted ones, so it steps up a tier there -
+   the same rule the conversation rows follow. */
+.uin-camp-item-meta {
+  display: flex; flex-wrap: wrap; gap: 0.15rem 0.6rem;
+  font-size: 0.6875rem; line-height: 1.35; color: var(--color-text-muted);
+}
+.uin-camp-item-meta b { color: var(--color-text); font-weight: 650; }
+.uin-camp-item:hover .uin-camp-item-meta,
+.uin-camp-item[aria-current="true"] .uin-camp-item-meta { color: var(--color-text-secondary); }
+.uin-camp-item-from { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .uin-camp-meta {
   color: var(--color-text-muted); font-size: 0.75rem;
   display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
@@ -2499,11 +2666,6 @@ const CSS = `
 .uin-camp-bar span[data-kind="replied"] { background: var(--color-success); }
 .uin-camp-bar span[data-kind="bad"] { background: var(--color-danger); }
 .uin-camp-bar span[data-kind="off"] { background: var(--color-warning); }
-.uin-camp-legend {
-  display: flex; flex-wrap: wrap; gap: 0.6rem;
-  font-size: 0.75rem; color: var(--color-text-muted);
-}
-.uin-camp-legend b { color: var(--color-text); font-weight: 650; }
 
 /* One section of the form: a heading and a hairline, not a card. */
 .uin-camp-section {
@@ -2512,7 +2674,11 @@ const CSS = `
   margin-bottom: 1rem;
   border-bottom: 1px solid var(--color-border);
 }
+/* The last one on the page has nothing under it worth ruling off from - and
+   the one that ends where the save bar begins is ruled off by the bar's own
+   top edge, so a second hairline a rem above it is just a stripe. */
 .uin-camp-section:last-of-type { border-bottom: 0; }
+.uin-camp-section:has(+ .uin-camp-bar-actions) { padding-bottom: 0; border-bottom: 0; }
 /* The two that are not part of the form - a warning to read, a question to
    answer - keep an outline, because they are not a section of anything. */
 .uin-camp-section[data-tone] {
@@ -2587,17 +2753,20 @@ const CSS = `
 .uin-camp-why > summary:hover { color: var(--color-text); }
 .uin-camp-why[open] > summary { margin-bottom: 0.15rem; }
 
-/* THE ONE SAVE BAR. Pinned to the bottom of the panel, same place on every
-   status and on both halves of the screen, because "where do I save this" is
-   the question this whole screen was rebuilt to stop anybody asking. */
+/* THE ONE SAVE BAR. Pinned to the foot of the pane, same place on every status
+   and however far down the page somebody has scrolled, because "where do I save
+   this" is the question this whole screen was rebuilt to stop anybody asking.
+   Pulled out to the pane's edges the same way the head is: a bar with a stripe
+   of ground either side of it is a bar the form scrolls past rather than
+   under. */
 .uin-camp-bar-actions {
   position: sticky; bottom: 0; z-index: 2;
   display: flex; flex-wrap: wrap; gap: 0.75rem;
   align-items: center; justify-content: space-between;
   padding: 0.625rem 0.875rem;
-  margin-top: 1rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md, 0.5rem);
+  margin: 1rem -0.875rem -0.875rem;
+  border: 0;
+  border-top: 1px solid var(--color-border);
   background: var(--color-surface);
   box-shadow: var(--shadow-lg);
 }
@@ -3143,47 +3312,40 @@ const CSS = `
 .uin-asked .uin-ask-actions { display: flex; flex: none; align-items: center; gap: 0.3rem; }
 
 /* ---- tagging a colleague from the note bar ------------------------------ */
-/* The names sit under the line rather than in a panel over it: they are wanted
-   at the same time as the sentence rather than instead of it, and a menu that
-   covers the note being written is a menu you close to check what you said. */
-.uin-notebar-tag { flex: none; position: relative; }
-.uin-notebar-tag-count {
-  position: absolute;
-  top: -0.25rem;
-  right: -0.25rem;
-  min-width: 1rem;
-  padding: 0 0.2rem;
-  border-radius: 0.5rem;
-  background: var(--color-primary);
-  color: var(--color-surface);
-  font-size: 0.625rem;
-  line-height: 1rem;
-  text-align: center;
-}
-.uin-notebar-tags {
+/* Typing @ opens the names under the line rather than in a panel over it: they
+   are wanted at the same time as the sentence rather than instead of it, and a
+   menu that covers the note being written is a menu you close to check what you
+   said. It replaces a button and a wall of chips - two presses and a hunt to do
+   the commonest thing a note is for. */
+.uin-notebar-names {
   flex: 1 1 100%;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.35rem;
-  padding-top: 0.15rem;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0.15rem 0 0;
+  list-style: none;
 }
-.uin-notebar-find {
-  flex: 0 1 11rem;
-  min-width: 0;
-  height: 1.75rem;
-  padding: 0 0.5rem;
+.uin-notebar-name {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.6rem;
+  padding: 0.15rem 0.5rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius, 0.375rem);
   background: var(--color-surface);
   color: var(--color-text);
   font-family: inherit;
   font-size: 0.75rem;
+  cursor: pointer;
 }
-.uin-notebar-find:focus {
-  outline: none;
-  border-color: var(--color-border-focus);
-  box-shadow: 0 0 0 3px var(--color-primary-glow);
+/* Whichever one Return would take. The keyboard and the pointer agree about it,
+   because the pointer moving over a name moves the keyboard's place too. */
+.uin-notebar-name[data-on="1"],
+.uin-notebar-name:hover {
+  background: var(--color-primary-subtle);
+  border-color: var(--color-primary-border);
 }
 /* The surprising half, said out loud: a tag hands somebody a job AND lets them
    into this one conversation, which is not what a mention means anywhere else. */
@@ -3207,17 +3369,17 @@ const CSS = `
 .uin-modal .uin-composer > .uin-fields { padding-inline: 0; background: none; }
 .uin-composer-aside { margin: 0; padding: 0.5rem 0.625rem; }
 .uin-modal .uin-composer-aside { padding-inline: 0; }
-/* Cc, Bcc, Subject and the way out to a window of its own, at the right-hand
-   end of the To line. None of them takes a line of its own until it is asked
-   for, which is the point: a reply that wants none of them - nearly every
-   reply - never sees them. */
+/* Cc, Bcc and Subject, at the right-hand end of the To line. None of them takes
+   a line of its own until it is asked for, which is the point: a reply that
+   wants none of them - nearly every reply - never sees them. The way out to a
+   window of its own used to be here too and is up in the head strip now, beside
+   the cross. */
 .uin-field-links {
   flex: none;
   display: flex;
   align-items: center;
   gap: 0.15rem;
 }
-.uin-field-pop { width: 1.6rem; height: 1.6rem; }
 
 /* ---- the strip along the bottom ----------------------------------------- */
 /* Two icons on the left for what you do TO the message, the ways it can leave
@@ -3225,6 +3387,25 @@ const CSS = `
    row of six buttons. */
 .uin-composer-actions { gap: 0.35rem; }
 .uin-composer-gap { flex: 1 1 auto; min-width: 0.5rem; }
+/* The ways the message leaves, kept together and kept right.
+
+   Two rules, and the second one is the interesting half. The group is pushed to
+   the end of the strip and wraps as a unit, so on a narrow column both buttons
+   drop to a second line still hard against the right rather than drifting left
+   under the icons. And INSIDE the group the wrap runs backwards
+   (wrap-reverse): when there is room for one button but not two, the one that
+   goes on the upper line is Send now - the button somebody actually came to
+   press - with Send & snooze underneath it, rather than the other way round,
+   which is what an ordinary wrap would have given. */
+.uin-send-group {
+  flex: 0 1 auto;
+  display: flex;
+  flex-wrap: wrap-reverse;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+}
 /* A time picked off the alarm clock and not yet committed, on the line above
    the buttons that commit it. */
 .uin-pending-send { border-top: 0; padding-top: 0; }
@@ -3251,29 +3432,27 @@ const CSS = `
    lands in. The strip sits above the words rather than below them, which is
    where every mail program has kept it. */
 .uin-richtext { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+/* The six buttons sit ON the strip along the bottom now, beside the paperclip,
+   rather than in a band of their own above the words - so they are a group
+   inside that row rather than a row of their own: no padding, no rule under
+   them, and no ground of their own. */
 .uin-richtext-bar {
-  display: flex;
+  display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.35rem 0.625rem;
-  border-bottom: 1px solid var(--color-border);
+  gap: 0.15rem;
 }
-.uin-modal .uin-richtext-bar { padding-inline: 0; }
 .uin-rt-btn { width: 1.7rem; height: 1.7rem; font-size: 0.8125rem; line-height: 1; }
 /* The colours are content, not chrome: they are read in somebody else's inbox,
-   where this site's tokens mean nothing. The frame round them is chrome, and is
-   tokens as usual. */
+   where this site's tokens mean nothing. They come out from behind the palette
+   when it is pressed and go away again the moment one is picked, so there is no
+   frame to draw round them - a box round seven dots on a strip of buttons reads
+   as a different kind of control, which they are not. */
 .uin-rt-ink {
   display: inline-flex;
   align-items: center;
   gap: 0.2rem;
-  padding: 0.1rem 0.3rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius, 0.375rem);
-  color: var(--color-text-muted);
 }
-.uin-rt-ink-icon { display: inline-flex; }
 .uin-rt-swatch {
   width: 0.95rem;
   height: 0.95rem;
@@ -3288,15 +3467,16 @@ const CSS = `
    browser dialog: a prompt() box cannot say what went wrong, and "that does not
    look like an address" is the whole of what somebody needs told. */
 .uin-rt-link {
+  /* The whole width of the strip, on a line of its own under the buttons: an
+     address box is wider than every control beside it, and squeezed onto the
+     end of the row it would take the send buttons off the screen. */
+  flex: 1 1 100%;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.4rem 0.625rem;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface-raised);
+  padding: 0.35rem 0 0;
 }
-.uin-modal .uin-rt-link { padding-inline: 0; background: none; }
 .uin-rt-link input {
   flex: 1 1 12rem;
   min-width: 0;

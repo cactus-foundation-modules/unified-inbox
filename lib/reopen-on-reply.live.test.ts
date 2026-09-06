@@ -247,6 +247,26 @@ describe.runIf(shouldRun)('a reply puts a conversation back in Open, against a r
     expect(await listed('done')).not.toContain(done)
   })
 
+  it('reads back where a conversation stands, which is what a scheduled send asks', async () => {
+    // threadSleep is the other side of the same coin, and the reason it exists:
+    // a message set to go out on Monday, on a conversation somebody has put to
+    // sleep until Thursday, has to find that sleep before it posts and put it
+    // back afterwards. Its statement is raw SQL like reopenOnReply's, and raw
+    // SQL is a string to every other gate this repository has.
+    const sleeping = await threadIn('snoozed', THURSDAY)
+    expect(await lib.threadSleep(sleeping)).toEqual({ status: 'snoozed', snoozeUntil: THURSDAY })
+
+    const open = await threadIn('open')
+    expect(await lib.threadSleep(open)).toEqual({ status: 'open', snoozeUntil: null })
+
+    const finished = await threadIn('done')
+    expect(await lib.threadSleep(finished)).toMatchObject({ status: 'done' })
+
+    // A conversation the retention sweep has been through. The caller treats
+    // this as "nothing to put back" rather than as an error.
+    expect(await lib.threadSleep('00000000-0000-0000-0000-000000000000')).toBeNull()
+  })
+
   it('counts a reopened conversation on the badge again, which done ones are not', async () => {
     // unreadCounts skips done conversations on purpose. That is precisely why a
     // reply to a finished one had to reopen it rather than merely mark it

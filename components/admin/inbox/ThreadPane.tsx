@@ -2,6 +2,7 @@ import Link from 'next/link'
 import type { ReactNode } from 'react'
 import type { AttachmentRow, ThreadDetail, ThreadEventRow, ThreadMessageRow } from '@/modules/unified-inbox/lib/db'
 import type { DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
+import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 import { avatarHref, channelLabel, formatFull, formatWhen, inboxHref, initialsFor, splitQuotedText } from '@/modules/unified-inbox/lib/list'
 import { draftHref } from '@/modules/unified-inbox/lib/drafts'
 import { describeSendAt } from '@/modules/unified-inbox/lib/scheduled'
@@ -17,7 +18,7 @@ import { ComposerOpenProvider, ComposerSlot } from './ComposerOpen'
 import { MessageMenu } from './MessageMenu'
 import { NoteBar } from './NoteBar'
 import { ThreadContext, type ThreadContextView } from './ThreadContext'
-import { MergedFrom, type MergedFromView } from './MergedFrom'
+import { UnmergeButton, type ThreadMergeView } from './Unmerge'
 import { AddressLine } from './AddressLine'
 import { ScrollToMessage } from './ScrollToMessage'
 import { MentionActions } from './MentionActions'
@@ -35,6 +36,10 @@ import { MentionActions } from './MentionActions'
 
 export type ThreadMessageView = ThreadMessageRow & {
   attachments: AttachmentRow[]
+  /** Whether this came from us rather than from a stranger - anything we sent,
+   *  and anything sent by a colleague or from one of our own domains. Its only
+   *  job is the pictures: ours are shown without asking. */
+  ownSender: boolean
 }
 
 type Props = {
@@ -65,6 +70,10 @@ type Props = {
   /** What this reader left half-written under this conversation, if anything.
    *  Nobody else's, ever - a shared inbox is not a shared notepad. */
   draft: DraftForComposer | null
+  /** Whether this person may put anything out of the catalogue on a message. */
+  canAddProducts: boolean
+  /** What the draft was carrying out of it, already looked up on the server. */
+  draftProducts: ProductChoice[]
   /** Newest message at the top, with the writing box above the messages to
    *  match. A site setting, not a per-reader one. */
   newestFirst: boolean
@@ -97,8 +106,11 @@ type Props = {
   asked: AskedView | null
   /** Conversations merged into this one that could still be separated out
    *  again. Empty on everything that has never been merged, which is nearly
-   *  everything. */
-  merges: MergedFromView[]
+   *  everything - and empty as well for anybody who would not be allowed to
+   *  take one apart, since the server only asks when they would. Read by the
+   *  log at the foot of the conversation, which is where the merge is recorded
+   *  and now where it can be undone. */
+  merges: ThreadMergeView[]
   /** The site's other addresses this conversation also belongs to, by name.
    *  Only a merge across two addresses puts anything here - it is what makes
    *  the conversation visible in both of their tabs, so the header says so
@@ -383,7 +395,11 @@ function Message({ message, personId, showAvatars, staffById, now, timezone, can
       )}
       <div className="uin-msg-body">
         {message.hasHtml ? (
-          <MessageBody messageId={message.id} hasRemoteImages={message.remoteImages > 0} />
+          <MessageBody
+            messageId={message.id}
+            hasRemoteImages={message.remoteImages > 0}
+            ownSender={message.ownSender}
+          />
         ) : (
           <MessageText text={message.bodyText ?? '(this message had nothing in it)'} />
         )}
@@ -525,9 +541,24 @@ function unattendedEvent(event: ThreadEventRow, staffById: Record<string, string
     : 'A reply arrived, so it stopped being snoozed'
 }
 
+
+/** The merges one log entry recorded that could still be taken apart.
+ *
+ *  The entry carries the ids it made; `merges` is what the server says is still
+ *  undoable and that this reader is allowed to undo. The intersection is what
+ *  gets a button - so a merge already separated out, or one on a conversation
+ *  this reader may read but not manage, quietly has none. */
+function undoableFromEvent(event: ThreadEventRow, merges: ThreadMergeView[]): ThreadMergeView[] {
+  if (event.kind !== 'merged' || merges.length === 0) return []
+  const made = event.detail?.mergeIds
+  if (!Array.isArray(made)) return []
+  return merges.filter((merge) => made.includes(merge.id))
+}
+
 export function ThreadPane({
   base, params, thread, inboxName, messages, events, staff, taggable, staffById,
-  canReply, cannotReplyReason, replyTo, replyAllTo, replySubject, forwardSubject, draft, newestFirst,
+  canReply, cannotReplyReason, replyTo, replyAllTo, replySubject, forwardSubject, draft,
+  canAddProducts, draftProducts, newestFirst,
   canDeleteMessages, blockState, now, timezone, heldDrafts, showAvatars,
   context, asked, merges, otherInboxNames, scrollToMessageId,
 }: Props) {
@@ -563,7 +594,11 @@ export function ThreadPane({
             the far edge, and shutting a conversation is how the list comes back
             whole - which there was previously no way at all to do. */}
         <div className="uin-thread-top">
-          <h2 className="uin-thread-subject">{thread.subject || '(no subject)'}</h2>
+          {/* Two lines, then an ellipsis - so the whole of it goes in the
+              title, where a subject cut short can still be read. */}
+          <h2 className="uin-thread-subject" title={thread.subject || '(no subject)'}>
+            {thread.subject || '(no subject)'}
+          </h2>
           {/* What can be done TO the conversation, on the subject's own line and
               hard against the way out of it. Answering is not up here: the arrow
               lives on the message being answered, which is the one thing this
@@ -607,10 +642,6 @@ export function ThreadPane({
         {!canReply && cannotReplyReason && (
           <p className="uin-thread-cannot">{cannotReplyReason}</p>
         )}
-        {/* What this conversation is made of, when it is made of more than one.
-            Under the controls rather than above the messages: it is a fact
-            about the conversation, not a thing that has just happened. */}
-        <MergedFrom merges={merges} />
         {/* Beside what is done TO the conversation, because that is what this
             is: it changes what happens next, not what is in the thread. */}
         {blockState && (
@@ -697,6 +728,11 @@ export function ThreadPane({
             replySubject={replySubject}
             forwardSubject={forwardSubject}
             draft={draft}
+            /* Never on a conversation another module owns: a chat window and a
+               text message carry words, and a table of chairs would leave here
+               as nothing at all. */
+            canAddProducts={canAddProducts && !thread.providerModule}
+            draftProducts={draftProducts}
             timezone={timezone}
           />
         )}
@@ -746,6 +782,11 @@ export function ThreadPane({
             replySubject={replySubject}
             forwardSubject={forwardSubject}
             draft={draft}
+            /* Never on a conversation another module owns: a chat window and a
+               text message carry words, and a table of chairs would leave here
+               as nothing at all. */
+            canAddProducts={canAddProducts && !thread.providerModule}
+            draftProducts={draftProducts}
             timezone={timezone}
           />
         )}
@@ -756,14 +797,23 @@ export function ThreadPane({
             <ul className="uin-log">
               {events.map((event) => (
                 <li key={event.id}>
-                  {unattendedEvent(event, staffById) ?? (
-                    <>
-                      {(event.userId && staffById[event.userId]) || 'Somebody'}{' '}
-                      {eventWords(event, staffById)}
-                    </>
-                  )}
-                  {' - '}
-                  {formatFull(event.createdAt, timezone)}
+                  <span>
+                    {unattendedEvent(event, staffById) ?? (
+                      <>
+                        {(event.userId && staffById[event.userId]) || 'Somebody'}{' '}
+                        {eventWords(event, staffById)}
+                      </>
+                    )}
+                    {' - '}
+                    {formatFull(event.createdAt, timezone)}
+                  </span>
+                  {/* The one line in the log that can be acted on. A merge that
+                      has already been taken apart, or one this reader could not
+                      undo anyway, is a line with nothing on the end of it - the
+                      list of undoable merges is empty in both cases. */}
+                  {undoableFromEvent(event, merges).map((merge) => (
+                    <UnmergeButton key={merge.id} merge={merge} />
+                  ))}
                 </li>
               ))}
             </ul>

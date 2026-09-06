@@ -18,6 +18,7 @@ import type {
   DraftAttachment,
   DraftBodyFormat,
   DraftMode,
+  DraftProduct,
   DraftSendState,
   IdentityKind,
   Inbox,
@@ -630,6 +631,7 @@ const DEFAULT_SETTINGS: UnifiedInboxSettings = {
   campaignCooldownDays: 7,
   campaignLogMonths: 24,
   campaignFooterAddress: null,
+  hiddenChannelModules: [],
 }
 
 export async function getSettings(): Promise<UnifiedInboxSettings> {
@@ -689,6 +691,10 @@ export async function getSettings(): Promise<UnifiedInboxSettings> {
       ? 24
       : Number(r.campaign_log_months),
     campaignFooterAddress: (r.campaign_footer_address as string | null) ?? null,
+    // Nothing hidden for a row written before the column existed, which is
+    // the same answer a fresh install gets: an update that quietly hid a
+    // channel would look exactly like one that lost the messages.
+    hiddenChannelModules: (r.hidden_channel_modules as string[] | null) ?? [],
   }
 }
 
@@ -716,6 +722,7 @@ export async function updateSettings(data: Partial<UnifiedInboxSettings>): Promi
   if (data.campaignCooldownDays !== undefined) sets.push(Prisma.sql`"campaign_cooldown_days" = ${data.campaignCooldownDays}`)
   if (data.campaignLogMonths !== undefined) sets.push(Prisma.sql`"campaign_log_months" = ${data.campaignLogMonths}`)
   if (data.campaignFooterAddress !== undefined) sets.push(Prisma.sql`"campaign_footer_address" = ${data.campaignFooterAddress}`)
+  if (data.hiddenChannelModules !== undefined) sets.push(Prisma.sql`"hidden_channel_modules" = ${data.hiddenChannelModules}`)
   if (sets.length === 0) return getSettings()
 
   await prisma.$executeRaw`
@@ -2137,7 +2144,12 @@ function visibilityClause(
     parts.push(Prisma.sql`(t."inbox_id" IS NULL AND t."provider_module" IS NULL)`)
   }
   if (providerModules.length > 0) {
-    parts.push(Prisma.sql`t."provider_module" IN (${Prisma.join(providerModules)})`)
+    // A channel's own conversations, and only the ones it addressed at nothing.
+    // An enquiry a form addressed at sales@ is ordinary filed post from the
+    // moment it lands: it is reached through the inbox clause above, by the
+    // people that inbox is open to, and counted there once rather than in two
+    // places at once.
+    parts.push(Prisma.sql`(t."provider_module" IN (${Prisma.join(providerModules)}) AND t."inbox_id" IS NULL)`)
   }
   // Nothing visible at all. The caller returns an empty page rather than
   // running a query whose WHERE clause would be empty and therefore true.
@@ -2155,7 +2167,9 @@ function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
   if (f.unroutedOnly) {
     where.push(Prisma.sql`t."inbox_id" IS NULL AND t."provider_module" IS NULL`)
   } else if (f.providerModule) {
-    where.push(Prisma.sql`t."provider_module" = ${f.providerModule}`)
+    // Same rule as the visibility clause: the channel's entry lists what was
+    // addressed at no inbox. What a form sent to sales@ is in sales@.
+    where.push(Prisma.sql`t."provider_module" = ${f.providerModule} AND t."inbox_id" IS NULL`)
   } else if (f.inboxId) {
     // The merged conversation shows in EVERY address's tab, which is what
     // merging across two of them was asked for.
@@ -2409,7 +2423,7 @@ export async function unreadCounts(
     ? Prisma.sql`AND (ti."inbox_id" IS NULL OR ti."inbox_id" IN (${Prisma.join(inboxIds)}))`
     : Prisma.empty
   const rows = await prisma.$queryRaw<{ key: string | null; count: bigint }[]>`
-    SELECT COALESCE('m:' || t."provider_module", ti."inbox_id", t."inbox_id") AS "key",
+    SELECT COALESCE(ti."inbox_id", t."inbox_id", 'm:' || t."provider_module") AS "key",
            COUNT(*)::bigint AS "count"
       FROM "uin_threads" t
       LEFT JOIN "uin_thread_inboxes" ti ON ti."thread_id" = t."id"
@@ -2418,7 +2432,7 @@ export async function unreadCounts(
        AND t."unread" = true
        AND t."status" <> 'done'
        ${restrict}
-     GROUP BY COALESCE('m:' || t."provider_module", ti."inbox_id", t."inbox_id")
+     GROUP BY COALESCE(ti."inbox_id", t."inbox_id", 'm:' || t."provider_module")
   `
   const out: Record<string, number> = {}
   for (const r of rows) out[r.key ?? ''] = Number(r.count)
@@ -2467,6 +2481,10 @@ export type ThreadDetail = {
   channel: string
   providerModule: string | null
   externalId: string | null
+  /** What on the site this came from, in the owning channel's own words -
+   *  which form, which widget. Null on everything that has nothing to add to
+   *  the name of the channel itself, which is most conversations. */
+  sourceLabel: string | null
   subject: string | null
   subjectNormalised: string | null
   status: string
@@ -2494,6 +2512,7 @@ export async function getThreadDetail(id: string): Promise<ThreadDetail | null> 
     channel: r.channel as string,
     providerModule: (r.provider_module as string | null) ?? null,
     externalId: (r.external_id as string | null) ?? null,
+    sourceLabel: (r.source_label as string | null) ?? null,
     subject: (r.subject as string | null) ?? null,
     subjectNormalised: (r.subject_normalised as string | null) ?? null,
     status: r.status as string,
@@ -2762,6 +2781,25 @@ export async function setThreadStatus(
            "updated_at" = now()
      WHERE "id" = ${threadId}
   `
+}
+
+/** Where a conversation stands and, when it is asleep, what time it is due
+ *  back. Its own small read rather than a field on getThread: the one caller is
+ *  the scheduled sender, which reads it either side of posting a message so
+ *  that a message going out does not quietly wake a conversation somebody put
+ *  to sleep until Thursday. */
+export async function threadSleep(
+  threadId: string,
+): Promise<{ status: string; snoozeUntil: Date | null } | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "status", "snooze_until" FROM "uin_threads" WHERE "id" = ${threadId}
+  `
+  const r = rows[0]
+  if (!r) return null
+  return {
+    status: r.status as string,
+    snoozeUntil: (r.snooze_until as Date | null) ?? null,
+  }
 }
 
 /** Conversations whose snooze has elapsed, opened again. Cheap enough to run
@@ -3116,32 +3154,46 @@ export async function wakeDueMentions(): Promise<number> {
 // ---------------------------------------------------------------------------
 // Drafts.
 //
-// READING one now follows the address it is filed on, exactly as every other
-// message on that address does: if you can read accounts@, you can read what is
-// half-written to accounts@. That is a deliberate reversal of the original rule
-// (author-only, see the header of migrations/013_drafts.sql, which describes
-// how this used to work and is left as written because an applied migration is
-// never edited). A shared inbox is shared, and a colleague who is off sick
-// should not take the supplier's half-answered question with them.
+// A draft belongs to whoever wrote it, and to nobody else. Reading one, opening
+// one, changing one, discarding one and sending one are all the same single
+// question: is this yours. Sharing the address it is filed on grants none of
+// them - a shared inbox shares what has been SENT and what has ARRIVED, and
+// half-written text is not either of those. Somebody typing a price they have
+// not checked, or an apology they have not decided to make, is entitled to the
+// same privacy the same words get in every mail program written since the
+// nineties, and that is what migrations/013_drafts.sql set out to build.
 //
-// A draft with no address on it answers a conversation another module owns.
-// There is no guest list to grant sight through, so it stays with its author.
+// This restores that. It was briefly widened so that a draft filed on an
+// address could be read by everyone who could read the address, and finished by
+// everyone who could send from it; the cost of the favour turned out to be that
+// nothing anybody typed in a shared inbox was private, which is not a trade a
+// colleague was ever asked to make.
 //
-// WRITING follows the same address, but through the narrower list: editing,
-// discarding and sending belong to whoever may SEND from the inbox the draft is
-// filed on, not to everybody who may read it. saveDraft, deleteDraft and the
-// send route all AND that into their WHERE clause, so a draft on an address this
-// person cannot send as is never touched. Authorship is not rewritten when
-// somebody else finishes one - the row keeps the name of whoever started it, and
-// the reply leaves as the inbox regardless. The pure statement of both halves,
-// with the tests, is canReadDraft/canEditDraft in lib/drafts.ts - change one and
-// change the other.
+// The price is the case that widening it was for: a draft whose author is on
+// leave cannot be finished by anybody else, and one whose author is an agent
+// waits for that agent. That is the same price every other mail program pays,
+// and the way out of it is to send the message rather than to read somebody's
+// unfinished sentence.
 //
-// The visible-inbox list goes into the SQL for the same reason it does
-// everywhere else in this file (E17): the rule is ANDed into the query rather
-// than applied to the rows afterwards, so a draft on an address this reader
-// cannot open is never fetched and never counted on the tabs.
+// The pure statement of the rule, with the tests, is canReadDraft/canEditDraft
+// in lib/drafts.ts - change one and change the other.
+//
+// Authorship goes into the SQL for the same reason every other visibility rule
+// in this file does (E17): it is ANDed into the query rather than applied to
+// the rows afterwards, so a colleague's draft is never fetched and never
+// counted on the tabs.
 // ---------------------------------------------------------------------------
+
+/** Whether a row out of the drafts table's `products` column is a reference we
+ *  can actually go and look up. Nothing here trusts the column: it is jsonb,
+ *  and the only thing jsonb guarantees is that it parsed. */
+function isDraftProduct(value: unknown): value is DraftProduct {
+  if (!value || typeof value !== 'object') return false
+  const row = value as Record<string, unknown>
+  return typeof row.moduleName === 'string' && row.moduleName.length > 0
+    && (row.kind === 'product' || row.kind === 'variation')
+    && typeof row.id === 'string' && row.id.length > 0
+}
 
 function mapDraft(r: Record<string, unknown>): Draft {
   const mode = r.mode as DraftMode
@@ -3163,6 +3215,14 @@ function mapDraft(r: Record<string, unknown>): Draft {
     // jsonb comes back parsed, and can be any shape at all if somebody has been
     // at the table by hand. Anything that is not a list of files is no files.
     attachments: Array.isArray(r.attachments) ? (r.attachments as DraftAttachment[]) : [],
+    // Same bargain as the attachments above, and the same reason: jsonb comes
+    // back parsed and can be any shape at all if somebody has been at the table
+    // by hand. Anything that is not a list of references is no products, and a
+    // reference missing any of its three parts is dropped rather than carried
+    // to a query that would then ask for undefined.
+    products: Array.isArray(r.products)
+      ? (r.products as unknown[]).filter(isDraftProduct)
+      : [],
     sendAt: (r.send_at as Date | null) ?? null,
     // A state the column check could not have allowed is a row somebody has
     // been at by hand. Read as an ordinary draft, which is the state that does
@@ -3181,36 +3241,31 @@ function mapDraft(r: Record<string, unknown>): Draft {
   }
 }
 
-/** Anybody's draft on an address this person can read, or this person's own on
- *  a conversation another module owns (which has no address to read through).
- *  The SQL twin of canReadDraft in lib/drafts.ts.
+/** This person's own drafts, and only those. The SQL twin of canReadDraft in
+ *  lib/drafts.ts, and - since reading and changing are now the same question -
+ *  of canEditDraft as well.
  *
- *  `includeUnfiled` is off for a Drafts folder looked at inside ONE address:
- *  the reader's own half-written chat replies belong to nowhere in particular,
- *  and a colleague's Drafts folder with the reader's own writing in it is a
- *  list that says the wrong thing about whose it is. */
-function draftScope(userId: string, inboxIds: string[], includeUnfiled = true): Prisma.Sql {
-  const filed = Prisma.sql`d."inbox_id" = ANY(${inboxIds}::text[])`
-  if (!includeUnfiled) return Prisma.sql`(${filed})`
-  return Prisma.sql`(${filed}
-      OR (d."inbox_id" IS NULL AND d."author_user_id" = ${userId}))`
-}
-
-/** Whose draft this person may CHANGE: their own, or one filed on an address
- *  they may send from. The SQL twin of canEditDraft in lib/drafts.ts. */
-function editScope(userId: string, replyableInboxIds: string[]): Prisma.Sql {
-  return Prisma.sql`("author_user_id" = ${userId}
-      OR ("inbox_id" IS NOT NULL AND "inbox_id" = ANY(${replyableInboxIds}::text[])))`
+ *  `inboxIds` narrows it further to the addresses named, for the Drafts folder
+ *  looked at inside ONE address. Null means every one of this person's, which
+ *  is what the Drafts folder on its own shows - including the ones with no
+ *  address at all, left on a conversation another module owns.
+ *
+ *  Every query that uses this aliases the table `d`, the UPDATE and the DELETE
+ *  included, so there is one spelling of the rule rather than two that have to
+ *  be kept level with each other. */
+function draftScope(userId: string, inboxIds: string[] | null = null): Prisma.Sql {
+  const author = Prisma.sql`d."author_user_id" = ${userId}`
+  if (inboxIds === null) return Prisma.sql`(${author})`
+  return Prisma.sql`(${author} AND d."inbox_id" = ANY(${inboxIds}::text[]))`
 }
 
 export async function listDrafts(
   userId: string,
-  inboxIds: string[],
-  includeUnfiled = true,
+  inboxIds: string[] | null = null,
 ): Promise<Draft[]> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT d.* FROM "uin_drafts" d
-     WHERE ${draftScope(userId, inboxIds, includeUnfiled)}
+     WHERE ${draftScope(userId, inboxIds)}
      ORDER BY d."updated_at" DESC
      LIMIT 200
   `
@@ -3220,12 +3275,11 @@ export async function listDrafts(
 /** How many are waiting, for the number on the Drafts tab. */
 export async function countDrafts(
   userId: string,
-  inboxIds: string[],
-  includeUnfiled = true,
+  inboxIds: string[] | null = null,
 ): Promise<number> {
   const rows = await prisma.$queryRaw<{ count: bigint }[]>`
     SELECT COUNT(*)::bigint AS "count" FROM "uin_drafts" d
-     WHERE ${draftScope(userId, inboxIds, includeUnfiled)}
+     WHERE ${draftScope(userId, inboxIds)}
   `
   return Number(rows[0]?.count ?? 0)
 }
@@ -3354,40 +3408,27 @@ export async function countSentMessages(
 }
 
 /** One draft, and only if it is this person's. Never "one draft, then check" -
- *  a route that forgets the second half hands somebody else's writing out. */
-/** One draft, if this person may read it. Whether they may CHANGE it is a
- *  second question - ask canEditDraft, and note that saveDraft and deleteDraft
- *  enforce it themselves regardless of what any screen decided. */
-export async function getDraft(
-  id: string,
-  userId: string,
-  inboxIds: string[],
-): Promise<Draft | null> {
+ *  a route that forgets the second half hands somebody else's writing out, and
+ *  a draft id guessed in the address bar finds nothing rather than something. */
+export async function getDraft(id: string, userId: string): Promise<Draft | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT d.* FROM "uin_drafts" d
-     WHERE d."id" = ${id} AND ${draftScope(userId, inboxIds)}
+     WHERE d."id" = ${id} AND ${draftScope(userId)}
      LIMIT 1
   `
   return rows[0] ? mapDraft(rows[0]) : null
 }
 
 /** Whatever THIS person left under this conversation, which the reply box opens
- *  on. One row at most - the unique index sees to that.
- *
- *  Their own first, and then anybody's on an address they may send from - the
- *  reply box is where a draft gets finished, and a draft only its author can
- *  finish is one that waits for ever when the author is an agent or on leave.
- *  Own-first matters when two people have written on the same conversation:
- *  nobody opens a reply box and finds their own paragraph replaced. */
-export async function draftForThread(
-  threadId: string,
-  userId: string,
-  replyableInboxIds: string[],
-): Promise<Draft | null> {
+ *  on. One row at most - the unique index on (thread_id, author_user_id) sees
+ *  to that, and it is that index which lets two colleagues each keep their own
+ *  half-written answer to the same conversation without either seeing the
+ *  other's. */
+export async function draftForThread(threadId: string, userId: string): Promise<Draft | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT * FROM "uin_drafts"
-     WHERE "thread_id" = ${threadId} AND ${editScope(userId, replyableInboxIds)}
-     ORDER BY ("author_user_id" = ${userId}) DESC, "updated_at" DESC
+    SELECT d.* FROM "uin_drafts" d
+     WHERE d."thread_id" = ${threadId} AND ${draftScope(userId)}
+     ORDER BY d."updated_at" DESC
      LIMIT 1
   `
   return rows[0] ? mapDraft(rows[0]) : null
@@ -3395,12 +3436,10 @@ export async function draftForThread(
 
 export type DraftInput = {
   id?: string | null
-  /** Whoever is saving. On a brand new draft this becomes the author; on one
-   *  that already exists it is only half of who may touch it, and the row keeps
-   *  the name it was started under. */
+  /** Whoever is saving, which on a draft that already exists is also the only
+   *  person who may be: the UPDATE finds nothing under anybody else's name and
+   *  the INSERT below writes a new row of their own instead. */
   authorUserId: string
-  /** The inboxes this person may send from - the other half of that rule. */
-  replyableInboxIds: string[]
   inboxId: string | null
   threadId: string | null
   mode: DraftMode
@@ -3415,6 +3454,9 @@ export type DraftInput = {
    *  written before the boxes could hold a typeface means. */
   bodyFormat?: DraftBodyFormat
   attachments: DraftAttachment[]
+  /** The catalogue items it carries. Left out is none, which is what every
+   *  caller written before a message could carry any means. */
+  products?: DraftProduct[]
   /** When it should leave on its own. A date puts it in the queue; null takes
    *  it back out and leaves an ordinary draft, which is also what clears the
    *  reason a failed one gives. LEFT OUT means leave whatever time is already
@@ -3456,6 +3498,7 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
   const followUp = sendAt ? data.followUpMinutes ?? null : null
   const bcc = data.bcc ?? []
   const bodyFormat = data.bodyFormat ?? 'text'
+  const products = data.products ?? []
   const schedule = keep
     ? Prisma.sql`"send_at" = "send_at", "send_state" = "send_state", "send_error" = "send_error"`
     : Prisma.sql`"send_at" = ${sendAt}, "send_state" = ${sendState}, "send_error" = NULL, "claimed_at" = NULL, "follow_up_minutes" = ${followUp}, "held_by_thread_id" = NULL, "held_at" = NULL`
@@ -3464,7 +3507,7 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
     : Prisma.sql`"send_at" = EXCLUDED."send_at", "send_state" = EXCLUDED."send_state", "send_error" = NULL, "claimed_at" = NULL, "follow_up_minutes" = EXCLUDED."follow_up_minutes", "held_by_thread_id" = NULL, "held_at" = NULL`
   if (data.id) {
     const updated = await prisma.$queryRaw<Record<string, unknown>[]>`
-      UPDATE "uin_drafts"
+      UPDATE "uin_drafts" AS d
          SET "inbox_id"     = ${data.inboxId},
              "mode"         = ${data.mode},
              "to_addresses" = ${data.to}::text[],
@@ -3474,9 +3517,10 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
              "body"         = ${data.body},
              "body_format"  = ${bodyFormat},
              "attachments"  = ${JSON.stringify(data.attachments)}::jsonb,
+             "products"     = ${JSON.stringify(products)}::jsonb,
              ${schedule},
              "updated_at"   = now()
-       WHERE "id" = ${data.id} AND ${editScope(data.authorUserId, data.replyableInboxIds)}
+       WHERE d."id" = ${data.id} AND ${draftScope(data.authorUserId)}
       RETURNING *
     `
     if (updated[0]) return mapDraft(updated[0])
@@ -3488,11 +3532,11 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
     INSERT INTO "uin_drafts"
       ("author_user_id", "inbox_id", "thread_id", "mode", "to_addresses",
        "cc_addresses", "bcc_addresses", "subject", "body", "body_format", "attachments",
-       "send_at", "send_state", "follow_up_minutes")
+       "products", "send_at", "send_state", "follow_up_minutes")
     VALUES (${data.authorUserId}, ${data.inboxId}, ${data.threadId}, ${data.mode},
             ${data.to}::text[], ${data.cc}::text[], ${bcc}::text[], ${data.subject},
             ${data.body}, ${bodyFormat}, ${JSON.stringify(data.attachments)}::jsonb,
-            ${sendAt}, ${sendState}, ${followUp})
+            ${JSON.stringify(products)}::jsonb, ${sendAt}, ${sendState}, ${followUp})
     ON CONFLICT ("thread_id", "author_user_id") WHERE "thread_id" IS NOT NULL
     DO UPDATE SET "inbox_id"     = EXCLUDED."inbox_id",
                   "mode"         = EXCLUDED."mode",
@@ -3503,6 +3547,7 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
                   "body"         = EXCLUDED."body",
                   "body_format"  = EXCLUDED."body_format",
                   "attachments"  = EXCLUDED."attachments",
+                  "products"     = EXCLUDED."products",
                   ${scheduleOnConflict},
                   "updated_at"   = now()
     RETURNING *
@@ -3518,26 +3563,18 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
  *  that outlive it: a follow-up is set on the conversation AFTER the message has
  *  gone and the draft has been cleared away, and reading the row first would be
  *  a second query racing this one. */
-export async function deleteDraftReturning(
-  id: string,
-  userId: string,
-  replyableInboxIds: string[],
-): Promise<Draft | null> {
+export async function deleteDraftReturning(id: string, userId: string): Promise<Draft | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    DELETE FROM "uin_drafts"
-     WHERE "id" = ${id} AND ${editScope(userId, replyableInboxIds)}
+    DELETE FROM "uin_drafts" AS d
+     WHERE d."id" = ${id} AND ${draftScope(userId)}
     RETURNING *
   `
   return rows[0] ? mapDraft(rows[0]) : null
 }
 
 /** The same, for the callers that only want to know whether there was one. */
-export async function deleteDraft(
-  id: string,
-  userId: string,
-  replyableInboxIds: string[],
-): Promise<boolean> {
-  return (await deleteDraftReturning(id, userId, replyableInboxIds)) !== null
+export async function deleteDraft(id: string, userId: string): Promise<boolean> {
+  return (await deleteDraftReturning(id, userId)) !== null
 }
 
 /** The draft behind a message that has just gone. Called by the send route
@@ -3546,14 +3583,12 @@ export async function deleteDraft(
 export async function discardDraftAfterSend(
   id: string | null | undefined,
   userId: string,
-  replyableInboxIds: string[],
 ): Promise<Draft | null> {
   if (!id) return null
   try {
-    // What it was is handed back: a draft may carry a follow-up, and the chase
-    // belongs to whoever WROTE it rather than to whoever pressed Send, so the
-    // row is the only thing that still knows who that was.
-    return await deleteDraftReturning(id, userId, replyableInboxIds)
+    // What it was is handed back: a draft may carry a follow-up, and the row is
+    // the only thing that still knows the chase was asked for.
+    return await deleteDraftReturning(id, userId)
   } catch (err) {
     // The message has gone. A draft left behind is untidy; a failed send
     // reported to somebody whose email actually left is a lie.
@@ -3675,18 +3710,14 @@ export async function holdScheduledDraftsFor(address: string, threadId: string):
   return rows.map(mapDraft)
 }
 
-/** What is being held because of this conversation, for whoever may read it.
- *  The same visibility rule as every other way of reaching a draft (E17): a
- *  message held on an address this reader cannot open is never fetched, so the
- *  warning is not a way of learning that it exists. */
-export async function draftsHeldByThread(
-  threadId: string,
-  userId: string,
-  inboxIds: string[],
-): Promise<Draft[]> {
+/** What of this person's own is being held because of this conversation. The
+ *  same rule as every other way of reaching a draft (E17): a colleague's held
+ *  message is never fetched, so the warning is not a way of learning that they
+ *  had one waiting. */
+export async function draftsHeldByThread(threadId: string, userId: string): Promise<Draft[]> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT d.* FROM "uin_drafts" d
-     WHERE d."held_by_thread_id" = ${threadId} AND ${draftScope(userId, inboxIds)}
+     WHERE d."held_by_thread_id" = ${threadId} AND ${draftScope(userId)}
      ORDER BY d."held_at" DESC
      LIMIT 20
   `
@@ -4971,6 +5002,12 @@ export type ProviderThreadInput = {
   lastMessageAt: Date
   lastDirection: 'in' | 'out' | 'note'
   unread: boolean
+  /** The inbox the channel addressed this at, already checked to be one of
+   *  ours, or null for a conversation that was addressed at nothing. Only ever
+   *  set when the conversation is FIRST filed - see below. */
+  inboxId: string | null
+  /** What on the site it came from, in the channel's own words. */
+  sourceLabel: string | null
 }
 
 /**
@@ -4989,16 +5026,28 @@ export async function upsertProviderThread(data: ProviderThreadInput): Promise<{
   const rows = await prisma.$queryRaw<{ id: string; created: boolean }[]>`
     INSERT INTO "uin_threads"
       ("provider_module", "external_id", "channel", "subject", "subject_normalised",
-       "preview", "last_message_at", "last_direction", "unread", "message_count")
+       "preview", "last_message_at", "last_direction", "unread", "message_count",
+       "inbox_id", "source_label")
     VALUES (${data.providerModule}, ${data.externalId}, ${data.channel}, ${data.subject},
             ${data.subjectNormalised}, ${data.preview}, ${data.lastMessageAt},
-            ${data.lastDirection}, ${data.unread}, 0)
+            ${data.lastDirection}, ${data.unread}, 0,
+            ${data.inboxId}, ${data.sourceLabel})
     ON CONFLICT ("provider_module", "external_id")
       WHERE "provider_module" IS NOT NULL AND "external_id" IS NOT NULL
       DO UPDATE SET
         "subject"            = EXCLUDED."subject",
         "subject_normalised" = EXCLUDED."subject_normalised",
         "preview"            = EXCLUDED."preview",
+        -- Filed once and then left alone. Where a conversation lives is this
+        -- hub's own bookkeeping the moment it has arrived: somebody who moved
+        -- an enquiry out of sales@ this morning must not find it back there
+        -- after the next collection because the form still says sales@.
+        -- COALESCE rather than a plain skip so a conversation collected before
+        -- its form was pointed anywhere is filed the first time it is.
+        "inbox_id"           = COALESCE("uin_threads"."inbox_id", EXCLUDED."inbox_id"),
+        -- What it came from does not change, but a channel that only started
+        -- reporting it in an update should be believed rather than ignored.
+        "source_label"       = COALESCE(EXCLUDED."source_label", "uin_threads"."source_label"),
         "last_message_at"    = GREATEST(
                                  COALESCE("uin_threads"."last_message_at", EXCLUDED."last_message_at"),
                                  EXCLUDED."last_message_at"),

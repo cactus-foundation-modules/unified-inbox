@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { AtIcon, NoteIcon, SendIcon } from './icons'
+import { NoteIcon, SendIcon } from './icons'
 
 // One line at the foot of the conversation for saying something to the people
 // you work with.
@@ -18,29 +18,47 @@ import { AtIcon, NoteIcon, SendIcon } from './icons'
 // wears the same amber the notes in the thread do. A note that reads as a reply
 // is how something private ends up sounding like it was sent.
 //
-// TAGGING A COLLEAGUE lives here too, and that is a change: it used to be
-// buried in the full writing box, which meant the commonest reason for leaving
-// a note at all - "Sam, can you look at this" - was the one thing this line
-// could not do, and people wrote the name into the sentence instead where
-// nothing was listening.
+// TAGGING A COLLEAGUE is done by typing @ into the sentence, which is what
+// everybody's fingers already do and what people were doing anyway - writing
+// "@Sam can you look at this" into a line where nothing was listening. It used
+// to be a button beside the box that opened a row of names underneath: two
+// presses and a hunt through a wall of chips to do the commonest thing a note
+// is for. The button has gone.
 //
-// The names are picked from a list rather than scraped out of the words. A
-// colleague called Sam Smith and another called Sam Smyth are not something a
-// regular expression should be deciding between, and a tag now hands somebody
-// a job and a way into the conversation - which is not a thing to get wrong on
-// a near miss.
+// The names are still PICKED from a list rather than scraped out of the words
+// afterwards. A colleague called Sam Smith and another called Sam Smyth are not
+// something a regular expression should be deciding between, and a tag hands
+// somebody a job and a way into the conversation - not a thing to get wrong on
+// a near miss. So typing @ opens the list, and it is choosing from it that
+// attaches the name; the words are only what the note ends up saying.
 
-/** How many names the row offers before it wants narrowing. Eight fits a line
- *  on an ordinary window; past that the row becomes a wall and the search box
- *  earns its place. */
-const TAG_CHIPS = 8
+/** How many names the menu offers at once. Past eight it is a list to scroll
+ *  rather than a list to read, and another letter typed is quicker. */
+const TAG_SUGGESTIONS = 8
+
+/** What is being typed after an @, if anything. Two words at most: the menu
+ *  narrows on every letter, and "@sam can you look" would otherwise go on
+ *  looking for a colleague called "sam can you look".
+ *
+ *  Anchored to the caret rather than to the end of the box, so going back to
+ *  put a name into a sentence already written works the same as typing one at
+ *  the end of it. */
+export function mentionQueryAt(text: string, caret: number): { query: string; from: number } | null {
+  const before = text.slice(0, caret)
+  const match = /(^|\s)@([^\s@]{0,24}(?:[ \t][^\s@]{0,24})?)$/.exec(before)
+  if (!match) return null
+  const query = match[2] ?? ''
+  return { query, from: before.length - query.length - 1 }
+}
+
+type Person = { id: string; name: string }
 
 type Props = {
   threadId: string
   /** Everybody who could be asked. Already narrowed by the server to the people
    *  this conversation can sensibly be handed to. Empty means no tagging at all
-   *  rather than an empty row: a one-person site has nobody to tell. */
-  staff: Array<{ id: string; name: string }>
+   *  rather than an empty menu: a one-person site has nobody to tell. */
+  staff: Person[]
 }
 
 export function NoteBar({ threadId, staff }: Props) {
@@ -48,29 +66,62 @@ export function NoteBar({ threadId, staff }: Props) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [tagging, setTagging] = useState(false)
-  const [mentions, setMentions] = useState<string[]>([])
-  const [query, setQuery] = useState('')
+  /** Whoever has been picked out of the menu, by name as well as by id: the
+   *  name is how we tell afterwards whether they are still mentioned in the
+   *  sentence or have been deleted back out of it. */
+  const [tagged, setTagged] = useState<Person[]>([])
+  /** What is being typed after an @ and where it starts, or null when the
+   *  caret is not in one. */
+  const [asking, setAsking] = useState<{ query: string; from: number } | null>(null)
+  /** Which suggestion the keyboard is on. */
+  const [cursor, setCursor] = useState(0)
   const box = useRef<HTMLInputElement>(null)
   // Stops the browser asking twice: state has not come back round by the time a
   // second press lands in the same frame, so a disabled button is not on its
   // own enough. Same guard, and the same reason, as the composer's.
   const inFlight = useRef(false)
 
-  // Whoever matches what has been typed, plus anybody already ticked - a name
-  // that vanishes from the row the moment you narrow past it is a tag you
-  // cannot see and cannot take off again.
-  const offered = useMemo(() => {
-    const wanted = query.trim().toLowerCase()
+  const suggestions = useMemo(() => {
+    if (!asking || staff.length === 0) return []
+    const wanted = asking.query.trim().toLowerCase()
     const matches = wanted
       ? staff.filter((person) => person.name.toLowerCase().includes(wanted))
       : staff
-    const shown = matches.slice(0, TAG_CHIPS)
-    const kept = staff.filter(
-      (person) => mentions.includes(person.id) && !shown.some((one) => one.id === person.id),
-    )
-    return { shown: [...kept, ...shown], hidden: Math.max(0, matches.length - shown.length) }
-  }, [mentions, query, staff])
+    return matches.slice(0, TAG_SUGGESTIONS)
+  }, [asking, staff])
+
+  /** Read the caret out of the box and work out whether it is in an @. Done on
+   *  every keystroke, every click and every arrow key, because all three move
+   *  it. */
+  const readCaret = useCallback(() => {
+    const el = box.current
+    if (!el || staff.length === 0) { setAsking(null); return }
+    const caret = el.selectionStart ?? el.value.length
+    const found = mentionQueryAt(el.value, caret)
+    setAsking(found)
+    setCursor(0)
+  }, [staff.length])
+
+  /** Put a name in the sentence, in place of what was typed after the @. */
+  const pick = useCallback((person: Person) => {
+    if (!asking) return
+    const before = text.slice(0, asking.from)
+    const after = text.slice(asking.from + 1 + asking.query.length)
+    const written = `${before}@${person.name} `
+    setText(written + after)
+    setTagged((prev) => (prev.some((one) => one.id === person.id) ? prev : [...prev, person]))
+    setAsking(null)
+    setError('')
+    // Back in the box, with the caret after the name rather than at the end of
+    // whatever was already written past it.
+    const el = box.current
+    if (el) {
+      window.requestAnimationFrame(() => {
+        el.focus()
+        el.setSelectionRange(written.length, written.length)
+      })
+    }
+  }, [asking, text])
 
   const save = useCallback(async () => {
     const note = text.trim()
@@ -83,6 +134,12 @@ export function NoteBar({ threadId, staff }: Props) {
     setBusy(true)
     setError('')
     try {
+      // Only the names still written in the sentence. Somebody picked and then
+      // deleted back out of it was a thought that changed its mind, and telling
+      // them anyway is how a note quietly asks the wrong person.
+      const mentions = tagged
+        .filter((person) => note.includes(`@${person.name}`))
+        .map((person) => person.id)
       const response = await fetch(`/api/m/unified-inbox/threads/${threadId}/notes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -96,9 +153,8 @@ export function NoteBar({ threadId, staff }: Props) {
       // The names go with the note they were attached to. Leaving them ticked
       // is how the next note - "no answer, will try Tuesday" - quietly asks
       // three people a second time.
-      setMentions([])
-      setQuery('')
-      setTagging(false)
+      setTagged([])
+      setAsking(null)
       // Straight back in the box: leaving one note is the best predictor there
       // is of leaving a second.
       box.current?.focus()
@@ -109,9 +165,10 @@ export function NoteBar({ threadId, staff }: Props) {
       inFlight.current = false
       setBusy(false)
     }
-  }, [mentions, router, text, threadId])
+  }, [router, tagged, text, threadId])
 
-  const chosen = staff.filter((person) => mentions.includes(person.id))
+  /** Whoever the note as it stands would actually tell. */
+  const chosen = tagged.filter((person) => text.includes(`@${person.name}`))
 
   return (
     <div className="uin-notebar">
@@ -122,32 +179,60 @@ export function NoteBar({ threadId, staff }: Props) {
         className="uin-notebar-input"
         value={text}
         disabled={busy}
-        placeholder="Leave an internal note - nobody outside sees this"
-        aria-label="Leave an internal note. Nobody outside sees this."
-        onChange={(event) => { setText(event.target.value); setError('') }}
+        placeholder={staff.length > 0
+          ? 'Leave an internal note - nobody outside sees this. Type @ to ask somebody'
+          : 'Leave an internal note - nobody outside sees this'}
+        aria-label="Leave an internal note. Nobody outside sees this. Type @ to ask a colleague to look."
+        autoComplete="off"
+        role="combobox"
+        aria-expanded={suggestions.length > 0}
+        aria-controls="uin-notebar-names"
+        onChange={(event) => { setText(event.target.value); setError(''); readCaret() }}
+        onClick={readCaret}
+        onBlur={() => {
+          // After the click on a name has had its chance to land. A menu that
+          // vanishes on blur is a menu nothing can be picked out of.
+          window.setTimeout(() => setAsking(null), 150)
+        }}
         onKeyDown={(event) => {
+          if (suggestions.length > 0) {
+            if (event.key === 'ArrowDown') {
+              event.preventDefault()
+              setCursor((was) => (was + 1) % suggestions.length)
+              return
+            }
+            if (event.key === 'ArrowUp') {
+              event.preventDefault()
+              setCursor((was) => (was - 1 + suggestions.length) % suggestions.length)
+              return
+            }
+            if (event.key === 'Enter' || event.key === 'Tab') {
+              const person = suggestions[cursor] ?? suggestions[0]
+              if (person) {
+                event.preventDefault()
+                pick(person)
+                return
+              }
+            }
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              // Only the menu. Escape inside a conversation is not a keystroke
+              // that should be throwing a half-typed note away.
+              event.stopPropagation()
+              setAsking(null)
+              return
+            }
+          }
+          // The arrows move the caret, which can move it in or out of an @.
+          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+            window.requestAnimationFrame(readCaret)
+            return
+          }
           if (event.key !== 'Enter' || event.shiftKey) return
           event.preventDefault()
           void save()
         }}
       />
-      {staff.length > 0 && (
-        <button
-          type="button"
-          className="uin-icon-btn uin-icon-btn-framed uin-notebar-tag"
-          aria-expanded={tagging}
-          aria-controls="uin-notebar-tags"
-          title="Ask a colleague to look at this"
-          disabled={busy}
-          onClick={() => setTagging((was) => !was)}
-        >
-          {AtIcon}
-          <span className="sr-only">
-            Ask a colleague to look at this{chosen.length > 0 ? `. ${chosen.length} chosen.` : ''}
-          </span>
-          {chosen.length > 0 && <span className="uin-notebar-tag-count" aria-hidden="true">{chosen.length}</span>}
-        </button>
-      )}
       <button
         type="button"
         className="btn btn-secondary btn-sm uin-notebar-send"
@@ -158,59 +243,41 @@ export function NoteBar({ threadId, staff }: Props) {
         <span>{busy ? 'Saving...' : 'Note'}</span>
       </button>
 
-      {/* Below the line rather than in a panel over it. The bar already wraps,
-          the names are wanted at the same time as the sentence rather than
-          instead of it, and a menu that covers the note you are writing is a
-          menu you close to check what you said. */}
-      {tagging && staff.length > 0 && (
-        <div className="uin-notebar-tags" id="uin-notebar-tags">
-          <span className="uin-recipients">Ask somebody to look at this</span>
-          {staff.length > TAG_CHIPS && (
-            <input
-              type="search"
-              className="uin-notebar-find"
-              value={query}
-              placeholder="Start typing a name"
-              autoComplete="off"
-              aria-label="Find a colleague by name"
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          )}
-          {offered.shown.map((person) => (
-            <button
-              key={person.id}
-              type="button"
-              className="uin-chip"
-              aria-pressed={mentions.includes(person.id)}
-              disabled={busy}
-              onClick={() => setMentions((prev) =>
-                prev.includes(person.id) ? prev.filter((id) => id !== person.id) : [...prev, person.id],
-              )}
-            >
-              {person.name}
-            </button>
+      {/* The names, under the line rather than over it: the bar already wraps,
+          and a menu that covers the note you are writing is a menu you close to
+          check what you said. */}
+      {suggestions.length > 0 && (
+        <ul className="uin-notebar-names" id="uin-notebar-names" role="listbox">
+          {suggestions.map((person, index) => (
+            <li key={person.id}>
+              <button
+                type="button"
+                className="uin-notebar-name"
+                role="option"
+                aria-selected={index === cursor}
+                data-on={index === cursor ? '1' : undefined}
+                // The click has to happen without the box losing the caret
+                // first, which is what a mouse-down anywhere else does.
+                onMouseDown={(event) => event.preventDefault()}
+                onMouseEnter={() => setCursor(index)}
+                onClick={() => pick(person)}
+              >
+                {person.name}
+              </button>
+            </li>
           ))}
-          {offered.shown.length === 0 && (
-            <span className="uin-recipients">Nobody here goes by that.</span>
-          )}
-          {offered.hidden > 0 && (
-            <span className="uin-recipients">
-              {offered.hidden === 1
-                ? 'One more. Keep typing to find them.'
-                : `${offered.hidden} more. Keep typing to find them.`}
-            </span>
-          )}
-          {/* Said out loud, because it is the surprising half: a tag hands
-              somebody a job AND lets them into this one conversation, which is
-              not what "mention" means anywhere else. */}
-          {chosen.length > 0 && (
-            <p className="uin-notebar-tagnote">
-              {chosen.length === 1
-                ? `${chosen[0]!.name} will see this conversation and be able to work through it, whether or not this inbox is one of theirs.`
-                : 'They will each see this conversation and be able to work through it, whether or not this inbox is one of theirs.'}
-            </p>
-          )}
-        </div>
+        </ul>
+      )}
+
+      {/* Said out loud, because it is the surprising half: a tag hands somebody
+          a job AND lets them into this one conversation, which is not what
+          "mention" means anywhere else. */}
+      {chosen.length > 0 && (
+        <p className="uin-notebar-tagnote">
+          {chosen.length === 1
+            ? `${chosen[0]!.name} will see this conversation and be able to work through it, whether or not this inbox is one of theirs.`
+            : 'They will each see this conversation and be able to work through it, whether or not this inbox is one of theirs.'}
+        </p>
       )}
 
       {/* Above the line rather than beside it: the bar is one line by design and

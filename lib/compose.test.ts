@@ -204,6 +204,44 @@ describe('assembleBody', () => {
     expect(out.text).toContain('> old')
   })
 
+  it('puts the products under the writing and above the signature', () => {
+    const out = assembleBody({
+      bodyHtml: '<p>The two we talked about:</p>',
+      products: { html: '<table><tr><td>Ergo Task Chair</td></tr></table>', text: 'Ergo Task Chair' },
+      signature: { html: '<p>Marcus</p>', text: 'Marcus' },
+      quoted: { html: '<blockquote>old</blockquote>', text: '\n\n> old' },
+    })
+    expect(out.html.indexOf('we talked about')).toBeLessThan(out.html.indexOf('Ergo Task Chair'))
+    expect(out.html.indexOf('Ergo Task Chair')).toBeLessThan(out.html.indexOf('Marcus'))
+    expect(out.text.indexOf('Ergo Task Chair')).toBeLessThan(out.text.indexOf('Marcus'))
+  })
+
+  it('leaves a message carrying no products carrying no markup for them either', () => {
+    const out = assembleBody({
+      bodyHtml: '<p>Yes.</p>',
+      products: null,
+      signature: null,
+      quoted: null,
+    })
+    expect(out.html).toBe('<p>Yes.</p>')
+  })
+
+  it('does not put the products through the sanitiser with the typed half', () => {
+    // Built from the site's own tables rather than posted, and email layout is
+    // exactly the markup a stricter pass would flatten.
+    const out = assembleBody({
+      bodyHtml: '<p>Here you go.</p>',
+      products: {
+        html: '<table role="presentation" cellpadding="0"><tr><td width="64">x</td></tr></table>',
+        text: 'x',
+      },
+      signature: null,
+      quoted: null,
+    })
+    expect(out.html).toContain('cellpadding="0"')
+    expect(out.html).toContain('width="64"')
+  })
+
   it('takes the plain text half from the signature rather than flattening it again', () => {
     const out = assembleBody({
       bodyHtml: '<p>Yes.</p>',

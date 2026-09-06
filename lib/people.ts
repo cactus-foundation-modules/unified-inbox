@@ -148,6 +148,43 @@ export function shouldBecomePerson(address: string | null, gate: PersonGate): bo
 }
 
 /**
+ * Whether a message came from us rather than from a stranger - the same "one of
+ * us" question as shouldBecomePerson (E18), asked about a message instead of an
+ * address.
+ *
+ * It decides whether the pictures in a message are held back until somebody
+ * asks. Holding them back protects the reader from a tracking pixel in a
+ * stranger's email; there is nothing to protect anybody from in our own signature
+ * logo, and warning about one on every reply we ever sent taught people to press
+ * the button without reading it, which is worse than not warning at all.
+ *
+ * Anything we sent is ours by definition, notes included - a note never left the
+ * building. An inbound message is ours when the address it came from is one of
+ * our inboxes, a colleague's, or at one of our own domains: a colleague
+ * forwarding a supplier's email is the ordinary case.
+ *
+ * From is what decides it, not Reply-To. Reply-To is set by whoever sent the
+ * message and says where they would like an answer, so treating it as proof of
+ * who they are would let anybody claim to be us. From can be forged too, and a
+ * stranger who forges our own domain gets their pictures loaded - which is the
+ * cost of the setting, and small next to the tracking they would have got from
+ * the reader pressing the button on a message that appeared to come from a
+ * colleague.
+ */
+export function isOwnSender(
+  message: { direction: 'in' | 'out' | 'note'; fromAddress: string | null },
+  gate: PersonGate,
+): boolean {
+  if (message.direction !== 'in') return true
+  const key = identityKey(message.fromAddress)
+  if (!key) return false
+  if (gate.ownAddresses.has(key)) return true
+  if (gate.staffAddresses.has(key)) return true
+  const domain = domainOf(key)
+  return !!domain && gate.ownDomains.includes(domain)
+}
+
+/**
  * Local parts that are a machine rather than somebody with a desk. A person
  * record for `mailer-daemon` or `no-reply` is never useful and clutters every
  * list it appears in. Role addresses like `accounts@` are deliberately NOT

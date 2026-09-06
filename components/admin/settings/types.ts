@@ -88,9 +88,15 @@ export type Settings = {
   requestReadReceipts: boolean
   showAvatars: boolean
   autoCheckSeconds: number | null
+  /** Channels kept off the screen: the module names whose entries are left out
+   *  of the rail, the counts and the lists. */
+  hiddenChannelModules: string[]
 }
 
 export type StaffMember = { id: string; name: string; email: string }
+
+/** One channel another module owns, as the settings screen lists it. */
+export type ChannelRow = { moduleName: string; label: string }
 
 /** One label contacts can be filed under, and how many are wearing it. */
 export type ContactCategoryRow = { id: string; name: string; people: number }
@@ -126,6 +132,8 @@ export type Payload = {
    *  window is set, which is where every site starts. */
   retention: RetentionForecast | null
   users: StaffMember[]
+  /** Every channel another module publishes, whether or not it is switched on. */
+  channels: ChannelRow[]
   encryptionReady: boolean
 }
 
@@ -145,6 +153,7 @@ export type SubTab =
   | 'overview'
   | 'accounts'
   | 'inboxes'
+  | 'channels'
   | 'collecting'
   | 'receipts'
   | 'people'
@@ -154,6 +163,7 @@ export const SUB_TABS: ReadonlyArray<{ key: SubTab; label: string }> = [
   { key: 'overview', label: 'Overview' },
   { key: 'accounts', label: 'Mail accounts' },
   { key: 'inboxes', label: 'Inboxes' },
+  { key: 'channels', label: 'Channels' },
   { key: 'collecting', label: 'Collecting' },
   { key: 'receipts', label: 'Sent replies' },
   { key: 'people', label: 'People' },

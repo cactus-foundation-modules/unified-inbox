@@ -9,7 +9,7 @@ import { confirmReference, suggestRecords } from '@/modules/unified-inbox/lib/ad
 import { buildContextQuery } from '@/modules/unified-inbox/lib/identity'
 import type { LinkKind } from '@/modules/unified-inbox/lib/linking'
 
-// Attaching a record to a conversation by hand.
+// Adding a record to a conversation as context, by hand.
 //
 // Somebody types the reference and the owning module is asked whether it holds
 // one - the same confirmation the automatic linker uses, so a typo comes back
@@ -33,7 +33,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (!await canOpenThread(user, thread)) return errorResponse('Forbidden', 403)
 
   const parsed = Body.safeParse(await request.json().catch(() => null))
-  if (!parsed.success) return errorResponse('Type the reference you want to attach.')
+  if (!parsed.success) return errorResponse('Type the reference you want to add.')
 
   const kind = parsed.data.kind as LinkKind
   const target = await confirmReference(kind, parsed.data.reference)
@@ -41,7 +41,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return errorResponse(`Nothing on this site has the reference ${parsed.data.reference}.`, 404)
   }
   if (await threadHasLink(id, target.moduleName, target.recordType, target.recordId)) {
-    return NextResponse.json({ ok: true, message: 'That is already attached.' })
+    return NextResponse.json({ ok: true, message: 'That is already there.' })
   }
 
   await recordLink({
@@ -68,7 +68,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
  * answer, and whoever is on the other end of the conversation decides what
  * comes first in it.
  *
- * Gated on the same permission as attaching, because a list of the site's
+ * Gated on the same permission as adding, because a list of the site's
  * orders is a thing worth having to be allowed to see, and each source is
  * gated again on its own module's permission inside `suggestRecords`.
  */

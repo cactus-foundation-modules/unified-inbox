@@ -167,7 +167,6 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
   async function put(sendAt: Date | null | undefined, body = 'The order, as discussed.') {
     return await lib.saveDraft({
       authorUserId: emma,
-      replyableInboxIds: [purchasing],
       inboxId: purchasing,
       threadId: null,
       mode: 'new',
@@ -184,7 +183,7 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     const draft = await put(undefined)
     expect(draft.sendAt).toBeNull()
     expect(draft.sendState).toBeNull()
-    await lib.deleteDraft(draft.id, emma, [purchasing])
+    await lib.deleteDraft(draft.id, emma)
   })
 
   it('puts a time on one, and reads it back', async () => {
@@ -192,9 +191,9 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     expect(draft.sendState).toBe('scheduled')
     expect(draft.sendAt?.toISOString()).toBe(future.toISOString())
 
-    const again = await lib.getDraft(draft.id, emma, [purchasing])
+    const again = await lib.getDraft(draft.id, emma)
     expect(again?.sendState).toBe('scheduled')
-    await lib.deleteDraft(draft.id, emma, [purchasing])
+    await lib.deleteDraft(draft.id, emma)
   })
 
   it('keeps the time when a save says nothing about it, and drops it when a save says null', async () => {
@@ -205,7 +204,6 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     const saved = await lib.saveDraft({
       id: draft.id,
       authorUserId: emma,
-      replyableInboxIds: [purchasing],
       inboxId: purchasing,
       threadId: null,
       mode: 'new',
@@ -222,7 +220,6 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     const cancelled = await lib.saveDraft({
       id: draft.id,
       authorUserId: emma,
-      replyableInboxIds: [purchasing],
       inboxId: purchasing,
       threadId: null,
       mode: 'new',
@@ -235,7 +232,7 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     })
     expect(cancelled.sendAt).toBeNull()
     expect(cancelled.sendState).toBeNull()
-    await lib.deleteDraft(draft.id, emma, [purchasing])
+    await lib.deleteDraft(draft.id, emma)
   })
 
   it('claims only what is due, and only once', async () => {
@@ -252,8 +249,8 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     const second = await lib.claimDueScheduledDrafts(new Date(), 10)
     expect(second).toEqual([])
 
-    await lib.deleteDraft(due.id, emma, [purchasing])
-    await lib.deleteDraft(later.id, emma, [purchasing])
+    await lib.deleteDraft(due.id, emma)
+    await lib.deleteDraft(later.id, emma)
   })
 
   it('writes the reason on one that could not be sent, and keeps the writing', async () => {
@@ -261,14 +258,14 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     await lib.claimDueScheduledDrafts(new Date(), 10)
     await lib.failScheduledDraft(draft.id, 'That inbox has no way to send mail yet.')
 
-    const after = await lib.getDraft(draft.id, emma, [purchasing])
+    const after = await lib.getDraft(draft.id, emma)
     expect(after?.sendState).toBe('failed')
     expect(after?.sendError).toBe('That inbox has no way to send mail yet.')
     expect(after?.body).toBe('This one will be refused.')
     // A failed one is not picked up again on its own - somebody has to look at
     // it, which is the point of saying so.
     expect(await lib.claimDueScheduledDrafts(new Date(), 10)).toEqual([])
-    await lib.deleteDraft(draft.id, emma, [purchasing])
+    await lib.deleteDraft(draft.id, emma)
   })
 
   it('puts back a claim from a run that died, and leaves a fresh one alone', async () => {
@@ -277,14 +274,14 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
 
     // A fresh claim is somebody else's work in flight.
     expect(await lib.releaseStaleScheduledClaims(new Date(Date.now() - 600_000))).toBe(0)
-    expect((await lib.getDraft(draft.id, emma, [purchasing]))?.sendState).toBe('sending')
+    expect((await lib.getDraft(draft.id, emma))?.sendState).toBe('sending')
 
     expect(await lib.releaseStaleScheduledClaims(new Date(Date.now() + 1000))).toBe(1)
-    const back = await lib.getDraft(draft.id, emma, [purchasing])
+    const back = await lib.getDraft(draft.id, emma)
     expect(back?.sendState).toBe('scheduled')
     // And it is due again, which is what "put back" has to mean.
     expect((await lib.claimDueScheduledDrafts(new Date(), 10)).map((d) => d.id)).toEqual([draft.id])
-    await lib.deleteDraft(draft.id, emma, [purchasing])
+    await lib.deleteDraft(draft.id, emma)
   })
 
   it('puts back exactly the rows a run named, and no others', async () => {
@@ -296,12 +293,12 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     expect(claimed).toHaveLength(2)
 
     expect(await lib.releaseScheduledClaims([mine.id])).toBe(1)
-    expect((await lib.getDraft(mine.id, emma, [purchasing]))?.sendState).toBe('scheduled')
-    expect((await lib.getDraft(theirs.id, emma, [purchasing]))?.sendState).toBe('sending')
+    expect((await lib.getDraft(mine.id, emma))?.sendState).toBe('scheduled')
+    expect((await lib.getDraft(theirs.id, emma))?.sendState).toBe('sending')
 
     expect(await lib.releaseScheduledClaims([])).toBe(0)
-    await lib.deleteDraft(mine.id, emma, [purchasing])
-    await lib.deleteDraft(theirs.id, emma, [purchasing])
+    await lib.deleteDraft(mine.id, emma)
+    await lib.deleteDraft(theirs.id, emma)
   })
 
   it('keeps a follow-up with the time, and drops it when the time comes off', async () => {
@@ -311,7 +308,6 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     // nothing to be chased about.
     const draft = await lib.saveDraft({
       authorUserId: emma,
-      replyableInboxIds: [purchasing],
       inboxId: purchasing,
       threadId: null,
       mode: 'new',
@@ -328,7 +324,6 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     const untouched = await lib.saveDraft({
       id: draft.id,
       authorUserId: emma,
-      replyableInboxIds: [purchasing],
       inboxId: purchasing,
       threadId: null,
       mode: 'new',
@@ -343,7 +338,6 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     const cancelled = await lib.saveDraft({
       id: draft.id,
       authorUserId: emma,
-      replyableInboxIds: [purchasing],
       inboxId: purchasing,
       threadId: null,
       mode: 'new',
@@ -355,7 +349,7 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
       sendAt: null,
     })
     expect(cancelled.followUpMinutes).toBeNull()
-    await lib.deleteDraft(draft.id, emma, [purchasing])
+    await lib.deleteDraft(draft.id, emma)
   })
 
   it('takes a chase measured in hours, and refuses one measured in a minute', async () => {
@@ -363,12 +357,12 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     // answers snoozing does, and "in three hours" is three hours.
     const draft = await put(future)
     await db.$executeRawUnsafe(`UPDATE "uin_drafts" SET "follow_up_minutes" = 180 WHERE "id" = $1`, draft.id)
-    expect((await lib.getDraft(draft.id, emma, [purchasing]))?.followUpMinutes).toBe(180)
+    expect((await lib.getDraft(draft.id, emma))?.followUpMinutes).toBe(180)
 
     await expect(
       db.$executeRawUnsafe(`UPDATE "uin_drafts" SET "follow_up_minutes" = 1 WHERE "id" = $1`, draft.id),
     ).rejects.toThrow()
-    await lib.deleteDraft(draft.id, emma, [purchasing])
+    await lib.deleteDraft(draft.id, emma)
   })
 
   it('stands a scheduled message down when they write first, and keeps the writing', async () => {
@@ -386,7 +380,6 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     // the same way twice.
     const waiting = await lib.saveDraft({
       authorUserId: emma,
-      replyableInboxIds: [purchasing],
       inboxId: purchasing,
       threadId: null,
       mode: 'new',
@@ -401,7 +394,7 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     const held = await lib.holdScheduledDraftsFor('supplier@example.com', thread)
     expect(held.map((d) => d.id)).toEqual([waiting.id])
 
-    const after = await lib.getDraft(waiting.id, emma, [purchasing])
+    const after = await lib.getDraft(waiting.id, emma)
     expect(after?.sendState).toBeNull()
     expect(after?.heldByThreadId).toBe(thread)
     expect(after?.heldAt).toBeInstanceOf(Date)
@@ -412,10 +405,10 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     // And nothing collects it any more, which is the whole point.
     expect(await lib.claimDueScheduledDrafts(new Date(Date.now() + 172_800_000), 10)).toEqual([])
 
-    const warned = await lib.draftsHeldByThread(thread, emma, [purchasing])
+    const warned = await lib.draftsHeldByThread(thread, emma)
     expect(warned.map((d) => d.id)).toEqual([waiting.id])
 
-    await lib.deleteDraft(waiting.id, emma, [purchasing])
+    await lib.deleteDraft(waiting.id, emma)
   })
 
   it('leaves a message that is already going out alone', async () => {
@@ -424,15 +417,15 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     const going = await put(past, 'Already on its way.')
     await lib.claimDueScheduledDrafts(new Date(), 10)
     expect(await lib.holdScheduledDraftsFor('supplier@example.com', 'no-such-thread')).toEqual([])
-    expect((await lib.getDraft(going.id, emma, [purchasing]))?.sendState).toBe('sending')
-    await lib.deleteDraft(going.id, emma, [purchasing])
+    expect((await lib.getDraft(going.id, emma))?.sendState).toBe('sending')
+    await lib.deleteDraft(going.id, emma)
   })
 
   it('leaves a scheduled message to somebody else alone', async () => {
     const mine = await put(future, 'This one is for the supplier.')
     expect(await lib.holdScheduledDraftsFor('someone.else@example.com', 'no-such-thread')).toEqual([])
-    expect((await lib.getDraft(mine.id, emma, [purchasing]))?.sendState).toBe('scheduled')
-    await lib.deleteDraft(mine.id, emma, [purchasing])
+    expect((await lib.getDraft(mine.id, emma))?.sendState).toBe('scheduled')
+    await lib.deleteDraft(mine.id, emma)
   })
 
   it('puts a message that was held back in the queue when it is scheduled again', async () => {
@@ -451,7 +444,6 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     const again = await lib.saveDraft({
       id: waiting.id,
       authorUserId: emma,
-      replyableInboxIds: [purchasing],
       inboxId: purchasing,
       threadId: null,
       mode: 'new',
@@ -464,8 +456,8 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     })
     expect(again.sendState).toBe('scheduled')
     expect(again.heldByThreadId).toBeNull()
-    expect(await lib.draftsHeldByThread(thread, emma, [purchasing])).toEqual([])
-    await lib.deleteDraft(waiting.id, emma, [purchasing])
+    expect(await lib.draftsHeldByThread(thread, emma)).toEqual([])
+    await lib.deleteDraft(waiting.id, emma)
   })
 
   it('hands the chase to whoever wrote the message, not to whoever sent it', async () => {
@@ -519,24 +511,26 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
   it('hands back what it deleted, so a chase outlives the draft that carried it', async () => {
     const draft = await lib.saveDraft({
       authorUserId: emma,
-      replyableInboxIds: [purchasing],
       inboxId: purchasing,
       threadId: null,
       mode: 'new',
       to: ['supplier@example.com'],
       cc: [],
       subject: 'Our order',
-      body: 'Sent by Marcus, written by Emma.',
+      body: 'Written and sent by Emma.',
       attachments: [],
       sendAt: future,
       followUpMinutes: 4320,
     })
-    // Marcus tidies it away after pressing Send, and what comes back still
-    // carries Emma's name and her chase.
-    const gone = await lib.deleteDraftReturning(draft.id, marcus, [purchasing])
+    // Marcus may send as purchasing@ and it is still not his to tidy away: a
+    // draft is its author's, and the id alone gets him nowhere.
+    expect(await lib.deleteDraftReturning(draft.id, marcus)).toBeNull()
+    expect(await lib.getDraft(draft.id, marcus)).toBeNull()
+
+    const gone = await lib.deleteDraftReturning(draft.id, emma)
     expect(gone?.authorUserId).toBe(emma)
     expect(gone?.followUpMinutes).toBe(4320)
-    expect(await lib.deleteDraftReturning(draft.id, marcus, [purchasing])).toBeNull()
+    expect(await lib.deleteDraftReturning(draft.id, emma)).toBeNull()
   })
 
   it('refuses a state the queue does not know', async () => {
@@ -544,7 +538,7 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     await expect(
       db.$executeRawUnsafe(`UPDATE "uin_drafts" SET "send_state" = 'posted' WHERE "id" = $1`, draft.id),
     ).rejects.toThrow()
-    await lib.deleteDraft(draft.id, emma, [purchasing])
+    await lib.deleteDraft(draft.id, emma)
   })
 
   it('refuses a state with no time to go with it', async () => {
@@ -552,6 +546,6 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     await expect(
       db.$executeRawUnsafe(`UPDATE "uin_drafts" SET "send_at" = NULL WHERE "id" = $1`, draft.id),
     ).rejects.toThrow()
-    await lib.deleteDraft(draft.id, emma, [purchasing])
+    await lib.deleteDraft(draft.id, emma)
   })
 })

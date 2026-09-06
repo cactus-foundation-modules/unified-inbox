@@ -45,9 +45,11 @@ export type InboxParams = {
    *  Same slot again - it is a list of things to work through, and which list
    *  is on the left is one choice. */
   mentionsOnly: boolean
-  /** Which colleague's address the Sent, Drafts or Mentioned list above is
-   *  narrowed to, or null for this reader's own across every address they can
-   *  read.
+  /** Which colleague's address the Sent or Mentioned list above is narrowed to,
+   *  or null for this reader's own across every address they can read. The rail
+   *  offers no Drafts folder under a colleague - a draft is its author's - but
+   *  an address typed into this slot beside `drafts` still narrows the reader's
+   *  OWN drafts to the ones filed on it, which is all the query will hand back.
    *
    *  Written into the same slot as everything else - `sent:<id>` - because it is
    *  the same choice, what the list on the left is a list of, and two params

@@ -2,10 +2,12 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { toE164 } from '@/lib/phone'
 import { inboxHref } from '@/modules/unified-inbox/lib/list'
 import { SEGMENT_CHARS_UNICODE, segmentsFor } from '@/modules/unified-inbox/lib/sms-segments'
 import { plainReason } from './AttachmentPicker'
 import { ComposeCancel, ComposeModal } from './ComposeModal'
+import { ContactPhoneField } from './ContactPhoneField'
 
 // Sending a text.
 //
@@ -25,9 +27,11 @@ type Props = {
   /** A number the screen already knew about - whoever the open conversation is
    *  with - so the ordinary case is not typed out again. */
   defaultTo: string | null
+  /** Which country a number typed without one belongs to (Settings > General). */
+  diallingCode: string
 }
 
-export function SmsView({ base, params, defaultTo }: Props) {
+export function SmsView({ base, params, defaultTo, diallingCode }: Props) {
   const router = useRouter()
   const [to, setTo] = useState(defaultTo ?? '')
   const [text, setText] = useState('')
@@ -45,6 +49,11 @@ export function SmsView({ base, params, defaultTo }: Props) {
       setError('Say which number this is going to.')
       return
     }
+    const sendTo = toE164(to, diallingCode)
+    if (!sendTo) {
+      setError('That does not look like a number to text. Try it as 07700 900123, or in full as +44 7700 900123.')
+      return
+    }
     if (!text.trim()) {
       setError('There is nothing to send yet.')
       return
@@ -58,7 +67,7 @@ export function SmsView({ base, params, defaultTo }: Props) {
       const response = await fetch('/api/m/unified-inbox/sms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: to.trim(), body: text.trim() }),
+        body: JSON.stringify({ to: sendTo, body: text.trim() }),
       })
       const data = await response.json().catch(() => null)
       if (!response.ok) {
@@ -66,7 +75,7 @@ export function SmsView({ base, params, defaultTo }: Props) {
         return
       }
       setText('')
-      setNote(`Sent to ${data?.to ?? to.trim()}. It will appear in the conversation with that number.`)
+      setNote(`Sent to ${data?.to ?? sendTo}. It will appear in the conversation with that number.`)
       router.refresh()
     } catch {
       setError('The site could not be reached. Nothing was sent.')
@@ -74,7 +83,7 @@ export function SmsView({ base, params, defaultTo }: Props) {
       inFlight.current = false
       setBusy(false)
     }
-  }, [router, text, to])
+  }, [diallingCode, router, text, to])
 
   return (
     <ComposeModal
@@ -90,17 +99,17 @@ export function SmsView({ base, params, defaultTo }: Props) {
             <div className="uin-field-row">
               <label htmlFor="uin-sms-to">To</label>
               <div className="uin-field-control">
-                <input
+                <ContactPhoneField
                   id="uin-sms-to"
-                  type="tel"
                   value={to}
-                  onChange={(e) => { setTo(e.target.value); setError(''); setNote('') }}
-                  placeholder="07700 900123"
-                  autoComplete="off"
+                  onChange={(next) => { setTo(next); setError(''); setNote('') }}
+                  onPick={(phone) => {
+                    setTo(toE164(phone, diallingCode) ?? phone)
+                    setError('')
+                    setNote('')
+                  }}
+                  placeholder="A name, or 07700 900123"
                 />
-                <span className="uin-field-hint">
-                  A mobile number. A landline will be refused by whoever carries it.
-                </span>
               </div>
             </div>
           </div>
@@ -129,11 +138,11 @@ export function SmsView({ base, params, defaultTo }: Props) {
           {error && <div className="alert alert-danger" role="alert">{error}</div>}
           {note && !error && <div className="alert alert-success" role="status">{note}</div>}
 
-          <div className="uin-composer-row">
-            <button type="button" className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
-              {busy ? 'Sending...' : 'Send the text'}
-            </button>
+          <div className="uin-composer-row uin-composer-row--end">
             <ComposeCancel closeHref={closeHref} guard={guard} askToLeave={askToLeave} />
+            <button type="button" className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
+              {busy ? 'Sending...' : 'Send text'}
+            </button>
           </div>
         </>
       )}

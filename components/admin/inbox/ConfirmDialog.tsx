@@ -28,6 +28,11 @@ import { createPortal } from 'react-dom'
 //   destructive   Something is lost if they say yes. Paints the yes button as
 //                 destructive and starts the keyboard on Cancel, so a stray
 //                 Return does the safe thing.
+//   other         A THIRD answer, for the questions that genuinely have three:
+//                 closing a half-written reply is save it, throw it away, or
+//                 carry on, and folding two of those into one button is how
+//                 somebody loses a paragraph to a button labelled "Leave it".
+//                 Left out everywhere else, which is nearly everywhere.
 //   busy          Greys both answers out while the work is in flight. The
 //                 dialog stays open; close it when the work has finished.
 //                 What happens to the keyboard while it is true: the browser
@@ -74,6 +79,10 @@ export type ConfirmDialogProps = {
   busy?: boolean
   onConfirm: () => void
   onCancel: () => void
+  /** The third answer, where there is one. Drawn between Cancel and the yes
+   *  button, in the quiet clothes, because on these questions it is the one
+   *  that throws something away. */
+  other?: { label: string; destructive?: boolean; onClick: () => void }
 }
 
 /** Everything the keyboard can land on. Used to work out where the ends of the
@@ -99,6 +108,7 @@ export function ConfirmDialog({
   busy = false,
   onConfirm,
   onCancel,
+  other,
 }: ConfirmDialogProps) {
   const cardRef = useRef<HTMLDivElement | null>(null)
   const returnTo = useRef<HTMLElement | null>(null)
@@ -225,6 +235,16 @@ export function ConfirmDialog({
           >
             {cancelLabel}
           </button>
+          {other && (
+            <button
+              type="button"
+              className={`btn ${other.destructive ? 'btn-destructive' : 'btn-secondary'}`}
+              disabled={busy}
+              onClick={other.onClick}
+            >
+              {other.label}
+            </button>
+          )}
           <button
             type="button"
             className={`btn ${destructive ? 'btn-destructive' : 'btn-primary'}`}

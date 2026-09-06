@@ -268,11 +268,22 @@ export function quoteForForward(original: QuotedOriginal, timezone: string): { h
   }
 }
 
-/** What the person typed, their inbox's signature, and the quoted original,
- *  in that order - which is where every mail client puts them and therefore
- *  where a reader expects to find them. */
+/** What the person typed, the products they put on it, their inbox's signature,
+ *  and the quoted original, in that order - which is where every mail client
+ *  puts the last two and therefore where a reader expects to find them.
+ *
+ *  The products go under the writing rather than into it, and that is a
+ *  decision rather than an accident: the writing box holds bold, italic, a
+ *  colour, a link and two kinds of list on purpose (see RichText.tsx), and a
+ *  table dropped into a box like that is a table somebody's next backspace
+ *  takes half of. Under the words, built on the server from what the shop says
+ *  at that moment, it is the same list every time and it cannot be broken. */
 export function assembleBody(parts: {
   bodyHtml: string
+  /** The catalogue items, already rendered by lib/products/render.ts. Built
+   *  from the site's own tables rather than from anything posted, which is why
+   *  it is not put through the sanitiser with the typed half. */
+  products?: { html: string; text: string } | null
   /** Already rendered by lib/signature.ts, whichever kind it was written in.
    *  The text half comes with it because a rich text signature reads better
    *  flattened from its markdown than from its HTML. */
@@ -286,8 +297,12 @@ export function assembleBody(parts: {
   const signature = parts.signature?.html ? sanitizeEmailHtml(parts.signature.html) : ''
   const signatureText = (parts.signature?.text ?? '').trim() || (signature ? htmlToText(signature) : '')
 
+  const products = parts.products?.html ?? ''
+  const productsText = parts.products?.text ?? ''
+
   const html = [
     typed,
+    products,
     signature ? `<div class="uin-signature">${signature}</div>` : '',
     parts.quoted?.html ?? '',
   ]
@@ -296,6 +311,7 @@ export function assembleBody(parts: {
 
   const text = [
     htmlToText(typed),
+    productsText ? `\n\n${productsText}` : '',
     signature ? `\n--\n${signatureText}` : '',
     parts.quoted?.text ?? '',
   ]

@@ -36,6 +36,14 @@ describe('buildMessageDocument', () => {
     expect(doc).not.toContain('<details class="uin-quote">')
   })
 
+  it('puts the message in the two boxes the fit-to-width scaling needs', () => {
+    const doc = buildMessageDocument({ html: '<p>hi</p>', nonce: 'abc' })
+    // The scaled box has to be inside the box that holds the room it takes up,
+    // and the message inside that. Flatten either of them and a message wider
+    // than the frame goes back to having a scrollbar along the bottom.
+    expect(doc).toContain('<body><div id="uin-fit"><div id="uin-doc"><p>hi</p></div></div>')
+  })
+
   it('carries the nonce on the one script it has', () => {
     const doc = buildMessageDocument({ html: '<p>hi</p>', nonce: 'nonce-value' })
     const scripts = doc.match(/<script/g) ?? []

@@ -40,6 +40,16 @@ const FRAME_STYLES = `
   }
   img, video { max-width: 100%; height: auto; }
   table { max-width: 100%; }
+  /* The message, and the box holding it to the width there is.
+     Email is written for a column about 600px wide and a good deal of it says
+     so in pixels, so in a narrower reading pane the message is wider than the
+     frame it is in. That used to earn it a scrollbar along the bottom, which is
+     a frame behaving like a frame: the reader asked for the message, not for a
+     window onto part of it. It is scaled down to fit instead, the way a phone
+     shows a desktop-width email, and the box round it is made exactly as tall
+     as the message ended up. A message that already fits is not touched. */
+  #uin-fit { overflow: hidden; }
+  #uin-doc { transform-origin: 0 0; }
   a { color: #14532d; }
   pre { white-space: pre-wrap; }
   details.uin-quote { margin-top: 1rem; }
@@ -61,7 +71,11 @@ const FRAME_STYLES = `
 
 /**
  * The frame's one script. It carries a nonce nothing else has, so anything that
- * somehow survived the sanitiser still cannot run. Two jobs.
+ * somehow survived the sanitiser still cannot run. Three jobs.
+ *
+ * HOW WIDE THE MESSAGE WANTS TO BE, and shrinking it until it fits. See
+ * fitToWidth below - this is the one that stops a frame having a scrollbar of
+ * its own along the bottom.
  *
  * HOW TALL IT TURNED OUT TO BE, so the frame is exactly its own height instead
  * of a fixed box with a scrollbar inside a scrollbar.
@@ -81,52 +95,95 @@ const FRAME_STYLES = `
 function frameScript(nonce: string): string {
   return `<script nonce="${nonce}">(function(){
   var doc = document.documentElement;
+  // Ours, and first in the body, so an email carrying an id of the same name
+  // cannot be picked up instead: getElementById answers in document order.
+  var fit = document.getElementById('uin-fit');
+  var page = fit ? fit.firstElementChild : null;
   var last = 0;
   var sent = 0;
+  var pending = false;
 
+  // Shrink a message that is wider than the frame until the whole of it fits.
+  //
+  // Almost every marketing email is a table with a width in pixels on it, and
+  // in a reading pane narrower than that width the message hangs off the side.
+  // The alternative to shrinking it is a sideways scrollbar, which shows the
+  // reader the left-hand half of a message and hides the rest behind a gesture
+  // nobody makes. So it is scaled, which is what a phone does with the same
+  // mail and for the same reason.
+  //
+  // Everything is put back before measuring: the natural width has to be read
+  // with no scale on it, or each pass would measure the last pass's answer and
+  // walk the message steadily smaller. The box is then given the scaled height,
+  // because a transform moves what is drawn and not what is laid out - without
+  // it the document stays as tall as the message was BEFORE it shrank, and the
+  // frame ends with a band of white under the message the size of what was
+  // taken off.
+  function fitToWidth(){
+    if (!fit || !page) return;
+    page.style.transform = 'none';
+    page.style.width = 'auto';
+    fit.style.height = 'auto';
+    var room = fit.clientWidth;
+    var wanted = page.scrollWidth;
+    // A pixel of slack: sub-pixel layout otherwise reports a message that fits
+    // exactly as one pixel too wide, and scales the whole thing for nothing.
+    if (room <= 0 || wanted <= room + 1) return;
+    var scale = room / wanted;
+    page.style.width = wanted + 'px';
+    page.style.transform = 'scale(' + scale + ')';
+    fit.style.height = Math.ceil(page.offsetHeight * scale) + 'px';
+  }
+
+  // The body's own height, and deliberately NOT the document element's. The
+  // root's scroll height is never less than the frame it is drawn in, so
+  // measuring it can only ever hand back the height the frame already had: a
+  // two-line "thanks, received" reported the opening height and stayed a
+  // 400-pixel box of white for the whole of its life.
   function measure(){
     var body = document.body;
-    var h = Math.max(
-      body ? body.scrollHeight : 0,
-      body ? body.offsetHeight : 0,
-      doc.scrollHeight,
-      doc.offsetHeight
-    );
-    // A message built round a table wider than the frame gets a sideways
-    // scrollbar along the bottom, and that bar stands in the frame's height
-    // rather than in the message's. Left out of the sum it crops the last line.
-    // Nothing is added where the browser draws its scrollbars over the top.
-    if (doc.scrollWidth > doc.clientWidth) {
-      h += Math.max(0, window.innerHeight - doc.clientHeight);
-    }
-    return h;
+    if (!body) return 0;
+    return Math.max(body.scrollHeight, body.offsetHeight);
   }
 
   function send(){
+    fitToWidth();
     var h = measure();
     if (h === last) return;
     // A frame that is told its own height can change height because of it, and
     // two layouts that disagree would otherwise talk to one another for ever.
-    if (sent > 60) return;
+    // High enough that no real message reaches it: sends are gathered up a
+    // frame at a time below, so a newsletter with two hundred pictures in it
+    // costs a handful of them rather than one apiece.
+    if (sent > 200) return;
     last = h;
     sent++;
     parent.postMessage({ uinFrameHeight: h }, '*');
   }
 
-  window.addEventListener('load', send);
-  window.addEventListener('resize', send);
-  document.addEventListener('toggle', send, true);
+  // Pictures arrive in a flurry and every one of them changes the answer.
+  // Gathering them up means the work is done once when the flurry is over
+  // rather than once per picture.
+  function schedule(){
+    if (pending) return;
+    pending = true;
+    setTimeout(function(){ pending = false; send(); }, 16);
+  }
+
+  window.addEventListener('load', schedule);
+  window.addEventListener('resize', schedule);
+  document.addEventListener('toggle', schedule, true);
   // Pictures arrive after the markup does, and every one of them makes the
   // message taller than it was when it was first measured.
-  document.addEventListener('load', send, true);
-  document.addEventListener('error', send, true);
+  document.addEventListener('load', schedule, true);
+  document.addEventListener('error', schedule, true);
   if (window.ResizeObserver) {
-    var observer = new ResizeObserver(send);
+    var observer = new ResizeObserver(schedule);
     observer.observe(doc);
     if (document.body) observer.observe(document.body);
   }
-  setTimeout(send, 60);
-  setTimeout(send, 400);
+  schedule();
+  setTimeout(schedule, 400);
 
   // The page around the frame says back how much room it actually gave. Only
   // then does the frame stop scrolling itself. Hiding its scrollbar before the
@@ -195,11 +252,16 @@ export function buildMessageDocument({ html, nonce, collapseQuoted = true }: Mes
         `<summary>Show the earlier messages</summary><div>${content.slice(at)}</div></details>`
     }
   }
+  // Two boxes round the message, and only the outer one ever does anything: the
+  // inner is what gets scaled when the message is wider than the frame, and the
+  // outer is what holds the room the scaled message actually takes up. See
+  // fitToWidth. A message that fits is laid out exactly as it would have been
+  // without them.
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>${FRAME_STYLES}</style></head>
-<body>${content}${frameScript(nonce)}</body></html>`
+<body><div id="uin-fit"><div id="uin-doc">${content}</div></div>${frameScript(nonce)}</body></html>`
 }
 
 /**
