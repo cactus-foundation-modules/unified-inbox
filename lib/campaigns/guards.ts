@@ -73,3 +73,20 @@ export function isCampaignWideFailure(reason: string): boolean {
     || lower.includes('could not be reached')
   )
 }
+
+/**
+ * Whether two sets of category ids are the same set, in any order.
+ *
+ * The edit route needs this because the whole campaign form saves in one press:
+ * a campaign that has started sends its own unchanged labels back on every
+ * save, and the route used to refuse the save merely because the field was
+ * PRESENT. Which meant a started campaign could not have its name corrected,
+ * its follow-ups tidied or its clock changed - and a finished one could not be
+ * saved at all.
+ */
+export function sameCategoryIds(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  const left = [...a].sort()
+  const right = [...b].sort()
+  return left.every((id, index) => id === right[index])
+}

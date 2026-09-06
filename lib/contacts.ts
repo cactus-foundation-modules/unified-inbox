@@ -413,3 +413,52 @@ export type ImportSummary = {
 /** How many problems come back. The file is the place to fix a thousand of
  *  them, and a response listing every one is a response nobody can read. */
 export const MAX_REPORTED_PROBLEMS = 50
+
+// ---------------------------------------------------------------------------
+// What was wrong with a file, in words somebody can act on.
+// ---------------------------------------------------------------------------
+
+/** A column number as a spreadsheet writes it: 0 is A, 25 is Z, 26 is AA. */
+export function columnLetter(index: number): string {
+  let n = index
+  let out = ''
+  do {
+    out = String.fromCharCode(65 + (n % 26)) + out
+    n = Math.floor(n / 26) - 1
+  } while (n >= 0)
+  return out
+}
+
+/**
+ * Which bound the import schema refused, said out loud.
+ *
+ * The route used to answer every one of a dozen constraints with the same
+ * sentence - "That file could not be read" - which is a sentence about the
+ * file, is usually untrue, and gave nobody, us included, anywhere to start.
+ *
+ * The path zod reports looks like `rows.412.7`: the eighth cell of the row
+ * after the four hundred and twelfth. A spreadsheet counts from one and has a
+ * heading, so both numbers are moved before they are said. `rowOffset` is how
+ * many rows went up in earlier chunks, so the line named is the line in the
+ * file rather than the line in the chunk.
+ */
+export function describeImportFault(
+  issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey> }>,
+  rowOffset = 0,
+): string {
+  const issue = issues[0]
+  if (!issue) return 'That file could not be read.'
+  const [field, rowIndex, cellIndex] = issue.path
+
+  if (field === 'rows' && typeof rowIndex === 'number') {
+    const row = rowIndex + rowOffset + 2
+    if (typeof cellIndex === 'number') {
+      return `One cell in that file is too long to bring in - row ${row}, column ${columnLetter(cellIndex)}. `
+        + 'Shorten it, or leave that column out.'
+    }
+    return `Row ${row} of that file has more columns than this can take.`
+  }
+  if (field === 'columns') return 'That file has more columns than this can take.'
+  if (field === 'rows') return 'The rows in that file were not in a shape this could read.'
+  return 'That file could not be read. It needs to be a CSV, with a heading row.'
+}

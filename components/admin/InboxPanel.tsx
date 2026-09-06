@@ -67,7 +67,8 @@ import { replyRecipients } from '@/modules/unified-inbox/lib/compose'
 import { chooseSendingInbox, effectiveInboxParam, inboxHref, NEW_CONTACT, parseInboxParams, PER_PAGE } from '@/modules/unified-inbox/lib/list'
 import { providerForModule, visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
 import { InboxStyles } from './inbox/styles'
-import { InboxTabs } from './inbox/InboxTabs'
+import { InboxIcon } from './inbox/icons'
+import { NavRail } from './inbox/NavRail'
 import { CampaignsPanel } from './inbox/campaigns/CampaignsPanel'
 import { StatusTabs } from './inbox/StatusTabs'
 import { Filters } from './inbox/Filters'
@@ -78,8 +79,12 @@ import { ThreadPane, type ThreadMessageView } from './inbox/ThreadPane'
 import { ComposeView } from './inbox/ComposeView'
 import { DraftReadOnlyView } from './inbox/DraftReadOnlyView'
 
-// The hub's tab on core's Inbox page: the addresses along the top, where each
-// conversation stands under them, the list, and whichever one is open.
+// The hub's tab on core's Inbox page. One framed box the height of the window,
+// divided into four: the rail of addresses and places to go, the head and list
+// of whichever one is chosen, whatever was opened from it, and what the rest of
+// the site knows about whoever sent it. Each pane scrolls its own contents, so
+// the row somebody is reading and the message they opened stay level with one
+// another - which a page that scrolls as one cannot do.
 //
 // Every piece of state on this screen is in the URL. The core Inbox host
 // renders only the tab the address asks for and hands the query string straight
@@ -168,7 +173,7 @@ export async function UnifiedInboxPanel({
   // whichever tab the host happens to render first.
   const carried: Record<string, string> = { tab: 'unified-inbox' }
   for (const key of [
-    'inbox', 'status', 'unread', 'assignee', 'q', 'page', 'id', 'person',
+    'inbox', 'status', 'unread', 'assignee', 'q', 'sort', 'page', 'id', 'person',
     // The address book's own: which half of it, whose card is open, whether the
     // card is being edited, and whether the importer is up.
     'view', 'org', 'edit', 'import', 'cat',
@@ -189,6 +194,19 @@ export async function UnifiedInboxPanel({
 
   const counts = await unreadCounts(visibleIds, canManage, channelModules)
   const allUnread = Object.values(counts).reduce((a, b) => a + b, 0)
+
+  // What has been handed to whoever is reading, across every address they can
+  // see. "Assigned to me" is a place in the rail rather than a filter chip now,
+  // and a place with no number beside it is a place nobody visits.
+  const assignedCount = await countThreads({
+    inboxIds: visibleIds,
+    includeUnrouted: canManage,
+    providerModules: channelModules,
+    assignee: user.id,
+    status: 'open',
+    page: 1,
+    perPage: PER_PAGE,
+  })
 
   // Writing a new one is a different grant from reading (D16), so the From menu
   // and the button that opens it are both built from the inboxes this person may
@@ -228,6 +246,7 @@ export async function UnifiedInboxPanel({
     unreadOnly: params.unreadOnly,
     assignee: params.assignee,
     search: params.search,
+    oldestFirst: params.oldestFirst,
     page: params.page,
     perPage: PER_PAGE,
   }
@@ -602,6 +621,7 @@ export async function UnifiedInboxPanel({
           replyAllTo={[...replyAll.to, ...replyAll.cc]}
           draft={ownDraft ? forComposer(ownDraft) : null}
           newestFirst={settings.newestFirst}
+          showAvatars={settings.showAvatars}
           canDeleteMessages={canDeleteMessages}
           blockState={blockState}
           now={new Date()}
@@ -726,11 +746,42 @@ export async function UnifiedInboxPanel({
               ? `m:${params.providerModule}`
               : params.inboxId
 
-  // The row of addresses, built once and used by both shapes this screen
-  // takes: the ordinary reading layout, and the campaigns tab, which is one
-  // full-width column rather than a list beside a conversation.
-  const tabs = (
-    <InboxTabs
+  // What the head of the list column says it is a list of, and how much of it
+  // there is. The rail says where you are as well, in a highlight; this says it
+  // in words, above the rows it describes, which is where somebody reading the
+  // list is already looking.
+  const currentInbox = params.inboxId ? allInboxes.find((i) => i.id === params.inboxId) ?? null : null
+  const currentChannel = params.providerModule
+    ? channels.find((c) => c.moduleName === params.providerModule) ?? null
+    : null
+  const viewTitle = params.draftsOnly
+    ? 'Drafts'
+    : params.sentOnly
+      ? 'Sent'
+      : params.contactsOnly
+        ? (showingOrganisations ? 'Organisations' : 'Contacts')
+        : params.unroutedOnly
+          ? 'Not filed'
+          : currentChannel
+            ? currentChannel.label
+            : currentInbox
+              ? currentInbox.name
+              : 'All conversations'
+  const headTotal = params.draftsOnly
+    ? plural(drafts.length, 'draft', 'drafts')
+    : params.sentOnly
+      ? plural(sentTotal, 'message', 'messages')
+      : params.contactsOnly
+        ? (showingOrganisations
+            ? plural(organisationsTotal, 'organisation', 'organisations')
+            : plural(contactsTotal, 'contact', 'contacts'))
+        : plural(total, 'conversation', 'conversations')
+
+  // The rail, built once and used by both shapes this screen takes: the
+  // ordinary reading layout, and campaigns, which is one full-width column
+  // rather than a list beside a conversation.
+  const rail = (
+    <NavRail
       base={base}
       params={carried}
       inboxes={inboxes.map((i) => ({
@@ -746,16 +797,20 @@ export async function UnifiedInboxPanel({
       }))}
       allCount={allUnread}
       current={currentTab}
+      me={{ id: user.id, name: staffById[user.id] ?? 'You' }}
+      showAvatars={settings.showAvatars}
+      assignedCount={assignedCount}
+      assignee={params.assignee}
       showUnrouted={canManage}
       unroutedCount={counts[''] ?? 0}
       showDrafts={sendable.length > 0 || draftCount > 0}
       draftCount={draftCount}
       contactCount={contactCount}
       showCampaigns={canCampaign}
-      /* Write a message rides beside the search on the status row below. The
-         status row is not drawn on Drafts and Sent, so on those two the
-         button falls back to the end of the addresses. */
-      composeHref={listing && !params.contactsOnly ? composeHref : null}
+      /* At the head of the rail, on every list: starting a message is the one
+         thing up there that is not a place to go, and it is the same act
+         whichever list somebody is standing in. */
+      composeHref={composeHref}
       defaultInboxId={pinnedInboxId}
       canReorder={canManage}
       canCheckNow={canManage && connections.length > 0}
@@ -772,8 +827,12 @@ export async function UnifiedInboxPanel({
       return (
         <div className="uin-page">
           <InboxStyles />
-          {tabs}
-          <div className="alert alert-danger">You do not have permission to send campaigns.</div>
+          <div className="uin-app uin-app-wide">
+            {rail}
+            <div className="uin-read uin-read-pad">
+              <div className="alert alert-danger">You do not have permission to send campaigns.</div>
+            </div>
+          </div>
         </div>
       )
     }
@@ -782,154 +841,200 @@ export async function UnifiedInboxPanel({
     return (
       <div className="uin-page">
         <InboxStyles />
-        {tabs}
-        <CampaignsPanel
-          base={base}
-          params={carried}
-          inboxes={sendable.map((i) => ({ id: i.id, name: i.name, address: i.address }))}
-          categories={categoryList.map((c) => ({ id: c.id, name: c.name }))}
-          campaignId={params.campaignId}
-          view={searchParams.view ?? null}
-          tickUrl={siteUrl && tickToken
-            ? `${siteUrl}/api/m/unified-inbox/cron/campaigns?key=${tickToken}`
-            : null}
-        />
+        {/* The rail stays; everything else on this screen is one long form with
+            a save bar of its own pinned to the bottom of it, so it keeps the
+            page's own scroll rather than being put inside a second one. */}
+        <div className="uin-app uin-app-wide">
+          {rail}
+          <div className="uin-read uin-read-pad">
+            <CampaignsPanel
+              base={base}
+              params={carried}
+              inboxes={sendable.map((i) => ({ id: i.id, name: i.name, address: i.address }))}
+              categories={categoryList.map((c) => ({ id: c.id, name: c.name }))}
+              campaignId={params.campaignId}
+              view={searchParams.view ?? null}
+              tickUrl={siteUrl && tickToken
+                ? `${siteUrl}/api/m/unified-inbox/cron/campaigns?key=${tickToken}`
+                : null}
+            />
+          </div>
+        </div>
       </div>
     )
   }
 
+  // The list itself, whichever of the four it is. Built here rather than inline
+  // so the column below reads as head-then-list rather than as a hundred lines
+  // of conditional with a wrapper somewhere in the middle of it.
+  const listView = params.contactsOnly ? (
+    showingOrganisations ? (
+      <OrganisationsListView
+        base={base}
+        params={carried}
+        rows={organisations}
+        total={organisationsTotal}
+        page={params.page}
+        openOrganisationId={params.organisationId}
+        searching={!!params.search}
+        canEdit={canEditLinks}
+      />
+    ) : (
+      <ContactsListView
+        base={base}
+        params={carried}
+        rows={contacts}
+        showAvatars={settings.showAvatars}
+        categories={contactCategories}
+        total={contactsTotal}
+        page={params.page}
+        openPersonId={params.personId}
+        searching={!!params.search}
+        canEdit={canEditLinks}
+      />
+    )
+  ) : params.draftsOnly ? (
+    <DraftListView
+      base={base}
+      params={carried}
+      drafts={drafts}
+      inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
+      openThreadId={params.threadId}
+      openDraftId={params.draftId}
+      staffById={staffById}
+      currentUserId={user.id}
+      now={new Date()}
+      timezone={timezone}
+    />
+  ) : params.sentOnly ? (
+    <SentListView
+      base={base}
+      params={carried}
+      rows={sent}
+      total={sentTotal}
+      page={params.page}
+      openThreadId={params.threadId}
+      inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
+      staffById={staffById}
+      now={new Date()}
+      timezone={timezone}
+    />
+  ) : (
+    <ThreadListView
+      base={base}
+      params={carried}
+      rows={rows}
+      total={total}
+      page={params.page}
+      openThreadId={params.threadId}
+      staffById={staffById}
+      inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
+      showAvatars={settings.showAvatars}
+      neverSynced={neverSynced}
+      canManage={canManage}
+      searching={!!params.search}
+      now={new Date()}
+      timezone={timezone}
+    />
+  )
+
+  // Everything that is not a conversation but takes a conversation's place: a
+  // person's page, a contact card, an organisation, the importer, and the one
+  // apology for a compose window somebody cannot have. The first four wear a
+  // conversation's own header and body, so they need nothing round them; the
+  // bare notices are given their air by .uin-read > .uin-empty in the
+  // stylesheet rather than by a wrapper only some of them would want.
+  const otherPane = cannotComposePane ?? importPane ?? organisationPane ?? personPane
+  // Whether the right-hand half is showing something, which on a phone is the
+  // difference between showing the list and showing what was opened from it.
+  const opened = !!otherPane || !!threadPane
+
   return (
     // Everything this module puts on the page lives in one box that cannot be
     // wider than the page it is on. Every region inside already handles its own
-    // overflow - the tab strips scroll, the rows end in an ellipsis, the tables
-    // sit in their own scroller - so what this catches is bleed rather than
-    // content: one stray element a few hundred pixels too wide used to give the
-    // WHOLE admin page a horizontal scrollbar and a screenful of nothing to the
-    // right of it. `clip` rather than `hidden` on purpose: hidden would make
-    // this a scroll container and kill the sticky reading frame inside it.
+    // overflow - the rail scrolls, the rows end in an ellipsis, the tables sit
+    // in their own scroller - so what this catches is bleed rather than content:
+    // one stray element a few hundred pixels too wide used to give the WHOLE
+    // admin page a horizontal scrollbar and a screenful of nothing to the right
+    // of it. `clip` rather than `hidden` on purpose: hidden would make this a
+    // scroll container and kill the sticky frame inside it.
     <div className="uin-page">
       <InboxStyles />
-      {tabs}
 
-      {/* Nothing above Drafts or Sent: where a conversation stands, and who it
-          is assigned to, are questions about messages that have arrived. A
-          message nobody has sent yet, or one already gone, has neither. */}
-      {params.contactsOnly && (
-        <ContactsToolbar
-          base={base}
-          params={carried}
-          view={params.contactsView}
-          search={params.search}
-          peopleCount={contactCount}
-          organisationCount={organisationCount}
-          canEdit={canEditLinks}
-          canImport={canManage}
-          categories={categoryList.map((c) => ({ id: c.id, name: c.name, people: c.peopleCount }))}
-          categoryId={params.categoryId}
-        />
-      )}
+      <div className="uin-app" data-open={opened ? '1' : '0'} data-context={contextRail ? 'on' : 'off'}>
+        {rail}
 
-      {!listing && (
-        <>
-          <StatusTabs
-            base={base}
-            params={carried}
-            status={params.status}
-            counts={statuses}
-            search={params.search}
-            composeHref={composeHref}
-          />
-          <Filters
-            base={base}
-            params={carried}
-            unreadOnly={params.unreadOnly}
-            assignee={params.assignee}
-            search={params.search}
-            staff={staff}
-            currentUserId={user.id}
-            total={total}
-          />
-        </>
-      )}
-
-      <div
-        className="uin"
-        data-thread={
-          params.personId || params.threadId || organisationPane || importPane ? 'open' : 'closed'
-        }
-        data-context={contextRail ? 'on' : 'off'}
-      >
-        <div className="uin-listpane">
-          {params.contactsOnly ? (
-            showingOrganisations ? (
-              <OrganisationsListView
+        <div className="uin-col">
+          <div className="uin-col-head">
+            {/* A name for the list only where nothing else in the head says
+                one. Drafts and Sent have no tabs and no counts, so without this
+                they are an unlabelled column of rows; everywhere else the tab
+                row carries the total and the rail carries the name, and a third
+                thing saying it is a third thing to read. */}
+            {listing && !params.contactsOnly && (
+              <div className="uin-col-title">
+                <h2>{viewTitle}</h2>
+                <span className="uin-col-total">{headTotal}</span>
+              </div>
+            )}
+            {/* Nothing above Drafts or Sent: where a conversation stands, and
+                who it is assigned to, are questions about messages that have
+                arrived. A message nobody has sent yet, or one already gone, has
+                neither. */}
+            {params.contactsOnly ? (
+              <ContactsToolbar
                 base={base}
                 params={carried}
-                rows={organisations}
-                total={organisationsTotal}
-                page={params.page}
-                openOrganisationId={params.organisationId}
-                searching={!!params.search}
+                view={params.contactsView}
+                search={params.search}
+                peopleCount={contactCount}
+                organisationCount={organisationCount}
                 canEdit={canEditLinks}
+                canImport={canManage}
+                categories={categoryList.map((c) => ({ id: c.id, name: c.name, people: c.peopleCount }))}
+                categoryId={params.categoryId}
               />
-            ) : (
-              <ContactsListView
-                base={base}
-                params={carried}
-                rows={contacts}
-                categories={contactCategories}
-                total={contactsTotal}
-                page={params.page}
-                openPersonId={params.personId}
-                searching={!!params.search}
-                canEdit={canEditLinks}
-              />
-            )
-          ) : params.draftsOnly ? (
-            <DraftListView
-              base={base}
-              params={carried}
-              drafts={drafts}
-              inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
-              openThreadId={params.threadId}
-              openDraftId={params.draftId}
-              staffById={staffById}
-              currentUserId={user.id}
-              now={new Date()}
-              timezone={timezone}
-            />
-          ) : params.sentOnly ? (
-            <SentListView
-              base={base}
-              params={carried}
-              rows={sent}
-              total={sentTotal}
-              page={params.page}
-              openThreadId={params.threadId}
-              inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
-              staffById={staffById}
-              now={new Date()}
-              timezone={timezone}
-            />
-          ) : (
-            <ThreadListView
-              base={base}
-              params={carried}
-              rows={rows}
-              total={total}
-              page={params.page}
-              openThreadId={params.threadId}
-              staffById={staffById}
-              neverSynced={neverSynced}
-              canManage={canManage}
-              searching={!!params.search}
-              now={new Date()}
-              timezone={timezone}
-            />
+            ) : listing ? null : (
+              <>
+                <Filters
+                  base={base}
+                  params={carried}
+                  unreadOnly={params.unreadOnly}
+                  assignee={params.assignee}
+                  search={params.search}
+                  staff={staff}
+                  oldestFirst={params.oldestFirst}
+                />
+                <StatusTabs
+                  base={base}
+                  params={carried}
+                  status={params.status}
+                  counts={statuses}
+                  total={headTotal}
+                />
+              </>
+            )}
+          </div>
+
+          <div className="uin-col-scroll">{listView}</div>
+        </div>
+
+        {/* Always drawn, even with nothing in it. A right-hand half that appears
+            and disappears is a screen that jumps every time somebody opens a
+            row, and a mail program that shows a reading pane only once you have
+            picked something is not one anybody recognises. */}
+        <div className="uin-read">
+          {otherPane ?? threadPane ?? (
+            <div className="uin-nothing">
+              {InboxIcon}
+              <strong>Nothing open</strong>
+              {params.contactsOnly
+                ? 'Pick somebody from the list to see their card, everything they have written and everything the rest of the site knows about them.'
+                : 'Pick something from the list to read it. Everything you can then do with it - answering it, setting it aside, handing it on - is at the top of it.'}
+            </div>
           )}
         </div>
 
-        {cannotComposePane ?? importPane ?? organisationPane ?? personPane ?? threadPane}
         {contextRail}
       </div>
 
@@ -939,6 +1044,12 @@ export async function UnifiedInboxPanel({
       {composePane}
     </div>
   )
+}
+
+/** "1 conversation", "12 conversations". Here rather than inline because the
+ *  head of the list column says it about four different things. */
+function plural(n: number, one: string, many: string): string {
+  return n === 1 ? `1 ${one}` : `${n.toLocaleString('en-GB')} ${many}`
 }
 
 /** Why a conversation has nobody attached to it. Said plainly rather than left

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import type { ThreadListRow } from '@/modules/unified-inbox/lib/db'
 import {
+  avatarHref,
   channelLabel,
   formatWhen,
   inboxHref,
@@ -13,7 +14,8 @@ import {
   participantLabel,
   PER_PAGE,
 } from '@/modules/unified-inbox/lib/list'
-import { ChatIcon, FormIcon, InboundIcon, PaperclipIcon, PhoneIcon } from './icons'
+import { ChatIcon, FormIcon, InboundIcon, PaperclipIcon, PhoneIcon, ReplyIcon } from './icons'
+import { Avatar } from './Avatar'
 
 // The list of conversations. Every state it can be in - filtered to nothing,
 // searched for something that is not there, an inbox that has never collected
@@ -40,6 +42,12 @@ type Props = {
   page: number
   openThreadId: string | null
   staffById: Record<string, string>
+  /** What each inbox is called, so a row can say which of your addresses it
+   *  came in on when nobody has been handed it yet. */
+  inboxNames: Record<string, string>
+  /** Whether to ask for people's own pictures at all. Off unless the site has
+   *  switched it on - see Settings, People. */
+  showAvatars: boolean
   /** True when nothing has ever been collected AND this list is one that mail
    *  collection would fill, which is a different problem from a filter that
    *  matches nothing. */
@@ -76,7 +84,8 @@ function ChannelBadge({ channel }: { channel: string }) {
 }
 
 export function ThreadListView({
-  base, params, rows, total, page, openThreadId, staffById, neverSynced, canManage, searching, now, timezone,
+  base, params, rows, total, page, openThreadId, staffById, inboxNames, showAvatars,
+  neverSynced, canManage, searching, now, timezone,
 }: Props) {
   const router = useRouter()
   const pages = pageCount(total, PER_PAGE)
@@ -144,7 +153,7 @@ export function ThreadListView({
         ) : (
           <>
             <strong>Nothing here</strong>
-            Everything in this view has been dealt with. Try &ldquo;Everything&rdquo; above if you
+            Everything in this view has been dealt with. Try &ldquo;All&rdquo; above if you
             are looking for something you have already closed.
           </>
         )}
@@ -207,6 +216,11 @@ export function ThreadListView({
           const named = (row.participantName ?? row.participantAddress ?? '').trim() || null
           const open = row.id === openThreadId
           const assignee = row.assigneeUserId ? staffById[row.assigneeUserId] : null
+          // Whose desk it is on. A name once somebody has taken it, and the
+          // address it arrived at until then - which on a shared inbox is the
+          // more useful of the two anyway. Nothing at all on a conversation
+          // that landed in no inbox and belongs to nobody.
+          const other = assignee ?? (row.inboxId ? inboxNames[row.inboxId] ?? null : null)
           const ticked = picked.includes(row.id)
           return (
             <li key={row.id} className="uin-list-item" data-selected={ticked ? 'true' : undefined}>
@@ -221,22 +235,47 @@ export function ThreadListView({
                 href={inboxHref(base, params, { id: row.id })}
                 aria-current={open ? 'true' : undefined}
               >
-                <span className="uin-avatar-wrap">
-                  <span className="uin-avatar" aria-hidden="true">
-                    {named ? initialsFor(named) : InboundIcon}
-                  </span>
-                  <ChannelBadge channel={row.channel} />
-                </span>
+                <Avatar
+                  src={showAvatars ? avatarHref('person', row.personId) : null}
+                  badge={<ChannelBadge channel={row.channel} />}
+                  title={named ?? undefined}
+                >
+                  {named ? initialsFor(named) : InboundIcon}
+                </Avatar>
                 <span className="uin-row-main">
                   <span className="uin-row-who">
                     {row.unread && <span className="uin-row-dot" aria-hidden="true" />}
                     <span className={`uin-row-name${row.unread ? ' uin-row-name-unread' : ''}`}>{who}</span>
+                    {/* Who it is with at this end. A mail program shows the two
+                        halves of a conversation, and on a shared address "who is
+                        this one with" is the question the list is asked most:
+                        whoever has been handed it, or the address it came in on
+                        while nobody has. */}
+                    {other && (
+                      <>
+                        <span className="uin-row-arrow" aria-hidden="true">&rsaquo;</span>
+                        <span className="uin-row-to">{other}</span>
+                      </>
+                    )}
                     {row.unread && <span className="sr-only">(unread)</span>}
                   </span>
                   <span className="uin-row-subject">{row.subject || '(no subject)'}</span>
                   {/* Nothing rather than an empty line: a blank preview left a gap
                       under every subject that has none. */}
-                  {row.preview && <span className="uin-row-preview">{row.preview}</span>}
+                  {row.preview && (
+                    <span className="uin-row-preview">
+                      {/* The turned arrow a mail program puts against a thread
+                          whose last word was ours. It answers "am I waiting on
+                          them, or are they waiting on me" without opening
+                          anything. */}
+                      {row.lastDirection === 'out' && (
+                        <span className="uin-row-replied">
+                          {ReplyIcon}<span className="sr-only">You replied last.</span>
+                        </span>
+                      )}
+                      {row.preview}
+                    </span>
+                  )}
                 </span>
                 <span className="uin-row-meta">
                   <span className="uin-row-tags">
@@ -256,6 +295,14 @@ export function ThreadListView({
                         itself is a flex box, and text-overflow does nothing to
                         one of those. */}
                     {assignee && <span className="uin-tag"><span className="uin-tag-text">{assignee}</span></span>}
+                    {/* How many messages are in it, last so it sits hard against
+                        the edge under the date. One is not worth saying. */}
+                    {row.messageCount > 1 && (
+                      <span className="uin-count" title={`${row.messageCount} messages`}>
+                        {row.messageCount > 99 ? '99+' : row.messageCount}
+                        <span className="sr-only"> messages</span>
+                      </span>
+                    )}
                   </span>
                   <span>{formatWhen(row.lastMessageAt, now, timezone)}</span>
                 </span>

@@ -1,5 +1,6 @@
 import Link from 'next/link'
-import { inboxHref, initialsFor, pageCount, PER_PAGE } from '@/modules/unified-inbox/lib/list'
+import { avatarHref, inboxHref, initialsFor, pageCount, PER_PAGE } from '@/modules/unified-inbox/lib/list'
+import { Avatar } from './Avatar'
 import type { PersonListRow } from '@/modules/unified-inbox/lib/db'
 
 // The people half of the address book.
@@ -17,6 +18,9 @@ type Props = {
   base: string
   params: Record<string, string>
   rows: PersonListRow[]
+  /** Whether to ask for people's own pictures. Off unless the site has
+   *  switched it on - see Settings, People. */
+  showAvatars: boolean
   /** The labels on each of them, by person id, fetched once for the page. */
   categories: Record<string, string[]>
   total: number
@@ -32,7 +36,7 @@ function nameOf(row: PersonListRow): string {
 }
 
 export function ContactsListView({
-  base, params, rows, categories, total, page, openPersonId, searching, canEdit,
+  base, params, rows, categories, total, page, openPersonId, searching, canEdit, showAvatars,
 }: Props) {
   const pages = pageCount(total, PER_PAGE)
 
@@ -63,9 +67,9 @@ export function ContactsListView({
                 aria-current={open ? 'true' : undefined}
                 href={inboxHref(base, params, { person: row.id, org: null, edit: null, import: null })}
               >
-                <span className="uin-avatar-wrap">
-                  <span className="uin-avatar" aria-hidden="true">{initialsFor(name)}</span>
-                </span>
+                <Avatar src={showAvatars ? avatarHref('person', row.id) : null} title={name}>
+                  {initialsFor(name)}
+                </Avatar>
                 <span className="uin-row-main">
                   <span className="uin-row-who">
                     <span className="uin-row-name">{name}</span>

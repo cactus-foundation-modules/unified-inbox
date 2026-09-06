@@ -7,7 +7,7 @@ import { inboxHref } from '@/modules/unified-inbox/lib/list'
 import { joinCategories, splitCategories, type ContactDraft } from '@/modules/unified-inbox/lib/contacts'
 import { CardField, CardNotes, CardSection } from './ContactFieldRows'
 import { CategoryPicker } from './CategoryPicker'
-import { BackIcon } from './icons'
+import { BackIcon, CloseIcon } from './icons'
 
 // One contact, written down.
 //
@@ -119,16 +119,14 @@ export function ContactCard({ base, params, personId, initial, onSaved }: Props)
   return (
     <div className="uin-thread">
       <div className="uin-thread-head">
-        <Link
-          className="uin-chip uin-back"
-          href={inboxHref(base, params, { person: null, import: null })}
-          style={{ justifySelf: 'start' }}
-        >
-          <span className="uin-back-phone" aria-hidden="true">{BackIcon} Back to the list</span>
-          <span className="uin-back-wide" aria-hidden="true">&times; Close</span>
-          <span className="sr-only">Close this card and go back to the list</span>
-        </Link>
-        <h2 className="uin-thread-subject">{personId ? 'Edit this contact' : 'New contact'}</h2>
+        <div className="uin-thread-top">
+          <h2 className="uin-thread-subject">{personId ? 'Edit this contact' : 'New contact'}</h2>
+          <Link className="uin-thread-close" href={inboxHref(base, params, { person: null, import: null })}>
+            <span className="uin-back-phone" aria-hidden="true">{BackIcon} Back to the list</span>
+            <span className="uin-back-wide" aria-hidden="true">{CloseIcon}</span>
+            <span className="sr-only">Close this card and go back to the list</span>
+          </Link>
+        </div>
       </div>
 
       <div className="uin-thread-body">

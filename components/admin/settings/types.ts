@@ -79,6 +79,7 @@ export type Settings = {
   quoteNumberPattern: string | null
   trackOpens: boolean
   requestReadReceipts: boolean
+  showAvatars: boolean
   autoCheckSeconds: number | null
 }
 

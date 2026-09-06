@@ -31,3 +31,11 @@ export const FormIcon = <svg {...ICON}><path d="M5 4h14v16H5z" /><path d="M8.5 9
 export const InboxIcon = <svg {...ICON}><path d="M4 13 6 5h12l2 8v6H4z" /><path d="M4 13h4l1 2.5h6L16 13h4" /></svg>
 export const RefreshIcon = <svg {...ICON}><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" /><path d="M19.5 3.5V9H14" /></svg>
 export const CloseIcon = <svg {...ICON}><path d="m6 6 12 12" /><path d="m18 6-12 12" /></svg>
+export const PeopleIcon = <svg {...ICON}><circle cx="9" cy="8" r="3.2" /><path d="M3.5 19a5.5 5.5 0 0 1 11 0" /><path d="M16 5.5a3 3 0 0 1 0 5.6" /><path d="M17.5 13.5A5.5 5.5 0 0 1 20.5 19" /></svg>
+export const SendIcon = <svg {...ICON}><path d="M20 4 3.5 10.5l6.5 2.5 2.5 6.5z" /><path d="m10 13 10-9" /></svg>
+export const FileIcon = <svg {...ICON}><path d="M6 3h7l5 5v13H6z" /><path d="M13 3v5h5" /></svg>
+export const MegaphoneIcon = <svg {...ICON}><path d="M4 10v4h3l7 4V6l-7 4z" /><path d="M17 9.5a3.5 3.5 0 0 1 0 5" /><path d="M7 14v4h3" /></svg>
+export const FolderIcon = <svg {...ICON}><path d="M3 6h6l2 2.5h10V19H3z" /></svg>
+export const ReplyIcon = <svg {...ICON}><path d="M9 7 4 12l5 5" /><path d="M4 12h9a6 6 0 0 1 6 6v1" /></svg>
+export const SortIcon = <svg {...ICON}><path d="M4 7h13" /><path d="M4 12h9" /><path d="M4 17h5" /></svg>
+export const AssignedIcon = <svg {...ICON}><circle cx="12" cy="8" r="3.2" /><path d="M5.5 19a6.5 6.5 0 0 1 13 0" /></svg>

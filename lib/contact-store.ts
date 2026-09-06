@@ -258,6 +258,10 @@ export type ImportOptions = {
    *  opens on: a file with a blank column would otherwise blank that field for
    *  everybody in it. */
   updateExisting: boolean
+  /** How many data rows came before these, when the file is being brought in
+   *  a chunk at a time. Only ever used to number a problem: "row 1,204" has to
+   *  mean the line the spreadsheet shows, not the line in the chunk. */
+  rowOffset?: number
   /** A category to put every contact in the file into, on top of whatever a
    *  category column on the row says. "These four hundred are all hauliers" is
    *  a thing somebody knows about the file rather than something written in it,
@@ -307,8 +311,9 @@ export async function importContacts(
   const categories = new Map<string, string>()
 
   for (const [index, row] of rows.entries()) {
-    // +2: the header is row one, and a spreadsheet counts from one.
-    const number = index + 2
+    // +2: the header is row one, and a spreadsheet counts from one. Plus
+    // whatever went before, when the file is arriving in chunks.
+    const number = index + 2 + (opts.rowOffset ?? 0)
     const draft = rowToContact(row, map)
 
     if (!isWorthImporting(draft)) {

@@ -11,12 +11,13 @@ import {
   guessColumnMap,
   isWorthImporting,
   MAX_IMPORT_ROWS,
+  MAX_REPORTED_PROBLEMS,
   parseCsv,
   rowToContact,
   type ColumnTarget,
   type ImportSummary,
 } from '@/modules/unified-inbox/lib/contacts'
-import { BackIcon } from './icons'
+import { BackIcon, CloseIcon } from './icons'
 
 // Bringing an address book in from somewhere else.
 //
@@ -46,6 +47,21 @@ type Props = {
 /** How many rows of the file are shown before the button. Enough to notice a
  *  column in the wrong place, few enough to still see the button. */
 const PREVIEW_ROWS = 5
+
+/**
+ * How many rows go up in one request.
+ *
+ * The whole file used to go in one body, which is what made a big import fail:
+ * a few thousand contacts is megabytes of JSON and the host refuses a body past
+ * its own ceiling before any of our code runs - so the answer came back as a
+ * parse failure and the screen said "That file could not be read", which was a
+ * sentence about the file and the file was fine.
+ *
+ * Two hundred and fifty rows is a few hundred kilobytes at the very worst,
+ * which nothing refuses, and it gives the count under the button something
+ * honest to say while a long file goes up.
+ */
+const IMPORT_CHUNK = 250
 
 /** What the target menu offers, grouped the way the card is. 'fullName' is
  *  offered alongside the fields because a single "Name" column is the commonest
@@ -79,6 +95,8 @@ export function ContactImport({ base, params }: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [summary, setSummary] = useState<ImportSummary | null>(null)
+  /** How many rows have been dealt with so far, while a long file goes up. */
+  const [done, setDone] = useState(0)
 
   // The labels the site already has, offered under the box so a file is filed
   // under an existing one rather than under a new one spelt slightly differently.
@@ -149,28 +167,72 @@ export function ContactImport({ base, params }: Props) {
     })
   }
 
+  /**
+   * Bring the file in, a chunk at a time, adding the answers up.
+   *
+   * Stops at the first chunk that is refused and keeps what went before, which
+   * is the honest thing to do: those contacts really are in the address book
+   * now, and telling somebody nothing happened would send them to import the
+   * same file again on top of it.
+   */
   const run = async () => {
     setBusy(true)
     setError('')
     setSummary(null)
+    setDone(0)
+
+    const total: ImportSummary = {
+      created: 0, updated: 0, skipped: 0, organisationsCreated: 0, categoriesCreated: 0, problems: [],
+    }
+
     try {
-      const response = await fetch('/api/m/unified-inbox/contacts/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          columns: map, rows, updateExisting, categoryName: categoryName.trim() || null,
-        }),
-      })
-      const body = await response.json().catch(() => null) as
-        { error?: string; summary?: ImportSummary } | null
-      if (!response.ok || !body?.summary) {
-        setError(body?.error ?? 'That import did not run.')
-        return
+      for (let offset = 0; offset < rows.length; offset += IMPORT_CHUNK) {
+        const chunk = rows.slice(offset, offset + IMPORT_CHUNK)
+        const response = await fetch('/api/m/unified-inbox/contacts/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            columns: map,
+            rows: chunk,
+            rowOffset: offset,
+            updateExisting,
+            // Only the first chunk carries it: the category is found or created
+            // on the way in, and saying it four times would count it as created
+            // four times.
+            categoryName: offset === 0 ? (categoryName.trim() || null) : null,
+          }),
+        })
+        const body = await response.json().catch(() => null) as
+          { error?: string; summary?: ImportSummary } | null
+
+        if (!response.ok || !body?.summary) {
+          setError([
+            body?.error ?? 'That import did not run.',
+            offset > 0
+              ? `The first ${offset.toLocaleString('en-GB')} rows did go in, so bring the rest in on their own rather than running the whole file again.`
+              : '',
+          ].filter(Boolean).join(' '))
+          if (offset > 0) setSummary(total)
+          return
+        }
+
+        total.created += body.summary.created
+        total.updated += body.summary.updated
+        total.skipped += body.summary.skipped
+        total.organisationsCreated += body.summary.organisationsCreated
+        total.categoriesCreated += body.summary.categoriesCreated
+        // Capped the same way one run's own list is: a file with a thousand
+        // bad rows is fixed in the file, not read down a screen.
+        for (const problem of body.summary.problems) {
+          if (total.problems.length < MAX_REPORTED_PROBLEMS) total.problems.push(problem)
+        }
+        setDone(Math.min(offset + IMPORT_CHUNK, rows.length))
       }
-      setSummary(body.summary)
+
+      setSummary(total)
       router.refresh()
     } catch {
-      setError('The site could not be reached, so nothing was brought in.')
+      setError('The site could not be reached, so nothing more was brought in.')
     } finally {
       setBusy(false)
     }
@@ -181,16 +243,14 @@ export function ContactImport({ base, params }: Props) {
   return (
     <div className="uin-thread">
       <div className="uin-thread-head">
-        <Link
-          className="uin-chip uin-back"
-          href={inboxHref(base, params, { import: null })}
-          style={{ justifySelf: 'start' }}
-        >
-          <span className="uin-back-phone" aria-hidden="true">{BackIcon} Back to the list</span>
-          <span className="uin-back-wide" aria-hidden="true">&times; Close</span>
-          <span className="sr-only">Close the importer and go back to the list</span>
-        </Link>
-        <h2 className="uin-thread-subject">Import contacts</h2>
+        <div className="uin-thread-top">
+          <h2 className="uin-thread-subject">Import contacts</h2>
+          <Link className="uin-thread-close" href={inboxHref(base, params, { import: null })}>
+            <span className="uin-back-phone" aria-hidden="true">{BackIcon} Back to the list</span>
+            <span className="uin-back-wide" aria-hidden="true">{CloseIcon}</span>
+            <span className="sr-only">Close the importer and go back to the list</span>
+          </Link>
+        </div>
         <div className="uin-thread-meta">
           <span>The file stays on this computer. Only the rows you can see below are sent.</span>
         </div>
@@ -330,7 +390,12 @@ export function ContactImport({ base, params }: Props) {
                         onClick={() => { void run() }}
                       >
                         {busy
-                          ? 'Bringing them in...'
+                          // A long file goes up in chunks, so the button can
+                          // say how far it has got rather than sitting on one
+                          // word for a minute and a half.
+                          ? (rows.length > IMPORT_CHUNK
+                            ? `Bringing them in... ${done.toLocaleString('en-GB')} of ${rows.length.toLocaleString('en-GB')}`
+                            : 'Bringing them in...')
                           : `Import ${usableRows.toLocaleString('en-GB')} ${usableRows === 1 ? 'contact' : 'contacts'}`}
                       </button>
                     </div>

@@ -125,6 +125,7 @@ const Body = z.object({
   quoteNumberPattern: Pattern,
   trackOpens: z.boolean().optional(),
   requestReadReceipts: z.boolean().optional(),
+  showAvatars: z.boolean().optional(),
   // NULL is off. The floor is the check-now route's own cooldown for a round
   // nobody asked for: an account visited inside that minute is stepped over
   // there anyway, so a shorter interval would buy nothing but function calls.

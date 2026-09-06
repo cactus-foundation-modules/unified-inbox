@@ -33,6 +33,7 @@ export function PeoplePanel({ settings, inboxes, counts, categories, busy, call 
   const [order, setOrder] = useState(settings.orderNumberPattern ?? '')
   const [po, setPo] = useState(settings.poNumberPattern ?? '')
   const [quote, setQuote] = useState(settings.quoteNumberPattern ?? '')
+  const [avatars, setAvatars] = useState(settings.showAvatars)
   // A pattern that cannot be searched for used to be accepted here and only fall
   // over later, out of sight.
   const [patternError, setPatternError] = useState<string | null>(null)
@@ -45,6 +46,7 @@ export function PeoplePanel({ settings, inboxes, counts, categories, busy, call 
     setOrder(settings.orderNumberPattern ?? '')
     setPo(settings.poNumberPattern ?? '')
     setQuote(settings.quoteNumberPattern ?? '')
+    setAvatars(settings.showAvatars)
   }
 
   // What the module will treat as one of your own domains if you leave it to
@@ -80,6 +82,7 @@ export function PeoplePanel({ settings, inboxes, counts, categories, busy, call 
         orderNumberPattern: order.trim() === '' ? null : order,
         poNumberPattern: po.trim() === '' ? null : po,
         quoteNumberPattern: quote.trim() === '' ? null : quote,
+        showAvatars: avatars,
       }),
     }, 'People settings saved.')
   }
@@ -133,6 +136,30 @@ export function PeoplePanel({ settings, inboxes, counts, categories, busy, call 
             provider does not get mistaken for the company they work for.
           </span>
         </div>
+      </FieldGroup>
+
+      <FieldGroup
+        title="Their own picture instead of their initials"
+        hint="Off unless you turn it on, and worth reading before you do."
+      >
+        <CheckField
+          label="Show people’s own pictures beside their messages"
+          checked={avatars}
+          onChange={setAvatars}
+          hint={<>
+            Plenty of people have published a picture of themselves against their email address at
+            Gravatar or Libravatar, and this puts it beside their messages in place of their
+            initials. Nobody is asked to sign up for anything and nothing changes for anyone who
+            has not.
+            {' '}
+            <strong>The trade is this:</strong> to find out whether somebody has a picture, this
+            site has to ask those two services about their address - so those services learn that
+            you hold it. The address itself is never sent, only a one-way scramble of it, the
+            asking is done by the site rather than by your browser, and the picture is served from
+            your own site afterwards. Even so, it is somebody else being told something about your
+            customer, which is why it is your decision rather than ours.
+          </>}
+        />
       </FieldGroup>
 
       <CategoriesSection categories={categories} busy={busy} call={call} />

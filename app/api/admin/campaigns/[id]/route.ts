@@ -7,6 +7,7 @@ import { canReplyToInbox } from '@/modules/unified-inbox/lib/access'
 import { getInbox, getSettings } from '@/modules/unified-inbox/lib/db'
 import { decideSendAt, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
 import { describeCampaignFault } from '@/modules/unified-inbox/lib/campaigns/faults'
+import { sameCategoryIds } from '@/modules/unified-inbox/lib/campaigns/guards'
 import { assessReadiness } from '@/modules/unified-inbox/lib/campaigns/readiness'
 import { OPEN_WINDOW, clockToMinute, forecastFinish, isCalendarDate } from '@/modules/unified-inbox/lib/campaigns/window'
 import {
@@ -106,7 +107,12 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   if (!isDraft && data.inboxId !== undefined && data.inboxId !== campaign.inboxId) {
     return errorResponse('The address it sends from cannot be changed once it has started. Stop it first.')
   }
-  if (!isDraft && data.categoryIds !== undefined) {
+  // Refused only when it would actually CHANGE, not merely because the field
+  // arrived. The whole form saves in one press, so a campaign that has started
+  // sends its own unchanged labels back on every save - and refusing that made
+  // every started campaign unsaveable in every other respect too.
+  if (!isDraft && data.categoryIds !== undefined
+    && !sameCategoryIds(data.categoryIds, campaign.categoryIds)) {
     return errorResponse('Who it goes to cannot be changed once it has started. Use Top up to add people who have joined since.')
   }
 

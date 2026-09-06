@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import { inboxHref } from '@/modules/unified-inbox/lib/list'
 import { CardField, CardNotes, CardSection } from './ContactFieldRows'
 import { ConfirmDialog } from './ConfirmDialog'
-import { BackIcon } from './icons'
+import { BackIcon, CloseIcon } from './icons'
 
 // One organisation, written down.
 //
@@ -127,16 +127,14 @@ export function OrganisationCard({
   return (
     <div className="uin-thread">
       <div className="uin-thread-head">
-        <Link
-          className="uin-chip uin-back"
-          href={inboxHref(base, params, { org: null })}
-          style={{ justifySelf: 'start' }}
-        >
-          <span className="uin-back-phone" aria-hidden="true">{BackIcon} Back to the list</span>
-          <span className="uin-back-wide" aria-hidden="true">&times; Close</span>
-          <span className="sr-only">Close this organisation and go back to the list</span>
-        </Link>
-        <h2 className="uin-thread-subject">{organisationId ? draft.name || 'This organisation' : 'New organisation'}</h2>
+        <div className="uin-thread-top">
+          <h2 className="uin-thread-subject">{organisationId ? draft.name || 'This organisation' : 'New organisation'}</h2>
+          <Link className="uin-thread-close" href={inboxHref(base, params, { org: null })}>
+            <span className="uin-back-phone" aria-hidden="true">{BackIcon} Back to the list</span>
+            <span className="uin-back-wide" aria-hidden="true">{CloseIcon}</span>
+            <span className="sr-only">Close this organisation and go back to the list</span>
+          </Link>
+        </div>
         {organisationId && peopleCount > 0 && (
           <div className="uin-thread-meta">
             <Link href={inboxHref(base, params, { view: null, org: organisationId })}>

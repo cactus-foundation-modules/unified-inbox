@@ -12,12 +12,16 @@ import type { CampaignDraft } from '../draft'
 // still only in a box on the screen tells you nothing.
 
 export function WhatSection({
-  draft, detail, editable, running, onChange, onTest,
+  draft, detail, firstLocked, onChange, onTest,
 }: {
   draft: CampaignDraft
   detail: CampaignDetail
-  editable: boolean
-  running: boolean
+  /** Whether the FIRST message is fixed - true the moment a campaign leaves
+   *  draft, which is the server's own rule. Some people have had it, and two
+   *  versions of one mailshot with no way to tell who got which is worse than
+   *  a box that will not take a change. The follow-ups are never locked: a
+   *  chase nobody has reached yet is still only writing. */
+  firstLocked: boolean
   onChange: (patch: Partial<CampaignDraft>) => void
   /** Saves what is on screen, then sends one to this address. Comes back with
    *  whatever went wrong, or null. */
@@ -76,7 +80,7 @@ export function WhatSection({
             <span className="uin-camp-hint">
               {entry.stepIndex === 0 ? 'What everybody gets' : 'Only to people who have not replied'}
             </span>
-            {entry.stepIndex > 0 && editable && (
+            {entry.stepIndex > 0 && (
               <button type="button" className="btn btn-secondary btn-sm" onClick={() => removeChase(entry.stepIndex)}>
                 Remove
               </button>
@@ -104,13 +108,19 @@ export function WhatSection({
             </div>
           )}
 
+          {entry.stepIndex === 0 && firstLocked && (
+            <span className="uin-camp-hint">
+              This one has gone out to people, so its wording is fixed. The follow-ups below can still be changed.
+            </span>
+          )}
+
           <div className="uin-camp-field">
             <label htmlFor={`subject-${entry.stepIndex}`}>Subject</label>
             <input
               id={`subject-${entry.stepIndex}`}
               className="form-control"
               value={entry.subject ?? ''}
-              readOnly={entry.stepIndex === 0 && running}
+              readOnly={entry.stepIndex === 0 && firstLocked}
               placeholder={entry.stepIndex === 0 ? 'A short, plain subject' : 'Leave empty to reply to the first one'}
               onChange={(event) => update(entry.stepIndex, { subject: event.target.value || null })}
             />
@@ -129,7 +139,7 @@ export function WhatSection({
               className="form-control"
               rows={entry.stepIndex === 0 ? 12 : 7}
               value={entry.body}
-              readOnly={entry.stepIndex === 0 && running}
+              readOnly={entry.stepIndex === 0 && firstLocked}
               onChange={(event) => update(entry.stepIndex, { body: event.target.value })}
             />
             <div className="uin-camp-tags">
@@ -153,7 +163,7 @@ export function WhatSection({
         </div>
       ))}
 
-      {draft.steps.length < 4 && editable && (
+      {draft.steps.length < 4 && (
         <div>
           <button type="button" className="btn btn-secondary btn-sm" onClick={addChase}>
             Add a follow-up

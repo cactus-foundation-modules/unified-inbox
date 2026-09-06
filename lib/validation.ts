@@ -221,8 +221,15 @@ export const CategoryOrderBody = z.object({
 export const ContactImportBody = z.object({
   /** One entry per column, in the file's own order. '' is "leave this column
    *  out", which is the honest answer for most of what Outlook exports. */
-  columns: z.array(z.string().max(60)).max(200),
-  rows: z.array(z.array(z.string().max(5000)).max(200)).max(5000),
+  columns: z.array(z.string().max(60)).max(500),
+  /** ONE BATCH of the file, not the whole thing - the screen sends it in
+   *  chunks, so none of these ceilings is what limits an import any more.
+   *  They are here to refuse something absurd, not to be met. A cell may be
+   *  long: a notes column pasted out of a CRM regularly runs to a page. */
+  rows: z.array(z.array(z.string().max(20000)).max(500)).max(1000),
+  /** How many data rows went before this batch, so a problem can be reported
+   *  against the line the spreadsheet shows rather than the line in the chunk. */
+  rowOffset: z.number().int().min(0).max(1000000).default(0),
   updateExisting: z.boolean().default(false),
   /** One category for everybody in the file, on top of whatever a category
    *  column says. "These four hundred are all hauliers" is a thing somebody

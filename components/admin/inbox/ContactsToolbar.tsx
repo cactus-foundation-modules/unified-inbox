@@ -1,16 +1,15 @@
 import Link from 'next/link'
-import { TabStrip } from '@/components/admin/TabStrip'
 import { QueryForm } from './QueryForm'
 import { inboxHref, NEW_CONTACT, type ContactsView } from '@/modules/unified-inbox/lib/list'
 import { PenIcon, SearchIcon } from './icons'
 
-// The address book's own row: which half of it is being listed, a search across
-// it, and the two ways of putting something into it.
+// The address book's own head: which half of it is being listed, a search across
+// it, the labels it is filed under, and the two ways of putting something into
+// it.
 //
-// The same shape as the status row over the conversations, and for the same
-// reason: it is the same kind of choice one level down - what the list on the
-// left is a list of - and the admin already stacks tabs this way where one
-// choice sits inside another.
+// The same shape as the tab row over the conversations, and for the same
+// reason: it is the same kind of choice one level down - what the list under it
+// is a list of - and it has the same one column of width to do it in.
 //
 // Everything is a change of address rather than client state, so the view
 // somebody is looking at can be sent to a colleague and the back button behaves.
@@ -51,22 +50,22 @@ export function ContactsToolbar({
     ),
   )
 
-  const tab = (value: ContactsView, label: string, count: number) => ({
-    key: value,
-    active: view === value,
-    href: inboxHref(base, params, { view: value === 'people' ? null : value, cat: null, ...reset }),
-    label: (
-      <span className="uin-tab">
-        <span className="uin-tab-name">{label}</span>
-        {count > 0 && (
-          <span className="uin-tab-count uin-tab-count-quiet">
-            {count > 999 ? '999+' : count}
-            <span className="sr-only"> {label.toLowerCase()}</span>
-          </span>
-        )}
-      </span>
-    ),
-  })
+  const half = (value: ContactsView, label: string, count: number) => (
+    <Link
+      key={value}
+      className="uin-tab"
+      href={inboxHref(base, params, { view: value === 'people' ? null : value, cat: null, ...reset })}
+      aria-current={view === value ? 'true' : undefined}
+    >
+      {label}
+      {count > 0 && (
+        <span className="uin-tab-count">
+          {count > 999 ? '999+' : count}
+          <span className="sr-only"> {label.toLowerCase()}</span>
+        </span>
+      )}
+    </Link>
+  )
 
   // Only over the people, and only where there are any: a label is something on
   // a contact, and a row of filters that narrows nothing is a row in the way.
@@ -74,84 +73,79 @@ export function ContactsToolbar({
 
   return (
     <>
-    <TabStrip
-      style={{ marginBottom: '0.75rem' }}
-      items={[
-        tab('people', 'People', peopleCount),
-        tab('organisations', 'Organisations', organisationCount),
-      ]}
-      trailing={
-        <div className="uin-search-row">
-          <QueryForm base={base} hidden={hidden} className="uin-search">
-            <label className="sr-only" htmlFor="uin-contact-search">Search the address book</label>
-            <input
-              id="uin-contact-search"
-              name="q"
-              type="search"
-              defaultValue={search ?? ''}
-              placeholder="Name, address, number or postcode"
-            />
-            <button type="submit" className="btn btn-secondary btn-sm" aria-label="Search">
-              {SearchIcon}
-            </button>
-          </QueryForm>
-          {canImport && view === 'people' && (
-            <Link
-              className="btn btn-secondary btn-sm"
-              href={inboxHref(base, params, { import: '1', person: null, org: null, edit: null })}
-            >
-              Import a file
-            </Link>
-          )}
-          {canEdit && (
-            <Link
-              className="uin-compose"
-              href={view === 'organisations'
-                ? inboxHref(base, params, { org: NEW_CONTACT, person: null, import: null, edit: null })
-                : inboxHref(base, params, { person: NEW_CONTACT, org: null, import: null, edit: null })}
-            >
-              {PenIcon}
-              <span className="uin-compose-words">
-                {view === 'organisations' ? 'New organisation' : 'New contact'}
-              </span>
-            </Link>
-          )}
-        </div>
-      }
-    />
-
-    {showCategories && (
-      <div className="uin-toolbar">
-        <Link
-          className="uin-chip"
-          aria-current={categoryId ? undefined : 'true'}
-          href={inboxHref(base, params, { cat: null, ...reset })}
-        >
-          Everybody
-        </Link>
-        {categories.map((category) => (
+      <div className="uin-search-row">
+        <QueryForm base={base} hidden={hidden} className="uin-search">
+          <label className="sr-only" htmlFor="uin-contact-search">Search the address book</label>
+          <span className="uin-search-icon" aria-hidden="true">{SearchIcon}</span>
+          <input
+            id="uin-contact-search"
+            name="q"
+            type="search"
+            defaultValue={search ?? ''}
+            placeholder="Name, address, number or postcode"
+          />
+          <button type="submit" className="sr-only">Search</button>
+        </QueryForm>
+        {canImport && view === 'people' && (
           <Link
-            key={category.id}
-            className="uin-chip"
-            aria-current={categoryId === category.id ? 'true' : undefined}
-            href={inboxHref(base, params, {
-              // Pressing the one already on takes the filter off, which is what
-              // pressing a pressed thing should do.
-              cat: categoryId === category.id ? null : category.id,
-              ...reset,
-            })}
+            className="btn btn-secondary btn-sm"
+            href={inboxHref(base, params, { import: '1', person: null, org: null, edit: null })}
           >
-            {category.name}
-            {category.people > 0 && (
-              <span className="uin-tab-count uin-tab-count-quiet">
-                {category.people > 999 ? '999+' : category.people}
-                <span className="sr-only"> contacts</span>
-              </span>
-            )}
+            Import
           </Link>
-        ))}
+        )}
+        {canEdit && (
+          <Link
+            className="uin-compose"
+            href={view === 'organisations'
+              ? inboxHref(base, params, { org: NEW_CONTACT, person: null, import: null, edit: null })
+              : inboxHref(base, params, { person: NEW_CONTACT, org: null, import: null, edit: null })}
+          >
+            {PenIcon}
+            <span className="uin-compose-words">
+              {view === 'organisations' ? 'New organisation' : 'New contact'}
+            </span>
+          </Link>
+        )}
       </div>
-    )}
+
+      <div className="uin-tabs" role="group" aria-label="Which half of the address book">
+        {half('people', 'People', peopleCount)}
+        {half('organisations', 'Organisations', organisationCount)}
+      </div>
+
+      {showCategories && (
+        <div className="uin-toolbar">
+          <Link
+            className="uin-chip"
+            aria-current={categoryId ? undefined : 'true'}
+            href={inboxHref(base, params, { cat: null, ...reset })}
+          >
+            Everybody
+          </Link>
+          {categories.map((category) => (
+            <Link
+              key={category.id}
+              className="uin-chip"
+              aria-current={categoryId === category.id ? 'true' : undefined}
+              href={inboxHref(base, params, {
+                // Pressing the one already on takes the filter off, which is what
+                // pressing a pressed thing should do.
+                cat: categoryId === category.id ? null : category.id,
+                ...reset,
+              })}
+            >
+              {category.name}
+              {category.people > 0 && (
+                <span className="uin-tab-count">
+                  {category.people > 999 ? '999+' : category.people}
+                  <span className="sr-only"> contacts</span>
+                </span>
+              )}
+            </Link>
+          ))}
+        </div>
+      )}
     </>
   )
 }

@@ -1,0 +1,22 @@
+-- Unified Inbox - Migration 028: people's own pictures.
+--
+-- A NEW numbered file rather than an edit to an earlier one: a module migration
+-- is recorded once per install and never runs again, so editing 001 reaches a
+-- fresh install and nobody else. Everything below is idempotent, and there is
+-- no dollar-quoting anywhere - comments included - because the backup
+-- round-trip harness skips a whole module whose migration files carry a pair of
+-- them, which buys a green gate that proved nothing.
+--
+-- BOOLEAN is already stored by this module (auto_link, newest_first,
+-- track_opens), so the schema-coverage backstop needs no new branch.
+
+-- Whether to look somebody up on Gravatar or Libravatar and show their own
+-- picture beside their messages, instead of their initials.
+--
+-- FALSE, and false for every install that takes this update. Asking a third
+-- party whether it holds a picture for an address tells that third party we
+-- hold the address, and the addresses in here belong to customers who never
+-- agreed to that. It is the same line this module already takes about read
+-- receipts: nothing that involves telling somebody else about a customer
+-- arrives switched on with an update. One tick in Settings turns it on.
+ALTER TABLE "uin_settings" ADD COLUMN IF NOT EXISTS "show_avatars" BOOLEAN NOT NULL DEFAULT FALSE;

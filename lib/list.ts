@@ -56,6 +56,10 @@ export type InboxParams = {
   editingContact: boolean
   status: StatusFilter
   unreadOnly: boolean
+  /** Which end of the list to start at. Only ever the two, and only ever off
+   *  the one word in the address - nothing a reader types reaches an ORDER BY
+   *  (see THREAD_LIST_ORDER in lib/db.ts). */
+  oldestFirst: boolean
   /** A user id, the literal 'unassigned', or null for no filter. */
   assignee: string | null
   search: string | null
@@ -113,6 +117,7 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
     editingContact: sp.edit === '1',
     status: rawStatus && STATUSES.includes(rawStatus) ? rawStatus : 'open',
     unreadOnly: sp.unread === '1',
+    oldestFirst: sp.sort === 'oldest',
     assignee: sp.assignee ? sp.assignee : null,
     search: search.length > 0 ? search.slice(0, 200) : null,
     page: Math.max(1, parseInt(sp.page ?? '1', 10) || 1),
@@ -214,6 +219,21 @@ const CHANNEL_LABELS: Record<string, string> = {
 /** What a channel is called in front of somebody who does not build websites. */
 export function channelLabel(channel: string): string {
   return CHANNEL_LABELS[channel] ?? 'Message'
+}
+
+/**
+ * Where somebody's own picture is served from, or null when there is nobody to
+ * look up.
+ *
+ * Addressed by WHO rather than by what their email hashes to, deliberately: the
+ * hash never appears in the page, so nothing in the markup can be lifted and
+ * asked of Gravatar by anybody else. The route does the looking up and answers
+ * 404 when nobody has published one, which is what the initials underneath are
+ * for. Here rather than in lib/avatars.ts because this file is read by the
+ * browser and that one is not - it opens DNS sockets.
+ */
+export function avatarHref(kind: 'person' | 'user', id: string | null | undefined): string | null {
+  return id ? `/api/m/unified-inbox/avatar/${kind}/${encodeURIComponent(id)}` : null
 }
 
 /** The name to show for a conversation, falling back through what we actually

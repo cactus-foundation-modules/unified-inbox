@@ -238,6 +238,14 @@ export type UnifiedInboxSettings = {
    *  receipt. Most ignore it; the ones that do not ask the reader first, which
    *  is the honest version of the same question. */
   requestReadReceipts: boolean
+  /** Whether to show people's own pictures from Gravatar and Libravatar in
+   *  place of their initials. Off until somebody switches it on: asking a
+   *  third party whether it holds a picture for an address tells that third
+   *  party we hold the address, and these are customers' addresses. The
+   *  lookup is always made by the server and the picture always served from
+   *  this site, so no address, no hash and no reader's IP ever reaches
+   *  Gravatar or Libravatar (see lib/avatars.ts). */
+  showAvatars: boolean
   /** How many days must pass before any campaign may write to the same address
    *  again. A guard rather than a preference, and site-wide rather than per
    *  campaign for exactly that reason: a rule one campaign can opt out of stops

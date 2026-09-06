@@ -567,6 +567,7 @@ const DEFAULT_SETTINGS: UnifiedInboxSettings = {
   quoteNumberPattern: null,
   trackOpens: false,
   requestReadReceipts: false,
+  showAvatars: false,
   autoCheckSeconds: null,
   campaignCooldownDays: 7,
   campaignLogMonths: 24,
@@ -610,6 +611,10 @@ export async function getSettings(): Promise<UnifiedInboxSettings> {
     // tracked by a restore.
     trackOpens: !!r.track_opens,
     requestReadReceipts: !!r.request_read_receipts,
+    // Off for a row written before the column existed, which is the same answer
+    // a fresh install gets and the only safe one: nobody's customers are opted
+    // into being looked up somewhere else by a restore.
+    showAvatars: !!r.show_avatars,
     // Off for a row written before the column existed, and off on a fresh
     // install: checking every minute is a decision about somebody's hosting
     // bill, and it is theirs to make rather than ours to assume.
@@ -648,6 +653,7 @@ export async function updateSettings(data: Partial<UnifiedInboxSettings>): Promi
   if (data.quoteNumberPattern !== undefined) sets.push(Prisma.sql`"quote_number_pattern" = ${data.quoteNumberPattern}`)
   if (data.trackOpens !== undefined) sets.push(Prisma.sql`"track_opens" = ${data.trackOpens}`)
   if (data.requestReadReceipts !== undefined) sets.push(Prisma.sql`"request_read_receipts" = ${data.requestReadReceipts}`)
+  if (data.showAvatars !== undefined) sets.push(Prisma.sql`"show_avatars" = ${data.showAvatars}`)
   if (data.autoCheckSeconds !== undefined) sets.push(Prisma.sql`"auto_check_seconds" = ${data.autoCheckSeconds}`)
   if (data.campaignCooldownDays !== undefined) sets.push(Prisma.sql`"campaign_cooldown_days" = ${data.campaignCooldownDays}`)
   if (data.campaignLogMonths !== undefined) sets.push(Prisma.sql`"campaign_log_months" = ${data.campaignLogMonths}`)
@@ -1893,6 +1899,10 @@ export type ThreadListFilters = {
   /** A user id, or 'unassigned', or null for "do not filter". */
   assignee?: string | null
   search?: string | null
+  /** Which end of the list to start at. Newest first is what a mail program
+   *  does; oldest first is for working a backlog off the bottom, which is the
+   *  only way to clear one without the top moving under you. */
+  oldestFirst?: boolean
   page: number
   perPage: number
 }
@@ -1902,6 +1912,11 @@ export type ThreadStatusFilter = 'open' | 'snoozed' | 'done' | 'all'
 export type ThreadListRow = {
   id: string
   inboxId: string | null
+  /** Whoever the hub has worked out is on the other end, when it has. Only used
+   *  to ask for their picture - everything shown about them on a row comes from
+   *  the message itself. Null on automatic mail and on anything from one of the
+   *  site's own addresses. */
+  personId: string | null
   channel: string
   providerModule: string | null
   subject: string | null
@@ -1988,9 +2003,23 @@ function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
   return where
 }
 
-/** The order every list of conversations is drawn in. Written once because the
- *  page and the join below both have to agree about it. */
+/**
+ * The order a list of conversations is drawn in. Written once each because the
+ * page and the join below both have to agree about it - the page is taken
+ * BEFORE the join (see below), so a query that sorted the two halves differently
+ * would show twenty-five rows chosen by one rule and ordered by another.
+ *
+ * TWO CONSTANTS RATHER THAN A BUILT STRING, and that is the whole of the safety
+ * argument: nothing a reader types ever reaches an ORDER BY, because the only
+ * two orders that exist are written out here in full and the caller picks one of
+ * them with a boolean.
+ *
+ * NULLS goes the other way round with the sort, which is not decoration:
+ * last_message_at is null on a conversation nothing has arrived in yet, and
+ * those belong at the far end from the newest either way round.
+ */
 const THREAD_LIST_ORDER = Prisma.sql`t."last_message_at" DESC NULLS LAST, t."id" DESC`
+const THREAD_LIST_ORDER_OLDEST = Prisma.sql`t."last_message_at" ASC NULLS FIRST, t."id" ASC`
 
 /**
  * The columns and the participant join every list of conversations needs,
@@ -2011,9 +2040,15 @@ const THREAD_LIST_ORDER = Prisma.sql`t."last_message_at" DESC NULLS LAST, t."id"
  * So the inner query narrows to the page first - which is an index scan, since
  * the ordering is the index's own - and only those rows are joined.
  */
-function threadListQuery(where: Prisma.Sql[], limit: number, offset: number): Prisma.Sql {
+function threadListQuery(
+  where: Prisma.Sql[],
+  limit: number,
+  offset: number,
+  oldestFirst = false,
+): Prisma.Sql {
+  const order = oldestFirst ? THREAD_LIST_ORDER_OLDEST : THREAD_LIST_ORDER
   return Prisma.sql`
-    SELECT t."id", t."inbox_id", t."channel", t."provider_module", t."subject",
+    SELECT t."id", t."inbox_id", t."person_id", t."channel", t."provider_module", t."subject",
            t."preview", t."status", t."snooze_until", t."assignee_user_id",
            t."last_message_at", t."last_direction", t."unread", t."message_count",
            lm."from_name"        AS "last_from_name",
@@ -2025,7 +2060,7 @@ function threadListQuery(where: Prisma.Sql[], limit: number, offset: number): Pr
       FROM (
         SELECT t.* FROM "uin_threads" t
          WHERE ${Prisma.join(where, ' AND ')}
-         ORDER BY ${THREAD_LIST_ORDER}
+         ORDER BY ${order}
          LIMIT ${limit} OFFSET ${offset}
       ) t
       LEFT JOIN LATERAL (
@@ -2036,7 +2071,7 @@ function threadListQuery(where: Prisma.Sql[], limit: number, offset: number): Pr
          ORDER BY (m."direction" = 'in') DESC, m."sent_at" DESC
          LIMIT 1
       ) lm ON true
-     ORDER BY ${THREAD_LIST_ORDER}`
+     ORDER BY ${order}`
 }
 
 function mapThreadListRow(r: Record<string, unknown>): ThreadListRow {
@@ -2046,6 +2081,7 @@ function mapThreadListRow(r: Record<string, unknown>): ThreadListRow {
   return {
     id: r.id as string,
     inboxId: (r.inbox_id as string | null) ?? null,
+    personId: (r.person_id as string | null) ?? null,
     channel: r.channel as string,
     providerModule: (r.provider_module as string | null) ?? null,
     subject: (r.subject as string | null) ?? null,
@@ -2074,7 +2110,7 @@ export async function listThreads(f: ThreadListFilters): Promise<ThreadListRow[]
   const where = [visible, ...filterClauses(f)]
   const offset = Math.max(0, (f.page - 1) * f.perPage)
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>(
-    threadListQuery(where, f.perPage, offset),
+    threadListQuery(where, f.perPage, offset, f.oldestFirst ?? false),
   )
   return rows.map(mapThreadListRow)
 }

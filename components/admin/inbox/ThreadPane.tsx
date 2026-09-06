@@ -1,10 +1,11 @@
 import Link from 'next/link'
 import type { AttachmentRow, ThreadDetail, ThreadEventRow, ThreadMessageRow } from '@/modules/unified-inbox/lib/db'
 import type { DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
-import { channelLabel, formatFull, formatWhen, inboxHref, splitQuotedText } from '@/modules/unified-inbox/lib/list'
+import { avatarHref, channelLabel, formatFull, formatWhen, inboxHref, initialsFor, splitQuotedText } from '@/modules/unified-inbox/lib/list'
 import { draftHref } from '@/modules/unified-inbox/lib/drafts'
 import { describeSendAt } from '@/modules/unified-inbox/lib/scheduled'
-import { BackIcon, ClockIcon, InboundIcon, NoteIcon, OutboundIcon, PaperclipIcon, TickIcon } from './icons'
+import { BackIcon, ClockIcon, CloseIcon, InboundIcon, NoteIcon, OutboundIcon, PaperclipIcon, TickIcon } from './icons'
+import { Avatar } from './Avatar'
 import { MessageBody } from './MessageBody'
 import { MessageText } from './MessageText'
 import { RetryButton } from './RetryButton'
@@ -53,6 +54,9 @@ type Props = {
    *  Null when the channel cannot refuse anybody, which is most of them. */
   blockState: { blocked: boolean; channelLabel: string } | null
   now: Date
+  /** Whether to ask for people's own pictures. Off unless the site has switched
+   *  it on - see Settings, People. */
+  showAvatars: boolean
   /** The site's timezone. Every clock time on this pane is stamped in it: the
    *  server renders these, and its own clock is UTC. */
   timezone: string
@@ -163,16 +167,34 @@ function MessageWhen({ at, now, timezone }: { at: Date | string | null; now: Dat
   return <span className="uin-msg-when" title={formatFull(at, timezone)}>{formatWhen(at, now, timezone)}</span>
 }
 
-function MessageHeader({ message, staffById, now, timezone }: {
+/**
+ * Who wrote a message, with their own picture where there is one to have.
+ *
+ * Which id to ask for depends on which way the message went, and only these two
+ * are ever right: a colleague wrote everything that went OUT and every note, so
+ * that is their staff account; everything that came IN was written by whoever
+ * the conversation is with. A message with neither - automatic mail from a
+ * shop, an address nobody has been matched to - keeps its initials, which is
+ * what the circle has always been.
+ */
+function MessageHeader({ message, personId, showAvatars, staffById, now, timezone }: {
   message: ThreadMessageView
+  personId: string | null
+  showAvatars: boolean
   staffById: Record<string, string>
   now: Date
   timezone: string
 }) {
+  const picture = (kind: 'person' | 'user', id: string | null) =>
+    showAvatars ? avatarHref(kind, id) : null
+
   if (message.direction === 'note') {
     const author = message.authorUserId ? staffById[message.authorUserId] : null
     return (
       <div className="uin-msg-head">
+        <Avatar src={picture('user', message.authorUserId)} title={author ?? undefined}>
+          {author ? initialsFor(author) : NoteIcon}
+        </Avatar>
         <span className="uin-msg-who">{author ?? 'Somebody here'}</span>
         <span className="uin-msg-dir">{NoteIcon} Internal note, not sent</span>
         <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
@@ -183,6 +205,9 @@ function MessageHeader({ message, staffById, now, timezone }: {
     const author = message.authorUserId ? staffById[message.authorUserId] : null
     return (
       <div className="uin-msg-head">
+        <Avatar src={picture('user', message.authorUserId)} title={author ?? undefined}>
+          {author ? initialsFor(author) : OutboundIcon}
+        </Avatar>
         <span className="uin-msg-who">{author ? `${author} replied` : 'Sent from here'}</span>
         <span className="uin-msg-dir">
           {/* A live chat or a web form has no email address to have been sent to,
@@ -195,9 +220,13 @@ function MessageHeader({ message, staffById, now, timezone }: {
       </div>
     )
   }
+  const named = (message.fromName || message.fromAddress || '').trim() || null
   return (
     <div className="uin-msg-head">
-      <span className="uin-msg-who">{message.fromName || message.fromAddress || 'Unknown sender'}</span>
+      <Avatar src={picture('person', personId)} title={named ?? undefined}>
+        {named ? initialsFor(named) : InboundIcon}
+      </Avatar>
+      <span className="uin-msg-who">{named ?? 'Unknown sender'}</span>
       <span className="uin-msg-dir">
         {InboundIcon} Received{message.fromName && message.fromAddress ? ` from ${message.fromAddress}` : ''}
       </span>
@@ -206,8 +235,11 @@ function MessageHeader({ message, staffById, now, timezone }: {
   )
 }
 
-function Message({ message, staffById, now, timezone, canDelete }: {
+function Message({ message, personId, showAvatars, staffById, now, timezone, canDelete }: {
   message: ThreadMessageView
+  /** Whoever the conversation is with, for the picture on an inbound message. */
+  personId: string | null
+  showAvatars: boolean
   staffById: Record<string, string>
   now: Date
   timezone: string
@@ -224,7 +256,14 @@ function Message({ message, staffById, now, timezone, canDelete }: {
 
   return (
     <article className={`uin-msg uin-msg-${kind}`}>
-      <MessageHeader message={message} staffById={staffById} now={now} timezone={timezone} />
+      <MessageHeader
+        message={message}
+        personId={personId}
+        showAvatars={showAvatars}
+        staffById={staffById}
+        now={now}
+        timezone={timezone}
+      />
       {message.autoKind && (
         <div className="uin-msg-foot uin-msg-flag">
           <span className="uin-tag uin-tag-snoozed">{AUTO_LABELS[message.autoKind] ?? 'Sent automatically'}</span>
@@ -365,7 +404,7 @@ function unattendedEvent(event: ThreadEventRow, staffById: Record<string, string
 export function ThreadPane({
   base, params, thread, inboxName, messages, events, staff, staffById,
   canReply, cannotReplyReason, replyTo, replyAllTo, draft, newestFirst,
-  canDeleteMessages, blockState, now, timezone, minSendAt, heldDrafts,
+  canDeleteMessages, blockState, now, timezone, minSendAt, heldDrafts, showAvatars,
 }: Props) {
   // The list arrives oldest first. Reversing a copy rather than sorting again:
   // the query already decided the order, and this only says which end to read
@@ -386,21 +425,22 @@ export function ThreadPane({
     <ComposerOpenProvider key={thread.id} initialMode={openAs}>
     <div className="uin-thread">
       <div className="uin-thread-head">
-        {/* On a phone this is the way back to a list that is not on the screen.
-            On anything wider it is how you shut a conversation and have the
-            list whole again, which there was previously no way at all to do. */}
-        <Link
-          className="uin-chip uin-back"
-          href={inboxHref(base, params, { id: null })}
-          style={{ justifySelf: 'start' }}
-        >
-          <span className="uin-back-phone" aria-hidden="true">{BackIcon} Back to the list</span>
-          <span className="uin-back-wide" aria-hidden="true">&times; Close</span>
-          {/* One name for it whichever of the two is showing, so the link is not
-              announced twice on a phone. */}
-          <span className="sr-only">Close this conversation and go back to the list</span>
-        </Link>
-        <h2 className="uin-thread-subject">{thread.subject || '(no subject)'}</h2>
+        {/* The subject and the way out of it on one line, which is where every
+            mail program has put them. On a phone the way out is the way back to
+            a list that is not on the screen at all, so it says so in words and
+            takes the line above; on anything wider it is a cross hard against
+            the far edge, and shutting a conversation is how the list comes back
+            whole - which there was previously no way at all to do. */}
+        <div className="uin-thread-top">
+          <h2 className="uin-thread-subject">{thread.subject || '(no subject)'}</h2>
+          <Link className="uin-thread-close" href={inboxHref(base, params, { id: null })}>
+            <span className="uin-back-phone" aria-hidden="true">{BackIcon} Back to the list</span>
+            <span className="uin-back-wide" aria-hidden="true">{CloseIcon}</span>
+            {/* One name for it whichever of the two is showing, so the link is
+                not announced twice on a phone. */}
+            <span className="sr-only">Close this conversation and go back to the list</span>
+          </Link>
+        </div>
         <div className="uin-thread-meta">
           <span>{channelLabel(thread.channel)}</span>
           {inboxName && <span>&middot; {inboxName}</span>}
@@ -494,7 +534,16 @@ export function ThreadPane({
         ) : (
           <div className="uin-messages">
             {ordered.map((message) => (
-              <Message key={message.id} message={message} staffById={staffById} now={now} timezone={timezone} canDelete={canDeleteMessages} />
+              <Message
+                key={message.id}
+                message={message}
+                personId={thread.personId}
+                showAvatars={showAvatars}
+                staffById={staffById}
+                now={now}
+                timezone={timezone}
+                canDelete={canDeleteMessages}
+              />
             ))}
           </div>
         )}

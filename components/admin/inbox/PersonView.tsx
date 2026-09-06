@@ -5,7 +5,7 @@ import type { ContactCategory, Person, PersonIdentity, RecordLink } from '@/modu
 import { channelLabel, formatFull, formatWhen, inboxHref, participantLabel } from '@/modules/unified-inbox/lib/list'
 import { addressLines } from '@/modules/unified-inbox/lib/contacts'
 import { formatInSiteTimezone } from '@/lib/config/timezone'
-import { BackIcon, InboundIcon, OutboundIcon } from './icons'
+import { BackIcon, CloseIcon, InboundIcon, OutboundIcon } from './icons'
 import { PersonActionsBar, PersonActionsPanels, PersonActionsProvider } from './PersonActions'
 import { ContactIdentities } from './ContactIdentities'
 import { ContextRail } from './ContextRail'
@@ -112,12 +112,14 @@ export function PersonView({
         <div className="uin-thread-head">
           {/* Same two words as a conversation's: back on a phone, close on
               anything where the list is already beside it. */}
-          <Link className="uin-chip uin-back" href={inboxHref(base, params, { person: null })} style={{ justifySelf: 'start' }}>
+          <div className="uin-thread-top">
+          <h2 className="uin-thread-subject">{name}</h2>
+          <Link className="uin-thread-close" href={inboxHref(base, params, { person: null })}>
             <span className="uin-back-phone" aria-hidden="true">{BackIcon} Back to the list</span>
-            <span className="uin-back-wide" aria-hidden="true">&times; Close</span>
+            <span className="uin-back-wide" aria-hidden="true">{CloseIcon}</span>
             <span className="sr-only">Close this person and go back to the list</span>
           </Link>
-          <h2 className="uin-thread-subject">{name}</h2>
+        </div>
           <div className="uin-thread-meta">
             {person.jobTitle && <span>{person.jobTitle}</span>}
             {person.organisationName && (

@@ -118,10 +118,14 @@ function Campaign({
 
   const running = campaign.status === 'running'
   const settled = campaign.status === 'done' || campaign.status === 'stopped'
-  const editable = !settled
   // Who it goes to is fixed the moment the first one leaves: the route refuses
   // to change it, and offering boxes that cannot be saved is a lie.
   const audienceEditable = campaign.status === 'draft'
+  // So is the first message, and for the same reason - some people have had it.
+  // This is the route's OWN rule (`!isDraft`), said the same way here. It used
+  // to be read as "running", which left a paused campaign offering a box that
+  // was refused on save.
+  const firstLocked = campaign.status !== 'draft'
   const dirty = !sameDraft(saved, draft)
   const ready = readiness.problems.length === 0
 
@@ -195,6 +199,19 @@ function Campaign({
     onStatusChanged()
   }, [campaign.id, onReload, onStatusChanged, onView, timezone])
 
+  /**
+   * Start it, saving first if anything is unsaved.
+   *
+   * It used to take two presses and there was no way to know that: Start was
+   * simply absent until Save had been pressed, so somebody who had just typed
+   * the last sentence of their email saw the button they wanted vanish. One
+   * press now does both, in the right order, and stops if the save is refused.
+   */
+  const startOrResume = useCallback(async () => {
+    if (dirty && !await save()) return
+    await act(campaign.status === 'draft' ? 'start' : 'resume')
+  }, [act, campaign.status, dirty, save])
+
   const topUp = useCallback(async () => {
     setBusy(true)
     setError('')
@@ -238,10 +255,21 @@ function Campaign({
   return (
     <>
       <div className="uin-camp-head">
-        <div>
-          <h2>{campaign.name}</h2>
+        <div className="uin-camp-head-main">
+          {/* The name, typed where it is read, rather than in a bordered
+              section of its own further down the page. It is one box; it did
+              not need a heading, a label and an outline to hold it. */}
+          <label className="sr-only" htmlFor="uin-camp-name">What this campaign is called - only you see it</label>
+          <input
+            id="uin-camp-name"
+            className="uin-camp-name-input"
+            value={draft.name}
+            placeholder="Name this campaign"
+            onChange={(event) => change({ name: event.target.value })}
+          />
           <div className="uin-camp-meta">
             <span className="uin-camp-pill" data-state={campaign.status}>{statusWord(campaign.status)}</span>
+            <span>{summarise(detail)}</span>
             {detail.finishesAbout && <span>Finishes about {when(detail.finishesAbout, timezone)}</span>}
           </div>
         </div>
@@ -359,19 +387,6 @@ function Campaign({
         )
         : (
           <>
-            <section className="uin-camp-section">
-              <h3>What it is called <small>Only you see this</small></h3>
-              <div className="uin-camp-field">
-                <label htmlFor="uin-camp-name">Name</label>
-                <input
-                  id="uin-camp-name"
-                  className="form-control"
-                  value={draft.name}
-                  onChange={(event) => change({ name: event.target.value })}
-                />
-              </div>
-            </section>
-
             <WhoSection
               draft={draft}
               detail={detail}
@@ -386,8 +401,7 @@ function Campaign({
             <WhatSection
               draft={draft}
               detail={detail}
-              editable={editable}
-              running={running}
+              firstLocked={firstLocked}
               onChange={change}
               onTest={sendTest}
             />
@@ -452,17 +466,23 @@ function Campaign({
               Pause
             </button>
           )}
-          {editable && !progress && (
+          {/* On EVERY status, including finished. A finished campaign still has
+              a name worth correcting and follow-up wording worth tidying before
+              it is sent again, and the boxes above have always let you type in
+              them - there was simply no button, so a form that looked editable
+              silently was not. Who it goes to and the first message stay locked
+              by the sections themselves. */}
+          {!progress && (
             <button type="button" className="btn btn-primary btn-sm" disabled={busy || !dirty} onClick={() => void save()}>
               {busy ? 'Saving…' : 'Save'}
             </button>
           )}
-          {ready && !dirty && (campaign.status === 'draft' || campaign.status === 'paused') && (
+          {ready && (campaign.status === 'draft' || campaign.status === 'paused') && (
             <button
               type="button"
               className="btn btn-primary btn-sm"
               disabled={busy}
-              onClick={() => void act(campaign.status === 'draft' ? 'start' : 'resume')}
+              onClick={() => void startOrResume()}
             >
               {campaign.status === 'draft' ? 'Start sending' : 'Resume'}
             </button>
@@ -471,6 +491,18 @@ function Campaign({
       </div>
     </>
   )
+}
+
+/** What has happened so far, in one clause. The head used to say only which
+ *  status word applied, which is the one thing the pill beside it already
+ *  says. */
+function summarise(detail: CampaignDetail): string {
+  const { tally } = detail
+  const gone = tally.done + tally.replied + tally.bounced + tally.complained + tally.failed
+  const onTheList = tally.total - tally.skipped
+  if (tally.total === 0) return 'Nobody on the list yet'
+  if (gone === 0) return `${onTheList.toLocaleString('en-GB')} on the list, none sent yet`
+  return `${gone.toLocaleString('en-GB')} of ${onTheList.toLocaleString('en-GB')} sent`
 }
 
 function statusWord(status: CampaignDetail['campaign']['status']): string {
