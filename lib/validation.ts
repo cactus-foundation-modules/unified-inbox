@@ -6,6 +6,14 @@ import { z } from 'zod'
 export const InboxBody = z.object({
   name: z.string().min(1).max(120),
   address: z.string().min(3).max(255),
+  // Whose post it is. Absent means the team's, which is what every address on
+  // every site was before the two kinds existed and what a caller that has
+  // never heard of them still means.
+  kind: z.enum(['individual', 'shared']).optional(),
+  // Only read on an individual inbox, and required there - the route checks
+  // that separately, because "which person" is a question about the site's
+  // staff rather than about the shape of the request.
+  ownerUserId: z.string().min(1).max(200).nullable().optional(),
   connectionId: z.string().nullable().optional(),
   imapFolder: z.string().min(1).max(255).optional(),
   sentFolder: z.string().max(255).nullable().optional(),
@@ -140,6 +148,36 @@ export const ThreadPatchBody = z.object({
 export const NoteBody = z.object({
   text: z.string().min(1).max(20_000),
   mentions: z.array(z.string().min(1)).max(20).optional(),
+})
+
+// ---------------------------------------------------------------------------
+// The three things the new-message menu starts that are not an email.
+// ---------------------------------------------------------------------------
+
+/** Starting a discussion: colleagues only, and it goes nowhere near a customer.
+ *  Several addresses may be named and each gets its own discussion - see
+ *  migrations/029_discussions.sql for why one thread with two guest lists is not
+ *  on offer. */
+export const DiscussionBody = z.object({
+  inboxIds: z.array(z.string().min(1)).min(1, 'Say which address this is for.').max(20),
+  subject: z.string().trim().min(1, 'Give the discussion a subject.').max(500),
+  body: z.string().min(1, 'There is nothing to say yet.').max(20_000),
+  mentions: z.array(z.string().min(1)).max(20).optional(),
+})
+
+/** Sending a text. Bounded at four segments' worth: past that it is an email
+ *  wearing the wrong hat, and each segment is charged for. */
+export const SmsBody = z.object({
+  to: z.string().trim().min(3).max(40),
+  body: z.string().trim().min(1, 'There is nothing to send yet.').max(640),
+})
+
+/** Ringing somebody. Two-leg: the site calls whoever pressed the button first,
+ *  then the customer, so `callMeAt` is required rather than assumed. */
+export const CallBody = z.object({
+  to: z.string().trim().min(3).max(40),
+  from: z.string().trim().min(3).max(40),
+  callMeAt: z.string().trim().min(3).max(40),
 })
 
 // ---------------------------------------------------------------------------

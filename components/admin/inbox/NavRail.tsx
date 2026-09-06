@@ -3,12 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { avatarHref, inboxHref, initialsFor, moveInOrder, pinDefaultInbox } from '@/modules/unified-inbox/lib/list'
+import { avatarHref, inboxHref, initialsFor, moveInOrder, splitInboxes } from '@/modules/unified-inbox/lib/list'
 import {
-  AssignedIcon, FileIcon, FolderIcon, InboxIcon, MegaphoneIcon, PenIcon, PeopleIcon, SendIcon,
+  AssignedIcon, FileIcon, FolderIcon, InboxIcon, MegaphoneIcon, PeopleIcon, SendIcon,
 } from './icons'
 import { Avatar } from './Avatar'
 import { CheckNowButton, type CheckNowNotice } from './CheckNowButton'
+import { InboxSearch } from './InboxSearch'
+import { ComposeMenu, type ComposeMenuEntry } from './ComposeMenu'
 
 // Everywhere you can go, down the left.
 //
@@ -23,17 +25,20 @@ import { CheckNowButton, type CheckNowNotice } from './CheckNowButton'
 //
 // FOUR GROUPS, and the split is the useful one rather than the tidy one.
 // "Yours" is the handful of places one person opens all day - their own
-// address, everything at once, what has been handed to them, what they have
-// half-written and what they have sent. "Team inboxes" is the shared addresses,
-// which is where a colour beside each name earns its keep: on a site with six
-// of them the name is read second and the colour first. Then the channels
-// another module owns, then the three screens that are not a list of post at
-// all.
+// addresses, everything at once, what has been handed to them, what they have
+// half-written and what they have sent. "Shared inboxes" is the addresses the
+// business owns, which is where a colour beside each name earns its keep: on a
+// site with six of them the name is read second and the colour first. Then the
+// channels another module owns, then the three screens that are not a list of
+// post at all.
 //
-// The pinned address is the one exception to the rail being the same for
-// everybody. It is first, under Yours, because it is what that person opens the
-// hub for - and All stays right under it rather than going away, because
-// somebody who works purchasing@ still wants to see the lot without hunting.
+// Two different things put an address under Yours and they are not the same
+// fact. An INDIVIDUAL inbox is one colleague's own post, and nobody else's rail
+// has it at all. A SHARED inbox pinned as somebody's own is a preference -
+// purchasing@ is still the team's, it is simply the one they open on - and it
+// is the one exception to the rail being the same for everybody. All stays
+// right under both rather than going away, because somebody who works
+// purchasing@ still wants to see the lot without hunting.
 //
 // Unread counts ride beside the names, because "is there anything new in
 // accounts@" is the question this rail is answering.
@@ -47,7 +52,16 @@ import { CheckNowButton, type CheckNowNotice } from './CheckNowButton'
 // half a second and a list that snaps back while a request finishes reads as a
 // bug. A refused save puts the order back and says so.
 
-export type TabInbox = { id: string; name: string; address: string; count: number }
+export type TabInbox = {
+  id: string
+  name: string
+  address: string
+  /** Whose post it is. Decides which of the two groups it sits in, and whether
+   *  it can be dragged: an individual address is at the top because of what it is,
+   *  not because of where somebody put it. */
+  kind: 'individual' | 'shared'
+  count: number
+}
 export type TabChannel = { moduleName: string; label: string; count: number }
 
 type Props = {
@@ -89,6 +103,11 @@ type Props = {
    *  may send from - in which case the button is not there at all, rather than
    *  there and disappointing. */
   composeHref: string | null
+  /** The other things the button beside it can start - a discussion, a call, a
+   *  text - already narrowed to the ones this site can actually do. Empty means
+   *  no arrow at all, and the button is exactly what it was before the menu
+   *  existed. */
+  composeEntries: ComposeMenuEntry[]
   /** The address this person calls their own, pinned to the front of the rail,
    *  or null when they have not been given one. Already known to be one they
    *  may read - the panel resolves it against the visible list. */
@@ -194,6 +213,7 @@ function Entry({ item }: { item: RailItem }) {
 export function NavRail({
   base, params, inboxes, channels, allCount, current, me, showAvatars, assignedCount, assignee,
   showUnrouted, unroutedCount, showDrafts, draftCount, contactCount, showCampaigns, composeHref,
+  composeEntries,
   defaultInboxId, canReorder, canCheckNow, autoCheckSeconds,
 }: Props) {
   const router = useRouter()
@@ -236,10 +256,10 @@ export function NavRail({
     }
   }, [router])
 
-  // This person's own address, out in front, and everything else in the order
+  // This person's own addresses, out in front, and everything else in the order
   // the site keeps. Both halves are worked out from one list so the drag below
   // can talk in one and save in the other.
-  const { pinned, rest } = pinDefaultInbox(order, defaultInboxId)
+  const { yours, shared } = splitInboxes(order, defaultInboxId)
 
   // Said in addresses rather than in positions, because the rail as it is drawn
   // and the order the site keeps are two different lists the moment anything is
@@ -270,23 +290,31 @@ export function NavRail({
       ...changes,
     })
 
-  // Only the addresses that are actually in the team list can be dragged, and
-  // the pinned one is not one of them: it is where it is because it is this
-  // person's, not because of the order.
-  const draggable = canReorder && rest.length > 1
+  // Only the addresses in the shared list can be dragged, and the ones under
+  // Yours are not among them: they are where they are because of whose they
+  // are, not because of the order.
+  const draggable = canReorder && shared.length > 1
 
-  /** One address. `movable` is false for the pinned one, which sits still. */
+  /** One address. `movable` is false for everything under Yours, which sits
+   *  still. An individual one says so out loud, because "only you can see this"
+   *  is worth knowing before you answer from it and not after. */
   const inboxEntry = (inbox: TabInbox, movable: boolean): RailItem => ({
     key: inbox.id,
     href: link(inbox.id),
     active: current === inbox.id,
     tone: toneFor(inbox.id),
     name: inbox.name,
-    title: movable ? inbox.address : `${inbox.address} - your own inbox`,
+    title: movable
+      ? inbox.address
+      : inbox.kind === 'individual'
+        ? `${inbox.address} - yours, and nobody else can see it`
+        : `${inbox.address} - your own inbox`,
     count: <Count value={inbox.count} />,
     hint: movable
       ? 'Hold Alt and press the up or down arrow keys to move it along the rail.'
-      : 'Your own inbox.',
+      : inbox.kind === 'individual'
+        ? 'Your own inbox. Nobody else can see it.'
+        : 'Your own inbox.',
     dragId: movable ? inbox.id : undefined,
     dragging: movable && dragId === inbox.id,
     over: movable && overId === inbox.id && dragId !== inbox.id,
@@ -345,11 +373,11 @@ export function NavRail({
     const list = event.currentTarget
     const links = Array.from(list.querySelectorAll<HTMLAnchorElement>('a[href]'))
     const index = links.indexOf((event.target as HTMLElement).closest('a') as HTMLAnchorElement)
-    if (index < 0 || index >= rest.length) return
+    if (index < 0 || index >= shared.length) return
     const to = event.key === 'ArrowUp' ? index - 1 : index + 1
-    if (to < 0 || to >= rest.length) return
+    if (to < 0 || to >= shared.length) return
     event.preventDefault()
-    move(rest[index]!.id, rest[to]!.id)
+    move(shared[index]!.id, shared[to]!.id)
     // The keyboard follows the address it just moved, so a second press carries
     // on from where it is rather than from whatever landed under the cursor.
     requestAnimationFrame(() => {
@@ -358,8 +386,8 @@ export function NavRail({
   }
 
   const mine: RailItem[] = [
-    // Ahead of All, because it is what this person opened the hub to read.
-    ...(pinned ? [inboxEntry(pinned, false)] : []),
+    // Ahead of All, because they are what this person opened the hub to read.
+    ...yours.map((inbox) => inboxEntry(inbox, false)),
     {
       key: 'all',
       // Named rather than left out: with an address of their own, an empty
@@ -450,19 +478,29 @@ export function NavRail({
           stay outside it either way, so an answer to a press is never parked
           off the end of a strip nobody has scrolled. */}
       <div className="uin-rail-scroll">
-        {/* Who is reading, and the one button up here that is not a place to go.
-            The same arrangement every mail program uses, for the same reason:
-            writing something is an act, and an act does not belong in a list of
-            places. */}
+        {/* Who is reading, and the two buttons up here that are not places to
+            go. The same arrangement every mail program uses, for the same
+            reason: finding something and writing something are acts, and an act
+            does not belong in a list of places. Search on the left of the pen,
+            because it is the one people reach for oftenest and the one they
+            reach for without looking. */}
         <div className="uin-rail-me">
           <Avatar src={showAvatars ? avatarHref('user', me.id) : null} title={me.name}>
             {initialsFor(me.name)}
           </Avatar>
           <span className="uin-rail-me-name">{me.name}</span>
+          <InboxSearch
+            base={base}
+            params={params}
+            inboxes={inboxes.map((inbox) => ({ id: inbox.id, name: inbox.name }))}
+            channels={channels.map((channel) => ({
+              moduleName: channel.moduleName,
+              label: channel.label,
+            }))}
+            showUnrouted={showUnrouted}
+          />
           {composeHref && (
-            <Link className="uin-rail-compose" href={composeHref} aria-label="Write a message">
-              {PenIcon}
-            </Link>
+            <ComposeMenu composeHref={composeHref} entries={composeEntries} />
           )}
         </div>
 
@@ -473,9 +511,9 @@ export function NavRail({
           </ul>
         </div>
 
-        {rest.length > 0 && (
+        {shared.length > 0 && (
           <div className="uin-rail-group">
-            <p className="uin-rail-heading" id="uin-rail-team">Team inboxes</p>
+            <p className="uin-rail-heading" id="uin-rail-team">Shared inboxes</p>
             <ul
               className="uin-rail-list"
               aria-labelledby="uin-rail-team"
@@ -486,7 +524,7 @@ export function NavRail({
               onDrop={draggable ? onDrop : undefined}
               onDragEnd={draggable ? onDragEnd : undefined}
             >
-              {rest.map((inbox) => (
+              {shared.map((inbox) => (
                 <Entry key={inbox.id} item={inboxEntry(inbox, draggable)} />
               ))}
             </ul>

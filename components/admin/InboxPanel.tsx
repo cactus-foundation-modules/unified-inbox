@@ -4,6 +4,7 @@ import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { prisma } from '@/lib/db/prisma'
 import { getSiteTimezone } from '@/lib/config/timezone.server'
+import { instantAtWallClock } from '@/lib/config/timezone'
 import { getSiteUrlOrNull } from '@/lib/config/env'
 import { canReplyToInbox, canViewInbox, replyableInboxIds, visibleInboxIds } from '@/modules/unified-inbox/lib/access'
 import {
@@ -41,6 +42,7 @@ import {
   peopleCount,
   peopleInOrganisation,
   setThreadRead,
+  latestPhoneOnThread,
   statusCounts,
   threadsForPerson,
   undoableMerges,
@@ -48,6 +50,8 @@ import {
   wakeDueThreads,
   type AttachmentRow,
 } from '@/modules/unified-inbox/lib/db'
+import { isSmsAvailable } from '@/lib/sms/send'
+import { callerNumbers, firstDialler } from '@/lib/dialler/registry'
 import { attachableKinds, loadContext } from '@/modules/unified-inbox/lib/adapters'
 import { defaultLinkKind } from '@/modules/unified-inbox/lib/link-kinds'
 import { modulesForInbox } from '@/modules/unified-inbox/lib/module-senders'
@@ -57,6 +61,7 @@ import { addressesForPerson, buildContextQuery } from '@/modules/unified-inbox/l
 import { ContextRail } from './inbox/ContextRail'
 import { PersonView } from './inbox/PersonView'
 import { ContactsToolbar } from './inbox/ContactsToolbar'
+import { ColumnResizer } from './inbox/ColumnResizer'
 import { ContactsListView } from './inbox/ContactsListView'
 import { OrganisationsListView } from './inbox/OrganisationsListView'
 import { ContactCard } from './inbox/ContactCard'
@@ -64,7 +69,7 @@ import { OrganisationCard, EMPTY_ORGANISATION } from './inbox/OrganisationCard'
 import { ContactImport } from './inbox/ContactImport'
 import { joinCategories, splitName } from '@/modules/unified-inbox/lib/contacts'
 import { replyRecipients } from '@/modules/unified-inbox/lib/compose'
-import { chooseSendingInbox, effectiveInboxParam, inboxHref, NEW_CONTACT, parseInboxParams, PER_PAGE } from '@/modules/unified-inbox/lib/list'
+import { chooseSendingInbox, effectiveInboxParam, inboxHref, isSearching, NEW_CONTACT, parseInboxParams, PER_PAGE } from '@/modules/unified-inbox/lib/list'
 import { providerForModule, visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
 import { InboxStyles } from './inbox/styles'
 import { InboxIcon } from './inbox/icons'
@@ -77,6 +82,9 @@ import { DraftListView } from './inbox/DraftListView'
 import { SentListView } from './inbox/SentListView'
 import { ThreadPane, type ThreadMessageView } from './inbox/ThreadPane'
 import { ComposeView } from './inbox/ComposeView'
+import { DiscussionView } from './inbox/DiscussionView'
+import { SmsView } from './inbox/SmsView'
+import { CallView } from './inbox/CallView'
 import { DraftReadOnlyView } from './inbox/DraftReadOnlyView'
 
 // The hub's tab on core's Inbox page. One framed box the height of the window,
@@ -119,7 +127,11 @@ export async function UnifiedInboxPanel({
   // own zone rather than in whichever one the reader's browser is standing in.
   // Both composers hand it straight to the date box as its floor.
   const minSendAt = toWallClock(new Date(new Date().getTime() + MIN_LEAD_MS), timezone)
-  const canEditLinks = canManage || await hasPermission(user, 'unifiedinbox.reply')
+  // Whether this person may put anything OUT of the building at all - a reply,
+  // a text, a call. Asked once and reused: it decides three different things
+  // further down, and three copies of the same question is three round trips.
+  const canSendOut = await hasPermission(user, 'unifiedinbox.reply')
+  const canEditLinks = canManage || canSendOut
   // Its own grant. Renaming a folder and emailing five thousand customers are
   // not the same act, and a site that gives somebody the first has not thereby
   // given them the second.
@@ -174,6 +186,9 @@ export async function UnifiedInboxPanel({
   const carried: Record<string, string> = { tab: 'unified-inbox' }
   for (const key of [
     'inbox', 'status', 'unread', 'assignee', 'q', 'sort', 'page', 'id', 'person',
+    // The search dialog's narrower cuts, so a search survives opening one of
+    // the conversations it found and coming back to the list.
+    'from', 'to', 'subject', 'att', 'after', 'before',
     // The address book's own: which half of it, whose card is open, whether the
     // card is being edited, and whether the importer is up.
     'view', 'org', 'edit', 'import', 'cat',
@@ -219,6 +234,40 @@ export async function UnifiedInboxPanel({
     ? inboxHref(base, carried, { compose: '1', draft: null, id: null, person: null })
     : null
 
+  // The three other things the button can start, narrowed to the ones this site
+  // can actually do. Both questions are asked the CHEAP way here - is there a
+  // module that sends texts, is there a module that places calls - rather than
+  // by reaching a telephony API to ask whether it is configured, because this
+  // runs on every draw of every list. The expensive question is asked by the
+  // screen that opens, where somebody is waiting for an answer anyway.
+  //
+  // A discussion needs nothing switched on: it is an internal note, and this
+  // module has always been able to write one. It does need somewhere to put it,
+  // which on a site where this person can read nothing is nowhere.
+  const [smsReady, dialler] = canSendOut
+    ? await Promise.all([isSmsAvailable(), firstDialler(user)])
+    : [false, null]
+  const composeEntries = composeHref === null ? [] : [
+    ...(visibleIds.length > 0 ? [{
+      key: 'discussion',
+      label: 'Discussion',
+      href: inboxHref(base, carried, { compose: 'discussion', draft: null, id: null, person: null }),
+      hint: 'A word with your colleagues. The customer never sees it.',
+    }] : []),
+    ...(dialler ? [{
+      key: 'call',
+      label: 'Call',
+      href: inboxHref(base, carried, { compose: 'call', draft: null, id: null, person: null }),
+      hint: 'We ring you, then them.',
+    }] : []),
+    ...(smsReady ? [{
+      key: 'sms',
+      label: 'SMS',
+      href: inboxHref(base, carried, { compose: 'sms', draft: null, id: null, person: null }),
+      hint: 'A text message to a mobile.',
+    }] : []),
+  ]
+
   // Drafts filed on an address are read by whoever can read that address, the
   // same as every other message on it, and the query says so rather than the
   // caller (see lib/db.ts). The count is what the Drafts tab shows; the list
@@ -246,6 +295,17 @@ export async function UnifiedInboxPanel({
     unreadOnly: params.unreadOnly,
     assignee: params.assignee,
     search: params.search,
+    fromText: params.fromText,
+    toText: params.toText,
+    subjectText: params.subjectText,
+    withAttachment: params.withAttachment,
+    // The two ends of the range become instants HERE, because that takes the
+    // site's timezone: a calendar date read as UTC starts an hour late through
+    // British Summer Time and drops the first message of the day. "Up to and
+    // including" means the whole of the day somebody named, so it runs to the
+    // end of it rather than to its first second.
+    after: params.after ? instantAtWallClock(params.after, '00:00', timezone) : null,
+    before: params.before ? instantAtWallClock(params.before, '24:00', timezone) : null,
     oldestFirst: params.oldestFirst,
     page: params.page,
     perPage: PER_PAGE,
@@ -566,11 +626,18 @@ export async function UnifiedInboxPanel({
       const channel = thread.providerModule
         ? channels.find((c) => c.moduleName === thread.providerModule) ?? null
         : null
-      const canReply = thread.providerModule
-        ? (channel?.canReply ?? false) && await hasPermission(user, 'unifiedinbox.reply')
-        : thread.inboxId
-          ? await canReplyToInbox(user, thread.inboxId)
-          : false
+      // A discussion has nobody outside it to answer, so there is nothing to
+      // send and no Reply to offer. What is left is the note box, which is what
+      // a discussion is made of anyway - so the composer arrives on the one mode
+      // that applies rather than on a Reply that would refuse.
+      const isDiscussion = thread.channel === 'discussion'
+      const canReply = isDiscussion
+        ? false
+        : thread.providerModule
+          ? (channel?.canReply ?? false) && await hasPermission(user, 'unifiedinbox.reply')
+          : thread.inboxId
+            ? await canReplyToInbox(user, thread.inboxId)
+            : false
       // Deleting takes the same two halves as replying: the channel has to offer
       // it, and this reader has to be allowed on that channel. Note it is the
       // channel's OWN permission that was already checked to build `channels`,
@@ -597,6 +664,8 @@ export async function UnifiedInboxPanel({
 
       const cannotReplyReason = canReply
         ? null
+        : isDiscussion
+        ? 'This is a discussion between colleagues. Nothing on it is ever sent to anybody outside.'
         : thread.providerModule
           ? channel
             ? `${channel.label} conversations are read here and answered where they came from.`
@@ -605,15 +674,45 @@ export async function UnifiedInboxPanel({
             ? 'You can read this inbox but not send from it. Leave a note instead, or ask whoever looks after the site.'
             : 'This conversation is not filed in one of your addresses, so there is nothing to send it from.'
 
+      // A conversation in somebody's own inbox has nobody to hand it to: the
+      // one person who can open it is the one it already belongs to. Offering
+      // the rest of the team is offering a name that would make the
+      // conversation vanish from the only screen it is on.
+      const threadInbox = thread.inboxId
+        ? allInboxes.find((i) => i.id === thread.inboxId) ?? null
+        : null
+      const threadStaff = threadInbox && threadInbox.kind === 'individual'
+        ? staff.filter((s) => s.id === threadInbox.ownerUserId)
+        : staff
+
+      // What the rest of the site knows about whoever this is. Every block in
+      // it reads another module and writes to none of them, and a module that
+      // is not installed costs one cheap check and contributes nothing.
+      const person = thread.personId ? await getPerson(thread.personId) : null
+      const query = person ? await buildContextQuery(person.id) : null
+      //
+      // What may be attached by hand is a separate question from what is here
+      // already: the kinds are whichever record-keeping modules this viewer may
+      // see, and which one the picker opens on comes from what the inbox is
+      // used for. An address purchasing sends from is an address suppliers
+      // answer purchase orders at, and that is worth one less choice made by
+      // hand on every conversation in it.
+      const [sections, links, kindOptions, senderModules] = await Promise.all([
+        query ? loadContext(user, query) : Promise.resolve([]),
+        linksForThread(thread.id),
+        canEditLinks ? attachableKinds(user) : Promise.resolve([]),
+        canEditLinks && thread.inboxId ? modulesForInbox(thread.inboxId) : Promise.resolve([]),
+      ])
+
       threadPane = (
         <ThreadPane
           base={base}
           params={carried}
           thread={thread}
-          inboxName={allInboxes.find((i) => i.id === thread.inboxId)?.name ?? null}
+          inboxName={threadInbox?.name ?? null}
           messages={view}
           events={events}
-          staff={staff}
+          staff={threadStaff}
           staffById={staffById}
           canReply={canReply}
           cannotReplyReason={cannotReplyReason}
@@ -637,43 +736,33 @@ export async function UnifiedInboxPanel({
             // it makes the trip as a string either way.
             sendAt: held.sendAt ? held.sendAt.toISOString() : null,
           }))}
+          context={{
+            adminPath,
+            person,
+            noPersonReason: person ? null : reasonThereIsNobody(thread.channel),
+            links,
+            canEditLinks,
+            linkKinds: kindOptions,
+            defaultLinkKind: defaultLinkKind(kindOptions, senderModules),
+          }}
         />
       )
 
-      // What the rest of the site knows about whoever this is. Every block in
-      // it reads another module and writes to none of them, and a module that
-      // is not installed costs one cheap check and contributes nothing.
-      const person = thread.personId ? await getPerson(thread.personId) : null
-      const query = person ? await buildContextQuery(person.id) : null
-      //
-      // What may be attached by hand is a separate question from what is here
-      // already: the kinds are whichever record-keeping modules this viewer may
-      // see, and which one the picker opens on comes from what the inbox is
-      // used for. An address purchasing sends from is an address suppliers
-      // answer purchase orders at, and that is worth one less choice made by
-      // hand on every conversation in it.
-      const [sections, links, kindOptions, senderModules] = await Promise.all([
-        query ? loadContext(user, query) : Promise.resolve([]),
-        linksForThread(thread.id),
-        canEditLinks ? attachableKinds(user) : Promise.resolve([]),
-        canEditLinks && thread.inboxId ? modulesForInbox(thread.inboxId) : Promise.resolve([]),
-      ])
-
-      contextRail = (
+      // The panel is what the rest of the site knows ABOUT this person, and it
+      // is only drawn when there is somebody for it to be about: the records
+      // attached to the conversation itself now sit in the conversation's own
+      // header, so without a person this would be a column of ground holding
+      // one sentence about nobody.
+      contextRail = person ? (
         <ContextRail
           adminPath={adminPath}
           threadId={thread.id}
-          base={base}
-          params={carried}
-          person={person}
-          noPersonReason={person ? null : reasonThereIsNobody(thread.channel)}
           sections={sections}
-          links={links}
+          /* A conversation's attached records are in its header. */
+          links={[]}
           canEditLinks={canEditLinks}
-          linkKinds={kindOptions}
-          defaultLinkKind={defaultLinkKind(kindOptions, senderModules)}
         />
-      )
+      ) : null
     }
   }
 
@@ -684,7 +773,63 @@ export async function UnifiedInboxPanel({
   // labelling it, which is a dialog in looks only - and there is nothing here to
   // answer, only something to be told.
   let cannotComposePane: React.ReactNode = null
-  if (params.composing) {
+  if (params.composing && params.composeKind !== 'email') {
+    // The three short ones. Each is refused rather than drawn empty when the
+    // site cannot do it - a form that ends in "this site cannot send texts" is
+    // a form somebody filled in for nothing.
+    const knownPhone = params.threadId && params.composeKind !== 'discussion'
+      ? await latestPhoneOnThread(params.threadId)
+      : null
+
+    if (params.composeKind === 'discussion') {
+      composePane = visibleIds.length > 0 ? (
+        <DiscussionView
+          base={base}
+          params={carried}
+          /* Every address this person may READ, not only the ones they may send
+             from: a discussion is a note, and a note goes nowhere. */
+          inboxes={inboxes
+            .filter((i) => visibleIds.includes(i.id))
+            .map((i) => ({ id: i.id, name: i.name, address: i.address }))}
+          defaultInboxId={params.inboxId ?? pinnedInboxId}
+          staff={staff}
+        />
+      ) : (
+        <div className="uin-empty">
+          <strong>There is no address to have this in</strong>
+          A discussion sits in one of the site&apos;s addresses, and you have not been given one to
+          read. Whoever looks after the site can put you on one.{' '}
+          <Link href={inboxHref(base, carried, { compose: null, draft: null })}>Back to the inbox</Link>
+        </div>
+      )
+    } else if (params.composeKind === 'sms') {
+      composePane = smsReady ? (
+        <SmsView base={base} params={carried} defaultTo={knownPhone} />
+      ) : (
+        <div className="uin-empty">
+          <strong>This site cannot send texts</strong>
+          Nothing here is set up to send one yet. Whoever looks after the site can switch that on.{' '}
+          <Link href={inboxHref(base, carried, { compose: null, draft: null })}>Back to the inbox</Link>
+        </div>
+      )
+    } else {
+      // The expensive question, asked here rather than on every draw of the
+      // rail: which of the site's numbers can actually place a call. Empty and
+      // this is a screen saying so, which is the honest answer whether the
+      // cause is no credentials or no number.
+      const numbers = dialler ? await callerNumbers(user) : []
+      composePane = numbers.length > 0 ? (
+        <CallView base={base} params={carried} numbers={numbers} defaultTo={knownPhone} />
+      ) : (
+        <div className="uin-empty">
+          <strong>There is no number to call from</strong>
+          Calls go out as one of the site&apos;s own numbers, and there is not one to use yet.
+          Whoever looks after the site can add one.{' '}
+          <Link href={inboxHref(base, carried, { compose: null, draft: null })}>Back to the inbox</Link>
+        </div>
+      )
+    }
+  } else if (params.composing) {
     // Only ever one this person may READ, and the query is what decides it
     // rather than a check afterwards, so a guessed id in the address finds
     // nothing. Whether they may also change it is the next question down.
@@ -788,6 +933,7 @@ export async function UnifiedInboxPanel({
         id: i.id,
         name: i.name,
         address: i.address,
+        kind: i.kind,
         count: counts[i.id] ?? 0,
       }))}
       channels={channels.map((c) => ({
@@ -811,6 +957,7 @@ export async function UnifiedInboxPanel({
          thing up there that is not a place to go, and it is the same act
          whichever list somebody is standing in. */
       composeHref={composeHref}
+      composeEntries={composeEntries}
       defaultInboxId={pinnedInboxId}
       canReorder={canManage}
       canCheckNow={canManage && connections.length > 0}
@@ -827,6 +974,7 @@ export async function UnifiedInboxPanel({
       return (
         <div className="uin-page">
           <InboxStyles />
+          <ColumnResizer handles={false} />
           <div className="uin-app uin-app-wide">
             {rail}
             <div className="uin-read uin-read-pad">
@@ -844,6 +992,11 @@ export async function UnifiedInboxPanel({
         {/* The rail stays; everything else on this screen is one long form with
             a save bar of its own pinned to the bottom of it, so it keeps the
             page's own scroll rather than being put inside a second one. */}
+        {/* No handles on this screen - its only edge is the rail's, and a
+            full-height grab bar down a long form is not worth having - but it
+            still applies the width somebody set in the inbox, or the rail would
+            spring back to its shipped size every time they opened Campaigns. */}
+        <ColumnResizer handles={false} />
         <div className="uin-app uin-app-wide">
           {rail}
           <div className="uin-read uin-read-pad">
@@ -932,7 +1085,10 @@ export async function UnifiedInboxPanel({
       showAvatars={settings.showAvatars}
       neverSynced={neverSynced}
       canManage={canManage}
-      searching={!!params.search}
+      /* Any of the cuts, not only the words: "nothing matches that" is the
+         honest answer to a date range that catches nothing too, and "nothing
+         here" in front of a narrowed list reads as an empty inbox. */
+      searching={isSearching(params)}
       now={new Date()}
       timezone={timezone}
     />
@@ -1002,6 +1158,14 @@ export async function UnifiedInboxPanel({
                   unreadOnly={params.unreadOnly}
                   assignee={params.assignee}
                   search={params.search}
+                  narrowed={{
+                    from: params.fromText,
+                    to: params.toText,
+                    subject: params.subjectText,
+                    withAttachment: params.withAttachment,
+                    after: params.after,
+                    before: params.before,
+                  }}
                   staff={staff}
                   oldestFirst={params.oldestFirst}
                 />
@@ -1036,6 +1200,12 @@ export async function UnifiedInboxPanel({
         </div>
 
         {contextRail}
+
+        {/* The two hairlines between the rail, the list and the conversation,
+            made draggable. Last inside the frame so it is over the panes rather
+            than under them, and drawn whatever is open: an edge that comes and
+            goes with the reading pane is one nobody would trust to stay put. */}
+        <ColumnResizer />
       </div>
 
       {/* Over the inbox rather than in place of it: starting a message is
@@ -1056,6 +1226,7 @@ function plural(n: number, one: string, many: string): string {
  *  blank: an empty panel reads as broken, and every one of these is a decision
  *  somebody made on purpose. */
 function reasonThereIsNobody(channel: string): string {
+  if (channel === 'discussion') return 'A discussion is between colleagues, so there is nobody outside it.'
   if (channel !== 'email') return 'Nobody is attached to this one yet.'
   return 'Nobody is attached to this one. That happens with automatic mail, and with anything from one of your own addresses.'
 }

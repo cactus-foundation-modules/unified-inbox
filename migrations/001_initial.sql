@@ -173,7 +173,7 @@ CREATE TABLE IF NOT EXISTS "uin_threads" (
     -- NULL for channels somebody else owns (a chat, a form submission): those
     -- arrive through a provider and belong to no email address.
     "inbox_id"           TEXT,
-    -- 'email' | 'chat' | 'form' | 'phone' | 'sms'
+    -- 'email' | 'chat' | 'form' | 'phone' | 'sms' | 'discussion'
     "channel"            TEXT         NOT NULL DEFAULT 'email',
     "provider_module"    TEXT,
     "external_id"        TEXT,
@@ -195,7 +195,7 @@ CREATE TABLE IF NOT EXISTS "uin_threads" (
     "updated_at"         TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "uin_threads_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "uin_threads_channel_check" CHECK ("channel" IN ('email', 'chat', 'form', 'phone', 'sms')),
+    CONSTRAINT "uin_threads_channel_check" CHECK ("channel" IN ('email', 'chat', 'form', 'phone', 'sms', 'discussion')),
     CONSTRAINT "uin_threads_status_check" CHECK ("status" IN ('open', 'snoozed', 'done')),
     CONSTRAINT "uin_threads_inbox_fk"
         FOREIGN KEY ("inbox_id") REFERENCES "uin_inboxes" ("id") ON DELETE SET NULL,

@@ -288,10 +288,6 @@ export function PersonView({
             <ContextRail
               adminPath={adminPath}
               threadId={null}
-              base={base}
-              params={params}
-              person={null}
-              noPersonReason={null}
               sections={sections}
               links={links}
               // The same permission the conversation rail gets. Being able to

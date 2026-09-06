@@ -14,7 +14,7 @@ import {
   participantLabel,
   PER_PAGE,
 } from '@/modules/unified-inbox/lib/list'
-import { ChatIcon, FormIcon, InboundIcon, PaperclipIcon, PhoneIcon, ReplyIcon } from './icons'
+import { ChatIcon, FormIcon, InboundIcon, NoteIcon, PaperclipIcon, PhoneIcon, ReplyIcon } from './icons'
 import { Avatar } from './Avatar'
 
 // The list of conversations. Every state it can be in - filtered to nothing,
@@ -68,6 +68,7 @@ const CHANNEL_ICONS: Record<string, React.ReactNode> = {
   form: FormIcon,
   phone: PhoneIcon,
   sms: PhoneIcon,
+  discussion: NoteIcon,
 }
 
 /** How a conversation arrived, on the corner of the circle. Email is the ordinary

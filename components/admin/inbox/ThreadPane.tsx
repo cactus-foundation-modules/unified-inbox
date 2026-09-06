@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import type { ReactNode } from 'react'
 import type { AttachmentRow, ThreadDetail, ThreadEventRow, ThreadMessageRow } from '@/modules/unified-inbox/lib/db'
 import type { DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
 import { avatarHref, channelLabel, formatFull, formatWhen, inboxHref, initialsFor, splitQuotedText } from '@/modules/unified-inbox/lib/list'
@@ -12,7 +13,10 @@ import { RetryButton } from './RetryButton'
 import { ThreadActions } from './ThreadActions'
 import { DeleteMessageButton } from './MessageActions'
 import { BlockParticipant } from './BlockParticipant'
-import { ComposerOpenProvider, ComposerSlot, ReplyActions } from './ComposerOpen'
+import { ComposerOpenProvider, ComposerSlot } from './ComposerOpen'
+import { MessageMenu } from './MessageMenu'
+import { NoteBar } from './NoteBar'
+import { ThreadContext, type ThreadContextView } from './ThreadContext'
 
 // One conversation, oldest message first - the order the story happened in.
 //
@@ -67,6 +71,10 @@ type Props = {
    *  this conversation arrived. Almost always empty; when it is not, it is the
    *  most important thing on the screen. */
   heldDrafts: HeldDraftView[]
+  /** Who this is with and what it is about, drawn under the actions. What the
+   *  rest of the site knows ABOUT that person - their orders, their quotes -
+   *  is a different question and stays in the panel beside the conversation. */
+  context: ThreadContextView
 }
 
 /** One stood-down message, said in the little the warning needs: who it was
@@ -177,13 +185,17 @@ function MessageWhen({ at, now, timezone }: { at: Date | string | null; now: Dat
  * shop, an address nobody has been matched to - keeps its initials, which is
  * what the circle has always been.
  */
-function MessageHeader({ message, personId, showAvatars, staffById, now, timezone }: {
+function MessageHeader({ message, personId, showAvatars, staffById, now, timezone, tools }: {
   message: ThreadMessageView
   personId: string | null
   showAvatars: boolean
   staffById: Record<string, string>
   now: Date
   timezone: string
+  /** The arrow and the dots, drawn at the trailing end of the header. Handed in
+   *  already built, because ThreadPane is a server component and those two are
+   *  the only part of a message that has to be interactive. */
+  tools: ReactNode
 }) {
   const picture = (kind: 'person' | 'user', id: string | null) =>
     showAvatars ? avatarHref(kind, id) : null
@@ -198,6 +210,7 @@ function MessageHeader({ message, personId, showAvatars, staffById, now, timezon
         <span className="uin-msg-who">{author ?? 'Somebody here'}</span>
         <span className="uin-msg-dir">{NoteIcon} Internal note, not sent</span>
         <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
+        {tools}
       </div>
     )
   }
@@ -217,6 +230,7 @@ function MessageHeader({ message, personId, showAvatars, staffById, now, timezon
           {message.toAddresses.length > 0 ? ` Sent to ${message.toAddresses.join(', ')}` : ' Sent'}
         </span>
         <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
+        {tools}
       </div>
     )
   }
@@ -231,11 +245,12 @@ function MessageHeader({ message, personId, showAvatars, staffById, now, timezon
         {InboundIcon} Received{message.fromName && message.fromAddress ? ` from ${message.fromAddress}` : ''}
       </span>
       <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
+      {tools}
     </div>
   )
 }
 
-function Message({ message, personId, showAvatars, staffById, now, timezone, canDelete }: {
+function Message({ message, personId, showAvatars, staffById, now, timezone, canDelete, tools }: {
   message: ThreadMessageView
   /** Whoever the conversation is with, for the picture on an inbound message. */
   personId: string | null
@@ -246,6 +261,8 @@ function Message({ message, personId, showAvatars, staffById, now, timezone, can
   /** Whether this reader may get rid of a message the channel owns. Decided on
    *  the server, per channel and per person - see InboxPanel. */
   canDelete: boolean
+  /** Answering this message, and the rarer things beside it. */
+  tools: ReactNode
 }) {
   const kind = message.direction === 'note' ? 'note' : message.direction === 'out' ? 'out' : 'in'
 
@@ -263,6 +280,7 @@ function Message({ message, personId, showAvatars, staffById, now, timezone, can
         staffById={staffById}
         now={now}
         timezone={timezone}
+        tools={tools}
       />
       {message.autoKind && (
         <div className="uin-msg-foot uin-msg-flag">
@@ -405,6 +423,7 @@ export function ThreadPane({
   base, params, thread, inboxName, messages, events, staff, staffById,
   canReply, cannotReplyReason, replyTo, replyAllTo, draft, newestFirst,
   canDeleteMessages, blockState, now, timezone, minSendAt, heldDrafts, showAvatars,
+  context,
 }: Props) {
   // The list arrives oldest first. Reversing a copy rather than sorting again:
   // the query already decided the order, and this only says which end to read
@@ -423,7 +442,7 @@ export function ThreadPane({
     // Keyed on the conversation, so opening the next one starts shut again
     // rather than inheriting whatever was open on the last.
     <ComposerOpenProvider key={thread.id} initialMode={openAs}>
-    <div className="uin-thread">
+    <div className="uin-thread uin-thread-conv">
       <div className="uin-thread-head">
         {/* The subject and the way out of it on one line, which is where every
             mail program has put them. On a phone the way out is the way back to
@@ -456,18 +475,22 @@ export function ThreadPane({
           )}
           {thread.status === 'done' && <span className="uin-tag uin-tag-done">Done</span>}
         </div>
-        {/* What you can say, before what you can do to it: answering is what
-            somebody came here for, and the box itself is no longer sitting open
-            underneath waiting to be noticed. */}
-        <ReplyActions canReply={canReply} canForward={canReply} cannotReplyReason={cannotReplyReason} />
+        {/* What can be done TO the conversation. Answering it is not up here any
+            more: the arrow lives on the message being answered, which is the
+            one thing this row could never say which of. */}
         <ThreadActions
           threadId={thread.id}
           status={thread.status}
-          unread={thread.unread}
           assigneeUserId={thread.assigneeUserId}
           staff={staff}
           timezone={timezone}
         />
+        {/* Why there is no arrow on any of the messages. Without it, a
+            conversation with the obvious thing missing and no explanation is
+            the sort of thing people report as broken. */}
+        {!canReply && cannotReplyReason && (
+          <p className="uin-thread-cannot">{cannotReplyReason}</p>
+        )}
         {/* Beside what is done TO the conversation, because that is what this
             is: it changes what happens next, not what is in the thread. */}
         {blockState && (
@@ -477,6 +500,9 @@ export function ThreadPane({
             channelLabel={blockState.channelLabel}
           />
         )}
+        {/* Last in the header, under everything that can be pressed: who this
+            is, and what it is about. */}
+        <ThreadContext threadId={thread.id} base={base} params={params} {...context} />
       </div>
 
       <div className="uin-thread-body">
@@ -543,6 +569,13 @@ export function ThreadPane({
                 now={now}
                 timezone={timezone}
                 canDelete={canDeleteMessages}
+                tools={(
+                  <MessageMenu
+                    threadId={thread.id}
+                    canReply={canReply}
+                    canReplyAll={canReply && replyAllTo.length > replyTo.length}
+                  />
+                )}
               />
             ))}
           </div>
@@ -583,6 +616,11 @@ export function ThreadPane({
           </details>
         )}
       </div>
+
+      {/* Last inside the conversation and pinned to the bottom of it, so it is
+          there whether you are at the top of a thread or four thousand pixels
+          down one. Outside the body on purpose: the body is what scrolls. */}
+      <NoteBar threadId={thread.id} />
     </div>
     </ComposerOpenProvider>
   )

@@ -20,14 +20,21 @@ the same human collapse into one story.
   what went wrong when it cannot.
 - **Inboxes.** The addresses people write to. One mail account can serve several
   of them, each with its own name on the replies, its own signature and its own
-  staff.
+  staff. Each one is either **shared** - the business's, read by the team - or
+  **individual**, one colleague's own post.
 - **Signatures.** One per inbox, written whichever way suits: typed as rich
   text, pasted as the markup your organisation already uses, or built out of the
   same blocks your site's emails are built from. Fill-in tags for the address,
   its name and the name replies go out under, and a preview before you save.
-- **Who can read what.** An inbox with nobody named on it is open to everybody
-  who can see the hub. Name one person and it becomes theirs alone, which is how
-  the accounts address stays away from the rest of the team.
+- **Who can read what.** A shared inbox with nobody named on it is open to
+  everybody who can see the hub. Name one person and it becomes theirs alone,
+  which is how the accounts address stays away from the rest of the team. A
+  individual inbox goes further: it belongs to one named colleague and nobody else
+  opens it, an administrator included. They keep the configuration - its name,
+  its folder, whose it is, whether it exists at all - and lose the reading, which
+  is the only version of that promise worth making. Nothing is converted by an
+  update: every address on an existing site stays shared until somebody says
+  otherwise.
 - **Collecting the post.** Mail is gathered on the site's own schedule, from the
   inbox and the folders you file things into, so a message read on a phone is
   still here.
@@ -37,6 +44,16 @@ the same human collapse into one story.
   Reply, reply to everybody, forward, or leave a note only your colleagues see.
   A brand new message opens in a box over the top, so the list stays where it
   was.
+- **A discussion, a call or a text.** The arrow beside the write button opens
+  the three things that are not an email. A **discussion** is a conversation
+  with your colleagues in one of your own addresses - subject, message, and
+  nothing on it is ever sent anywhere, so there is no Reply on it, only the note
+  box. A **call** rings your phone first, then theirs, out of one of the site's
+  own numbers. A **text** goes to a mobile. The last two need something on the
+  site that makes calls and sends texts - the Twilio module today - and neither
+  is offered when there is not one. Neither is written down here either: the
+  part of the site that placed the call files it back as a phone conversation,
+  which is one record rather than two disagreeing ones.
 - **Sent.** One row per message that has left, newest first, across every
   address you can read, with who it went to, which address it left as, and what
   became of it where the site is watching. Opening one opens the conversation it

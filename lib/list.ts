@@ -63,11 +63,28 @@ export type InboxParams = {
   /** A user id, the literal 'unassigned', or null for no filter. */
   assignee: string | null
   search: string | null
+  /** The narrower cuts the search dialog can add on top of the words: who it
+   *  came from, who it went to, what the subject says, whether anything is
+   *  attached, and the two ends of a date range. All of them optional, all of
+   *  them read off the address like everything else on this screen. */
+  fromText: string | null
+  toText: string | null
+  subjectText: string | null
+  withAttachment: boolean
+  /** Calendar dates, "YYYY-MM-DD", meant in the site's own timezone. Kept as
+   *  the strings they arrived as: turning them into instants needs the zone,
+   *  which this file has no business knowing. */
+  after: string | null
+  before: string | null
   page: number
   /** The conversation open on the right, if any. */
   threadId: string | null
   /** Composing a brand new message rather than answering one. */
   composing: boolean
+  /** Which of the four the compose button was asked for. An email unless the
+   *  address says otherwise, so every link written before the menu existed
+   *  still opens the thing it always opened. */
+  composeKind: ComposeKind
   /** The draft being finished, if the address names one. */
   draftId: string | null
   /** The person whose own page is open, if any. Takes the same place on the
@@ -78,11 +95,49 @@ export type InboxParams = {
 
 export type ContactsView = 'people' | 'organisations'
 
+/** The four things the new-message button can start. `email` is what the button
+ *  itself does; the other three are on the little menu beside it. */
+export type ComposeKind = 'email' | 'discussion' | 'sms' | 'call'
+
+const COMPOSE_KINDS: ComposeKind[] = ['email', 'discussion', 'sms', 'call']
+
+/** What `?compose=` says, read defensively. '1' is the email composer and
+ *  predates the menu, so every link written before it still opens what it
+ *  always opened. Anything else at all opens nothing: a value nobody wrote is a
+ *  mistyped address rather than an instruction, and this screen has always
+ *  treated it that way. */
+export function parseComposeKind(raw: string | undefined): ComposeKind | null {
+  if (!raw) return null
+  if (raw === '1') return 'email'
+  return COMPOSE_KINDS.includes(raw as ComposeKind) ? (raw as ComposeKind) : null
+}
+
 const STATUSES: StatusFilter[] = ['open', 'snoozed', 'done', 'all']
 
 /** What "start a new one" is written as in the address. A word rather than a
  *  blank, so a link that dropped its value cannot be mistaken for it. */
 export const NEW_CONTACT = 'new'
+
+/** One of the search dialog's own boxes, trimmed and capped. Same ceiling as
+ *  the words themselves: nothing on this screen has any business handing a
+ *  thousand characters to a LIKE. */
+function text(raw: string | undefined): string | null {
+  const value = (raw ?? '').trim()
+  return value.length > 0 ? value.slice(0, 200) : null
+}
+
+/** A calendar date off the address, or null for anything that is not one.
+ *  Checked properly rather than by shape alone: "2026-13-45" is the right
+ *  length and the wrong date, and Date.UTC would roll it forward into February
+ *  rather than complain. */
+function calendarDate(raw: string | undefined): string | null {
+  const value = (raw ?? '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  const [y, m, d] = value.split('-').map(Number) as [number, number, number]
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null
+  const date = new Date(Date.UTC(y, m - 1, d))
+  return date.getUTCMonth() === m - 1 && date.getUTCDate() === d ? value : null
+}
 
 /**
  * The query string, read defensively. A mistyped ?page= once reached a database
@@ -120,9 +175,16 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
     oldestFirst: sp.sort === 'oldest',
     assignee: sp.assignee ? sp.assignee : null,
     search: search.length > 0 ? search.slice(0, 200) : null,
+    fromText: text(sp.from),
+    toText: text(sp.to),
+    subjectText: text(sp.subject),
+    withAttachment: sp.att === '1',
+    after: calendarDate(sp.after),
+    before: calendarDate(sp.before),
     page: Math.max(1, parseInt(sp.page ?? '1', 10) || 1),
     threadId: sp.id ? sp.id : null,
-    composing: sp.compose === '1',
+    composing: parseComposeKind(sp.compose) !== null,
+    composeKind: parseComposeKind(sp.compose) ?? 'email',
     draftId: sp.draft ? sp.draft : null,
     personId: sp.person ? sp.person : null,
   }
@@ -143,6 +205,173 @@ export function inboxHref(
   }
   const query = params.toString()
   return query ? `${base}?${query}` : base
+}
+
+/** What the search dialog can ask for. Every field is what somebody typed or
+ *  picked, which is why they are all strings: the builder below is the one
+ *  place they become an address, and it is the piece worth testing. */
+export type SearchRequest = {
+  /** Conversations, or the address book. Two different lists, one box. */
+  mode: 'conversations' | 'contacts'
+  /** The words themselves. */
+  q: string
+  /** Where to look: an inbox id, `m:<module>`, or 'all' for everything this
+   *  person may see - which is what the dialog opens on, because a search that
+   *  quietly only covered the inbox somebody happened to be standing in is the
+   *  reason they could not find the message. */
+  scope: string
+  from: string
+  to: string
+  subject: string
+  withAttachment: boolean
+  unreadOnly: boolean
+  /** One of the four statuses. 'all' by default: something answered and filed
+   *  three weeks ago is exactly what people come to a search box for. */
+  status: StatusFilter
+  after: string
+  before: string
+}
+
+export const EMPTY_SEARCH: SearchRequest = {
+  mode: 'conversations',
+  q: '',
+  scope: 'all',
+  from: '',
+  to: '',
+  subject: '',
+  withAttachment: false,
+  unreadOnly: false,
+  status: 'all',
+  after: '',
+  before: '',
+}
+
+/**
+ * The address a search asks for.
+ *
+ * Pure, and here rather than in the dialog, because what a search means is a
+ * question about the query string and the query string is this file's job.
+ * Everything already in the address survives except the things a new search has
+ * no business keeping: the page, whatever was open beside the list, and the
+ * composer.
+ *
+ * The address book takes the words and nothing else - "from" and "has an
+ * attachment" are questions about post, and a contacts list cannot answer
+ * them - so they are dropped rather than carried along invisibly.
+ */
+export function buildSearchHref(
+  base: string,
+  current: Record<string, string>,
+  request: SearchRequest,
+): string {
+  const cleared = { page: null, id: null, person: null, compose: null, draft: null }
+  const value = (raw: string) => {
+    const trimmed = raw.trim()
+    return trimmed.length > 0 ? trimmed.slice(0, 200) : null
+  }
+  if (request.mode === 'contacts') {
+    return inboxHref(base, current, {
+      ...cleared,
+      inbox: 'contacts',
+      q: value(request.q),
+      // The narrower cuts belong to the post, and so do the two views of it.
+      from: null, to: null, subject: null, att: null, after: null, before: null,
+      status: null, unread: null, assignee: null,
+    })
+  }
+  return inboxHref(base, current, {
+    ...cleared,
+    // The address book's own params go with it rather than lingering over a
+    // list of conversations.
+    view: null, org: null, edit: null, import: null, cat: null,
+    inbox: request.scope || 'all',
+    q: value(request.q),
+    from: value(request.from),
+    to: value(request.to),
+    subject: value(request.subject),
+    att: request.withAttachment ? '1' : null,
+    unread: request.unreadOnly ? '1' : null,
+    // Open is what the ordinary list shows and needs no saying; the other three
+    // are a deliberate choice and go in the address.
+    status: request.status === 'open' ? null : request.status,
+    after: calendarDate(request.after),
+    before: calendarDate(request.before),
+  })
+}
+
+/**
+ * The dialog's boxes, filled in from the address it was opened over.
+ *
+ * So that opening search on a list somebody has already narrowed shows what
+ * they narrowed it with, rather than an empty form that would quietly throw it
+ * away the moment they pressed Search. Takes the raw query string rather than
+ * the parsed params because the dialog is a client component holding strings,
+ * and the parsed shape would only have to be turned back into them.
+ */
+export function searchRequestFrom(current: Record<string, string>): SearchRequest {
+  const inbox = current.inbox ?? ''
+  const contacts = inbox === 'contacts'
+  const status = current.status as StatusFilter | undefined
+  // Whether the list underneath is already the answer to a search. It settles
+  // where the dialog opens pointed: everywhere, when somebody is simply reading
+  // an inbox and has come here BECAUSE they cannot find something - and at
+  // whatever they chose last time, when they are refining the search they are
+  // already looking at.
+  const narrowed = !!(current.q || current.from || current.to || current.subject
+    || current.att || current.after || current.before)
+  return {
+    mode: contacts ? 'contacts' : 'conversations',
+    q: current.q ?? '',
+    // Drafts, Sent, Contacts and Campaigns are not places to search in - they
+    // are other lists entirely - so a search opened over one of them looks
+    // everywhere rather than nowhere.
+    scope: narrowed ? searchableScope(inbox) : 'all',
+    from: current.from ?? '',
+    to: current.to ?? '',
+    subject: current.subject ?? '',
+    withAttachment: current.att === '1',
+    unreadOnly: current.unread === '1',
+    // Anything already chosen stands; a search opened fresh looks everywhere,
+    // because something dealt with a fortnight ago is exactly what people come
+    // to a search box for.
+    status: status && STATUSES.includes(status) ? status : 'all',
+    after: current.after ?? '',
+    before: current.before ?? '',
+  }
+}
+
+/** The tabs a search can be pointed at: one address, one channel, the mail that
+ *  landed nowhere, or the lot. The other four are not narrower views of the
+ *  post - they are different lists altogether - so a search opened over one of
+ *  them looks everywhere rather than at nothing. */
+const NOT_A_SCOPE = ['drafts', 'sent', 'contacts', 'campaigns']
+
+function searchableScope(inbox: string): string {
+  if (!inbox || NOT_A_SCOPE.includes(inbox)) return 'all'
+  return inbox
+}
+
+/** A calendar date, as somebody would write it. No timezone involved and none
+ *  wanted: "2026-09-03" is a date rather than an instant, and putting it
+ *  through a formatter with a zone is how a date becomes the day before. */
+export function formatCalendarDate(value: string): string {
+  const [y, m, d] = value.split('-').map(Number)
+  if (!y || !m || !d) return value
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  return `${d} ${months[m - 1] ?? ''} ${y}`.trim()
+}
+
+/** Whether the list on screen is the answer to a search rather than a plain
+ *  view of an inbox. Asked in three places - the empty state, the chips, the
+ *  dialog - so it is written once. */
+export function isSearching(params: InboxParams): boolean {
+  return !!params.search
+    || !!params.fromText
+    || !!params.toText
+    || !!params.subjectText
+    || params.withAttachment
+    || !!params.after
+    || !!params.before
 }
 
 /**
@@ -203,6 +432,33 @@ export function pinDefaultInbox<T extends { id: string }>(
   return { pinned, rest: inboxes.filter((i) => i.id !== pinned.id) }
 }
 
+/**
+ * The rail's two groups of addresses: the ones that are this person's, and the
+ * ones the business shares.
+ *
+ * Built on `pinDefaultInbox` rather than beside it, because there are two
+ * different ways an address ends up under Yours and they are not the same fact.
+ * An INDIVIDUAL inbox is theirs by its nature - nobody else can see it, so it
+ * could not sensibly appear anywhere else on anybody's rail. A SHARED inbox
+ * pinned as their own is a preference: purchasing@ is still the team's, it is
+ * simply the one this person opens the hub on. Both belong at the top, and only
+ * the second of them is per person.
+ *
+ * `shared` stays in the site's own order, which is what the drag saves and what
+ * everybody else sees.
+ */
+export function splitInboxes<T extends { id: string; kind: 'individual' | 'shared' }>(
+  inboxes: T[],
+  defaultInboxId: string | null,
+): { yours: T[]; shared: T[] } {
+  const mine = inboxes.filter((i) => i.kind === 'individual')
+  const { pinned, rest } = pinDefaultInbox(
+    inboxes.filter((i) => i.kind !== 'individual'),
+    defaultInboxId,
+  )
+  return { yours: pinned ? [...mine, pinned] : mine, shared: rest }
+}
+
 export function pageCount(total: number, perPage: number = PER_PAGE): number {
   if (total <= 0) return 1
   return Math.ceil(total / perPage)
@@ -214,6 +470,7 @@ const CHANNEL_LABELS: Record<string, string> = {
   form: 'Contact form',
   phone: 'Phone',
   sms: 'Text',
+  discussion: 'Discussion',
 }
 
 /** What a channel is called in front of somebody who does not build websites. */

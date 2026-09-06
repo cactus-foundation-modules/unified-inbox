@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
+import { audienceForSave } from '@/modules/unified-inbox/lib/access'
 import {
   getInbox,
   listInboxAccess,
@@ -53,13 +54,19 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
   if (!await hasPermission(user, 'unifiedinbox.manage')) return errorResponse('Forbidden', 403)
 
   const { id } = await params
-  if (!await getInbox(id)) return errorResponse('That inbox no longer exists.', 404)
+  const inbox = await getInbox(id)
+  if (!inbox) return errorResponse('That inbox no longer exists.', 404)
 
   const parsed = Body.safeParse(await request.json().catch(() => null))
   if (!parsed.success) return errorResponse('That access list does not look right.')
 
   const defaults = parsed.data.defaultUserIds ?? await defaultUserIdsFor(id)
-  await setInboxAudience(id, parsed.data.entries, [...new Set(defaults)])
+  // An individual inbox has one member, and it is its owner - whatever this
+  // request happens to say. A screen loaded before the inbox became somebody's
+  // own would otherwise put the old team back on it, and it would look like it
+  // had worked.
+  const audience = audienceForSave(inbox, parsed.data.entries, [...new Set(defaults)])
+  await setInboxAudience(id, audience.entries, audience.defaultUserIds)
 
   const [access, defaultUserIds] = await Promise.all([listInboxAccess(id), defaultUserIdsFor(id)])
   return NextResponse.json({ access, defaultUserIds })

@@ -30,10 +30,17 @@ export type Connection = {
 
 export type SignatureKind = 'markdown' | 'html' | 'puck'
 
+export type InboxKind = 'individual' | 'shared'
+
 export type Inbox = {
   id: string
   name: string
   address: string
+  /** Whose post it is: the team's, or one named person's. */
+  kind: InboxKind
+  /** Which person, on an individual one. Null on a shared one, and null on an
+   *  individual one whose owner's account has been deleted since. */
+  ownerUserId: string | null
   connectionId: string | null
   imapFolder: string
   sentFolder: string | null

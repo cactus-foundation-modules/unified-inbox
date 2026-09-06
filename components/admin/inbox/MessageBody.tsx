@@ -11,10 +11,13 @@ import { LinkPeek, type PeekedLink } from './LinkPeek'
 // same-origin access, no forms, no navigation - only links, which open in a new
 // tab because a sandboxed frame cannot navigate itself anywhere.
 //
-// The frame reports its own height back, so a message is exactly as tall as it
+// The frame reports its own height back, and keeps reporting it as pictures
+// arrive and sections are folded away, so a message is exactly as tall as it
 // turned out to be rather than a fixed box with a scrollbar inside the page's
-// scrollbar. Until that message arrives it stands at a sensible height, so a
-// blocked script or a slow load costs a slightly wrong size and nothing else.
+// scrollbar. The whole message is on the page and the page scrolls it, which is
+// what reading post is. Until that first message arrives the frame stands at a
+// sensible height, so a blocked script or a slow load costs a slightly wrong
+// size and nothing else.
 //
 // Two different numbers, and conflating them was the whole of the problem.
 //
@@ -40,7 +43,13 @@ import { LinkPeek, type PeekedLink } from './LinkPeek'
 
 const OPENING_HEIGHT = 400
 const MIN_HEIGHT = 60
-const MAX_HEIGHT = 4000
+// A runaway guard and nothing else. It is not a view onto the message, so it is
+// not a size anybody has chosen: a newsletter with thirty sections in it is
+// twenty thousand pixels tall and every one of them is meant to be read. This
+// used to be 4000, which is about two screens, and everything past that could
+// only be reached by scrolling inside the message - which is the whole of what
+// a frame is not supposed to do.
+const MAX_HEIGHT = 200000
 /** How long to let the frame stay silent before asking whether it was ever
  *  going to say anything. Long enough for a large message on a slow line. */
 const SILENCE_MS = 5000
@@ -76,7 +85,12 @@ export function MessageBody({ messageId, hasRemoteImages }: Props) {
     const value = data?.uinFrameHeight
     if (typeof value === 'number' && Number.isFinite(value)) {
       heard.current = true
-      setHeight(Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.ceil(value))))
+      const applied = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.ceil(value)))
+      setHeight(applied)
+      // Say back how much room it got. The frame puts its own scrollbar away
+      // once it knows the whole message is on the page, so a wide table cannot
+      // give a message a scrollbar of its own inside the page's.
+      frame.current.contentWindow?.postMessage({ uinAppliedHeight: applied }, '*')
       return
     }
 

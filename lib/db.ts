@@ -6,7 +6,7 @@ import { normaliseAddress } from './addresses'
 import type { ThreadRef } from './threading'
 import type { OutboundCandidate } from './relay-copy'
 import { remoteImageUrls } from './remote-images'
-import { DRAFT_MODES, DRAFT_SEND_STATES, isSignatureKind } from './types'
+import { DRAFT_MODES, DRAFT_SEND_STATES, isInboxKind, isSignatureKind } from './types'
 import type {
   AttachmentFetchMode,
   Connection,
@@ -20,6 +20,8 @@ import type {
   IdentityKind,
   Inbox,
   InboxAccess,
+  InboxAudience,
+  InboxKind,
   UserDefaultInbox,
   Organisation,
   Person,
@@ -239,6 +241,8 @@ function mapInbox(r: Record<string, unknown>): Inbox {
     id: r.id as string,
     name: r.name as string,
     address: r.address as string,
+    kind: isInboxKind(r.kind) ? r.kind : 'shared',
+    ownerUserId: (r.owner_user_id as string | null) ?? null,
     connectionId: (r.connection_id as string | null) ?? null,
     imapFolder: (r.imap_folder as string) ?? 'INBOX',
     sentFolder: (r.sent_folder as string | null) ?? null,
@@ -270,6 +274,35 @@ export async function allInboxIds(): Promise<string[]> {
   return rows.map((r) => r.id)
 }
 
+/** The kind and the owner of every address on the site, for resolving one
+ *  person's view of the lot in a single query. Deliberately not `listInboxes` -
+ *  that reads every signature and every SMTP setting to answer a question about
+ *  who may open what. */
+export async function listInboxAudiences(): Promise<InboxAudience[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "id", "kind", "owner_user_id" FROM "uin_inboxes"
+  `
+  return rows.map(mapAudience)
+}
+
+/** The same two facts about one address, or null when there is no such address.
+ *  A missing row is not "open to everybody" - the caller must treat it as a
+ *  refusal, which is what every caller in lib/access.ts does. */
+export async function getInboxAudience(id: string): Promise<InboxAudience | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "id", "kind", "owner_user_id" FROM "uin_inboxes" WHERE "id" = ${id}
+  `
+  return rows[0] ? mapAudience(rows[0]) : null
+}
+
+function mapAudience(r: Record<string, unknown>): InboxAudience {
+  return {
+    id: r.id as string,
+    kind: isInboxKind(r.kind) ? r.kind : 'shared',
+    ownerUserId: (r.owner_user_id as string | null) ?? null,
+  }
+}
+
 export async function listInboxes(): Promise<Inbox[]> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT * FROM "uin_inboxes" ORDER BY "sort_order" ASC, "name" ASC
@@ -287,6 +320,8 @@ export async function getInbox(id: string): Promise<Inbox | null> {
 export type InboxInput = {
   name: string
   address: string
+  kind?: InboxKind
+  ownerUserId?: string | null
   connectionId?: string | null
   imapFolder?: string
   sentFolder?: string | null
@@ -311,12 +346,15 @@ export type InboxInput = {
 export async function createInbox(data: InboxInput): Promise<Inbox> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     INSERT INTO "uin_inboxes"
-      ("name", "address", "connection_id", "imap_folder", "sent_folder", "is_catch_all",
+      ("name", "address", "kind", "owner_user_id",
+       "connection_id", "imap_folder", "sent_folder", "is_catch_all",
        "folder_owns_mail",
        "send_transport", "brevo_api_key_encrypted", "smtp_host", "smtp_port", "smtp_username",
        "smtp_password_encrypted", "from_name", "signature_kind", "signature", "signature_html",
        "signature_puck", "append_to_sent", "colour", "sort_order")
-    VALUES (${data.name}, ${normaliseAddress(data.address)}, ${data.connectionId ?? null},
+    VALUES (${data.name}, ${normaliseAddress(data.address)},
+            ${data.kind ?? 'shared'}, ${data.kind === 'individual' ? data.ownerUserId ?? null : null},
+            ${data.connectionId ?? null},
             ${data.imapFolder ?? 'INBOX'}, ${data.sentFolder ?? null}, ${data.isCatchAll ?? false},
             ${data.folderOwnsMail ?? false},
             ${data.sendTransport ?? 'brevo'}, ${optionalSecret(data.brevoApiKey) ?? null},
@@ -334,6 +372,17 @@ export async function updateInbox(id: string, data: Partial<InboxInput>): Promis
   const sets: Prisma.Sql[] = []
   if (data.name !== undefined) sets.push(Prisma.sql`"name" = ${data.name}`)
   if (data.address !== undefined) sets.push(Prisma.sql`"address" = ${normaliseAddress(data.address)}`)
+  // The pair moves together: an address that becomes the team's keeps no owner,
+  // and one that becomes somebody's own has no meaning without one. Written
+  // here rather than left to the caller because half of this landing is an
+  // inbox nobody can read.
+  if (data.kind !== undefined) {
+    sets.push(Prisma.sql`"kind" = ${data.kind}`)
+    if (data.kind === 'shared') sets.push(Prisma.sql`"owner_user_id" = ${null}`)
+    else if (data.ownerUserId !== undefined) sets.push(Prisma.sql`"owner_user_id" = ${data.ownerUserId}`)
+  } else if (data.ownerUserId !== undefined) {
+    sets.push(Prisma.sql`"owner_user_id" = ${data.ownerUserId}`)
+  }
   if (data.connectionId !== undefined) sets.push(Prisma.sql`"connection_id" = ${data.connectionId}`)
   if (data.imapFolder !== undefined) sets.push(Prisma.sql`"imap_folder" = ${data.imapFolder}`)
   if (data.sentFolder !== undefined) sets.push(Prisma.sql`"sent_folder" = ${data.sentFolder}`)
@@ -487,8 +536,15 @@ export async function defaultInboxIdFor(userId: string): Promise<string | null> 
  *  Asked at send time, because it settles whose signature goes at the foot:
  *  a personal address signs as its owner whoever is holding the keyboard. */
 export async function inboxIsSomebodysOwn(inboxId: string): Promise<boolean> {
+  // Two ways of being somebody's own, and either one settles it. An individual
+  // inbox is one by definition; a shared address can still be the one somebody
+  // opens on and signs as, which is the older of the two and the reason a site
+  // that has set neither behaves exactly as it always did.
   const rows = await prisma.$queryRaw<{ one: number }[]>`
-    SELECT 1 AS one FROM "uin_user_default_inbox" WHERE "inbox_id" = ${inboxId} LIMIT 1
+    SELECT 1 AS one FROM "uin_user_default_inbox" WHERE "inbox_id" = ${inboxId}
+    UNION ALL
+    SELECT 1 AS one FROM "uin_inboxes" WHERE "id" = ${inboxId} AND "kind" = 'individual'
+    LIMIT 1
   `
   return rows.length > 0
 }
@@ -1834,6 +1890,35 @@ export async function recordLink(data: {
   `
 }
 
+/**
+ * Starts a discussion: a conversation between colleagues with no outside party
+ * on it at all (see migrations/029_discussions.sql).
+ *
+ * It opens UNREAD, which is the one place a discussion differs from the notes
+ * it is made of. A note deliberately does not mark a conversation unread -
+ * colleagues talking about a customer's email should not look like the customer
+ * writing again - but a discussion nobody has been told about is a discussion
+ * nobody reads. The person starting it sees their own as unread for a moment,
+ * which is the cheaper of the two mistakes, because a conversation carries one
+ * unread flag between everybody rather than one each.
+ */
+export async function createDiscussionThread(data: {
+  inboxId: string
+  subject: string
+  subjectNormalised: string
+  preview: string | null
+}): Promise<string> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    INSERT INTO "uin_threads"
+      ("inbox_id", "channel", "subject", "subject_normalised", "preview",
+       "last_message_at", "last_direction", "unread", "message_count")
+    VALUES (${data.inboxId}, 'discussion', ${data.subject}, ${data.subjectNormalised},
+            ${data.preview}, now(), 'note', true, 1)
+    RETURNING "id"
+  `
+  return rows[0]!.id
+}
+
 /** Starts a conversation that begins with us writing to somebody (D12). */
 export async function createOutboundThread(data: {
   inboxId: string
@@ -1899,6 +1984,20 @@ export type ThreadListFilters = {
   /** A user id, or 'unassigned', or null for "do not filter". */
   assignee?: string | null
   search?: string | null
+  /** The search dialog's narrower cuts. Each one asks the conversation whether
+   *  ANY message in it matches, which is the only reading that makes sense of a
+   *  thread: "from the supplier" and "about the invoice" are usually two
+   *  different messages of the same conversation. */
+  fromText?: string | null
+  toText?: string | null
+  subjectText?: string | null
+  withAttachment?: boolean
+  /** The two ends of a date range, as instants. Worked out from the calendar
+   *  dates in the address by the caller, in the SITE's timezone - a date turned
+   *  into an instant here would be a date in UTC, which is an hour out for most
+   *  of the British year and would quietly drop the first message of a day. */
+  after?: Date | null
+  before?: Date | null
   /** Which end of the list to start at. Newest first is what a mail program
    *  does; oldest first is for working a backlog off the bottom, which is the
    *  only way to clear one without the top moving under you. */
@@ -2000,7 +2099,77 @@ function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
          AND ${SEARCH_VECTOR} @@ websearch_to_tsquery('english', ${q})
     )`)
   }
+  // The narrower cuts, one EXISTS each. Separate rather than folded into one
+  // subquery on purpose: "from the supplier" and "with something attached" are
+  // usually two different messages of the same conversation, and one subquery
+  // would insist on finding them in the same one.
+  //
+  // ILIKE rather than the search index, because these are asked of an address
+  // and a subject line, where somebody types half of one and expects the middle
+  // of a word to count. The words themselves still go through the index above,
+  // which is the clause that does the heavy lifting.
+  const from = likeContains(f.fromText)
+  if (from) {
+    where.push(Prisma.sql`EXISTS (
+      SELECT 1 FROM "uin_messages" ms
+       WHERE ms."thread_id" = t."id"
+         AND (ms."from_address" ILIKE ${from} OR ms."from_name" ILIKE ${from})
+    )`)
+  }
+  const to = likeContains(f.toText)
+  if (to) {
+    // Copied-in addresses count: somebody looking for what went to accounts@
+    // means the mail accounts@ was on, not only the mail it was the first name
+    // on. array_to_string rather than unnest so the whole thing is one
+    // predicate over the row rather than a second correlated query.
+    where.push(Prisma.sql`EXISTS (
+      SELECT 1 FROM "uin_messages" ms
+       WHERE ms."thread_id" = t."id"
+         AND array_to_string(ms."to_addresses" || ms."cc_addresses", ' ') ILIKE ${to}
+    )`)
+  }
+  const subject = likeContains(f.subjectText)
+  if (subject) {
+    // The conversation's own subject as well as its messages': a thread carries
+    // the subject it was opened with, and a reply whose subject somebody edited
+    // should still be found under either.
+    where.push(Prisma.sql`(t."subject" ILIKE ${subject} OR EXISTS (
+      SELECT 1 FROM "uin_messages" ms
+       WHERE ms."thread_id" = t."id" AND ms."subject" ILIKE ${subject}
+    ))`)
+  }
+  if (f.withAttachment) {
+    // Asked of the messages rather than read off the newest one: the invoice is
+    // attached to the message that carried it, and the conversation has usually
+    // moved on since.
+    where.push(Prisma.sql`EXISTS (
+      SELECT 1 FROM "uin_messages" ms
+       WHERE ms."thread_id" = t."id" AND ms."has_attachments" = true
+    )`)
+  }
+  // Asked of when the conversation last moved, which is what the list is
+  // ordered by and what the date on a row says - so a range narrows the list
+  // somebody is looking at rather than a column they cannot see.
+  if (f.after) where.push(Prisma.sql`t."last_message_at" >= ${f.after}`)
+  if (f.before) where.push(Prisma.sql`t."last_message_at" < ${f.before}`)
   return where
+}
+
+/**
+ * A contains-match for ILIKE, with the wildcards in what somebody typed taken
+ * literally.
+ *
+ * An unescaped `%` in a search box is a search for everything, and an
+ * unescaped `_` quietly matches any character - neither is what a person
+ * hunting for "50%_off" means. Backslash is the escape ILIKE uses by default,
+ * so it has to go first or escaping the wildcards would leave a dangling one.
+ *
+ * Exported for the tests: this is the piece with a genuine wrong answer in it.
+ */
+export function likeContains(raw: string | null | undefined): string | null {
+  const value = raw?.trim()
+  if (!value) return null
+  return `%${value.replace(/\\/g, '\\\\').replace(/[%_]/g, (c) => `\\${c}`)}%`
 }
 
 /**
@@ -2218,6 +2387,26 @@ export async function getThreadDetail(id: string): Promise<ThreadDetail | null> 
     lastMessageAt: (r.last_message_at as Date | null) ?? null,
     createdAt: r.created_at as Date,
   }
+}
+
+/**
+ * The other party's number on an open conversation, for a text or a call
+ * started while looking at it.
+ *
+ * Newest first, because a number is a thing people change, and only ever from
+ * a message they sent US: `from_phone` on our own outgoing message is our own
+ * number, and ringing ourselves is not what anybody meant by "call them".
+ */
+export async function latestPhoneOnThread(threadId: string): Promise<string | null> {
+  const rows = await prisma.$queryRaw<{ from_phone: string | null }[]>`
+    SELECT "from_phone" FROM "uin_messages"
+     WHERE "thread_id" = ${threadId}
+       AND "direction" = 'in'
+       AND "from_phone" IS NOT NULL
+     ORDER BY "sent_at" DESC
+     LIMIT 1
+  `
+  return rows[0]?.from_phone ?? null
 }
 
 export type ThreadMessageRow = {

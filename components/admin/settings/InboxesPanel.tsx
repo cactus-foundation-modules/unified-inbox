@@ -6,10 +6,12 @@ import { ConfirmDialog } from '../inbox/ConfirmDialog'
 import { fetchFolders } from './api'
 import { SignatureEditor } from './SignatureEditor'
 import { blankInbox, type InboxDraft } from './inbox-draft'
-import type { AccessRow, Caller, Connection, DefaultInboxRow, Inbox, Note, StaffMember } from './types'
+import type {
+  AccessRow, Caller, Connection, DefaultInboxRow, Inbox, InboxKind, Note, StaffMember,
+} from './types'
 import {
   CheckField, Chip, EditPanel, EmptyState, FieldGroup, FieldRow, FormActions,
-  ListRow, ListRowHeader, MUTED, Panel,
+  GROUP_LABEL, ListRow, ListRowHeader, MUTED, Panel,
 } from './ui'
 
 // ---------------------------------------------------------------------------
@@ -20,6 +22,22 @@ import {
 // allowed to read any of it. It asks all of that in five named groups rather
 // than in one column of fourteen boxes, which is what it used to be.
 // ---------------------------------------------------------------------------
+
+/** The two kinds, in the words somebody who has never heard of a guest list
+ *  would use. Said once because the form, the list and the wiki all have to say
+ *  the same thing about a choice with consequences. */
+const KINDS: ReadonlyArray<{ value: InboxKind; label: string; hint: string }> = [
+  {
+    value: 'shared',
+    label: 'Shared - the business\u2019s',
+    hint: 'sales@, accounts@, hello@. Your team reads it between them, conversations get handed round, and you say below who is on it.',
+  },
+  {
+    value: 'individual',
+    label: 'Individual - one colleague\u2019s',
+    hint: 'Their own post at work. Nobody else opens it: not their colleagues, and not whoever looks after the site.',
+  },
+]
 
 export function InboxesPanel({ inboxes, connections, access, defaults, users, busy, call, setMessage, reload }: {
   inboxes: Inbox[]
@@ -79,6 +97,13 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
     return inboxes.find((i) => i.id === row.inboxId) ?? null
   }
 
+  /** What to call the person an address belongs to, or null when nobody has
+   *  been named yet. */
+  function ownerName(userId: string | null): string | null {
+    if (!userId) return null
+    return users.find((u) => u.id === userId)?.name ?? null
+  }
+
   function startNew() {
     setDraft(blankInbox())
     setStaff([])
@@ -90,6 +115,8 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
     setDraft({
       name: inbox.name,
       address: inbox.address,
+      kind: inbox.kind,
+      ownerUserId: inbox.ownerUserId ?? '',
       connectionId: inbox.connectionId ?? '',
       imapFolder: inbox.imapFolder,
       sentFolder: inbox.sentFolder ?? '',
@@ -118,10 +145,16 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
     const body = {
       name: draft.name,
       address: draft.address,
+      kind: draft.kind,
+      ownerUserId: draft.kind === 'individual' ? draft.ownerUserId || null : null,
       connectionId: draft.connectionId || null,
+      // An address that belongs to one person cannot also be where unplaceable
+      // post lands. Cleared here as well as refused by the server, so switching
+      // a catch-all to somebody's own is one press rather than an error message
+      // about a tick box further up the form.
+      isCatchAll: draft.kind === 'individual' ? false : draft.isCatchAll,
       imapFolder: draft.imapFolder || 'INBOX',
       sentFolder: draft.sentFolder || null,
-      isCatchAll: draft.isCatchAll,
       folderOwnsMail: draft.folderOwnsMail,
       sendTransport: draft.sendTransport,
       smtpHost: draft.smtpHost || null,
@@ -241,6 +274,80 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
         </FieldGroup>
 
         <FieldGroup
+          title="Whose inbox it is"
+          hint="The one thing on this form that cannot be undone by reading it: a shared address is the business&rsquo;s, and an individual one is one colleague&rsquo;s and nobody else&rsquo;s."
+        >
+          <div className="field">
+            <span style={GROUP_LABEL} id={`${fid}-kind-label`}>Kind of inbox</span>
+            <div
+              role="radiogroup"
+              aria-labelledby={`${fid}-kind-label`}
+              style={{
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-md)',
+                overflow: 'hidden',
+                marginTop: '0.375rem',
+              }}
+            >
+              {KINDS.map((option, index) => (
+                <label
+                  key={option.value}
+                  style={{
+                    display: 'flex', gap: '0.625rem', alignItems: 'flex-start',
+                    padding: '0.625rem 0.75rem', cursor: 'pointer', fontWeight: 400,
+                    borderTop: index === 0 ? 'none' : '1px solid var(--color-border)',
+                    background: draft.kind === option.value ? 'var(--color-primary-subtle)' : 'transparent',
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name={`${fid}-kind`}
+                    value={option.value}
+                    checked={draft.kind === option.value}
+                    onChange={() => setDraft({ ...draft, kind: option.value })}
+                    style={{ marginTop: '0.2rem' }}
+                  />
+                  <span>
+                    <span style={{ display: 'block', fontWeight: 'var(--font-medium)' }}>{option.label}</span>
+                    <span className="field-hint" style={{ display: 'block' }}>{option.hint}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {draft.kind === 'individual' && (
+            <div className="field">
+              <label htmlFor={`${fid}-owner`}>Whose it is</label>
+              {users.length === 0 ? (
+                <p className="field-hint" style={{ margin: 0 }}>
+                  Nobody has an account on this site yet, so there is nobody to give it to. Leave it
+                  shared for now.
+                </p>
+              ) : (
+                <>
+                  <select
+                    id={`${fid}-owner`}
+                    value={draft.ownerUserId}
+                    onChange={(e) => setDraft({ ...draft, ownerUserId: e.target.value })}
+                  >
+                    <option value="">Choose somebody</option>
+                    {users.map((u) => <option key={u.id} value={u.id}>{u.name} ({u.email})</option>)}
+                  </select>
+                  <span className="field-hint">
+                    Only they will see it - not their colleagues, and not whoever looks after the
+                    site. Whoever looks after the site can still rename it, re-point it or delete it;
+                    they simply cannot read a word of it. It also becomes the address that person
+                    opens the hub on, so naming somebody who already has one of their own moves them
+                    here.
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+        </FieldGroup>
+
+        <FieldGroup
           title="Where it is collected from"
           hint="Which mailbox this address arrives in, and which folder of it to read."
         >
@@ -288,12 +395,14 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
             onChange={(folderOwnsMail) => setDraft({ ...draft, folderOwnsMail })}
             hint="For a folder you fill yourself. Anything sitting in it is collected, even when it was sent to some older address of yours. Mail that names one of your other addresses still goes to that one."
           />
-          <CheckField
-            label="Anything that does not match another address lands here"
-            checked={draft.isCatchAll}
-            onChange={(isCatchAll) => setDraft({ ...draft, isCatchAll })}
-            hint="One address can be the catch-all. Without one, post for an address you have not set up is filed under Not filed, where only an administrator sees it."
-          />
+          {draft.kind === 'shared' && (
+            <CheckField
+              label="Anything that does not match another address lands here"
+              checked={draft.isCatchAll}
+              onChange={(isCatchAll) => setDraft({ ...draft, isCatchAll })}
+              hint="One address can be the catch-all. Without one, post for an address you have not set up is filed under Not filed, where only an administrator sees it."
+            />
+          )}
         </FieldGroup>
 
         <FieldGroup
@@ -361,6 +470,17 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
           <SignatureEditor draft={draft} setDraft={setDraft} />
         </FieldGroup>
 
+        {draft.kind === 'individual' ? (
+          <FieldGroup
+            title="Who can read it"
+            hint="Settled by whose it is, further up. There is no guest list on an individual inbox - that is the whole of the difference between the two kinds."
+          >
+            <p className="field-hint" style={{ margin: 0 }}>
+              {ownerName(draft.ownerUserId) ?? 'Whoever you name above'}, and nobody else. Anybody
+              who was on this address before will stop seeing it the moment you save.
+            </p>
+          </FieldGroup>
+        ) : (
         <FieldGroup
           title="Who can read it"
           hint={<>
@@ -435,6 +555,7 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
             )}
           </div>
         </FieldGroup>
+        )}
 
         <FormActions>
           <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>Save inbox</button>
@@ -480,15 +601,20 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
         const rows = accessByInbox.get(inbox.id) ?? []
         const owners = defaultsByInbox.get(inbox.id) ?? []
         const connection = inbox.connectionId ? connectionsById.get(inbox.connectionId) : null
+        const individual = inbox.kind === 'individual'
+        const owner = individual ? ownerName(inbox.ownerUserId) : null
         return (
           <ListRow key={inbox.id}>
             <ListRowHeader
               title={inbox.name}
               badges={<>
+                {/* Whose it is comes first, because it is the fact that decides
+                    what every other badge on the row means. */}
+                <Chip tone={individual ? 'info' : 'plain'}>{individual ? 'Individual' : 'Shared'}</Chip>
                 {inbox.isCatchAll && <Chip tone="info">Catch-all</Chip>}
                 {inbox.folderOwnsMail && <Chip tone="info">Whole folder</Chip>}
-                {rows.length > 0 && <Chip tone="plain">{rows.length === 1 ? '1 person' : `${rows.length} people`}</Chip>}
-                {owners.length > 0 && (
+                {!individual && rows.length > 0 && <Chip tone="plain">{rows.length === 1 ? '1 person' : `${rows.length} people`}</Chip>}
+                {!individual && owners.length > 0 && (
                   <Chip tone="info">
                     {owners.length === 1 ? 'Somebody\u2019s own' : `${owners.length} people\u2019s own`}
                   </Chip>
@@ -501,9 +627,13 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
                   ? `Collected from ${connection.label} · ${inbox.imapFolder}`
                   : 'Not collected from a mailbox - replies go out from it, nothing arrives.'}
                 {' · '}
-                {rows.length === 0
-                  ? 'Anybody who can see the inbox can read this one.'
-                  : 'Only the people listed on it can read it.'}
+                {individual
+                  ? owner
+                    ? `${owner}’s own post. Nobody else can read it, an administrator included.`
+                    : 'Whoever it belonged to no longer has an account here, so only an administrator can read it.'
+                  : rows.length === 0
+                    ? 'Anybody who can see the inbox can read this one.'
+                    : 'Only the people listed on it can read it.'}
               </>}
               actions={<>
                 <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => startEdit(inbox)}>Edit</button>

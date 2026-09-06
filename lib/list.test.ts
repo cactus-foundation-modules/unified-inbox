@@ -1,11 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import {
+  buildSearchHref,
   channelLabel,
   chooseSendingInbox,
+  formatCalendarDate,
+  isSearching,
+  searchRequestFrom,
   formatWhen,
   inboxHref,
   initialsFor,
   pageCount,
+  parseComposeKind,
   parseInboxParams,
   participantLabel,
   quotedHtmlIndex,
@@ -203,7 +208,53 @@ describe('channelLabel', () => {
   it('says it in words a shopkeeper uses', () => {
     expect(channelLabel('email')).toBe('Email')
     expect(channelLabel('sms')).toBe('Text')
+    expect(channelLabel('discussion')).toBe('Discussion')
     expect(channelLabel('carrier-pigeon')).toBe('Message')
+  })
+})
+
+describe('parseComposeKind', () => {
+  it('says nothing is being written when the address does not ask', () => {
+    expect(parseComposeKind(undefined)).toBeNull()
+    expect(parseComposeKind('')).toBeNull()
+  })
+
+  // Every link written before the menu existed says compose=1, and every one of
+  // them still has to open the email composer.
+  it('keeps the old flag meaning an email', () => {
+    expect(parseComposeKind('1')).toBe('email')
+  })
+
+  it('reads the three the menu adds', () => {
+    expect(parseComposeKind('discussion')).toBe('discussion')
+    expect(parseComposeKind('sms')).toBe('sms')
+    expect(parseComposeKind('call')).toBe('call')
+  })
+
+  // A value nobody wrote is a mistyped address rather than an instruction, and
+  // this screen has always treated it that way.
+  it('opens nothing on anything it does not know', () => {
+    expect(parseComposeKind('semaphore')).toBeNull()
+    expect(parseComposeKind('yes')).toBeNull()
+    expect(parseComposeKind('0')).toBeNull()
+  })
+})
+
+describe('parseInboxParams, on what is being written', () => {
+  it('opens nothing when the address does not ask', () => {
+    expect(parseInboxParams({}).composing).toBe(false)
+  })
+
+  it('opens the email composer on the old flag', () => {
+    const params = parseInboxParams({ compose: '1' })
+    expect(params.composing).toBe(true)
+    expect(params.composeKind).toBe('email')
+  })
+
+  it('opens a discussion when asked for one', () => {
+    const params = parseInboxParams({ compose: 'discussion' })
+    expect(params.composing).toBe(true)
+    expect(params.composeKind).toBe('discussion')
   })
 })
 
@@ -238,5 +289,134 @@ describe('quotedHtmlIndex', () => {
 
   it('says there is none when nothing is quoted', () => {
     expect(quotedHtmlIndex('<p>hello</p>')).toBe(-1)
+  })
+})
+
+describe('the search dialog', () => {
+  const base = '/hq/inbox'
+  const carried = { tab: 'unified-inbox' }
+
+  it('reads the narrower cuts off the address, and refuses a date that is not one', () => {
+    const params = parseInboxParams({
+      q: ' invoice ',
+      from: ' Sally ',
+      to: 'accounts@example.co.uk',
+      subject: 'Chairs',
+      att: '1',
+      after: '2026-09-01',
+      before: '2026-02-31',
+    })
+    expect(params).toMatchObject({
+      search: 'invoice',
+      fromText: 'Sally',
+      toText: 'accounts@example.co.uk',
+      subjectText: 'Chairs',
+      withAttachment: true,
+      after: '2026-09-01',
+      // The 31st of February is the right shape and the wrong date, and rolling
+      // it forward into March would silently answer a question nobody asked.
+      before: null,
+    })
+  })
+
+  it('knows the difference between a narrowed list and an empty inbox', () => {
+    expect(isSearching(parseInboxParams({}))).toBe(false)
+    expect(isSearching(parseInboxParams({ q: 'invoice' }))).toBe(true)
+    // A date range with no words is still a search, which is what the empty
+    // state has to say when it catches nothing.
+    expect(isSearching(parseInboxParams({ after: '2026-09-01' }))).toBe(true)
+    expect(isSearching(parseInboxParams({ att: '1' }))).toBe(true)
+    // Being handed something is not searching for it.
+    expect(isSearching(parseInboxParams({ assignee: 'u1' }))).toBe(false)
+  })
+
+  it('builds an address that looks everywhere and at every status', () => {
+    const href = buildSearchHref(base, carried, {
+      ...searchRequestFrom({}),
+      q: 'invoice',
+    })
+    const params = new URLSearchParams(href.split('?')[1])
+    expect(params.get('inbox')).toBe('all')
+    expect(params.get('q')).toBe('invoice')
+    expect(params.get('status')).toBe('all')
+    expect(params.get('tab')).toBe('unified-inbox')
+  })
+
+  it('drops the page, the open conversation and the composer, because none of them survive a new search', () => {
+    const href = buildSearchHref(
+      base,
+      { tab: 'unified-inbox', page: '4', id: 'thread-1', person: 'p1', compose: '1', draft: 'd1' },
+      { ...searchRequestFrom({}), q: 'chairs' },
+    )
+    const params = new URLSearchParams(href.split('?')[1])
+    for (const key of ['page', 'id', 'person', 'compose', 'draft']) {
+      expect(params.get(key)).toBeNull()
+    }
+  })
+
+  it('leaves open out of the address, because open is what the list shows anyway', () => {
+    const href = buildSearchHref(base, carried, {
+      ...searchRequestFrom({}),
+      q: 'chairs',
+      status: 'open',
+    })
+    expect(new URLSearchParams(href.split('?')[1]).get('status')).toBeNull()
+  })
+
+  it('takes only the words to the address book, since the rest are questions about post', () => {
+    const href = buildSearchHref(base, carried, {
+      ...searchRequestFrom({}),
+      mode: 'contacts',
+      q: 'Sally',
+      from: 'someone',
+      withAttachment: true,
+      after: '2026-09-01',
+    })
+    const params = new URLSearchParams(href.split('?')[1])
+    expect(params.get('inbox')).toBe('contacts')
+    expect(params.get('q')).toBe('Sally')
+    expect(params.get('from')).toBeNull()
+    expect(params.get('att')).toBeNull()
+    expect(params.get('after')).toBeNull()
+  })
+
+  it('opens filled in from whatever is already narrowing the list', () => {
+    expect(searchRequestFrom({
+      inbox: 'inbox-1', q: 'invoice', from: 'Sally', att: '1', status: 'done', unread: '1',
+    })).toMatchObject({
+      mode: 'conversations',
+      scope: 'inbox-1',
+      q: 'invoice',
+      from: 'Sally',
+      withAttachment: true,
+      status: 'done',
+      unreadOnly: true,
+    })
+  })
+
+  it('opens pointed at everything when the list underneath is not a search', () => {
+    // Somebody standing in one address who has come to search has usually come
+    // BECAUSE the thing they want is not in it.
+    expect(searchRequestFrom({ inbox: 'inbox-1' }).scope).toBe('all')
+    // And keeps what they chose when they are refining the search they are
+    // already looking at.
+    expect(searchRequestFrom({ inbox: 'inbox-1', q: 'invoice' }).scope).toBe('inbox-1')
+    expect(searchRequestFrom({ inbox: 'inbox-1', att: '1' }).scope).toBe('inbox-1')
+  })
+
+  it('points a search opened over Drafts or Sent at everything, since neither is a place to look', () => {
+    const q = 'invoice'
+    expect(searchRequestFrom({ inbox: 'drafts', q }).scope).toBe('all')
+    expect(searchRequestFrom({ inbox: 'sent', q }).scope).toBe('all')
+    expect(searchRequestFrom({ inbox: 'campaigns', q }).scope).toBe('all')
+    // The address book is the one that is not a scope but IS a mode.
+    expect(searchRequestFrom({ inbox: 'contacts', q })).toMatchObject({ mode: 'contacts', scope: 'all' })
+    // A channel another module owns is a perfectly good place to look.
+    expect(searchRequestFrom({ inbox: 'm:live-chat', q }).scope).toBe('m:live-chat')
+  })
+
+  it('writes a date the way somebody would say it, with no timezone involved', () => {
+    expect(formatCalendarDate('2026-09-03')).toBe('3 Sep 2026')
+    expect(formatCalendarDate('nonsense')).toBe('nonsense')
   })
 })

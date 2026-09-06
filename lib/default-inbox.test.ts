@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { effectiveInboxParam, moveInOrder, pinDefaultInbox } from './list'
+import { effectiveInboxParam, moveInOrder, pinDefaultInbox, splitInboxes } from './list'
 import { chooseSignatureSource, type SignatureSource } from './signature'
 
 // An address of one's own: what the hub opens on, where it sits along the top,
@@ -44,6 +44,37 @@ describe('pinDefaultInbox', () => {
     const { pinned, rest } = pinDefaultInbox(inboxes, 'gone')
     expect(pinned).toBeNull()
     expect(rest.map((i) => i.id)).toEqual(['a', 'b', 'c'])
+  })
+})
+
+// Two different facts put an address under Yours, and only one of them is a
+// preference. Confusing them puts a colleague's private address in the shared
+// group, where it would be dragged about by whoever is tidying the rail.
+describe('splitInboxes', () => {
+  const shared = (id: string) => ({ id, kind: 'shared' as const })
+  const mine = (id: string) => ({ id, kind: 'individual' as const })
+
+  it('puts every personal address under Yours, pinned or not', () => {
+    const { yours, shared: team } = splitInboxes([shared('a'), mine('b'), shared('c')], null)
+    expect(yours.map((i) => i.id)).toEqual(['b'])
+    expect(team.map((i) => i.id)).toEqual(['a', 'c'])
+  })
+
+  it('puts a pinned shared address under Yours as well, after the personal ones', () => {
+    const { yours, shared: team } = splitInboxes([shared('a'), mine('b'), shared('c')], 'c')
+    expect(yours.map((i) => i.id)).toEqual(['b', 'c'])
+    expect(team.map((i) => i.id)).toEqual(['a'])
+  })
+
+  it('never lists an address twice when the pinned one is already theirs', () => {
+    const { yours, shared: team } = splitInboxes([mine('a'), shared('b')], 'a')
+    expect(yours.map((i) => i.id)).toEqual(['a'])
+    expect(team.map((i) => i.id)).toEqual(['b'])
+  })
+
+  it('leaves the shared group in the site’s own order', () => {
+    const { shared: team } = splitInboxes([shared('a'), shared('b'), mine('c')], null)
+    expect(team.map((i) => i.id)).toEqual(['a', 'b'])
   })
 })
 

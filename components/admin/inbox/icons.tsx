@@ -37,5 +37,12 @@ export const FileIcon = <svg {...ICON}><path d="M6 3h7l5 5v13H6z" /><path d="M13
 export const MegaphoneIcon = <svg {...ICON}><path d="M4 10v4h3l7 4V6l-7 4z" /><path d="M17 9.5a3.5 3.5 0 0 1 0 5" /><path d="M7 14v4h3" /></svg>
 export const FolderIcon = <svg {...ICON}><path d="M3 6h6l2 2.5h10V19H3z" /></svg>
 export const ReplyIcon = <svg {...ICON}><path d="M9 7 4 12l5 5" /><path d="M4 12h9a6 6 0 0 1 6 6v1" /></svg>
-export const SortIcon = <svg {...ICON}><path d="M4 7h13" /><path d="M4 12h9" /><path d="M4 17h5" /></svg>
+export const FilterIcon = <svg {...ICON}><path d="M4 7h13" /><path d="M4 12h9" /><path d="M4 17h5" /></svg>
+export const SortIcon = <svg {...ICON}><path d="M7 20V4" /><path d="m3.5 7.5 3.5-3.5 3.5 3.5" /><path d="M17 4v16" /><path d="m13.5 16.5 3.5 3.5 3.5-3.5" /></svg>
+export const ChevronDownIcon = <svg {...ICON}><path d="m6 9.5 6 6 6-6" /></svg>
+export const SmsIcon = <svg {...ICON}><path d="M4 5h16v10H9l-5 3z" /><path d="M8.5 10h.01" /><path d="M12 10h.01" /><path d="M15.5 10h.01" /></svg>
 export const AssignedIcon = <svg {...ICON}><circle cx="12" cy="8" r="3.2" /><path d="M5.5 19a6.5 6.5 0 0 1 13 0" /></svg>
+export const MoreIcon = <svg {...ICON}><circle cx="12" cy="5.5" r="1.4" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" /><circle cx="12" cy="18.5" r="1.4" fill="currentColor" stroke="none" /></svg>
+export const AlarmIcon = <svg {...ICON}><circle cx="12" cy="13" r="7" /><path d="M12 9.5V13l2.5 1.5" /><path d="m4 6 3-2.5" /><path d="m20 6-3-2.5" /></svg>
+export const ChevronRightIcon = <svg {...ICON}><path d="m9.5 6 6 6-6 6" /></svg>
+export const ChevronLeftIcon = <svg {...ICON}><path d="m14.5 6-6 6 6 6" /></svg>

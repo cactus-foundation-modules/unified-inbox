@@ -70,6 +70,11 @@ const CSS = `
   grid-template-areas: "rail" "list" "read" "ctx";
   grid-template-columns: minmax(0, 1fr);
   min-width: 0;
+  /* The drag handles are laid over the hairlines between the columns, so the
+     frame has to be what they are positioned against. From 900px up it is
+     sticky, which is positioned too, so this only does any work on a phone -
+     where the handles are not drawn at all. */
+  position: relative;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg, 0.75rem);
   background: var(--color-bg);
@@ -78,13 +83,26 @@ const CSS = `
 /* From a tablet up the frame stops being a stack of blocks on a page that
    scrolls and becomes the height of the screen, stuck to the top of it until
    whatever core has put above has scrolled away. Nothing inside is stuck to the
-   page itself, so no pane can be painted over another. */
+   page itself, so no pane can be painted over another.
+
+   THE HEIGHT IS THE SCREEN MINUS THE PADDING CORE PUTS ROUND IT, NOT THE SCREEN.
+   Core's admin content column is padded --space-8 (32px) top and bottom, so a
+   frame a whole screen tall makes the page 64px taller than the window and the
+   whole admin scrolls by an inch - enough to bounce the mail program under a
+   trackpad flick, not enough to reveal anything, which is the worst of both.
+   Take the padding off the height and the document is exactly one screen: the
+   frame rests where it is drawn, nothing scrolls, and the sticky below only
+   comes into play on a site where core has put a tab strip above us.
+   The sticky offset matches the same padding for the same reason - stuck at a
+   different inset to where it rests would make the frame jump on the first
+   scroll. Below 900px core is on --space-4 instead, but so is this rule: it
+   never applies there. */
 @media (min-width: 900px) {
   .uin-app {
     position: sticky;
-    top: 0.75rem;
-    height: calc(100vh - 1.5rem);
-    height: calc(100svh - 1.5rem);
+    top: var(--space-8, 2rem);
+    height: calc(100vh - var(--space-8, 2rem) * 2);
+    height: calc(100svh - var(--space-8, 2rem) * 2);
     min-height: 30rem;
     grid-template-areas: "rail rail" "list read" "list ctx";
     grid-template-columns: minmax(17rem, 26rem) minmax(0, 1.7fr);
@@ -102,8 +120,20 @@ const CSS = `
    here for. */
 @media (min-width: 1200px) {
   .uin-app {
+    /* THE TWO WIDTHS SOMEBODY CAN DRAG. Both are read through a fallback, so a
+       reader who has never touched a handle gets exactly the layout this file
+       shipped with - 15rem of rail, and a list at the 24rem it always settled
+       at once the conversation's 1fr had taken the rest. ColumnResizer writes
+       --uin-w-rail / --uin-w-list onto the document and nothing else, which is
+       why the frame itself can go on being server-rendered - and why the
+       campaigns screen further down can share the same rail width.
+       The handles' own offsets are calc()ed off these, so a fallback that is
+       not a plain length would break them: keep both fallbacks single values,
+       not minmax(). */
+    --uin-rail: var(--uin-w-rail, 15rem);
+    --uin-list: var(--uin-w-list, 24rem);
     grid-template-areas: "rail list read" "rail list ctx";
-    grid-template-columns: 15rem minmax(17rem, 24rem) minmax(0, 1fr);
+    grid-template-columns: var(--uin-rail) var(--uin-list) minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) fit-content(40%);
   }
 }
@@ -113,7 +143,7 @@ const CSS = `
 @media (min-width: 1500px) {
   .uin-app[data-context="on"] {
     grid-template-areas: "rail list read ctx";
-    grid-template-columns: 15rem minmax(17rem, 24rem) minmax(0, 1fr) minmax(16rem, 20rem);
+    grid-template-columns: var(--uin-rail) var(--uin-list) minmax(0, 1fr) minmax(16rem, 20rem);
     grid-template-rows: minmax(0, 1fr);
   }
 }
@@ -123,6 +153,69 @@ const CSS = `
   .uin-app[data-open="1"] > .uin-col { display: none; }
   .uin-app[data-open="0"] > .uin-read,
   .uin-app[data-open="0"] > .uin-ctx { display: none; }
+}
+
+/* ---- the handles between the columns ------------------------------------ */
+/* How wide the list wants to be is a question about the person reading it, not
+   about the screen, so the two hairlines between the three columns can be
+   dragged. The handle is a strip of nothing sitting over the hairline: it
+   paints only when somebody is on it, because a mail program with two visible
+   grab bars down it looks like a page that came apart.
+   Nine pixels wide and centred on the edge - four each side. A one-pixel target
+   is one nobody can hit, and anything fatter starts eating the clicks of the
+   rows either side of it.
+   ONLY FROM 1200px UP: below that the rail lies across the top of the frame
+   instead of standing beside it, so a full-height handle at the list's edge
+   would sit over the rail's own links. There are two columns there, not three.
+   The offsets are calc()ed off the same --uin-rail / --uin-list the grid uses,
+   so the handle cannot drift away from the edge it moves. */
+.uin-resize { display: none; }
+
+@media (min-width: 1200px) {
+  .uin-resize {
+    display: block;
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 9px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: col-resize;
+    z-index: 4;
+    /* Or the browser takes the drag for a scroll on a touchscreen and the edge
+       never moves. */
+    touch-action: none;
+  }
+  .uin-resize[data-edge="rail"] { left: calc(var(--uin-rail) - 4px); }
+  .uin-resize[data-edge="list"] { left: calc(var(--uin-rail) + var(--uin-list) - 4px); }
+
+  /* The line itself, inside the target rather than being it: the thing somebody
+     can hit is nine pixels wide and the thing they can see is two. */
+  .uin-resize-line {
+    display: block;
+    position: absolute;
+    inset: 0 3px;
+    border-radius: 999px;
+    background: var(--color-primary);
+    opacity: 0;
+    transition: opacity 0.12s ease-out;
+  }
+  .uin-resize:hover .uin-resize-line,
+  .uin-resize[data-dragging="on"] .uin-resize-line { opacity: 1; }
+  /* Focus is shown the same way as hover rather than with a ring: the target is
+     a nine-pixel strip and an outline round it reads as a scratch on the
+     screen. Keyboard users get the same line, and it stays while they arrow. */
+  .uin-resize:focus-visible { outline: none; }
+  .uin-resize:focus-visible .uin-resize-line { opacity: 1; }
+
+  /* A drag anywhere in the frame keeps the resize cursor and stops the pointer
+     selecting the text it passes over. */
+  .uin-app:has(.uin-resize[data-dragging="on"]) { cursor: col-resize; user-select: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .uin-resize-line { transition: none; }
 }
 
 /* The campaigns screen, which is not a list beside a conversation and has a
@@ -149,7 +242,10 @@ const CSS = `
 @media (min-width: 1200px) {
   .uin-app-wide {
     grid-template-areas: "rail read";
-    grid-template-columns: 15rem minmax(0, 1fr);
+    /* The same rail width the inbox has, so it does not change size on the way
+       between the two screens. There is no handle on this one to change it
+       with; ColumnResizer is mounted here only to apply what was stored. */
+    grid-template-columns: var(--uin-rail) minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
   }
   /* The rail's cell is as tall as a long form, so the links inside it stick
@@ -407,6 +503,65 @@ const CSS = `
   .uin-compose-words { display: none; }
 }
 
+/* The pen, and the arrow beside it for the three things that are not an email.
+   One button split in two rather than two buttons: writing an email is what
+   this is pressed for nearly every time, and the seam says the arrow belongs to
+   it rather than being another thing in the row. */
+.uin-compose-split { flex: none; display: inline-flex; }
+.uin-rail-compose-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.uin-rail-compose-more {
+  width: 1.15rem;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left-color: var(--color-primary);
+  cursor: pointer;
+}
+/* Fixed, and positioned from the button by ComposeMenu: the rail scrolls, and a
+   menu drawn inside it is a menu with its bottom half cut off on a phone.
+   Above everything core puts on an admin page, for the same reason the dialogs
+   are - the bell's dropdown sits at 9999. */
+.uin-compose-menu {
+  position: fixed;
+  z-index: 10000;
+  width: 15rem;
+  padding: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-xl);
+}
+.uin-compose-menu-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: var(--radius, 0.375rem);
+  color: var(--color-text);
+  text-decoration: none;
+}
+.uin-compose-menu-item:hover {
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  text-decoration: none;
+}
+.uin-compose-menu-icon {
+  flex: none;
+  display: inline-flex;
+  margin-top: 0.05rem;
+  color: var(--color-text-secondary);
+}
+.uin-compose-menu-words { display: flex; flex-direction: column; gap: 0.05rem; min-width: 0; }
+.uin-compose-menu-label { font-size: 0.8125rem; font-weight: 600; }
+/* Secondary rather than muted: this line carries the whole meaning of the entry,
+   and muted does not clear AA on the raised ground it lands on when hovered. */
+.uin-compose-menu-hint { font-size: 0.6875rem; color: var(--color-text-secondary); }
+
 /* ---- fetching new mail, at the foot of the rail ------------------------- */
 .uin-rail-foot {
   margin-top: auto;
@@ -629,8 +784,6 @@ const CSS = `
   gap: 0.35rem;
   align-items: center;
 }
-.uin-toolbar-form { display: flex; gap: 0.3rem; align-items: center; }
-.uin-toolbar-form select { min-width: 0; font-size: 0.75rem; }
 /* Pushed to the far end so the count reads as an answer to the row rather than
    as one more thing to press. */
 .uin-toolbar-count {
@@ -1127,10 +1280,108 @@ const CSS = `
   color: var(--color-text-muted);
   font-size: 0.75rem;
 }
+/* ---- who this is, and what it is about ---------------------------------- */
+/* The last thing in the pinned header, under everything that can be pressed.
+   Two lines, both of them one line each and clipped rather than wrapped: this
+   band is over the messages on every window wide enough to pin it, so a
+   conversation with nine orders on it must not be allowed to push the message
+   itself down the screen. Whatever will not fit ends in an ellipsis and lives
+   behind the arrow. */
+.uin-thread-ctx {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--color-border);
+}
+.uin-thread-who {
+  margin: 0;
+  min-width: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.uin-thread-who a { color: var(--color-text); }
+/* Told apart from the name by a hairline rather than by a middot in the markup:
+   a punctuation character between two names is read out as punctuation. */
+.uin-thread-org {
+  margin-left: 0.45rem;
+  padding-left: 0.45rem;
+  border-left: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  font-weight: 400;
+}
+/* Nobody on the other end. It is a note about the conversation rather than a
+   name, so it is not dressed as one. */
+.uin-thread-who-none { font-weight: 400; color: var(--color-text-secondary); font-size: 0.75rem; }
+.uin-attached {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+/* Secondary rather than muted: these are the site's own record numbers, which
+   is real information, and muted measures under AA in dark mode. */
+.uin-attached-line {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+.uin-attached-more {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius, 0.375rem);
+  background: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.uin-attached-more:hover {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+.uin-attached-more svg { width: 14px; height: 14px; }
+.uin-attached-more[aria-expanded="true"] svg { transform: rotate(180deg); }
+/* Fixed, and drawn at the very top of the stack, for the same reason as the
+   compose menu: the header it hangs off is pinned inside a pane that scrolls
+   its own contents, so a menu positioned inside that pane is a menu clipped by
+   it. Its width is repeated in MENU_WIDTH in AttachedRecords.tsx - keep the two
+   in step or the menu stops lining up with the arrow it opened from. */
+.uin-attached-menu {
+  position: fixed;
+  z-index: 10000;
+  width: 300px;
+  max-width: calc(100vw - 1rem);
+  max-height: min(60vh, 26rem);
+  overflow-y: auto;
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-xl);
+}
 /* Named as a container so that what is inside a conversation can lay itself out
    by how wide the conversation is. A person's page is the one that needs it: it
    is the middle pane, so on a 1200px window it is about 700px however wide the
    window says it is. */
+/* A conversation, unlike the other things drawn in this pane, has something
+   pinned under it - so its middle row takes whatever is left over and the bar
+   is at the foot of the pane even on a thread with one line in it. */
+.uin-thread-conv { grid-template-rows: auto 1fr auto; }
 .uin-thread-body {
   display: grid;
   gap: 0.75rem;
@@ -1440,6 +1691,10 @@ const CSS = `
    whatever the four lines above it do not, rather than sitting at a polite
    eight rows with a stripe of nothing under it. */
 .uin-modal-card-compose { height: min(88vh, 50rem); }
+/* A discussion, a text and a call are one short form apiece rather than a
+   screenful, so the card is as tall as what is in it instead of reserving half
+   the window for a box nobody is going to fill. */
+.uin-modal-card-short { width: min(32rem, 100%); }
 
 /* ---- asking twice ------------------------------------------------------- */
 /* One question, two answers, and no more room than that needs. The answers sit
@@ -1490,7 +1745,39 @@ const CSS = `
   font-weight: 600;
   color: var(--color-text-muted);
 }
+/* A row whose control is a group of tick boxes has no single field to point a
+   <label> at, so it names the group with a span instead. Same look either way. */
+.uin-field-row > .uin-field-label {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
 .uin-field-control { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+/* Choosing which of the site's own addresses something is for. A short list of
+   tick boxes rather than a box to type in, because the answers are known and
+   typing one that is not on the list would be a message somebody thought they
+   were sending. */
+.uin-pick-list {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  max-height: 9rem;
+  overflow-y: auto;
+  padding: 0.25rem 0;
+}
+.uin-pick {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.15rem 0;
+  font-size: 0.8125rem;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.uin-pick input { flex: none; margin: 0; }
 /* Borderless inside a ruled block: a box drawn round every line would be four
    boxes inside a box, and the row itself already says where to type. */
 .uin-field-control input,
@@ -2160,6 +2447,416 @@ const CSS = `
   font-size: 0.6875rem; background: var(--color-surface-raised);
   border: 1px solid var(--color-border); border-radius: var(--radius-sm, 0.25rem); padding: 0.1rem 0.35rem;
   word-break: break-all;
+}
+
+/* ---- searching everything, from anywhere -------------------------------- */
+/* The magnifier at the head of the rail, on the left of the pen: find
+   something, or write something. Quieter than the pen on purpose - writing is
+   the act this hub is for, and two buttons shouting at each other beside
+   somebody's own name is one too many. */
+.uin-rail-search {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 0.375rem);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.uin-rail-search:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+.uin-rail-search svg { display: block; }
+/* Lying down, the rail is a strip and the name goes; both buttons stay, so the
+   pair keeps a gap between them rather than sitting flush. */
+@media (max-width: 1199px) {
+  .uin-rail-me { gap: 0.35rem; }
+}
+
+/* The dialog itself. Wider than the short composers because it is a form of two
+   columns rather than one, and the head of it is one big box that reads as a
+   search box at a glance. */
+.uin-search-card { width: min(46rem, 100%); }
+.uin-search-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 0.875rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.uin-search-head .uin-search-icon svg { width: 18px; height: 18px; }
+.uin-search-head input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: none;
+  padding: 0.25rem 0;
+  font-size: 1rem;
+  color: var(--color-text);
+}
+.uin-search-head input:focus { outline: none; box-shadow: none; }
+.uin-search-body { gap: 0.75rem; }
+.uin-search-modes { display: flex; gap: 0.35rem; align-items: center; }
+.uin-search-note { margin: 0; font-size: 0.8125rem; color: var(--color-text-secondary); }
+/* Two columns where there is room for two, one where there is not. The subject
+   takes the width of both, because a subject line is longer than a name and a
+   box half the width of the sentence it holds invites half a sentence. */
+.uin-search-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  gap: 0.6rem;
+}
+.uin-field { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
+.uin-field > span {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.uin-field input,
+.uin-field select {
+  width: 100%;
+  min-width: 0;
+  font-size: 0.8125rem;
+}
+.uin-field-wide { grid-column: 1 / -1; }
+.uin-search-ticks {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+.uin-tick {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8125rem;
+  color: var(--color-text);
+}
+.uin-tick input { margin: 0; }
+/* The hint pushes the two buttons to the far end, so the thing to press is
+   where a dialog always keeps it. */
+.uin-search-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 0.875rem;
+  border-top: 1px solid var(--color-border);
+}
+.uin-search-hint {
+  margin: 0 auto 0 0;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+/* ---- a button that opens a panel ---------------------------------------- */
+/* Five of these on one conversation - the dots on a message, who it is with,
+   where it stands, when it comes back, and the month inside that. They share
+   one component (Dropdown.tsx) and one set of clothes. The panel is drawn fixed
+   and positioned from its button, because every one of them hangs off a header
+   pinned inside a pane that scrolls its own contents: a panel drawn inside that
+   pane is a panel clipped by it. Above everything core puts on an admin page,
+   for the same reason the dialogs are - the bell's dropdown sits at 9999. */
+.uin-dropdown { display: inline-flex; }
+.uin-menu {
+  position: fixed;
+  z-index: 10000;
+  max-width: calc(100vw - 1rem);
+  max-height: min(70vh, 34rem);
+  overflow-y: auto;
+  padding: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-xl);
+}
+/* What the panel is for, when the button it opened from is an icon and cannot
+   say. Centred and ruled off, the way a phone puts a title on a sheet. */
+.uin-menu-title {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.4rem 0.5rem 0.45rem;
+  margin-bottom: 0.15rem;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.8125rem;
+  font-weight: 650;
+  color: var(--color-text);
+}
+.uin-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.5rem;
+  border: 0;
+  border-radius: var(--radius, 0.375rem);
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+}
+.uin-menu-item:hover:not(:disabled),
+.uin-menu-item:focus-visible { background: var(--color-surface-raised); }
+.uin-menu-item:disabled { color: var(--color-text-disabled); cursor: default; }
+.uin-menu-item-icon { flex: none; display: inline-flex; color: var(--color-text-secondary); }
+.uin-menu-item-label { flex: 1 1 auto; min-width: 0; }
+/* The day a snooze actually lands on, or the name it is already with. Secondary
+   rather than muted: it lands on the raised ground when hovered, which muted
+   does not clear AA against. */
+.uin-menu-item-hint {
+  flex: none;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+.uin-menu-item-after { flex: none; display: inline-flex; color: var(--color-text-secondary); }
+.uin-menu-sep { height: 1px; margin: 0.2rem 0.25rem; background: var(--color-border); }
+/* A panel with two halves to it - the filters, and the names behind them. The
+   way back sits hard left so the title stays put when the panel swaps what is
+   in it, rather than sliding across as the words change. */
+.uin-menu-back { justify-content: center; position: relative; }
+.uin-menu-back .uin-icon-btn { position: absolute; left: 0.15rem; }
+/* Finding one colleague among thirty. Same box as the search over the list, at
+   the width of the panel it is in. */
+.uin-menu-search {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.1rem 0.25rem 0.25rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 0.375rem);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+}
+.uin-menu-search:focus-within {
+  border-color: var(--color-border-focus);
+  box-shadow: 0 0 0 3px var(--color-primary-glow);
+}
+.uin-menu-search svg { display: block; width: 14px; height: 14px; }
+.uin-menu-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: none;
+  padding: 0.35rem 0;
+  font-size: 0.8125rem;
+  color: var(--color-text);
+}
+.uin-menu-search input:focus { outline: none; box-shadow: none; }
+.uin-menu-empty {
+  margin: 0;
+  padding: 0.45rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+/* ---- a button that is only an icon -------------------------------------- */
+/* No border until it is wanted, so a run of them beside a name reads as marks
+   on the message rather than as a toolbar bolted to it. Big enough to hit on a
+   phone either way: 28px of box round a 16px icon. */
+.uin-icon-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius, 0.375rem);
+  background: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.uin-icon-btn:hover:not(:disabled),
+.uin-icon-btn[aria-expanded="true"] {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+.uin-icon-btn:disabled { color: var(--color-text-disabled); cursor: default; }
+/* The one in the row of actions keeps its outline whatever it is doing: it is
+   standing beside a real button there, and an invisible control next to a
+   visible one reads as something that failed to draw. */
+.uin-icon-btn-framed {
+  height: 1.875rem;
+  border-color: var(--color-border);
+  background: var(--color-surface);
+}
+/* Tinted while any filter is on. The chips under the tabs say which ones, but
+   the button has to admit there are some before anybody thinks to look. */
+.uin-icon-btn-on,
+.uin-icon-btn-on:hover:not(:disabled) {
+  background: var(--color-primary-subtle);
+  border-color: var(--color-primary-border);
+  color: var(--color-text);
+}
+
+/* ---- answering a message ------------------------------------------------ */
+/* The arrow and the dots, at the trailing end of the message header. After the
+   time, which already has the margin that pushes the whole tail over. */
+.uin-msg-tools { display: inline-flex; align-items: center; gap: 0.1rem; margin-left: 0.15rem; }
+/* Why there is no arrow anywhere on this conversation. */
+.uin-thread-cannot { margin: 0; font-size: 0.75rem; color: var(--color-text-secondary); }
+
+/* ---- where the conversation stands -------------------------------------- */
+/* Whose it is on the left, the clock and the state hard against the far edge -
+   the two you press on the way out of a conversation, together. */
+.uin-thread-actions-end { display: flex; align-items: center; gap: 0.35rem; margin-left: auto; }
+.uin-status-btn { display: inline-flex; align-items: center; gap: 0.2rem; }
+.uin-status-btn svg { margin-right: -0.15rem; }
+
+/* ---- when it comes back ------------------------------------------------- */
+.uin-menu-snooze { padding-bottom: 0.35rem; }
+.uin-cal { display: flex; flex-direction: column; gap: 0.4rem; }
+/* The way back to the ready-made times, then the word. The button is pulled
+   left so the title stays where it was when the panel swapped what is in it. */
+.uin-cal-title { justify-content: center; position: relative; }
+.uin-cal-title .uin-icon-btn { position: absolute; left: 0.15rem; }
+.uin-cal-month {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem;
+  padding: 0 0.35rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.uin-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.1rem;
+  padding: 0 0.25rem;
+}
+.uin-cal-weekday {
+  text-align: center;
+  padding-bottom: 0.2rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.uin-cal-day {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  min-height: 1.9rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius, 0.375rem);
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+.uin-cal-day:hover:not(:disabled) { background: var(--color-surface-raised); border-color: var(--color-border); }
+/* A day either side of the month being shown. Kept rather than left blank - a
+   month with holes in its corners is harder to read than one with its
+   neighbours in - and told apart by weight, not by colour alone. */
+.uin-cal-day[data-outside="1"] { color: var(--color-text-muted); }
+.uin-cal-day:disabled { color: var(--color-text-disabled); cursor: default; }
+/* Today, and the day picked. Today is a ring so that picking it can still fill
+   it in: two states, two different marks. */
+.uin-cal-day[data-today="1"] { border-color: var(--color-primary-border); font-weight: 650; }
+.uin-cal-day[aria-pressed="true"] {
+  background: var(--color-primary-subtle);
+  border-color: var(--color-primary);
+  color: var(--color-text);
+  font-weight: 650;
+}
+.uin-cal-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  padding: 0.45rem 0.35rem 0;
+  border-top: 1px solid var(--color-border);
+  margin-top: 0.15rem;
+}
+.uin-cal-field { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.uin-cal-field span { font-size: 0.6875rem; font-weight: 600; color: var(--color-text-secondary); }
+.uin-cal-field input {
+  width: 100%;
+  min-width: 0;
+  height: 2rem;
+  padding: 0 0.45rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 0.375rem);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 0.8125rem;
+}
+.uin-cal-field input:focus {
+  outline: none;
+  border-color: var(--color-border-focus);
+  box-shadow: 0 0 0 3px var(--color-primary-glow);
+}
+.uin-cal-error {
+  margin: 0;
+  padding: 0 0.35rem;
+  font-size: 0.75rem;
+  color: var(--color-destructive-hover);
+}
+.uin-cal-buttons { display: flex; justify-content: flex-end; gap: 0.4rem; padding: 0.2rem 0.35rem 0; }
+
+/* ---- the note bar ------------------------------------------------------- */
+/* One line for saying something to the people you work with, pinned to the
+   bottom of the conversation. Amber, and it says so in words, because a note
+   that reads as a reply is how something private ends up sounding like it was
+   sent to the customer.
+   Sticky rather than fixed: it keeps its place in the flow, so the last message
+   in a thread is never hidden underneath it. */
+.uin-notebar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 1rem;
+  border-top: 1px solid var(--color-warning-border);
+  background: var(--color-warning-bg);
+}
+.uin-notebar-icon { flex: none; display: inline-flex; color: var(--color-warning); }
+.uin-notebar-input {
+  flex: 1 1 12rem;
+  min-width: 0;
+  height: 2rem;
+  padding: 0 0.55rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 0.375rem);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 0.8125rem;
+}
+.uin-notebar-input:focus {
+  outline: none;
+  border-color: var(--color-border-focus);
+  box-shadow: 0 0 0 3px var(--color-primary-glow);
+}
+.uin-notebar-send { flex: none; display: inline-flex; align-items: center; gap: 0.3rem; }
+.uin-notebar-send-icon { display: inline-flex; }
+.uin-notebar-error {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--color-destructive-hover);
 }
 
 `

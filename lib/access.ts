@@ -1,7 +1,7 @@
 import { hasPermission } from '@/lib/permissions/check'
 import { prisma } from '@/lib/db/prisma'
-import { listAllInboxAccess, listInboxAccess } from './db'
-import type { InboxAccess } from './types'
+import { getInboxAudience, listAllInboxAccess, listInboxAccess, listInboxAudiences } from './db'
+import type { InboxAccess, InboxAudience, InboxKind } from './types'
 import type { SessionUser } from '@/lib/auth/session'
 
 // ---------------------------------------------------------------------------
@@ -9,33 +9,105 @@ import type { SessionUser } from '@/lib/auth/session'
 // the sync engine onwards asks it the same question and a leak in one place is
 // a leak everywhere.
 //
-// The rule, in one sentence: an inbox with NO access rows is open to anybody
-// holding `unifiedinbox.view`, and an inbox with ANY access rows is open to the
-// people named on them and nobody else.
+// There are two questions, asked in this order.
+//
+// FIRST: which kind of address is it?
+//
+//   individual - one person's own post at work. Their answer is yes and every
+//                other answer is no, an administrator's included. This is the
+//                ONE place in this module where `unifiedinbox.manage` is not a
+//                way past a list, and it is deliberate: an address is only ever
+//                somebody's own because a person deliberately made it so, and a
+//                promise of privacy that the site owner can read anyway is not
+//                a promise, it is a label. What an administrator keeps is the
+//                configuration - the name, the folder, who it belongs to, and
+//                whether it exists at all - which is the honest half. An
+//                individual inbox whose owner's staff account has been deleted
+//                belongs to nobody, and falls back to `manage` so the post is
+//                not sealed in with no way to reach it.
+//
+//   shared     - an address the business owns, and the rule this module has
+//                always had: NO access rows means open to anybody holding
+//                `unifiedinbox.view`, ANY access rows means open to the people
+//                named on them and nobody else. `manage` goes past that list,
+//                because whoever edits the guest lists can put themselves on
+//                one in two clicks - pretending otherwise would be theatre.
 //
 // That way an ordinary one-person site never has to configure anything, and the
 // moment somebody restricts accounts@ it is genuinely restricted rather than
-// merely hidden from the tabs. Holding `unifiedinbox.manage` is the one way
-// past a list, because the person who edits the guest lists can put themselves
-// on any of them in two clicks - pretending otherwise would be theatre, not
-// security. Search and the All view must filter with visibleInboxIds INSIDE
-// their query rather than dropping rows afterwards: a snippet from accounts@ in
-// somebody's search results is the same breach as opening it.
+// merely hidden from the rail.
+//
+// SECOND, and unchanged: reading and answering are two grants, so `view` never
+// implies `reply`.
+//
+// Search and the All view must filter with visibleInboxIds INSIDE their query
+// rather than dropping rows afterwards: a snippet from accounts@ in somebody's
+// search results is the same breach as opening it.
 // ---------------------------------------------------------------------------
 
+/** What one address is, without the twenty facts that do not bear on who may
+ *  open it. Shaped so a caller can hand over a whole `Inbox` and be right. */
+export type InboxShape = { kind: InboxKind; ownerUserId: string | null }
+
 /** Pure half of the rule, so the interesting cases can be tested without a
- *  database or a session. `rows` is every access row for the inbox in question. */
+ *  database or a session. `rows` is every access row for the inbox in question,
+ *  and is ignored entirely on an individual inbox - the owner is the guest
+ *  list there. */
 export function decideInboxAccess(
+  inbox: InboxShape,
   rows: Array<{ userId: string; canReply: boolean }>,
   userId: string,
   perms: { canView: boolean; canReply: boolean; canManage: boolean }
 ): { view: boolean; reply: boolean } {
+  if (inbox.kind === 'individual') {
+    // Nobody's, because whoever it belonged to no longer has an account. Left
+    // to an administrator rather than to nobody at all, which is the same
+    // answer this module gives for mail it could not place.
+    if (!inbox.ownerUserId) {
+      return perms.canManage ? { view: true, reply: true } : { view: false, reply: false }
+    }
+    if (inbox.ownerUserId !== userId) return { view: false, reply: false }
+    // Their own post, but they still have to be allowed in the hub at all: a
+    // colleague whose access to the whole thing has been withdrawn does not
+    // keep one address of it.
+    if (!perms.canView && !perms.canManage) return { view: false, reply: false }
+    return { view: true, reply: perms.canReply || perms.canManage }
+  }
+
   if (perms.canManage) return { view: true, reply: true }
   if (!perms.canView) return { view: false, reply: false }
   if (rows.length === 0) return { view: true, reply: perms.canReply }
   const mine = rows.find((r) => r.userId === userId)
   if (!mine) return { view: false, reply: false }
   return { view: true, reply: perms.canReply && mine.canReply }
+}
+
+/**
+ * What to write to the two tables when an inbox is saved.
+ *
+ * An individual inbox has one member and one owner, and they are the same
+ * person - so the guest list is written to say exactly that rather than left
+ * empty. Redundant on purpose: any query that reads the guest list and has
+ * never heard of `kind` then still gets the right answer, which is the sort of
+ * belt-and-braces worth having on the one rule in here whose failure mode is a
+ * privacy breach rather than a bug.
+ *
+ * It also settles what happens to the address somebody opens on. Making an
+ * inbox theirs points them at it; the older "their own inbox" tick on a shared
+ * address is untouched, because a person can perfectly well have a private
+ * address and still open the hub on the team's.
+ */
+export function audienceForSave(
+  inbox: InboxShape,
+  entries: Array<{ userId: string; canReply: boolean }>,
+  defaultUserIds: string[],
+): { entries: Array<{ userId: string; canReply: boolean }>; defaultUserIds: string[] } {
+  if (inbox.kind !== 'individual') return { entries, defaultUserIds }
+  if (!inbox.ownerUserId) return { entries: [], defaultUserIds: [] }
+  return {
+    entries: [{ userId: inbox.ownerUserId, canReply: true }],
+    defaultUserIds: [inbox.ownerUserId],
+  }
 }
 
 async function permissionsFor(user: SessionUser) {
@@ -49,35 +121,36 @@ async function permissionsFor(user: SessionUser) {
 
 export async function canViewInbox(user: SessionUser, inboxId: string): Promise<boolean> {
   const perms = await permissionsFor(user)
-  if (perms.canManage) return true
-  if (!perms.canView) return false
-  const rows = await listInboxAccess(inboxId)
-  return decideInboxAccess(rows, user.id, perms).view
+  if (!perms.canView && !perms.canManage) return false
+  // The kind is read before the shortcut, not after it: an administrator is
+  // past a shared address's guest list and is not past an individual one, and
+  // answering true before asking which kind it is was exactly the bug this
+  // whole distinction exists to make impossible.
+  const inbox = await getInboxAudience(inboxId)
+  if (!inbox) return false
+  const rows = inbox.kind === 'individual' ? [] : await listInboxAccess(inboxId)
+  return decideInboxAccess(inbox, rows, user.id, perms).view
 }
 
 export async function canReplyToInbox(user: SessionUser, inboxId: string): Promise<boolean> {
   const perms = await permissionsFor(user)
   if (!perms.canManage && !perms.canReply) return false
-  const rows = await listInboxAccess(inboxId)
-  return decideInboxAccess(rows, user.id, perms).reply
+  const inbox = await getInboxAudience(inboxId)
+  if (!inbox) return false
+  const rows = inbox.kind === 'individual' ? [] : await listInboxAccess(inboxId)
+  return decideInboxAccess(inbox, rows, user.id, perms).reply
 }
 
 /** Every inbox id this user may read, in one query - the shape a list, a search
  *  or the All view wants, because they must filter inside the SQL. */
 export async function visibleInboxIds(user: SessionUser, allInboxIds: string[]): Promise<string[]> {
   const perms = await permissionsFor(user)
-  if (perms.canManage) return allInboxIds
-  if (!perms.canView) return []
-  const all = await listAllInboxAccess()
-  const byInbox = new Map<string, InboxAccess[]>()
-  for (const row of all) {
-    const list = byInbox.get(row.inboxId)
-    if (list) list.push(row)
-    else byInbox.set(row.inboxId, [row])
-  }
-  return allInboxIds.filter((id) =>
-    decideInboxAccess(byInbox.get(id) ?? [], user.id, perms).view
-  )
+  if (!perms.canView && !perms.canManage) return []
+  const { byInbox, kinds } = await audienceIndex()
+  return allInboxIds.filter((id) => {
+    const inbox = kinds.get(id)
+    return inbox ? decideInboxAccess(inbox, byInbox.get(id) ?? [], user.id, perms).view : false
+  })
 }
 
 /** Every inbox id this user may SEND FROM, in one query.
@@ -90,18 +163,29 @@ export async function visibleInboxIds(user: SessionUser, allInboxIds: string[]):
  */
 export async function replyableInboxIds(user: SessionUser, allInboxIds: string[]): Promise<string[]> {
   const perms = await permissionsFor(user)
-  if (perms.canManage) return allInboxIds
-  if (!perms.canView || !perms.canReply) return []
-  const all = await listAllInboxAccess()
+  if (!perms.canManage && !perms.canReply) return []
+  const { byInbox, kinds } = await audienceIndex()
+  return allInboxIds.filter((id) => {
+    const inbox = kinds.get(id)
+    return inbox ? decideInboxAccess(inbox, byInbox.get(id) ?? [], user.id, perms).reply : false
+  })
+}
+
+/** Both halves of what the rule needs about every address on the site, in two
+ *  queries rather than two per address. Shared by the two bulk helpers above,
+ *  which ask the same question about reading and about answering. */
+async function audienceIndex(): Promise<{
+  byInbox: Map<string, InboxAccess[]>
+  kinds: Map<string, InboxAudience>
+}> {
+  const [all, audiences] = await Promise.all([listAllInboxAccess(), listInboxAudiences()])
   const byInbox = new Map<string, InboxAccess[]>()
   for (const row of all) {
     const list = byInbox.get(row.inboxId)
     if (list) list.push(row)
     else byInbox.set(row.inboxId, [row])
   }
-  return allInboxIds.filter((id) =>
-    decideInboxAccess(byInbox.get(id) ?? [], user.id, perms).reply
-  )
+  return { byInbox, kinds: new Map(audiences.map((a) => [a.id, a])) }
 }
 
 /**
@@ -131,8 +215,10 @@ export async function canUserViewInbox(userId: string, inboxId: string): Promise
     canReply: has.has('unifiedinbox.reply'),
     canManage: has.has('unifiedinbox.manage'),
   }
-  const rows = await listInboxAccess(inboxId)
-  return decideInboxAccess(rows, userId, perms).view
+  const inbox = await getInboxAudience(inboxId)
+  if (!inbox) return false
+  const rows = inbox.kind === 'individual' ? [] : await listInboxAccess(inboxId)
+  return decideInboxAccess(inbox, rows, userId, perms).view
 }
 
 /**
@@ -158,8 +244,10 @@ export async function canUserReplyToInbox(userId: string, inboxId: string): Prom
     canManage: held.has('unifiedinbox.manage'),
   }
   if (!perms.canManage && !perms.canReply) return false
-  const rows = await listInboxAccess(inboxId)
-  return decideInboxAccess(rows, userId, perms).reply
+  const inbox = await getInboxAudience(inboxId)
+  if (!inbox) return false
+  const rows = inbox.kind === 'individual' ? [] : await listInboxAccess(inboxId)
+  return decideInboxAccess(inbox, rows, userId, perms).reply
 }
 
 /** Whether this colleague may answer anything at all. Asked about a channel

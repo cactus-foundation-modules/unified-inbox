@@ -16,6 +16,24 @@ export type MessageSource = 'imap' | 'brevo' | 'provider' | 'manual'
 
 export type IdentityKind = 'email' | 'phone' | 'chat'
 
+/**
+ * Which of the two things an inbox is.
+ *
+ *   shared     - an address the business owns: sales@, accounts@, hello@. Its
+ *                guest list says who may read it, and an empty guest list means
+ *                everybody who may open the hub at all.
+ *   individual - one person's own post at work. Theirs alone: no colleague and
+ *                no administrator opens it. The one place in this module where
+ *                holding `unifiedinbox.manage` is not a way past a list.
+ */
+export type InboxKind = 'individual' | 'shared'
+
+export const INBOX_KINDS: readonly InboxKind[] = ['individual', 'shared']
+
+export function isInboxKind(value: unknown): value is InboxKind {
+  return typeof value === 'string' && (INBOX_KINDS as readonly string[]).includes(value)
+}
+
 /** How an inbox's signature was written. The same three the contact form
  *  offers, rendered through the same core code, so a site only ever learns one
  *  signature editor. */
@@ -146,6 +164,13 @@ export type Inbox = {
   id: string
   name: string
   address: string
+  /** Whose post this is: the team's, or one named person's. */
+  kind: InboxKind
+  /** The person whose own address it is, on an individual inbox. Null on a
+   *  shared one, and null on an individual one whose owner's staff account has
+   *  since been deleted - at which point only an administrator can see it, the
+   *  same answer this module gives for mail it cannot place at all. */
+  ownerUserId: string | null
   connectionId: string | null
   imapFolder: string
   sentFolder: string | null
@@ -173,6 +198,16 @@ export type Inbox = {
   sortOrder: number
   createdAt: Date
   updatedAt: Date
+}
+
+/** The two facts that decide who may open an inbox, without the twenty that
+ *  do not. Read on its own so the access helpers can settle a whole site's
+ *  worth of addresses in one query rather than fetching every signature and
+ *  every SMTP setting to answer a yes-or-no question. */
+export type InboxAudience = {
+  id: string
+  kind: InboxKind
+  ownerUserId: string | null
 }
 
 /** One person's place on one inbox's guest list. No rows at all for an inbox

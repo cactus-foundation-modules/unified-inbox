@@ -80,15 +80,64 @@ const FRAME_STYLES = `
  */
 function frameScript(nonce: string): string {
   return `<script nonce="${nonce}">(function(){
+  var doc = document.documentElement;
+  var last = 0;
+  var sent = 0;
+
+  function measure(){
+    var body = document.body;
+    var h = Math.max(
+      body ? body.scrollHeight : 0,
+      body ? body.offsetHeight : 0,
+      doc.scrollHeight,
+      doc.offsetHeight
+    );
+    // A message built round a table wider than the frame gets a sideways
+    // scrollbar along the bottom, and that bar stands in the frame's height
+    // rather than in the message's. Left out of the sum it crops the last line.
+    // Nothing is added where the browser draws its scrollbars over the top.
+    if (doc.scrollWidth > doc.clientWidth) {
+      h += Math.max(0, window.innerHeight - doc.clientHeight);
+    }
+    return h;
+  }
+
   function send(){
-    var h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+    var h = measure();
+    if (h === last) return;
+    // A frame that is told its own height can change height because of it, and
+    // two layouts that disagree would otherwise talk to one another for ever.
+    if (sent > 60) return;
+    last = h;
+    sent++;
     parent.postMessage({ uinFrameHeight: h }, '*');
   }
+
   window.addEventListener('load', send);
   window.addEventListener('resize', send);
   document.addEventListener('toggle', send, true);
+  // Pictures arrive after the markup does, and every one of them makes the
+  // message taller than it was when it was first measured.
+  document.addEventListener('load', send, true);
+  document.addEventListener('error', send, true);
+  if (window.ResizeObserver) {
+    var observer = new ResizeObserver(send);
+    observer.observe(doc);
+    if (document.body) observer.observe(document.body);
+  }
   setTimeout(send, 60);
   setTimeout(send, 400);
+
+  // The page around the frame says back how much room it actually gave. Only
+  // then does the frame stop scrolling itself. Hiding its scrollbar before the
+  // room was granted would turn a message the page would not make tall enough
+  // into a message with no way to reach the rest of it.
+  window.addEventListener('message', function(event){
+    if (event.source !== parent) return;
+    var applied = event.data && event.data.uinAppliedHeight;
+    if (typeof applied !== 'number') return;
+    doc.style.overflowY = applied + 1 >= last ? 'hidden' : '';
+  });
 
   document.addEventListener('click', function(event){
     if (event.defaultPrevented) return;

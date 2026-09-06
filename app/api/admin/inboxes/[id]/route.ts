@@ -7,6 +7,7 @@ import { isValidAddress } from '@/modules/unified-inbox/lib/addresses'
 import { InboxPatchBody } from '@/modules/unified-inbox/lib/validation'
 import { cleanSignatureHtml } from '@/modules/unified-inbox/lib/signature'
 import { senderWarningFor } from '@/modules/unified-inbox/lib/sender-warning'
+import { kindProblem, ownerProblem, settleIndividualAudience } from '@/modules/unified-inbox/lib/inbox-kind'
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getSessionFromCookie()
@@ -26,13 +27,37 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
   }
 
+  // An edit sends some of the form, so the kind is judged on what the inbox
+  // WOULD be rather than on what arrived: turning on the catch-all without
+  // mentioning the kind, and making it somebody's own without mentioning the
+  // catch-all, are the same mistake arriving from either end.
+  const kind = parsed.data.kind ?? before.kind
+  const ownerUserId = kind === 'individual'
+    ? parsed.data.ownerUserId ?? (before.kind === 'individual' ? before.ownerUserId : null)
+    : null
+  const problem = kindProblem({
+    kind,
+    ownerUserId,
+    isCatchAll: parsed.data.isCatchAll ?? before.isCatchAll,
+  })
+  if (problem) return errorResponse(problem)
+  if (ownerUserId && ownerUserId !== before.ownerUserId) {
+    const owner = await ownerProblem(ownerUserId)
+    if (owner) return errorResponse(owner)
+  }
+
   const inbox = await updateInbox(id, {
     ...parsed.data,
+    ...(parsed.data.kind !== undefined || parsed.data.ownerUserId !== undefined
+      ? { kind, ownerUserId }
+      : {}),
     ...(parsed.data.signatureHtml !== undefined
       ? { signatureHtml: cleanSignatureHtml(parsed.data.signatureHtml) }
       : {}),
   })
   if (!inbox) return errorResponse('That inbox no longer exists.', 404)
+
+  await settleIndividualAudience(inbox)
 
   // Switching the folder rule ON also sweeps up what is already sitting in that
   // folder with nowhere to go. Somebody turning this on has a specific email in
