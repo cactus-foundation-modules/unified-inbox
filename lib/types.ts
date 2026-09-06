@@ -332,6 +332,16 @@ export type UnifiedInboxSettings = {
    *  was off. An enquiry addressed at no inbox on a hidden channel has nowhere
    *  to be seen in this hub, which is what the setting says in as many words. */
   hiddenChannelModules: string[]
+  /** The channel keys, in the order somebody has dragged them into down the
+   *  rail. Empty means "the order the modules were found in", which is the
+   *  order every install read in before this could be said at all.
+   *
+   *  Keys naming a channel this site no longer has are kept rather than
+   *  dropped: switching a module off and back on again should not lose the
+   *  place its channel was put in. Anything installed since is read as coming
+   *  after everything named here, so a new channel arrives at the end of the
+   *  group rather than in the middle of an order somebody chose. */
+  channelOrder: string[]
 }
 
 // ---------------------------------------------------------------------------

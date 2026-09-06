@@ -46,6 +46,13 @@ export const InboxOrderBody = z.object({
   ids: z.array(z.string().min(1)).min(1).max(200),
 })
 
+/** The order the channels are in, as the rail posts it. Channel keys, so
+ *  bounded the way a channel key is - and only the ones the person dragging can
+ *  see, which is why the route merges rather than replaces. */
+export const ChannelOrderBody = z.object({
+  keys: z.array(z.string().trim().min(1).max(100)).min(1).max(50),
+})
+
 /** A product on a message: a reference to something the site sells, and never a
  *  name or a price. Everything a customer reads is fetched from the owning
  *  module when the message is sent, so nothing posted here can put words in the

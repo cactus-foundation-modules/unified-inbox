@@ -146,6 +146,8 @@ export function CallView({
               <label htmlFor="uin-call-to">Ring</label>
               <div className="uin-field-control">
                 <ContactPhoneField
+                  // Neutral wording on purpose - see ContactPhoneField on what
+                  // Safari does with an id that sounds like a contact field.
                   id="uin-call-to"
                   value={to}
                   onChange={(next) => { setTo(next); setError(''); setNote('') }}
@@ -154,7 +156,7 @@ export function CallView({
                     setError('')
                     setNote('')
                   }}
-                  placeholder="A name, or 020 8138 0512"
+                  placeholder="Who to ring, or 020 8138 0512"
                 />
               </div>
             </div>

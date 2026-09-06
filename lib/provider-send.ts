@@ -4,7 +4,8 @@ import {
   recountProviderThread,
   setThreadRead,
 } from './db'
-import { providerForModule } from './provider-registry'
+import { pushProviderRead } from './provider-read'
+import { providerForKey } from './provider-registry'
 import { buildSnippet } from './threading'
 
 // Answering a conversation somebody else's module owns.
@@ -41,12 +42,9 @@ export async function sendProviderReply(input: {
   // A channel whose module has been removed keeps its conversations - they stay
   // readable and searchable (E20) - but there is nothing left to answer through,
   // and saying so plainly beats a failure from somewhere deeper.
-  const resolved = await providerForModule(thread.providerModule)
+  const resolved = await providerForKey(thread.providerModule)
   if (!resolved) {
-    return {
-      ok: false,
-      reason: 'The part of the site that handles this channel is no longer installed, so this cannot be answered here.',
-    }
+    return { ok: false, reason: 'That channel cannot be answered from here.' }
   }
   if (!resolved.provider.capabilities?.reply || typeof resolved.provider.send !== 'function') {
     return { ok: false, reason: `${resolved.provider.label} conversations cannot be answered from here.` }
@@ -93,8 +91,11 @@ export async function sendProviderReply(input: {
   })
   await recountProviderThread(thread.id)
   // Answering something is the clearest possible statement that it has been
-  // read.
-  if (thread.unread) await setThreadRead(thread.id, false)
+  // read, here and at the far end both.
+  if (thread.unread) {
+    await setThreadRead(thread.id, false)
+    await pushProviderRead(thread)
+  }
 
   return { ok: true, messageId }
 }

@@ -43,6 +43,15 @@ export type ProductChoice = {
   /** The options that make this variation - 'Black / High back' - or null on a
    *  listing, which has no single answer to that question. */
   options: string | null
+  /** The same answer taken apart: which option, and which value of it. Empty on
+   *  anything that is not a variation.
+   *
+   *  The joined string above is what a person reads and what the email prints;
+   *  this is what the picker narrows a long list by, and the two cannot be
+   *  derived from one another - 'Black / High back' does not say which half is
+   *  the colour. A range of ninety variations is a range nobody scrolls, and
+   *  "the black one with arms" is how everybody asks for one. */
+  optionPairs: { option: string; value: string }[]
   /** Formatted and ready to print: '£249.00'. Null where there is no price
    *  worth quoting. Never carries the tax suffix - that is beside it, because
    *  the two are styled differently. */
@@ -97,9 +106,17 @@ export const MAX_PRODUCTS_PER_MESSAGE = 20
  *  plausibly meant, short enough to read without scrolling for a minute. */
 export const PRODUCT_SEARCH_LIMIT = 12
 
-/** How many variations one listing may offer for picking. A range with more
- *  than this is a range nobody scrolls - they search for the one they mean. */
-export const VARIATION_LIMIT = 200
+/** How many variations one listing may offer for picking.
+ *
+ *  It was 200, on the reasoning that a range with more than that is a range
+ *  nobody scrolls. True, and beside the point once the list can be narrowed by
+ *  its own options: the menus are built out of the variations that came back, so
+ *  a cut-off range offers menus with values missing from them, and picking a
+ *  width that exists finds nothing. Ranges of five and six hundred are ordinary
+ *  in furniture - a desk in eight widths, six storage options, six finishes and
+ *  three leg colours is 864 by itself - so the ceiling is set above the real
+ *  ones rather than at a tidy round number below them. */
+export const VARIATION_LIMIT = 1000
 
 export type ProductSource = {
   /** The module this reads, exactly as it appears in the module list. */

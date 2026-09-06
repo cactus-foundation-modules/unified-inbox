@@ -1,7 +1,9 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
+import { CloseIcon } from './icons'
 
 // Putting something out of the site's own catalogue on a message.
 //
@@ -22,6 +24,18 @@ import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 // screen are the shop's, fetched now; the ones in the message are the shop's
 // again, fetched when Send is pressed. A price that moves in between moves in
 // the message too, which is the right way round.
+//
+// It opens over everything rather than inside the composer. It used to unfold
+// underneath the writing box, which pushed the message being written off the
+// bottom of the pane the moment somebody went looking for a chair - and a
+// catalogue is a thing you rummage in, so it is the wrong thing to put inside
+// something you are in the middle of.
+//
+// A range with ninety variations is narrowed by its own options rather than
+// scrolled: one menu per option, built out of what the variations actually
+// carry, so "the black one with arms" is two presses instead of four screens.
+// The menus appear only where they would do something - an option with a single
+// value across the whole range answers nothing.
 
 type Props = {
   onPick: (item: ProductChoice) => void
@@ -46,6 +60,39 @@ export function priceLabel(item: ProductChoice): string {
  *  worth reading, and the options that make it either way. */
 function variationLabel(item: ProductChoice): string {
   return item.options || item.name
+}
+
+/** Which option is chosen on a listing that has been opened up. Option name to
+ *  value, and an option nobody has narrowed is simply not in here. */
+type Narrowing = Record<string, string>
+
+/**
+ * The menus to offer over a list of variations: every option any of them
+ * carries, each with the values that actually occur, in the order the shop
+ * arranged them.
+ *
+ * An option with one value across the whole range is left out. It is true of
+ * every variation, so choosing it removes nothing - and a row of menus that
+ * cannot narrow anything is a row of menus in the way.
+ */
+function optionMenus(list: readonly ProductChoice[]): { option: string; values: string[] }[] {
+  const seen = new Map<string, string[]>()
+  for (const item of list) {
+    for (const pair of item.optionPairs) {
+      const values = seen.get(pair.option)
+      if (!values) { seen.set(pair.option, [pair.value]); continue }
+      if (!values.includes(pair.value)) values.push(pair.value)
+    }
+  }
+  return [...seen.entries()]
+    .filter(([, values]) => values.length > 1)
+    .map(([option, values]) => ({ option, values }))
+}
+
+/** Whether one variation answers everything that has been narrowed. */
+function matches(item: ProductChoice, narrowing: Narrowing): boolean {
+  return Object.entries(narrowing).every(([option, value]) =>
+    !value || item.optionPairs.some((pair) => pair.option === option && pair.value === value))
 }
 
 export function ProductPicker({ onPick, onClose, chosen }: Props) {
@@ -153,19 +200,19 @@ export function ProductPicker({ onPick, onClose, chosen }: Props) {
 
   const already = new Set(chosen.map(keyOf))
 
-  return (
-    <div className="card uin-actions">
-      <div className="uin-composer-row">
+  const results = (
+    <>
+      <div className="uin-composer-row uin-product-find">
         <label className="sr-only" htmlFor="uin-product-search">Find a product</label>
         <input
           id="uin-product-search"
           type="search"
           value={query}
           placeholder="Find a product"
+          autoFocus
           onChange={(e) => ask(e.target.value)}
           onFocus={() => { if (term === null) { setTerm(''); setLoading(true) } }}
         />
-        <button type="button" className="btn btn-secondary btn-sm" onClick={onClose}>Close</button>
       </div>
 
       {failed && (
@@ -237,94 +284,126 @@ export function ProductPicker({ onPick, onClose, chosen }: Props) {
                   <p className="uin-ctx-sub">Nothing on this one can be bought at the moment.</p>
                 )}
                 {Array.isArray(list) && list.length > 0 && (
-                  <ul className="uin-product-variations">
-                    {list.map((variation) => {
-                      const vid = keyOf(variation)
-                      const vprice = priceLabel(variation)
-                      return (
-                        <li key={vid}>
-                          <button
-                            type="button"
-                            title={variationLabel(variation)}
-                            aria-label={`Put ${variationLabel(variation)} on this message`}
-                            disabled={already.has(vid)}
-                            onClick={() => onPick(variation)}
-                          >
-                            <span className="uin-ctx-main">
-                              <span className="uin-chip-clear-text">{variationLabel(variation)}</span>
-                              {already.has(vid) && <span className="uin-tag">On the message</span>}
-                            </span>
-                            {vprice && <span className="uin-ctx-sub">{vprice}</span>}
-                          </button>
-                        </li>
-                      )
-                    })}
-                  </ul>
+                  <Variations key={id} list={list} already={already} onPick={onPick} />
                 )}
               </li>
             )
           })}
         </ul>
       )}
-    </div>
+    </>
+  )
+
+  // Over everything rather than inside the composer: see the note at the top of
+  // this file. Drawn into the body for the same reason the popped-out reply is -
+  // the composer sits in a pane that scrolls its own contents, and a dialog
+  // inside one of those is a dialog clipped by it.
+  return createPortal(
+    <div className="uin-modal">
+      <div
+        className="uin-modal-card uin-modal-card-picker"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Put something you sell on this message"
+      >
+        <div className="uin-modal-head">
+          <h2 className="uin-modal-title">Add a product</h2>
+          <button
+            type="button"
+            className="uin-modal-close"
+            aria-label="Close the catalogue"
+            title="Close the catalogue"
+            onClick={onClose}
+          >
+            {CloseIcon}
+          </button>
+        </div>
+        <div className="uin-modal-body">{results}</div>
+      </div>
+    </div>,
+    document.body,
   )
 }
 
-/** The chips under the box listing what the message is carrying out of the
- *  catalogue. The same object the attached files are, because they are the same
- *  kind of thing to somebody writing: something on the message that is not
- *  words. */
-export function ProductChips({ products, onRemove, disabled = false }: {
-  products: readonly ProductChoice[]
-  onRemove: (key: string) => void
-  /** Greyed out while something is in flight, so a product cannot be taken off
-   *  a message that is already on its way. */
-  disabled?: boolean
+/**
+ * The variations of one listing, and the menus that narrow them.
+ *
+ * A component of its own because the narrowing is per listing and has to be
+ * forgotten when that listing is closed - which is exactly what unmounting
+ * does, for free. Held in the picker as a map keyed by listing it would have to
+ * be cleaned up by hand, and the day somebody forgot, the black-chairs-only
+ * filter would still be on when they opened a range of desks.
+ */
+function Variations({ list, already, onPick }: {
+  list: ProductChoice[]
+  already: Set<string>
+  onPick: (item: ProductChoice) => void
 }) {
+  const [narrowing, setNarrowing] = useState<Narrowing>({})
+  const menus = useMemo(() => optionMenus(list), [list])
+  const shown = useMemo(() => list.filter((one) => matches(one, narrowing)), [list, narrowing])
+  const narrowed = Object.values(narrowing).some(Boolean)
+
   return (
     <>
-      {products.map((product) => {
-        const label = product.kind === 'variation' ? variationLabel(product) : product.name
-        const price = priceLabel(product)
-        return (
-          <span
-            key={keyOf(product)}
-            className="uin-tag uin-chip-clear"
-            title={[product.name, product.options, price].filter(Boolean).join(' - ')}
-          >
-            <span className="uin-chip-clear-text">{label}</span>
-            <button
-              type="button"
-              className="uin-chip-clear-x"
-              aria-label={`Take ${label} off this message`}
-              disabled={disabled}
-              onClick={() => onRemove(keyOf(product))}
-              // The same padding the file chips carry, for the same reason: a
-              // cross in a tag this small is an eleven pixel target, which is a
-              // miss on a phone. The chip grows to fit it rather than clipping
-              // it, because a clipped target is not a target.
-              style={{
-                border: 0,
-                background: 'none',
-                color: 'inherit',
-                cursor: disabled ? 'default' : 'pointer',
-                opacity: disabled ? 0.6 : 1,
-                padding: '0.4rem 0.5rem',
-                margin: '0 -0.35rem 0 0',
-              }}
-            >
-              &times;
+      {menus.length > 0 && (
+        <div className="uin-product-narrow">
+          {menus.map((menu) => (
+            <label key={menu.option} className="uin-product-narrow-one">
+              <span>{menu.option}</span>
+              <select
+                value={narrowing[menu.option] ?? ''}
+                onChange={(event) => setNarrowing((was) => ({ ...was, [menu.option]: event.target.value }))}
+              >
+                <option value="">Any</option>
+                {menu.values.map((value) => (
+                  <option key={value} value={value}>{value}</option>
+                ))}
+              </select>
+            </label>
+          ))}
+          {narrowed && (
+            <button type="button" className="uin-chip" onClick={() => setNarrowing({})}>
+              Show them all
             </button>
-          </span>
-        )
-      })}
+          )}
+        </div>
+      )}
+
+      {shown.length === 0 ? (
+        <p className="uin-ctx-sub">Nothing on this one comes in that combination.</p>
+      ) : (
+        <ul className="uin-product-variations">
+          {shown.map((variation) => {
+            const vid = keyOf(variation)
+            const vprice = priceLabel(variation)
+            return (
+              <li key={vid}>
+                <button
+                  type="button"
+                  title={variationLabel(variation)}
+                  aria-label={`Put ${variationLabel(variation)} on this message`}
+                  disabled={already.has(vid)}
+                  onClick={() => onPick(variation)}
+                >
+                  <span className="uin-ctx-main">
+                    <span className="uin-chip-clear-text">{variationLabel(variation)}</span>
+                    {already.has(vid) && <span className="uin-tag">On the message</span>}
+                  </span>
+                  {vprice && <span className="uin-ctx-sub">{vprice}</span>}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
     </>
   )
 }
 
-/** The key a chip is removed by, and the one the picker compares against.
- *  Exported so both composers speak the same language about which product is
- *  which without either of them inventing a second scheme. */
+/** The key a product is removed by, and the one the picker compares against.
+ *  Exported so both composers and the preview speak the same language about
+ *  which product is which without any of them inventing a second scheme. */
 export function productKey(item: { moduleName: string; kind: string; id: string }): string {
   return keyOf(item)
 }

@@ -9,6 +9,7 @@ function product(over: Partial<ProductChoice> = {}): ProductChoice {
     id: 'p1',
     name: 'Ergo Task Chair',
     options: null,
+    optionPairs: [],
     price: '£249.00',
     priceFrom: false,
     priceSuffix: null,

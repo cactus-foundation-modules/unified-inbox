@@ -16,7 +16,8 @@ import {
 } from '@/modules/unified-inbox/lib/drafts'
 import { plainTextToHtml, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
 import { AttachmentChips, AttachmentPicker, plainReason, type Attachment } from './AttachmentPicker'
-import { ProductChips, ProductPicker, productKey } from './ProductPicker'
+import { ProductPicker, productKey } from './ProductPicker'
+import { ProductPreview } from './ProductPreview'
 import { AttachmentDropNotice, AttachmentDropOverlay } from './AttachmentDropChrome'
 import { useAttachmentDrop } from './useAttachmentDrop'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -27,7 +28,7 @@ import { RichText, RichTextBox, RichTextTools } from './RichText'
 import { ScheduleNotice } from './ScheduleNotice'
 import { SendLaterPanel } from './SendLaterPanel'
 import { SnoozePanel } from './SnoozePanel'
-import { CloseIcon, PaperclipIcon, TagIcon } from './icons'
+import { AlarmIcon, CloseIcon, PaperclipIcon, TagIcon } from './icons'
 import type { DraftSendState } from '@/modules/unified-inbox/lib/types'
 import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 
@@ -659,6 +660,19 @@ export function ComposeView({
               <RichTextBox />
             </div>
 
+            {/* Where the products actually go, drawn where they actually go:
+                under the writing and above the signature, which is where the
+                send path puts them - see lib/compose.ts. */}
+            <ProductPreview
+              products={products}
+              keyOf={productKey}
+              disabled={busy}
+              onRemove={(key) => {
+                setProducts((prev) => prev.filter((p) => productKey(p) !== key))
+                setDirty(true)
+              }}
+            />
+
             <AttachmentDropNotice
               progress={drop.progress}
               errors={drop.errors}
@@ -695,8 +709,8 @@ export function ComposeView({
                 the words - the ways it leaves are on the right, and the gap
                 between them keeps the two from reading as one long row.
 
-                Narrow, the send buttons wrap as a pair and stay hard right, and
-                if only one of them fits it is Send now that keeps the first
+                Narrow, the send buttons wrap as a group and stay hard right, and
+                if only one of them fits it is the primary that keeps the first
                 line. See uin-send-group in styles.tsx. */}
             <div className="uin-composer-row uin-composer-actions">
               <button
@@ -723,24 +737,6 @@ export function ComposeView({
               )}
               <RichTextTools />
 
-              {/* Words rather than an alarm clock, the same as the reply box. */}
-              <Dropdown
-                className="btn btn-secondary btn-sm"
-                label={'Send Later'}
-                title={waiting ? 'Change when this goes out' : 'Choose when this goes out'}
-                width={280}
-                panelClassName="uin-menu-snooze"
-                disabled={busy}
-              >
-                <SendLaterPanel
-                  timezone={timezone}
-                  busy={busy}
-                  scheduled={waiting}
-                  onPick={(at) => { setPendingSendAt(at); setError('') }}
-                  onCancelTimer={() => { setPendingSendAt(null); void save(null) }}
-                />
-              </Dropdown>
-
               <AttachmentChips
                 attachments={attachments}
                 disabled={busy}
@@ -749,15 +745,6 @@ export function ComposeView({
                   setDirty(true)
                 }}
               />
-              <ProductChips
-                products={products}
-                disabled={busy}
-                onRemove={(key) => {
-                  setProducts((prev) => prev.filter((p) => productKey(p) !== key))
-                  setDirty(true)
-                }}
-              />
-
               <span className="uin-composer-gap" />
 
               {/* A message with a time on it has already been decided about, so
@@ -777,23 +764,35 @@ export function ComposeView({
               )}
 
               <span className="uin-send-group">
-                {!waiting && pendingSendAt && (
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => { void save(toWallClock(pendingSendAt, timezone), pendingFollowUp) }}
-                    disabled={busy}
-                  >
-                    {busyWith === 'save' ? 'Saving...' : 'Save it for then'}
-                  </button>
-                )}
+                {/* When it goes out, on the alarm clock and at the left-hand end
+                    of the group that sends things - the same strip the reply box
+                    has, and for the same reason: choosing a time changes what
+                    the buttons beside it say and do, so it belongs next to them
+                    rather than at the far end of the row beside the paperclip. */}
+                <Dropdown
+                  className="uin-icon-btn"
+                  label={AlarmIcon}
+                  ariaLabel={waiting ? 'Change when this goes out' : 'Choose when this goes out'}
+                  title={waiting ? 'Change when this goes out' : 'Choose when this goes out'}
+                  width={280}
+                  panelClassName="uin-menu-snooze"
+                  disabled={busy}
+                >
+                  <SendLaterPanel
+                    timezone={timezone}
+                    busy={busy}
+                    scheduled={waiting}
+                    onPick={(at) => { setPendingSendAt(at); setError('') }}
+                    onCancelTimer={() => { setPendingSendAt(null); void save(null) }}
+                  />
+                </Dropdown>
 
-                {/* No "Send later & snooze" up here, and there cannot be one: a
-                    message that has not gone yet has not started a conversation,
-                    and there is nothing to put to sleep. The chase on the line
-                    above is what covers that case - it brings the conversation
-                    back after the message has actually left. */}
-                {!waiting && (
+                {/* "Send & snooze" only while it is going now. A message with a
+                    time on it has not started a conversation yet, so there is
+                    nothing to put to sleep - the chase on the line above is what
+                    covers that case, and it counts from when the message
+                    actually leaves. */}
+                {!waiting && !pendingSendAt && (
                   <Dropdown
                     className="btn btn-secondary btn-sm"
                     label={'Send & snooze'}
@@ -811,14 +810,25 @@ export function ComposeView({
                   </Dropdown>
                 )}
 
+                {/* One button, whichever was decided. A time picked off the clock
+                    changes what this one says and what it does rather than adding
+                    a second button beside it saying almost the same thing. */}
                 {!waiting && (
                   <button
                     type="button"
                     className="btn btn-primary btn-sm"
-                    onClick={() => { void submit() }}
+                    onClick={() => {
+                      if (pendingSendAt) {
+                        void save(toWallClock(pendingSendAt, timezone), pendingFollowUp)
+                        return
+                      }
+                      void submit()
+                    }}
                     disabled={busy}
                   >
-                    {busyWith === 'send' ? 'Sending...' : 'Send now'}
+                    {busyWith === 'send' || (busyWith === 'save' && pendingSendAt)
+                      ? 'Sending...'
+                      : pendingSendAt ? 'Send later' : 'Send now'}
                   </button>
                 )}
               </span>

@@ -57,7 +57,7 @@ type Props = {
   inboxes: Array<{ id: string; name: string }>
   /** And the channels another module owns, which are places to look in exactly
    *  the same way. */
-  channels: Array<{ moduleName: string; label: string }>
+  channels: Array<{ key: string; label: string }>
   /** Whether "the mail that landed nowhere" is a place this reader has. */
   showUnrouted: boolean
 }
@@ -241,7 +241,7 @@ export function InboxSearch({ base, params, inboxes, channels, showUnrouted }: P
                           <option key={inbox.id} value={inbox.id}>{inbox.name}</option>
                         ))}
                         {channels.map((channel) => (
-                          <option key={channel.moduleName} value={`m:${channel.moduleName}`}>
+                          <option key={channel.key} value={`m:${channel.key}`}>
                             {channel.label}
                           </option>
                         ))}

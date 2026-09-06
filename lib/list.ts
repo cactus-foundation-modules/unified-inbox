@@ -535,6 +535,7 @@ const CHANNEL_LABELS: Record<string, string> = {
   form: 'Contact form',
   phone: 'Phone',
   sms: 'Text',
+  whatsapp: 'WhatsApp',
   discussion: 'Discussion',
 }
 
@@ -725,4 +726,64 @@ export function moveInOrder<T>(list: T[], from: number, to: number): T[] {
   const [moved] = next.splice(from, 1)
   next.splice(to, 0, moved!)
   return next
+}
+
+/**
+ * The channels down the rail, in the order the site keeps them.
+ *
+ * An order that names none of them - a site nobody has rearranged - leaves the
+ * list exactly as the modules were found in, which is what every install read
+ * before any of this could be said. A channel the order does not name goes
+ * after the ones it does, in the order it arrived in: a module installed this
+ * morning belongs at the end of the group rather than in the middle of an
+ * arrangement somebody chose.
+ */
+export function sortByChannelOrder<T extends { key: string }>(channels: T[], order: string[]): T[] {
+  if (order.length === 0) return channels
+  const rank = new Map(order.map((key, index) => [key, index]))
+  // A stable sort, so two channels the order says nothing about stay in the
+  // order they arrived in rather than swapping places between page loads.
+  return [...channels].sort((a, b) => (
+    (rank.get(a.key) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.key) ?? Number.MAX_SAFE_INTEGER)
+  ))
+}
+
+/**
+ * The stored order with a rearrangement of SOME of it dropped into place.
+ *
+ * Nobody drags a whole rail. A channel is governed by the module that owns it,
+ * and a colleague's own inbox is only on the screen of the colleagues named on
+ * it, so what the rail posts is only ever what the person dragging could see.
+ * Replacing the stored order with that would throw away the place of
+ * everything they could not - and, on the next visit by somebody who can see
+ * those, move them all to the end for no reason anybody could name.
+ *
+ * So the moved ids are poured back into the slots the stored order already held
+ * for them, in their new order, and everything else keeps the slot it had.
+ * Anything moved that the stored order has never heard of - a channel installed
+ * since it was last written - goes on the end.
+ */
+export function mergeOrder(stored: string[], moved: string[]): string[] {
+  const moving = new Set(moved)
+  const queue = [...moved]
+  const merged: string[] = []
+  const placed = new Set<string>()
+  for (const key of stored) {
+    if (placed.has(key)) continue
+    if (!moving.has(key)) {
+      merged.push(key)
+      placed.add(key)
+      continue
+    }
+    const next = queue.shift()
+    if (next === undefined) continue
+    merged.push(next)
+    placed.add(next)
+  }
+  for (const key of queue) {
+    if (placed.has(key)) continue
+    merged.push(key)
+    placed.add(key)
+  }
+  return merged
 }

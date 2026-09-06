@@ -5,7 +5,9 @@ import {
   chooseSendingInbox,
   formatCalendarDate,
   isSearching,
+  mergeOrder,
   searchRequestFrom,
+  sortByChannelOrder,
   formatWhen,
   inboxHref,
   initialsFor,
@@ -459,5 +461,49 @@ describe('the search dialog', () => {
   it('writes a date the way somebody would say it, with no timezone involved', () => {
     expect(formatCalendarDate('2026-09-03')).toBe('3 Sep 2026')
     expect(formatCalendarDate('nonsense')).toBe('nonsense')
+  })
+})
+
+describe('sortByChannelOrder', () => {
+  const channels = [{ key: 'form' }, { key: 'chat' }, { key: 'phone' }]
+
+  it('leaves the channels alone on a site nobody has rearranged', () => {
+    expect(sortByChannelOrder(channels, [])).toBe(channels)
+  })
+
+  it('puts them in the order the site keeps', () => {
+    expect(sortByChannelOrder(channels, ['phone', 'form', 'chat']).map((c) => c.key))
+      .toEqual(['phone', 'form', 'chat'])
+  })
+
+  it('puts a channel the order has never heard of after the ones it has', () => {
+    expect(sortByChannelOrder(channels, ['phone', 'chat']).map((c) => c.key))
+      .toEqual(['phone', 'chat', 'form'])
+  })
+
+  it('keeps two unnamed channels in the order they arrived in', () => {
+    expect(sortByChannelOrder(channels, ['phone']).map((c) => c.key))
+      .toEqual(['phone', 'form', 'chat'])
+  })
+})
+
+describe('mergeOrder', () => {
+  it('takes the whole order when nothing was stored', () => {
+    expect(mergeOrder([], ['chat', 'form'])).toEqual(['chat', 'form'])
+  })
+
+  it('pours a rearrangement back into the slots those channels already held', () => {
+    // Somebody who cannot see the phone swaps the other two. The phone must not
+    // move: they never saw it, so they cannot have meant anything about it.
+    expect(mergeOrder(['form', 'phone', 'chat'], ['chat', 'form']))
+      .toEqual(['chat', 'phone', 'form'])
+  })
+
+  it('puts a channel the stored order has never heard of on the end', () => {
+    expect(mergeOrder(['form'], ['chat', 'form'])).toEqual(['chat', 'form'])
+  })
+
+  it('keeps a stored key naming a channel nobody can see any more', () => {
+    expect(mergeOrder(['whatsapp', 'form'], ['form'])).toEqual(['whatsapp', 'form'])
   })
 })

@@ -13,32 +13,26 @@ import { ComposeCancel, ComposeModal } from './ComposeModal'
 // wrote. This is the same note with nothing above it - "a word about the
 // Henderson order" without waiting for the Hendersons to write in.
 //
-// To is colleagues, and In is which of the site's own addresses it sits in.
-// That is the whole difference between this and a message: there is no outside
-// party to write to, only people here to put it to, and the address decides who
-// may read it rather than where it goes. Naming several addresses starts one
-// discussion in each - see the route for why one thread cannot honestly belong
-// to two addresses at once.
+// To is colleagues, and that is the whole of what is asked: there is no outside
+// party to write to, only people here to put it to. WHERE it sits is not asked
+// at all - it goes in the address the person starting it calls their own, which
+// the server settles (see InboxPanel). A tick list of addresses was a question
+// with one sensible answer nine times in ten, and the tenth - putting a word to
+// a team by starting it in their inbox - is what the To line is for.
 
-export type DiscussionInbox = { id: string; name: string; address: string }
 type StaffMember = { id: string; name: string }
 
 type Props = {
   base: string
   params: Record<string, string>
-  /** Every address this person may read. A discussion is a note, and a note
-   *  takes reading rights rather than sending ones. */
-  inboxes: DiscussionInbox[]
-  /** Which one it opens ticked, worked out on the server from the open tab. */
-  defaultInboxId: string | null
+  /** The address it is started in: the person's own, or failing that the one
+   *  they are standing in. Settled on the server, never chosen here. */
+  inboxId: string
   staff: StaffMember[]
 }
 
-export function DiscussionView({ base, params, inboxes, defaultInboxId, staff }: Props) {
+export function DiscussionView({ base, params, inboxId, staff }: Props) {
   const router = useRouter()
-  const [chosen, setChosen] = useState<string[]>(
-    defaultInboxId && inboxes.some((i) => i.id === defaultInboxId) ? [defaultInboxId] : [],
-  )
   const [subject, setSubject] = useState('')
   const [text, setText] = useState('')
   const [mentions, setMentions] = useState<string[]>([])
@@ -53,16 +47,7 @@ export function DiscussionView({ base, params, inboxes, defaultInboxId, staff }:
   const closeHref = inboxHref(base, params, {})
   const guard = subject.trim().length > 0 || text.trim().length > 0
 
-  const toggle = useCallback((id: string) => {
-    setChosen((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
-    setError('')
-  }, [])
-
   const submit = useCallback(async () => {
-    if (chosen.length === 0) {
-      setError('Say which of your addresses this is for.')
-      return
-    }
     if (!subject.trim()) {
       setError('Give the discussion a subject.')
       return
@@ -80,7 +65,7 @@ export function DiscussionView({ base, params, inboxes, defaultInboxId, staff }:
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          inboxIds: chosen,
+          inboxIds: [inboxId],
           subject: subject.trim(),
           body: text,
           mentions,
@@ -91,11 +76,11 @@ export function DiscussionView({ base, params, inboxes, defaultInboxId, staff }:
         setError(plainReason(data?.error, 'That discussion could not be started.'))
         return
       }
-      // It is a conversation now, so go and stand in it - in the first address
-      // named, which on the ordinary single-address discussion is the only one.
+      // It is a conversation now, so go and stand in it, in the address it
+      // was started in.
       router.push(inboxHref(base, params, {
         id: data?.threadId ?? null,
-        inbox: chosen[0] ?? null,
+        inbox: inboxId,
         page: null,
         compose: null,
       }))
@@ -106,7 +91,7 @@ export function DiscussionView({ base, params, inboxes, defaultInboxId, staff }:
       inFlight.current = false
       setBusy(false)
     }
-  }, [base, chosen, mentions, params, router, subject, text])
+  }, [base, inboxId, mentions, params, router, subject, text])
 
   return (
     <ComposeModal
@@ -133,30 +118,6 @@ export function DiscussionView({ base, params, inboxes, defaultInboxId, staff }:
                 </div>
               </div>
             )}
-
-            <div className="uin-field-row uin-field-row--stack">
-              <span className="uin-field-label" id="uin-discussion-in">In</span>
-              <div className="uin-field-control">
-                <div className="uin-pick-list" role="group" aria-labelledby="uin-discussion-in">
-                  {inboxes.map((inbox) => (
-                    <label className="uin-pick" key={inbox.id}>
-                      <input
-                        type="checkbox"
-                        checked={chosen.includes(inbox.id)}
-                        onChange={() => toggle(inbox.id)}
-                      />
-                      <span className="uin-pick-name" title={inbox.name}>{inbox.name}</span>
-                      <span className="uin-recipients" title={inbox.address}>{inbox.address}</span>
-                    </label>
-                  ))}
-                </div>
-                {chosen.length > 1 && (
-                  <span className="uin-field-hint">
-                    Each address gets its own discussion, so each team can answer in their own.
-                  </span>
-                )}
-              </div>
-            </div>
 
             <div className="uin-field-row">
               <label htmlFor="uin-discussion-subject">Subject</label>

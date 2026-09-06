@@ -47,8 +47,16 @@ const FRAME_STYLES = `
      a frame behaving like a frame: the reader asked for the message, not for a
      window onto part of it. It is scaled down to fit instead, the way a phone
      shows a desktop-width email, and the box round it is made exactly as tall
-     as the message ended up. A message that already fits is not touched. */
-  #uin-fit { overflow: hidden; }
+     as the message ended up. A message that already fits is not touched.
+
+     The clipping is switched on by the script, not by this stylesheet, and that
+     is deliberate. Clipping is only ever right once something has scaled the
+     message to fit inside it; on its own it is a message with its right-hand
+     side cut off and no way to reach it. So if the script does not run at all -
+     an extension, a blocked nonce, a proxy that rewrote the tag - the message
+     overflows visibly and can still be read, which is the better of the two
+     wrong answers. */
+  #uin-fit.uin-fitted { overflow: hidden; }
   #uin-doc { transform-origin: 0 0; }
   a { color: #14532d; }
   pre { white-space: pre-wrap; }
@@ -91,17 +99,44 @@ const FRAME_STYLES = `
  * The markup still carries target="_blank" underneath. If this script never
  * runs - a blocked script, an extension - a link that does nothing at all is a
  * message that reads as broken, and a working link is better than a dead one.
+ *
+ * `data-cfasync="false"` is what keeps it running at all on a site sat behind
+ * Cloudflare, and it is not optional. Cloudflare's Rocket Loader rewrites every
+ * script tag in an HTML response it touches - `type="javascript"` becomes
+ * `type="<token>-text/javascript"`, which no browser will execute - and then
+ * loads a script of its own to run them in its own order. That script comes
+ * from Cloudflare, this document's policy allows precisely one nonce and
+ * nothing else, so the policy blocks the only thing that could have started
+ * ours. The frame then reports no height, fits nothing to the width, and sits
+ * at its opening size with the message cut off inside it - which is exactly
+ * what it looks like when a message "displays weirdly" on a Cloudflare site and
+ * nowhere else. The attribute is Cloudflare's own opt-out, and it is inert
+ * anywhere Cloudflare is not.
  */
 function frameScript(nonce: string): string {
-  return `<script nonce="${nonce}">(function(){
+  return `<script nonce="${nonce}" data-cfasync="false">(function(){
   var doc = document.documentElement;
   // Ours, and first in the body, so an email carrying an id of the same name
   // cannot be picked up instead: getElementById answers in document order.
   var fit = document.getElementById('uin-fit');
   var page = fit ? fit.firstElementChild : null;
   var last = 0;
+  // The height reported before the current one. Two heights that keep swapping
+  // places are two layouts arguing with each other, and the guard at the bottom
+  // of send() settles that argument on the taller of the two.
+  var beforeLast = -1;
   var sent = 0;
   var pending = false;
+  // A pixel or two of slack on every answer.
+  //
+  // This is the whole of why messages kept arriving with a scrollbar inside
+  // them. scrollHeight is an INTEGER: a message that is genuinely 500.4 pixels
+  // tall reports 500, the frame is made 500 tall, and the four tenths left over
+  // are a scrollbar over the whole message. Sub-pixel layout is the normal case
+  // - line heights in rem, images at 100% of an odd width, a table with a
+  // fractional border - so this was most messages, not a few. Two pixels of
+  // white under the shortest message is the price, and it is worth paying.
+  var SLACK = 2;
 
   // Shrink a message that is wider than the frame until the whole of it fits.
   //
@@ -124,6 +159,10 @@ function frameScript(nonce: string): string {
     page.style.transform = 'none';
     page.style.width = 'auto';
     fit.style.height = 'auto';
+    // Nothing is clipped until this pass has decided to scale something. See
+    // the stylesheet: a box that clips without scaling is a message with its
+    // right-hand side quietly removed.
+    fit.className = '';
     var room = fit.clientWidth;
     var wanted = page.scrollWidth;
     // A pixel of slack: sub-pixel layout otherwise reports a message that fits
@@ -131,8 +170,16 @@ function frameScript(nonce: string): string {
     if (room <= 0 || wanted <= room + 1) return;
     var scale = room / wanted;
     page.style.width = wanted + 'px';
+    // Measured while the transform is still off, so this is the LAYOUT height -
+    // a rect read after the scale is applied is already the scaled one, and
+    // scaling it again would halve the message. Fractional rather than
+    // offsetHeight: an integer multiplied by a fraction and then rounded loses
+    // up to a pixel, and a pixel lost here is the same scrollbar the slack above
+    // exists to stop.
+    var natural = page.getBoundingClientRect().height;
     page.style.transform = 'scale(' + scale + ')';
-    fit.style.height = Math.ceil(page.offsetHeight * scale) + 'px';
+    fit.style.height = Math.ceil(natural * scale) + 'px';
+    fit.className = 'uin-fitted';
   }
 
   // The body's own height, and deliberately NOT the document element's. The
@@ -140,22 +187,46 @@ function frameScript(nonce: string): string {
   // measuring it can only ever hand back the height the frame already had: a
   // two-line "thanks, received" reported the opening height and stayed a
   // 400-pixel box of white for the whole of its life.
+  //
+  // Read three ways and the tallest answer taken. getBoundingClientRect is the
+  // fractional one and is what stops the rounding-down scrollbar described
+  // above; scrollHeight is the one that still sees a child hanging out of the
+  // flow; offsetHeight is the belt to their braces. Rounded UP, never down, and
+  // then given its slack.
   function measure(){
     var body = document.body;
     if (!body) return 0;
-    return Math.max(body.scrollHeight, body.offsetHeight);
+    var rect = body.getBoundingClientRect();
+    var tallest = Math.max(rect.height, body.scrollHeight, body.offsetHeight);
+    return Math.ceil(tallest) + SLACK;
   }
 
   function send(){
     fitToWidth();
     var h = measure();
     if (h === last) return;
-    // A frame that is told its own height can change height because of it, and
-    // two layouts that disagree would otherwise talk to one another for ever.
-    // High enough that no real message reaches it: sends are gathered up a
-    // frame at a time below, so a newsletter with two hundred pictures in it
-    // costs a handful of them rather than one apiece.
-    if (sent > 200) return;
+    // A frame that is told its own height can change height because of it, so
+    // two layouts that disagree can talk to one another for ever. When the new
+    // answer is the one BEFORE the current one, that is exactly what is
+    // happening - and it is settled on the taller of the two, because a frame a
+    // pixel too tall costs a hairline of white and a frame a pixel too short
+    // costs a scrollbar over the whole message.
+    if (h === beforeLast) {
+      if (h > last) {
+        beforeLast = last;
+        last = h;
+        parent.postMessage({ uinFrameHeight: h }, '*');
+      }
+      return;
+    }
+    // A runaway guard and nothing else, and generous: sends are gathered up a
+    // frame at a time below, so a newsletter with three hundred pictures in it
+    // costs a handful rather than one apiece. It used to be 200, which a long
+    // enough message could genuinely reach - and reaching it meant the frame
+    // stopped reporting while it was still growing, which is a message you
+    // scroll inside.
+    if (sent > 500) return;
+    beforeLast = last;
     last = h;
     sent++;
     parent.postMessage({ uinFrameHeight: h }, '*');
@@ -185,15 +256,21 @@ function frameScript(nonce: string): string {
   schedule();
   setTimeout(schedule, 400);
 
-  // The page around the frame says back how much room it actually gave. Only
-  // then does the frame stop scrolling itself. Hiding its scrollbar before the
-  // room was granted would turn a message the page would not make tall enough
-  // into a message with no way to reach the rest of it.
+  // The page around the frame says back how much room it actually gave, once it
+  // has actually given it. Only then does the frame stop scrolling itself:
+  // hiding the scrollbar before the room was granted would turn a message the
+  // page would not make tall enough into a message with no way to reach the
+  // rest of it.
+  //
+  // The slack above is what makes this reliable. The room granted is now always
+  // a pixel or two MORE than the message needs, so the comparison is never lost
+  // to a rounding error, and a message that fits genuinely reads as one that
+  // fits.
   window.addEventListener('message', function(event){
     if (event.source !== parent) return;
     var applied = event.data && event.data.uinAppliedHeight;
     if (typeof applied !== 'number') return;
-    doc.style.overflowY = applied + 1 >= last ? 'hidden' : '';
+    doc.style.overflowY = applied + 1 >= last ? 'hidden' : 'auto';
   });
 
   document.addEventListener('click', function(event){
@@ -257,11 +334,22 @@ export function buildMessageDocument({ html, nonce, collapseQuoted = true }: Mes
   // outer is what holds the room the scaled message actually takes up. See
   // fitToWidth. A message that fits is laid out exactly as it would have been
   // without them.
+  //
+  // The email_off comments are Cloudflare's opt-out from address obfuscation,
+  // and they matter here for a reason that does not apply to a normal page.
+  // Cloudflare rewrites any address it finds in an HTML response into the words
+  // "[email protected]" plus a script that puts the real one back - which is a
+  // fair trade on a public page being read by spam harvesters, and nonsense
+  // inside somebody's own inbox. Worse, the script that would restore it comes
+  // from Cloudflare, and this document's policy allows one nonce and nothing
+  // else, so it never runs: the reader is left looking at a message where every
+  // address has been replaced by a placeholder that will never turn back. These
+  // two comments cost a few bytes and are ignored everywhere else.
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>${FRAME_STYLES}</style></head>
-<body><div id="uin-fit"><div id="uin-doc">${content}</div></div>${frameScript(nonce)}</body></html>`
+<body><!--email_off--><div id="uin-fit"><div id="uin-doc">${content}</div></div><!--/email_off-->${frameScript(nonce)}</body></html>`
 }
 
 /**
@@ -269,11 +357,24 @@ export function buildMessageDocument({ html, nonce, collapseQuoted = true }: Mes
  * from this site (which is where the picture proxy serves them from) and the
  * one script carrying this nonce. No fetching, no forms, no frames of its own,
  * and nothing may frame it but this site.
+ *
+ * `origins` is this site's own address, written out in full, and leaving it off
+ * is what stopped the pictures ever appearing. The frame is sandboxed WITHOUT
+ * allow-same-origin - which is the whole point of it, since that is what keeps a
+ * stranger's email away from this site's cookies - and a document with no origin
+ * of its own has nothing for `'self'` to mean. So `img-src 'self'` matched
+ * precisely nothing, including the proxy's own pictures, and every picture in
+ * every message came out broken with no error anywhere to say why. Naming the
+ * address in full is a source the browser can actually compare against.
+ *
+ * `'self'` stays beside it. It costs nothing and is the right answer if this
+ * document is ever served somewhere it has an origin of its own.
  */
-export function messageDocumentCsp(nonce: string): string {
+export function messageDocumentCsp(nonce: string, origins: readonly string[] = []): string {
+  const hosts = Array.from(new Set(origins.filter(Boolean)))
   return [
     `default-src 'none'`,
-    `img-src 'self' data:`,
+    [`img-src 'self'`, ...hosts, 'data:'].join(' '),
     `style-src 'unsafe-inline'`,
     `script-src 'nonce-${nonce}'`,
     `font-src data:`,

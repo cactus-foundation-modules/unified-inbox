@@ -10,6 +10,7 @@ import {
   setThreadRead,
   setThreadStatus,
 } from '@/modules/unified-inbox/lib/db'
+import { pushProviderRead } from '@/modules/unified-inbox/lib/provider-read'
 import { ThreadPatchBody } from '@/modules/unified-inbox/lib/validation'
 
 // Working through a conversation: read it, hand it to somebody, put it to
@@ -40,6 +41,11 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
   if (body.unread !== undefined && body.unread !== thread.unread) {
     await setThreadRead(id, body.unread)
+    // Read here means read there, for a channel that keeps a state of its own.
+    // Only the one way: no provider offers "mark it unread again", and the hub
+    // marking it unread for one colleague is this hub's own bookkeeping rather
+    // than a statement about the enquiry the far end is holding.
+    if (!body.unread) await pushProviderRead(thread)
   }
 
   if (body.assigneeUserId !== undefined && body.assigneeUserId !== thread.assigneeUserId) {

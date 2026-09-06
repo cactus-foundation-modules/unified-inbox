@@ -90,13 +90,17 @@ export type Settings = {
   autoCheckSeconds: number | null
   /** Channels kept off the screen: the module names whose entries are left out
    *  of the rail, the counts and the lists. */
+  /** The channel keys switched off the rail. Stored under a column named
+   *  for modules, from when a module could only publish one channel; the
+   *  values are channel keys and always were for every channel that existed
+   *  then. See lib/provider-registry.ts. */
   hiddenChannelModules: string[]
 }
 
 export type StaffMember = { id: string; name: string; email: string }
 
 /** One channel another module owns, as the settings screen lists it. */
-export type ChannelRow = { moduleName: string; label: string }
+export type ChannelRow = { key: string; label: string }
 
 /** One label contacts can be filed under, and how many are wearing it. */
 export type ContactCategoryRow = { id: string; name: string; people: number }

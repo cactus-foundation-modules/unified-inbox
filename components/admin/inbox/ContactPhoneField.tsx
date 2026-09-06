@@ -163,6 +163,18 @@ export function ContactPhoneField({ id, value, onChange, onPick, placeholder }: 
       <input
         id={id}
         ref={input}
+        // Named, and named out of Safari's vocabulary. Safari guesses what a box
+        // is for from its name - and with no name at all it guesses from the id,
+        // then the placeholder, then the label. Guess "one-time code" and it
+        // drops the From Messages chip on top; guess "person" and it drops the
+        // contacts card there instead. Either one lands on this field's own
+        // suggestion menu, which knows the number and is the point of the box.
+        //
+        // So: nothing here - name, id, placeholder, label - may say sms, code,
+        // otp, passcode, name, phone, tel, email or address. autocomplete="off"
+        // is asked for as well, but it is a request Safari overrules whenever
+        // its guess is confident, so the wording is what actually does the work.
+        name="uin-lookup"
         // Text rather than tel: a name is typed in here as often as a number,
         // and tel hands a phone a keypad with no letters on it.
         type="text"

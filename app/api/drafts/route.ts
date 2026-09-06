@@ -8,7 +8,7 @@ import { canOpenThread, canReplyToInbox } from '@/modules/unified-inbox/lib/acce
 import { getThreadDetail, saveDraft } from '@/modules/unified-inbox/lib/db'
 import { htmlHasWriting, isWorthSaving } from '@/modules/unified-inbox/lib/drafts'
 import { decideFollowUp, decideSendAt } from '@/modules/unified-inbox/lib/scheduled'
-import { visibleProviderModules } from '@/modules/unified-inbox/lib/provider-registry'
+import { visibleChannelKeys } from '@/modules/unified-inbox/lib/provider-registry'
 import { DraftBody } from '@/modules/unified-inbox/lib/validation'
 
 // Putting a message down half-written.
@@ -67,7 +67,7 @@ export async function POST(request: Request) {
     return errorResponse('You do not have permission to write on that conversation.', 403)
   }
   if (thread?.providerModule) {
-    const allowed = await visibleProviderModules(user)
+    const allowed = await visibleChannelKeys(user)
     if (!allowed.includes(thread.providerModule)) {
       return errorResponse('You do not have permission to write on that conversation.', 403)
     }

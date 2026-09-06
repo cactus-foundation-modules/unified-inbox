@@ -37,10 +37,10 @@ export function ChannelsPanel({ settings, channels, busy, call }: {
     setHidden(settings.hiddenChannelModules)
   }
 
-  function toggle(moduleName: string, shown: boolean) {
+  function toggle(channelKey: string, shown: boolean) {
     setHidden((current) => shown
-      ? current.filter((name) => name !== moduleName)
-      : current.includes(moduleName) ? current : [...current, moduleName])
+      ? current.filter((key) => key !== channelKey)
+      : current.includes(channelKey) ? current : [...current, channelKey])
   }
 
   async function save() {
@@ -68,10 +68,10 @@ export function ChannelsPanel({ settings, channels, busy, call }: {
         <>
           {channels.map((channel) => (
             <CheckField
-              key={channel.moduleName}
+              key={channel.key}
               label={`Show ${channel.label}`}
-              checked={!hidden.includes(channel.moduleName)}
-              onChange={(shown) => toggle(channel.moduleName, shown)}
+              checked={!hidden.includes(channel.key)}
+              onChange={(shown) => toggle(channel.key, shown)}
               disabled={busy}
             />
           ))}

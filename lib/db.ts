@@ -632,6 +632,7 @@ const DEFAULT_SETTINGS: UnifiedInboxSettings = {
   campaignLogMonths: 24,
   campaignFooterAddress: null,
   hiddenChannelModules: [],
+  channelOrder: [],
 }
 
 export async function getSettings(): Promise<UnifiedInboxSettings> {
@@ -695,6 +696,10 @@ export async function getSettings(): Promise<UnifiedInboxSettings> {
     // the same answer a fresh install gets: an update that quietly hid a
     // channel would look exactly like one that lost the messages.
     hiddenChannelModules: (r.hidden_channel_modules as string[] | null) ?? [],
+    // Empty for a row written before the column existed, which is the same
+    // answer a fresh install gets: nothing rearranged, so the channels sit in
+    // the order the modules were found in.
+    channelOrder: (r.channel_order as string[] | null) ?? [],
   }
 }
 
@@ -723,6 +728,7 @@ export async function updateSettings(data: Partial<UnifiedInboxSettings>): Promi
   if (data.campaignLogMonths !== undefined) sets.push(Prisma.sql`"campaign_log_months" = ${data.campaignLogMonths}`)
   if (data.campaignFooterAddress !== undefined) sets.push(Prisma.sql`"campaign_footer_address" = ${data.campaignFooterAddress}`)
   if (data.hiddenChannelModules !== undefined) sets.push(Prisma.sql`"hidden_channel_modules" = ${data.hiddenChannelModules}`)
+  if (data.channelOrder !== undefined) sets.push(Prisma.sql`"channel_order" = ${data.channelOrder}::text[]`)
   if (sets.length === 0) return getSettings()
 
   await prisma.$executeRaw`
@@ -5052,10 +5058,24 @@ export async function upsertProviderThread(data: ProviderThreadInput): Promise<{
                                  COALESCE("uin_threads"."last_message_at", EXCLUDED."last_message_at"),
                                  EXCLUDED."last_message_at"),
         "last_direction"     = EXCLUDED."last_direction",
-        -- Unread only ever goes ON from out here. A conversation somebody has
+        -- Unread only ever goes ON from out here, and only when the
+        -- conversation has actually moved on. A conversation somebody has
         -- opened in this hub stays read even while the far end still counts it
         -- as new, because the person who read it is the one sitting here.
-        "unread"             = "uin_threads"."unread" OR EXCLUDED."unread",
+        --
+        -- The second half of that is the one that was missing. A channel with
+        -- no read state of its own - the contact form is the plain case -
+        -- reports every enquiry as new for ever, so a re-listing with nothing
+        -- new in it was marking read enquiries unread again on every
+        -- collection. The hub does tell the channel now (see
+        -- lib/provider-read.ts), but a channel that cannot be told, or that
+        -- would not listen, must not be able to do this either. A genuinely
+        -- newer message raises it, which is what unread is for.
+        "unread"             = "uin_threads"."unread"
+                               OR (EXCLUDED."unread" AND (
+                                    "uin_threads"."last_message_at" IS NULL
+                                    OR EXCLUDED."last_message_at" > "uin_threads"."last_message_at"
+                                  )),
         "updated_at"         = CURRENT_TIMESTAMP
     RETURNING "id", (xmax = 0) AS "created"
   `

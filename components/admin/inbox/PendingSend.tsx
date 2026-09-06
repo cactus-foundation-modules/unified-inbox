@@ -49,9 +49,17 @@ export function PendingSend({ at, followUp, onFollowUp, onProblem, onClear, time
   return (
     <div className="uin-composer-row uin-pending-send">
       <span className="uin-recipients">Set to go out {describeSendAt(at, now, timezone)}.</span>
+      {/* The chase, and no longer a pill saying "No chase".
+          A pill is a thing that has been set, and that one stood on every
+          message with a time on it announcing what had NOT been set - so it read
+          as a state somebody had chosen rather than an offer. It is the same
+          menu, worded as the offer it is and drawn as one of the small links the
+          composer uses for Cc and Bcc; once a chase exists it says so. */}
       <Dropdown
-        className="uin-chip"
-        label={chaseAt ? `Chase it ${describeSendAt(chaseAt, now, timezone)}` : 'No chase'}
+        className={chaseAt ? 'uin-chip' : 'uin-field-add'}
+        label={chaseAt
+          ? `Chase it ${describeSendAt(chaseAt, now, timezone)}`
+          : 'Chase it if nobody replies'}
         width={260}
         disabled={busy}
       >
@@ -69,7 +77,7 @@ export function PendingSend({ at, followUp, onFollowUp, onProblem, onClear, time
         ))}
       </Dropdown>
       <button type="button" className="uin-chip" disabled={busy} onClick={onClear}>
-        Not later after all
+        Cancel send later
       </button>
     </div>
   )

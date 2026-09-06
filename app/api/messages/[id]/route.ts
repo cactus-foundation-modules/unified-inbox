@@ -59,7 +59,7 @@ export async function DELETE(
   if (permission && !(await hasPermission(user, permission))) return errorResponse('Forbidden', 403)
 
   const providers = await allConversationProviders()
-  const provider = providers.find((p) => p.moduleName === msg.provider_module)
+  const provider = providers.find((p) => p.id === msg.provider_module)
   if (!provider) return errorResponse('That channel is not available at the moment.', 404)
 
   if (!provider.provider.capabilities.delete || !provider.provider.deleteMessage) {

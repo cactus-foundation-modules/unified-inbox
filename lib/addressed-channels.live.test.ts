@@ -47,6 +47,15 @@ import {
 // both is the second place to look for the same thing that this whole module
 // exists to abolish.
 //
+// READ HERE STAYS READ. A channel with no read state of its own reports every
+// enquiry as new for ever, so the SET list has to say that unread only goes
+// back on when the conversation has genuinely moved on. Get that wrong and
+// every enquiry somebody read this morning is bold again after the next
+// collection, which is what happened.
+//
+// THE ORDER OF THE CHANNELS IS KEPT. A text[] written by the settings UPDATE,
+// which nothing else in this repository executes either.
+//
 // Skipped unless opted into, so a plain npm test never touches the network:
 //
 //   RUN_INBOX_ADDRESSED=1 npx vitest run \
@@ -148,7 +157,10 @@ describe.runIf(shouldRun)('a channel that addressed its conversations, against a
   }, 600_000)
 
   /** One enquiry as the collection tick files it. */
-  const arrive = (externalId: string, opts: { inboxId: string | null; sourceLabel: string | null }) =>
+  const arrive = (
+    externalId: string,
+    opts: { inboxId: string | null; sourceLabel: string | null; at?: Date },
+  ) =>
     queries.upsertProviderThread({
       providerModule: 'contact-form',
       externalId,
@@ -156,12 +168,22 @@ describe.runIf(shouldRun)('a channel that addressed its conversations, against a
       subject: `Enquiry ${externalId}`,
       subjectNormalised: `enquiry ${externalId}`,
       preview: 'Some words somebody typed into a form.',
-      lastMessageAt: new Date('2026-09-04T09:00:00Z'),
+      lastMessageAt: opts.at ?? new Date('2026-09-04T09:00:00Z'),
       lastDirection: 'in',
+      // Every collection: the contact form has no read state to report, so it
+      // says "new" about an enquiry for as long as it holds it.
       unread: true,
       inboxId: opts.inboxId,
       sourceLabel: opts.sourceLabel,
     })
+
+  const isUnread = async (id: string): Promise<boolean> => {
+    const rows = await db.$queryRawUnsafe<{ unread: boolean }[]>(
+      `SELECT "unread" FROM "uin_threads" WHERE "id" = $1`,
+      id,
+    )
+    return rows[0]!.unread
+  }
 
   it('files an enquiry at the inbox the form named, with the form’s own name on it', async () => {
     const { id, created } = await arrive('e1', { inboxId: salesId, sourceLabel: 'Get in touch' })
@@ -204,6 +226,36 @@ describe.runIf(shouldRun)('a channel that addressed its conversations, against a
     const again = await arrive('e4', { inboxId: salesId, sourceLabel: 'Get in touch' })
     expect(again.id).toBe(first.id)
     expect((await queries.getThreadDetail(first.id))?.inboxId).toBe(salesId)
+  })
+
+  it('leaves an enquiry somebody has read alone when nothing new has come in', async () => {
+    // The bug this settles: an enquiry read in the morning went bold again on
+    // the next Check now, because the form still called it new and the upsert
+    // believed it.
+    const { id } = await arrive('r1', { inboxId: salesId, sourceLabel: 'Get in touch' })
+    await queries.setThreadRead(id, false)
+    expect(await isUnread(id)).toBe(false)
+
+    await arrive('r1', { inboxId: salesId, sourceLabel: 'Get in touch' })
+    expect(await isUnread(id)).toBe(false)
+  })
+
+  it('makes one unread again when a genuinely newer message arrives', async () => {
+    const { id } = await arrive('r2', { inboxId: salesId, sourceLabel: 'Get in touch' })
+    await queries.setThreadRead(id, false)
+
+    await arrive('r2', {
+      inboxId: salesId,
+      sourceLabel: 'Get in touch',
+      at: new Date('2026-09-05T11:30:00Z'),
+    })
+    expect(await isUnread(id)).toBe(true)
+  })
+
+  it('remembers the order somebody dragged the channels into', async () => {
+    const saved = await queries.updateSettings({ channelOrder: ['phone', 'form', 'chat'] })
+    expect(saved.channelOrder).toEqual(['phone', 'form', 'chat'])
+    expect((await queries.getSettings()).channelOrder).toEqual(['phone', 'form', 'chat'])
   })
 
   it('counts an addressed enquiry under its inbox and not under its channel', async () => {

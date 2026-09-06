@@ -12,7 +12,7 @@ const getThreadDetail = vi.hoisted(() => vi.fn())
 const insertProviderMessage = vi.hoisted(() => vi.fn())
 const recountProviderThread = vi.hoisted(() => vi.fn())
 const setThreadRead = vi.hoisted(() => vi.fn())
-const providerForModule = vi.hoisted(() => vi.fn())
+const providerForKey = vi.hoisted(() => vi.fn())
 
 vi.mock('./db', () => ({
   getThreadDetail,
@@ -20,7 +20,7 @@ vi.mock('./db', () => ({
   recountProviderThread,
   setThreadRead,
 }))
-vi.mock('./provider-registry', () => ({ providerForModule }))
+vi.mock('./provider-registry', () => ({ providerForKey }))
 
 const { sendProviderReply } = await import('./provider-send')
 
@@ -66,7 +66,7 @@ beforeEach(() => {
   recountProviderThread.mockReset().mockResolvedValue(undefined)
   setThreadRead.mockReset().mockResolvedValue(undefined)
   send.mockReset().mockResolvedValue(undefined)
-  providerForModule.mockReset().mockResolvedValue(providerWith(send))
+  providerForKey.mockReset().mockResolvedValue(providerWith(send))
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 
@@ -123,20 +123,19 @@ describe('sendProviderReply', () => {
     })
   })
 
-  it('says so plainly when that channel is no longer installed (E20)', async () => {
-    providerForModule.mockResolvedValue(null)
+  it('refuses plainly when the module behind that channel has gone (E20)', async () => {
+    providerForKey.mockResolvedValue(null)
     const result = await sendProviderReply({
       threadId: 't1',
       text: 'hi',
       authorUserId: 'u1',
       authorName: null,
     })
-    expect(result).toMatchObject({ ok: false })
-    expect((result as { reason: string }).reason).toContain('no longer installed')
+    expect(result).toEqual({ ok: false, reason: 'That channel cannot be answered from here.' })
   })
 
   it('says so when the channel is one that cannot be answered at all', async () => {
-    providerForModule.mockResolvedValue(
+    providerForKey.mockResolvedValue(
       providerWith(undefined, { capabilities: { reply: false, markRead: false, byIdentity: false } }),
     )
     const result = await sendProviderReply({

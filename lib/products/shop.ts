@@ -159,6 +159,29 @@ function productPage(slug: unknown, settings: ShopSettings): string | null {
   return `${settings.siteUrl}${path}`
 }
 
+/**
+ * The option pairs off a variation row, believed only where they are the shape
+ * they are supposed to be.
+ *
+ * Prisma hands a jsonb column back already parsed, and json_agg over nothing at
+ * all is NULL rather than an empty array - so a variation with no options is a
+ * null here, not a []. Nothing is guessed: a row that does not look right
+ * contributes no filter rather than a filter made of nonsense.
+ */
+function readOptionPairs(value: unknown): { option: string; value: string }[] {
+  if (!Array.isArray(value)) return []
+  const out: { option: string; value: string }[] = []
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue
+    const pair = entry as { option?: unknown; value?: unknown }
+    const option = typeof pair.option === 'string' ? pair.option.trim() : ''
+    const label = typeof pair.value === 'string' ? pair.value.trim() : ''
+    if (!option || !label) continue
+    out.push({ option, value: label })
+  }
+  return out
+}
+
 /** One product row as something the picker can draw and the email can print. */
 function toChoice(
   row: Record<string, unknown>,
@@ -166,6 +189,8 @@ function toChoice(
   extras: {
     kind: 'product' | 'variation'
     options?: string | null
+    /** The same options taken apart, for narrowing a long list of variations. */
+    optionPairs?: { option: string; value: string }[]
     /** The cheapest of several, where this listing has variations. */
     from?: { amount: number; varies: boolean } | null
     variationCount?: number
@@ -192,6 +217,7 @@ function toChoice(
     id: row.id as string,
     name: (row.name as string) || 'Product',
     options: extras.options ?? null,
+    optionPairs: extras.optionPairs ?? [],
     price: quotable
       ? formatPrice(displayAmount(amount, settings.display, rate), settings.currencySymbol)
       : null,
@@ -322,7 +348,13 @@ export const shopProducts: ProductSource = {
                 FROM "svr_variant_values" vv
                 JOIN "svr_option_values" ov ON ov."id" = vv."option_value_id"
                 JOIN "svr_options" o ON o."id" = ov."option_id"
-               WHERE vv."variant_id" = v."id") AS "options"
+               WHERE vv."variant_id" = v."id") AS "options",
+             (SELECT json_agg(json_build_object('option', o."name", 'value', ov."label")
+                              ORDER BY o."position" ASC, ov."position" ASC)
+                FROM "svr_variant_values" vv
+                JOIN "svr_option_values" ov ON ov."id" = vv."option_value_id"
+                JOIN "svr_options" o ON o."id" = ov."option_id"
+               WHERE vv."variant_id" = v."id") AS "option_pairs"
         FROM "svr_variants" v
         JOIN "shp_products" c ON c."id" = v."child_product_id"
        WHERE v."product_id" = ${productId}
@@ -335,6 +367,7 @@ export const shopProducts: ProductSource = {
     return rows.map((row) => toChoice(row, settings, {
       kind: 'variation',
       options: typeof row.options === 'string' && row.options.trim() ? row.options.trim() : null,
+      optionPairs: readOptionPairs(row.option_pairs),
     }))
   },
 

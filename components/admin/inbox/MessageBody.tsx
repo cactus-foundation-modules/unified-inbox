@@ -82,6 +82,12 @@ export function MessageBody({ messageId, hasRemoteImages, ownSender }: Props) {
   // for the other. Held this way round so that changing address clears it
   // without a second render to do the clearing.
   const [failedSrc, setFailedSrc] = useState<string | null>(null)
+  /** Whether the frame has ever said how tall it is. Until it has, it is not
+   *  told how much room it was given: telling it would stop it scrolling itself
+   *  on the strength of a height nobody has measured, and a frame whose script
+   *  never ran would then be a message clipped at 400 pixels with no way to
+   *  reach the rest of it. */
+  const [measured, setMeasured] = useState(false)
   /** The link somebody has just clicked inside the message, waiting to be
    *  looked at. The frame does not follow it - see LinkPeek for why. */
   const [peek, setPeek] = useState<PeekedLink | null>(null)
@@ -99,10 +105,7 @@ export function MessageBody({ messageId, hasRemoteImages, ownSender }: Props) {
       heard.current = true
       const applied = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.ceil(value)))
       setHeight(applied)
-      // Say back how much room it got. The frame puts its own scrollbar away
-      // once it knows the whole message is on the page, so a wide table cannot
-      // give a message a scrollbar of its own inside the page's.
-      frame.current.contentWindow?.postMessage({ uinAppliedHeight: applied }, '*')
+      setMeasured(true)
       return
     }
 
@@ -121,6 +124,22 @@ export function MessageBody({ messageId, hasRemoteImages, ownSender }: Props) {
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
   }, [onMessage])
+
+  // Say back how much room it actually got, AFTER the frame has actually been
+  // given it. The frame puts its own scrollbar away once it knows the whole
+  // message is on the page, so a wide table cannot give a message a scrollbar
+  // of its own inside the page's.
+  //
+  // From an effect rather than straight back inside the listener above, and
+  // that is the point: the reply used to go out in the same breath as the
+  // measurement, before React had committed the new height, so the frame was
+  // told about room it did not have yet. Every later growth - a picture landing,
+  // a quoted section unfolded - then left the two out of step, and out of step
+  // is exactly the state in which a message keeps its scrollbar.
+  useEffect(() => {
+    if (!measured) return
+    frame.current?.contentWindow?.postMessage({ uinAppliedHeight: height }, '*')
+  }, [height, measured])
 
   // Asked again per message rather than once for the component: the same
   // frame is reused as somebody moves down a thread, and one message having

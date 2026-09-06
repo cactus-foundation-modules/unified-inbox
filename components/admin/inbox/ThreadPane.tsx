@@ -17,7 +17,7 @@ import { BlockParticipant } from './BlockParticipant'
 import { ComposerOpenProvider, ComposerSlot } from './ComposerOpen'
 import { MessageMenu } from './MessageMenu'
 import { NoteBar } from './NoteBar'
-import { ThreadContext, type ThreadContextView } from './ThreadContext'
+import { ThreadContext, hasThreadContext, type ThreadContextView } from './ThreadContext'
 import { UnmergeButton, type ThreadMergeView } from './Unmerge'
 import { AddressLine } from './AddressLine'
 import { ScrollToMessage } from './ScrollToMessage'
@@ -635,6 +635,15 @@ export function ThreadPane({
             <span className="uin-tag uin-tag-snoozed">Back {formatWhen(thread.snoozeUntil, now, timezone)}</span>
           )}
           {thread.status === 'done' && <span className="uin-tag uin-tag-done">Done</span>}
+          {/* With nothing attached and nowhere it came from, the arrow that
+              attaches the first one rides on the end of this line rather than
+              taking a strip of its own to say "No context yet" - see
+              ThreadContext. */}
+          {!hasThreadContext(context) && (
+            <span className="uin-thread-meta-end">
+              <ThreadContext threadId={thread.id} {...context} compact />
+            </span>
+          )}
         </div>
         {/* Why there is no arrow on any of the messages. Without it, a
             conversation with the obvious thing missing and no explanation is
@@ -652,8 +661,9 @@ export function ThreadPane({
           />
         )}
         {/* Last in the header, under everything that can be pressed: what this
-            conversation is about. */}
-        <ThreadContext threadId={thread.id} {...context} />
+            conversation is about. Only once there is something to say - with
+            nothing on it the arrow is up on the line above. */}
+        {hasThreadContext(context) && <ThreadContext threadId={thread.id} {...context} />}
       </div>
 
       <div className="uin-thread-body">

@@ -458,13 +458,14 @@ const CSS = `
 .uin-rail-sub[hidden] { display: none; }
 .uin-rail-sub .uin-rail-item { font-size: 0.78125rem; }
 
-/* Rearranging the addresses. The grab cursor is the only thing that says so
-   until somebody takes hold of one - a column of handles would put furniture
-   beside every address to serve a job done once a year. While one is in the air
-   it fades, and the address it would land on carries a line along its top edge,
-   so the answer to "where does this go" is on the screen rather than in the
-   wrist. */
-.uin-rail-item[data-uin-drag] { cursor: grab; }
+/* Rearranging the addresses, the colleagues' inboxes and the channels. Nothing
+   is said about it until somebody takes hold of a row: the rail is a list of
+   places to go, it wears the cursor of one, and a grab handle appearing under
+   every hover talks about a job done once a year to somebody who is reading
+   their post. Take hold of one and the hand closes, so the gesture is confirmed
+   at the moment it starts. While a row is in the air it fades, and the row it
+   would land on carries a line along its top edge, so the answer to "where does
+   this go" is on the screen rather than in the wrist. */
 .uin-rail-item[data-uin-drag]:active { cursor: grabbing; }
 .uin-rail-item[data-uin-dragging] { opacity: 0.45; }
 .uin-rail-item[data-uin-over] { box-shadow: inset 0 2px 0 0 var(--color-primary); }
@@ -800,15 +801,13 @@ const CSS = `
   font-weight: 650;
 }
 .uin-tab[aria-current="true"]:hover { background: var(--color-surface-raised); }
-/* The count is smaller than the word beside it, so its own line box is
-   shorter, and where it sat inside that box was left to the inherited
-   leading. Given its own one-line box and centred on the row, the digits
-   sit level with the middle of the label instead of floating in leading. */
+/* Sat on the word's own baseline, not centred on the row. Centring uses the
+   line box, and a line box carries descender room the word does not fill, so a
+   smaller number centred in it reads as raised - which is what it looked like.
+   Baseline is where the eye expects a count beside a word, and it is the one
+   alignment that cannot come out at the top. */
 .uin-tab-count {
-  display: inline-flex;
-  align-items: center;
-  align-self: center;
-  line-height: 1;
+  align-self: baseline;
   font-size: 0.6875rem;
   font-weight: 600;
   color: var(--color-text-muted);
@@ -1762,28 +1761,6 @@ const CSS = `
   color: var(--color-text);
 }
 .uin-composer textarea:focus { outline: none; box-shadow: none; }
-/* What is being written, and the two ways out of it: the name of the thing on
-   the left, the window-of-its-own and the cross hard against the right. It was
-   a row of four chips that SWITCHED between reply, reply to all, forward and
-   note - a second place to make a choice already made on the message being
-   answered. The choice went back to the message; the label stayed, because a
-   box that does not say whether it is a forward is a box that sends one. */
-.uin-composer-head {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.35rem 0.5rem 0.35rem 0.625rem;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface-raised);
-}
-.uin-composer-title {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: var(--color-text-secondary);
-}
-.uin-composer-head-tools { flex: none; display: inline-flex; align-items: center; gap: 0.15rem; }
 /* Everything you can do to the message, on one strip along the bottom - the
    place every mail program has kept it. */
 .uin-composer-row {
@@ -1914,10 +1891,6 @@ const CSS = `
   padding-inline: 0;
   background: none;
 }
-.uin-modal .uin-composer-head {
-  padding-inline: 0;
-  background: none;
-}
 /* The two crosses on a popped-out reply: put it back, and close it. */
 .uin-modal-head-tools { display: inline-flex; align-items: center; gap: 0.15rem; }
 .uin-modal .uin-composer textarea { padding-inline: 0; }
@@ -1988,56 +1961,6 @@ const CSS = `
   color: var(--color-text-muted);
 }
 .uin-field-control { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
-/* Choosing which of the site's own addresses something is for. A short list of
-   tick boxes rather than a box to type in, because the answers are known and
-   typing one that is not on the list would be a message somebody thought they
-   were sending. */
-.uin-pick-list {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.05rem;
-  max-height: 9rem;
-  overflow-y: auto;
-  padding: 0.25rem 0;
-}
-/* One address a line, and the whole line the thing you click. Baseline sat the
-   tick box on the text's baseline, which left it hanging low beside a name;
-   beside a name it belongs in the middle. */
-.uin-pick {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-width: 0;
-  padding: 0.3rem 0.4rem;
-  border-radius: 0.375rem;
-  font-size: 0.8125rem;
-  color: var(--color-text);
-  cursor: pointer;
-}
-.uin-pick:hover { background: var(--color-surface-raised); }
-.uin-pick input { flex: none; margin: 0; accent-color: var(--color-primary); }
-/* The name takes what it needs, the address takes the rest, and both stop at an
-   ellipsis rather than wrapping. Three stacked lines of "Emma (Marketing
-   Manager)" is not a tidier answer than one line you can hover to read in full,
-   and an address broken mid-word reads as a fault. */
-.uin-pick-name {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.uin-pick:has(input:checked) .uin-pick-name { font-weight: 600; }
-.uin-pick .uin-recipients {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: right;
-}
 /* Borderless inside a ruled block: a box drawn round every line would be four
    boxes inside a box, and the row itself already says where to type. */
 .uin-field-control input,
@@ -2546,13 +2469,19 @@ const CSS = `
    pulled out to the pane's edges by the padding they cancel, because a pinned
    band with a stripe of ground either side of it is a band things scroll behind
    rather than under. */
-.uin-read.uin-camp-pane { display: block; padding: 0.875rem; }
+/* NO PADDING AT THE TOP OF THIS PANE. The head below is pinned to the top of
+   it, and a scroll container that carries padding-top pins its sticky child
+   below that padding in WebKit - which left a band of ground at the top of the
+   pane with the form scrolling through it, above the head rather than under it.
+   The head brings its own top padding instead, so there is nothing for the pin
+   to sit below. */
+.uin-read.uin-camp-pane { display: block; padding: 0 0.875rem 0.875rem; }
 
 .uin-camp-head {
   display: flex; flex-wrap: wrap; gap: 0.75rem;
   align-items: flex-start; justify-content: space-between;
   padding: 0.75rem 0.875rem;
-  margin: -0.875rem -0.875rem 0.875rem;
+  margin: 0 -0.875rem 0.875rem;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
 }
@@ -2560,12 +2489,6 @@ const CSS = `
    page scrolls and a pinned band would take a third of a phone's screen. */
 @media (min-width: 900px) {
   .uin-camp-head { position: sticky; top: 0; z-index: 3; }
-}
-/* The way back to the list, which on anything wider than a phone is already on
-   screen beside this - so the button is there for the one width where it is
-   the only way out. */
-@media (min-width: 900px) {
-  .uin-camp-close { display: none; }
 }
 .uin-camp-head-main { display: grid; gap: 0.3rem; min-width: 0; flex: 1 1 16rem; }
 /* The name, typed where it is read. Borderless until it is hovered or focused,
@@ -3347,14 +3270,6 @@ const CSS = `
   background: var(--color-primary-subtle);
   border-color: var(--color-primary-border);
 }
-/* The surprising half, said out loud: a tag hands somebody a job AND lets them
-   into this one conversation, which is not what a mention means anywhere else. */
-.uin-notebar-tagnote {
-  flex: 1 1 100%;
-  margin: 0;
-  font-size: 0.75rem;
-  color: var(--color-text-secondary);
-}
 
 /* ---- the reply box's own header block ----------------------------------- */
 /* The reply box now opens with the same ruled lines the new-message dialog has
@@ -3510,6 +3425,121 @@ const CSS = `
 .uin-richtext-box a { color: var(--color-link, var(--color-primary)); }
 .uin-richtext-box ul, .uin-richtext-box ol { margin: 0.4rem 0; padding-left: 1.5rem; }
 .uin-richtext-box li { margin: 0.15rem 0; }
+
+/* ---- the two ways out of the composer ----------------------------------- */
+/* The window-of-its-own and the cross. They used to have a strip of their own
+   along the top of the box with the word "Reply" beside them, which spent a
+   whole row of the reading pane naming the button somebody had just pressed.
+   They sit at the right-hand end of the line that already carries Cc, Bcc and
+   Subject now, drawn smaller than a strip button because they are riding on a
+   field line rather than standing on a bar of their own. */
+.uin-composer-tool { width: 1.5rem; height: 1.5rem; }
+.uin-composer-tool svg { width: 14px; height: 14px; }
+/* An internal note has no To line for them to ride on, so the sentence that
+   says nobody outside sees it carries them instead. */
+.uin-composer-aside-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-right: 0.625rem;
+}
+.uin-modal .uin-composer-aside-row { padding-right: 0; }
+.uin-composer-aside-row > .uin-composer-aside { flex: 1 1 auto; min-width: 0; }
+
+/* ---- what a conversation is about, when it is about nothing yet ---------- */
+/* The arrow on the end of the line that says "Email - General Enquiries - 1
+   message - last message 20:32". A conversation with nothing attached used to
+   get a bordered strip of its own underneath saying "No context yet", which is a
+   row of a pinned header spent saying there is nothing to say. */
+.uin-thread-meta-end { margin-left: auto; display: inline-flex; align-items: center; }
+.uin-ctxbar-compact { flex: none; }
+
+/* ---- the catalogue, over everything ------------------------------------- */
+/* Roomier than the short forms and shorter than the whole composer: a list to
+   rummage in wants height, and the message being written is still behind it. */
+.uin-modal-card-picker { width: min(40rem, 100%); height: min(80vh, 44rem); }
+/* The search box is the first thing in the card's own body, so it has neither a
+   rule above it nor a tint of its own. */
+.uin-product-find { border-top: 0; padding: 0; background: none; }
+.uin-product-find input { flex: 1 1 auto; min-width: 0; }
+/* One menu per option, over a list of variations. Only options with more than
+   one value across the range get one: an option every variation shares narrows
+   nothing, and a menu that cannot narrow is a menu in the way. */
+.uin-product-narrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0 0.15rem;
+}
+.uin-product-narrow-one {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+.uin-product-narrow-one select {
+  font-size: 0.75rem;
+  padding: 0.15rem 1.4rem 0.15rem 0.4rem;
+}
+
+/* ---- the products on a message, as the recipient gets them --------------- */
+/* Under the writing, which is where the send path puts them. White in both
+   themes on purpose - the same decision the frame round a received message
+   makes. This is a picture of what leaves the building, and a preview that
+   repainted itself for dark mode would be a preview of something nobody is
+   going to get. Only the chrome around it follows the theme. */
+.uin-product-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0.625rem 0;
+}
+.uin-modal .uin-product-preview { padding-inline: 0; }
+.uin-product-preview-said { margin: 0; }
+.uin-product-preview-sheet {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 0.375rem);
+  background: #ffffff;
+  padding: 0 0.75rem;
+  font-size: 15px;
+  line-height: 1.45;
+}
+.uin-product-preview-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 0;
+}
+.uin-product-preview-words {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+.uin-product-preview-price { flex: none; white-space: nowrap; }
+/* The one control on the sheet, so it is the one thing on it that follows the
+   theme rather than the email: it is ours, not the recipient's. */
+.uin-product-preview-off {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 0.375rem);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.uin-product-preview-off:hover { color: var(--color-text); border-color: var(--color-border-strong); }
+.uin-product-preview-off:disabled { opacity: 0.6; cursor: default; }
 
 `
 

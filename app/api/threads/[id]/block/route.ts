@@ -52,7 +52,7 @@ export async function POST(
   if (permission && !(await hasPermission(user, permission))) return errorResponse('Forbidden', 403)
 
   const providers = await allConversationProviders()
-  const provider = providers.find((p) => p.moduleName === thread.providerModule)
+  const provider = providers.find((p) => p.id === thread.providerModule)
   if (!provider) return errorResponse('That channel is not available at the moment.', 404)
 
   const { capabilities, blockParticipant, unblockParticipant, isParticipantBlocked } = provider.provider

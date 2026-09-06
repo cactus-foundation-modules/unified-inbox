@@ -5,9 +5,15 @@
 # Unified Inbox
 
 Every conversation with every customer and supplier in one place: email, live
-chat, contact form enquiries, calls and texts, with the site's own records
-sitting beside them. One screen instead of five, and a shared history instead of
-whatever happens to be on somebody's phone.
+chat, contact form enquiries, calls, texts and WhatsApp, with the site's own
+records sitting beside them. One screen instead of five, and a shared history
+instead of whatever happens to be on somebody's phone.
+
+Each of those arrives from a module that owns it, and each gets its own entry
+down the left. A module may publish more than one - the telephony module
+publishes the phone and WhatsApp separately, because they are two different
+things to the person answering them - and any of them can be switched off the
+list in Settings without anything stopping being collected.
 
 It is not a CRM. There are no pipelines, no deals and no lead scoring. People
 exist here for one reason only: so two emails, a live chat and a phone call from

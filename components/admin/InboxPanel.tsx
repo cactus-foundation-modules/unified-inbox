@@ -67,7 +67,6 @@ import { forComposer } from '@/modules/unified-inbox/lib/drafts'
 import { canAddProducts as canAddProductsFor, resolveProducts } from '@/modules/unified-inbox/lib/products'
 import { addressesForPerson, buildContextQuery } from '@/modules/unified-inbox/lib/identity'
 import { identityKey, isOwnSender, resolveOwnDomains } from '@/modules/unified-inbox/lib/people'
-import { ContextRail } from './inbox/ContextRail'
 import { PersonView } from './inbox/PersonView'
 import { ContactsToolbar } from './inbox/ContactsToolbar'
 import { ColumnResizer } from './inbox/ColumnResizer'
@@ -78,8 +77,9 @@ import { OrganisationCard, EMPTY_ORGANISATION } from './inbox/OrganisationCard'
 import { ContactImport } from './inbox/ContactImport'
 import { joinCategories, splitName } from '@/modules/unified-inbox/lib/contacts'
 import { forwardSubject, replyRecipients, replySubject } from '@/modules/unified-inbox/lib/compose'
-import { chooseSendingInbox, effectiveInboxParam, formatWhen, inboxHref, isSearching, NEW_CONTACT, parseInboxParams, PER_PAGE } from '@/modules/unified-inbox/lib/list'
-import { providerForModule, visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
+import { chooseSendingInbox, effectiveInboxParam, formatWhen, inboxHref, isSearching, NEW_CONTACT, parseInboxParams, PER_PAGE, sortByChannelOrder } from '@/modules/unified-inbox/lib/list'
+import { pushProviderRead } from '@/modules/unified-inbox/lib/provider-read'
+import { providerForKey, visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
 import { InboxStyles } from './inbox/styles'
 import { InboxIcon } from './inbox/icons'
 import { NavRail } from './inbox/NavRail'
@@ -170,9 +170,24 @@ export async function UnifiedInboxPanel({
   // link and still governed by the same permissions, so switching a channel
   // back on brings back everything that arrived while it was off.
   const hiddenChannels = new Set(settings.hiddenChannelModules)
-  const channels = (await visibleProviderChannels(user))
-    .filter((channel) => !hiddenChannels.has(channel.moduleName))
-  const channelModules = channels.map((c) => c.moduleName)
+  // Two lists, deliberately. `allChannels` is what this site HAS and this
+  // reader may see; `channels` is what goes in the rail. Hiding a channel is a
+  // decision about the rail and nothing else, so anything asked about a
+  // conversation already open - what it is called, whether it can be answered -
+  // is asked of the full list. Conflating the two told somebody whose form
+  // posts into a real inbox that the contact form was no longer installed, on a
+  // site that was running it perfectly well.
+  //
+  // In the order the site has dragged them into, which is a decision about the
+  // rail in exactly the way hiding one is - so it is applied here, to the list
+  // that goes on the screen, and `allChannels` stays the full list anything
+  // asked about an open conversation is asked of.
+  const allChannels = await visibleProviderChannels(user)
+  const channels = sortByChannelOrder(
+    allChannels.filter((channel) => !hiddenChannels.has(channel.key)),
+    settings.channelOrder,
+  )
+  const channelModules = channels.map((c) => c.key)
 
   if (inboxes.length === 0 && channels.length === 0) {
     return (
@@ -660,7 +675,6 @@ export async function UnifiedInboxPanel({
 
   // ---- the conversation on the right, if the address asks for one ---------
   let threadPane: React.ReactNode = null
-  let contextRail: React.ReactNode = null
   if (!params.composing && !params.personId && params.threadId) {
     // A link to a conversation that has since been merged into another opens
     // the one it became. Without this a bookmark, a search result somebody
@@ -690,7 +704,12 @@ export async function UnifiedInboxPanel({
       // means by opening one. Taken first, because where the pane opens turns on
       // it and it stops being true one line below.
       const wasUnread = thread.unread
-      if (thread.unread) await setThreadRead(thread.id, false)
+      if (thread.unread) {
+        await setThreadRead(thread.id, false)
+        // And the channel that owns it is told, so the next collection does not
+        // arrive still calling it new and mark it unread all over again.
+        await pushProviderRead(thread)
+      }
 
       const [messages, files, events, ownDraft, heldDrafts, sellsAnything] = await Promise.all([
         listThreadMessages(thread.id),
@@ -796,8 +815,10 @@ export async function UnifiedInboxPanel({
       const replySubjectLine = replySubject(newest?.subject ?? thread.subject)
       const forwardSubjectLine = forwardSubject(newest?.subject ?? thread.subject)
 
+      // The full list, not the rail's: a channel switched off the rail is still
+      // installed, still collecting and still answerable.
       const channel = thread.providerModule
-        ? channels.find((c) => c.moduleName === thread.providerModule) ?? null
+        ? allChannels.find((c) => c.key === thread.providerModule) ?? null
         : null
       // A discussion has nobody outside it to answer, so there is nothing to
       // send and no Reply to offer. What is left is the note box, which is what
@@ -822,7 +843,7 @@ export async function UnifiedInboxPanel({
       // this reader may act on it.
       let blockState: { blocked: boolean; channelLabel: string } | null = null
       if (thread.providerModule && channel?.canBlock && (await hasPermission(user, 'unifiedinbox.reply'))) {
-        const resolved = await providerForModule(thread.providerModule)
+        const resolved = await providerForKey(thread.providerModule)
         const ask = resolved?.provider.isParticipantBlocked
         if (ask && thread.externalId) {
           try {
@@ -842,7 +863,11 @@ export async function UnifiedInboxPanel({
         : thread.providerModule
           ? channel
             ? `${channel.label} conversations are read here and answered where they came from.`
-            : 'The part of the site that handles this channel is no longer installed, so this cannot be answered here.'
+            // No channel at all means the module that ran it has been removed,
+            // which by now is the only way to get here and is rare enough that
+            // a notice about it was doing more harm than good. The conversation
+            // stays readable (E20) and says nothing further.
+            : null
           : thread.inboxId
             ? 'You can read this inbox but not send from it. Leave a note instead, or ask whoever looks after the site.'
             : 'This conversation is not filed in one of your addresses, so there is nothing to send it from.'
@@ -858,11 +883,6 @@ export async function UnifiedInboxPanel({
         ? staff.filter((s) => s.id === threadInbox.ownerUserId)
         : staff
 
-      // What the rest of the site knows about whoever this is. Every block in
-      // it reads another module and writes to none of them, and a module that
-      // is not installed costs one cheap check and contributes nothing.
-      const person = thread.personId ? await getPerson(thread.personId) : null
-      const query = person ? await buildContextQuery(person.id) : null
       //
       // What may be attached by hand is a separate question from what is here
       // already: the kinds are whichever record-keeping modules this viewer may
@@ -875,8 +895,7 @@ export async function UnifiedInboxPanel({
       // have got to it is between them and whoever asked them.
       const ask = await mentionForThread(user.id, thread.id)
 
-      const [sections, links, kindOptions, senderModules, merges] = await Promise.all([
-        query ? loadContext(user, query) : Promise.resolve([]),
+      const [links, kindOptions, senderModules, merges] = await Promise.all([
         linksForThread(thread.id),
         canEditLinks ? attachableKinds(user) : Promise.resolve([]),
         canEditLinks && thread.inboxId ? modulesForInbox(thread.inboxId) : Promise.resolve([]),
@@ -954,21 +973,6 @@ export async function UnifiedInboxPanel({
         />
       )
 
-      // The panel is what the rest of the site knows ABOUT this person, and it
-      // is only drawn when there is somebody for it to be about: the records
-      // attached to the conversation itself now sit in the conversation's own
-      // header, so without a person this would be a column of ground holding
-      // one sentence about nobody.
-      contextRail = person ? (
-        <ContextRail
-          adminPath={adminPath}
-          threadId={thread.id}
-          sections={sections}
-          /* A conversation's attached records are in its header. */
-          links={[]}
-          canEditLinks={canEditLinks}
-        />
-      ) : null
     }
   }
 
@@ -988,16 +992,20 @@ export async function UnifiedInboxPanel({
       : null
 
     if (params.composeKind === 'discussion') {
-      composePane = visibleIds.length > 0 ? (
+      // Where it goes is settled here rather than asked: the address this
+      // person calls their own, which is the answer nine times in ten and the
+      // only one a site with personal inboxes wants. Failing that - nobody has
+      // been given an address of their own - the tab they are standing in, and
+      // failing that the first address they may read at all. Reading rights,
+      // not sending ones: a discussion is a note, and a note goes nowhere.
+      const standingIn = params.inboxId && visible.has(params.inboxId) ? params.inboxId : null
+      const discussionInboxId = pinnedInboxId ?? standingIn ?? inboxes[0]?.id ?? null
+
+      composePane = discussionInboxId ? (
         <DiscussionView
           base={base}
           params={carried}
-          /* Every address this person may READ, not only the ones they may send
-             from: a discussion is a note, and a note goes nowhere. */
-          inboxes={inboxes
-            .filter((i) => visibleIds.includes(i.id))
-            .map((i) => ({ id: i.id, name: i.name, address: i.address }))}
-          defaultInboxId={params.inboxId ?? pinnedInboxId}
+          inboxId={discussionInboxId}
           /* The names here are people to ASK, not people to hand it to, so it
              is the list of colleagues who can actually use the hub. */
           staff={taggable}
@@ -1120,7 +1128,7 @@ export async function UnifiedInboxPanel({
   // list is already looking.
   const currentInbox = params.inboxId ? allInboxes.find((i) => i.id === params.inboxId) ?? null : null
   const currentChannel = params.providerModule
-    ? channels.find((c) => c.moduleName === params.providerModule) ?? null
+    ? channels.find((c) => c.key === params.providerModule) ?? null
     : null
   // Whose folder it is, said in front of which folder it is: "Sam Blake ·
   // Sent". The name first because on this screen the surprising half is whose
@@ -1176,9 +1184,9 @@ export async function UnifiedInboxPanel({
         count: counts[i.id] ?? 0,
       }))}
       channels={channels.map((c) => ({
-        moduleName: c.moduleName,
+        key: c.key,
         label: c.label,
-        count: counts[`m:${c.moduleName}`] ?? 0,
+        count: counts[`m:${c.key}`] ?? 0,
       }))}
       allCount={allUnread}
       current={currentTab}
@@ -1379,7 +1387,16 @@ export async function UnifiedInboxPanel({
     <div className="uin-page">
       <InboxStyles />
 
-      <div className="uin-app" data-open={opened ? '1' : '0'} data-context={contextRail ? 'on' : 'off'}>
+      {/* Never a fourth column beside a conversation.
+          There used to be one - what the rest of the site knows about whoever
+          this is - and on any window narrower than 1500px it stacked UNDERNEATH
+          the conversation, which is to say under the note bar, at the bottom of
+          however many thousand pixels of quoted email the thread happened to
+          hold. Nobody scrolled to it, and it cost a query per record-keeping
+          module per conversation opened. What is worth knowing beside a
+          conversation is what it is ABOUT, and that is one line in the pinned
+          header. The rest is the person's own page, one click away. */}
+      <div className="uin-app" data-open={opened ? '1' : '0'} data-context="off">
         {rail}
 
         <div className="uin-col">
@@ -1479,8 +1496,6 @@ export async function UnifiedInboxPanel({
             </div>
           )}
         </div>
-
-        {contextRail}
 
         {/* The two hairlines between the rail, the list and the conversation,
             made draggable. Last inside the frame so it is over the panes rather

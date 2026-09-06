@@ -91,16 +91,18 @@ export function SmsView({ base, params, defaultTo, diallingCode }: Props) {
       closeHref={closeHref}
       guard={guard}
       noun="text"
-      focusId="uin-sms-to"
+      focusId="uin-recipient-to"
     >
       {({ askToLeave }) => (
         <>
           <div className="uin-fields">
             <div className="uin-field-row">
-              <label htmlFor="uin-sms-to">To</label>
+              <label htmlFor="uin-recipient-to">To</label>
               <div className="uin-field-control">
                 <ContactPhoneField
-                  id="uin-sms-to"
+                  // Not "sms" anything: Safari reads the id for a hint that a
+                  // box wants a one-time code, and offered one here.
+                  id="uin-recipient-to"
                   value={to}
                   onChange={(next) => { setTo(next); setError(''); setNote('') }}
                   onPick={(phone) => {
@@ -108,7 +110,7 @@ export function SmsView({ base, params, defaultTo, diallingCode }: Props) {
                     setError('')
                     setNote('')
                   }}
-                  placeholder="A name, or 07700 900123"
+                  placeholder="Who to text, or 07700 900123"
                 />
               </div>
             </div>

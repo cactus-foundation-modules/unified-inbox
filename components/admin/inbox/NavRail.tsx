@@ -45,8 +45,7 @@ import { ComposeMenu, type ComposeMenuEntry } from './ComposeMenu'
 //
 // An individual inbox somebody ELSE owns is neither. It goes under Team
 // inboxes, named for the colleague rather than for the address, because "Sam"
-// is how anybody covering Sam's post thinks of it and "sam@" is not. It cannot
-// be dragged: where it sits is decided by whose it is.
+// is how anybody covering Sam's post thinks of it and "sam@" is not.
 //
 // Unread counts ride beside the names, because "is there anything new in
 // accounts@" is the question this rail is answering.
@@ -57,18 +56,28 @@ import { ComposeMenu, type ComposeMenuEntry } from './ComposeMenu'
 // last arrived, because that is the question somebody is really asking when
 // they reach for the button.
 //
-// The addresses can still be dragged into the order somebody wants them in.
+// Three of the groups can be dragged into the order somebody wants them in -
+// the shared addresses, the colleagues' inboxes and the channels - and each of
+// them keeps to itself: a list is put in an order against the other things in
+// the same list, and a channel landing among the addresses would be nonsense.
+// Only Yours sits still, because where an address sits there is decided by
+// whose it is rather than by where anybody put it.
+//
 // Dropping saves straight away and the rail moves first: the gesture is over in
 // half a second and a list that snaps back while a request finishes reads as a
 // bug. A refused save puts the order back and says so.
+//
+// Nothing announces the drag while the pointer is merely passing over a row.
+// The rail is a list of places to go and it wears the cursor of one; a row that
+// turns into a grab handle under every hover tells somebody reading their post
+// about a job done once a year, every single time they look down the list.
 
 export type TabInbox = {
   id: string
   name: string
   address: string
-  /** Whose post it is. Decides which of the three groups it sits in, and whether
-   *  it can be dragged: an individual address is where it is because of what it is,
-   *  not because of where somebody put it. */
+  /** Whose post it is. Decides which of the three groups it sits in - and, with
+   *  it, which list it is dragged about within. */
   kind: 'individual' | 'shared'
   /** Which colleague's, on an individual one. Null on a shared address, and
    *  null on an individual one whose owner's account has gone - which is why
@@ -78,7 +87,7 @@ export type TabInbox = {
   ownerName: string | null
   count: number
 }
-export type TabChannel = { moduleName: string; label: string; count: number }
+export type TabChannel = { key: string; label: string; count: number }
 
 type Props = {
   base: string
@@ -263,6 +272,118 @@ function Entry({ item }: { item: RailItem }) {
   )
 }
 
+/** What is said, out of sight, on a row somebody can move. The gesture itself
+ *  is a mouse gesture; this is the same job for anybody who is not holding
+ *  one. */
+const REORDER_HINT = 'Hold Alt and press the up or down arrow keys to move it along the rail.'
+
+/** Which of the two rows in the air a list is currently showing. */
+type RailDragState = { dragId: string | null; overId: string | null }
+
+/** Everything a rearrangeable list hangs on its own <ul>. Optional to a one,
+ *  because a list nobody may rearrange hangs none of them. */
+type RailDragHandlers = {
+  onDragStart?: React.DragEventHandler<HTMLUListElement>
+  onDragOver?: React.DragEventHandler<HTMLUListElement>
+  onDragLeave?: React.DragEventHandler<HTMLUListElement>
+  onDrop?: React.DragEventHandler<HTMLUListElement>
+  onDragEnd?: React.DragEventHandler<HTMLUListElement>
+  onKeyDown?: React.KeyboardEventHandler<HTMLUListElement>
+}
+
+/** The movable row under the pointer, or under whatever has the keyboard. The
+ *  drag is hung on the list rather than on each of its rows: fourteen addresses
+ *  is fourteen sets of five handlers, all of them saying the same thing, and
+ *  one set that asks the DOM what it landed on says it once. */
+const rowUnder = (event: { target: EventTarget | null }): HTMLElement | null =>
+  (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-uin-id]') ?? null
+
+/**
+ * One list that can be put in an order - the shared addresses, the colleagues'
+ * inboxes, the channels - as the handlers to hang on it and the two rows that
+ * are currently in the air.
+ *
+ * `move` is told which row was picked up and which one it was dropped on, in
+ * whatever ids that list is keyed by, and the caller decides what those mean.
+ */
+function useRailDrag(enabled: boolean, move: (fromId: string, toId: string) => void): {
+  state: RailDragState
+  handlers: RailDragHandlers
+} {
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [overId, setOverId] = useState<string | null>(null)
+
+  const onDragStart = (event: React.DragEvent<HTMLUListElement>) => {
+    const id = rowUnder(event)?.dataset.uinId
+    if (!id) return
+    setDragId(id)
+    // Overwritten deliberately: a dragged link otherwise carries its own URL,
+    // and dropping it on the address bar or another window would be a surprise
+    // nobody asked for.
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', id)
+  }
+  const onDragOver = (event: React.DragEvent<HTMLUListElement>) => {
+    if (!dragId) return
+    const id = rowUnder(event)?.dataset.uinId
+    if (!id) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    setOverId(id)
+  }
+  const onDragLeave = (event: React.DragEvent<HTMLUListElement>) => {
+    const id = rowUnder(event)?.dataset.uinId
+    if (id) setOverId((c) => (c === id ? null : c))
+  }
+  const onDrop = (event: React.DragEvent<HTMLUListElement>) => {
+    const id = rowUnder(event)?.dataset.uinId
+    if (!dragId || !id) return
+    event.preventDefault()
+    const from = dragId
+    setDragId(null)
+    setOverId(null)
+    move(from, id)
+  }
+  const onDragEnd = () => { setDragId(null); setOverId(null) }
+
+  // Alt and an arrow key does what dragging does, because a rearrangement only
+  // a mouse can perform is a rearrangement some people cannot perform at all.
+  // Counted off the rows that actually move rather than off every link in the
+  // list: a colleague's folders hang inside their row, and counting those would
+  // make the second name in the group the fourth thing on the keyboard.
+  const onKeyDown = (event: React.KeyboardEvent<HTMLUListElement>) => {
+    if (!event.altKey) return
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+    const from = rowUnder(event)
+    const fromId = from?.dataset.uinId
+    if (!from || !fromId) return
+    // Held in a local: React empties currentTarget the moment the handler
+    // returns, and the focus below happens a frame later.
+    const list = event.currentTarget
+    const rows = Array.from(list.querySelectorAll<HTMLElement>('[data-uin-id]'))
+    const index = rows.indexOf(from)
+    const to = event.key === 'ArrowUp' ? index - 1 : index + 1
+    if (index < 0 || to < 0 || to >= rows.length) return
+    const toId = rows[to]!.dataset.uinId
+    if (!toId) return
+    event.preventDefault()
+    move(fromId, toId)
+    // The keyboard follows the row it just moved, so a second press carries on
+    // from where it is rather than from whatever landed under the cursor.
+    requestAnimationFrame(() => {
+      list.querySelectorAll<HTMLElement>('[data-uin-id]')[to]?.focus()
+    })
+  }
+
+  return {
+    state: { dragId, overId },
+    handlers: enabled
+      ? { onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd, onKeyDown }
+      : {},
+  }
+}
+
+
 export function NavRail({
   base, params, inboxes, channels, allCount, current, me, showAvatars, assignedCount, askedCount, assignee,
   showUnrouted, unroutedCount, showDrafts, draftCount, contactCount, showCampaigns, composeHref,
@@ -281,13 +402,15 @@ export function NavRail({
     setNoticeSeq((seq) => seq + 1)
   }, [])
   const [order, setOrder] = useState(inboxes)
+  // The channels in the order the site keeps them, beside the addresses and for
+  // the same reason: a drag has to move on the screen before the save comes
+  // back, or a list that snaps back mid-gesture reads as a bug.
+  const [channelOrder, setChannelOrder] = useState(channels)
   // Which colleagues' folders are showing. Held here rather than in the address
   // because it is furniture rather than a place: opening Sam's folders is not
   // somewhere to send a colleague a link to, and putting it in the query string
   // would make every list below reload to draw three static rows.
   const [opened, setOpened] = useState<string[]>([])
-  const [dragId, setDragId] = useState<string | null>(null)
-  const [overId, setOverId] = useState<string | null>(null)
   const [error, setError] = useState('')
 
   // When a check this page ran actually opened the accounts, or null until one
@@ -322,23 +445,37 @@ export function NavRail({
     setOrder(inboxes)
   }, [serverKey, inboxes])
 
-  const save = useCallback(async (next: TabInbox[], previous: TabInbox[]) => {
+  // The same bargain for the channels. Their own key rather than a shared one:
+  // an address arriving must not throw away a channel somebody is halfway
+  // through moving, and the two lists are saved down two different routes.
+  const channelKey = channels.map((c) => `${c.key}:${c.count}`).join('|')
+  const lastChannelKey = useRef(channelKey)
+  useEffect(() => {
+    if (lastChannelKey.current === channelKey) return
+    lastChannelKey.current = channelKey
+    setChannelOrder(channels)
+  }, [channelKey, channels])
+
+  /** Send an order the site has just been shown, and put the list back where it
+   *  was if the site will not have it. One function for both lists: they are
+   *  two routes and two shapes of body, and everything either of them does
+   *  about a refusal is the same sentence in the same box. */
+  const saveOrder = useCallback(async (url: string, body: unknown, undo: () => void) => {
     setError('')
     try {
-      const response = await fetch('/api/m/unified-inbox/admin/inboxes/reorder', {
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: next.map((i) => i.id) }),
+        body: JSON.stringify(body),
       })
       if (!response.ok) {
-        setOrder(previous)
+        undo()
         setError((await response.json().catch(() => null))?.error ?? 'That order did not save.')
         return
       }
-      lastServerKey.current = next.map((i) => `${i.id}:${i.count}`).join('|')
       router.refresh()
     } catch {
-      setOrder(previous)
+      undo()
       setError('The site could not be reached, so the order is as it was.')
     }
   }, [router])
@@ -353,6 +490,10 @@ export function NavRail({
   // pinned. Resolving against the site's own order here is what keeps the
   // pinned address exactly where it was in it - pinning is one person's
   // preference and must not rearrange the rail for everybody else.
+  //
+  // One function for the shared addresses and for colleagues' inboxes, because
+  // both groups are drawn out of the one order and a move within either of them
+  // is the same edit to it.
   const move = useCallback((fromId: string, toId: string) => {
     const next = moveInOrder(
       order,
@@ -360,9 +501,43 @@ export function NavRail({
       order.findIndex((i) => i.id === toId),
     )
     if (next === order) return
+    const previous = order
     setOrder(next)
-    void save(next, order)
-  }, [order, save])
+    // Told ahead of the answer rather than after it: a good save asks for a
+    // refresh, and a key still describing the old order would take the refresh
+    // as somebody else's rearrangement and put the rail back.
+    lastServerKey.current = next.map((i) => `${i.id}:${i.count}`).join('|')
+    void saveOrder(
+      '/api/m/unified-inbox/admin/inboxes/reorder',
+      { ids: next.map((i) => i.id) },
+      () => {
+        lastServerKey.current = previous.map((i) => `${i.id}:${i.count}`).join('|')
+        setOrder(previous)
+      },
+    )
+  }, [order, saveOrder])
+
+  /** The same move, for the channels another module owns. Said in keys because
+   *  that is what a channel has instead of a row of its own. */
+  const moveChannel = useCallback((fromKey: string, toKey: string) => {
+    const next = moveInOrder(
+      channelOrder,
+      channelOrder.findIndex((c) => c.key === fromKey),
+      channelOrder.findIndex((c) => c.key === toKey),
+    )
+    if (next === channelOrder) return
+    const previous = channelOrder
+    setChannelOrder(next)
+    lastChannelKey.current = next.map((c) => `${c.key}:${c.count}`).join('|')
+    void saveOrder(
+      '/api/m/unified-inbox/admin/channels/reorder',
+      { keys: next.map((c) => c.key) },
+      () => {
+        lastChannelKey.current = previous.map((c) => `${c.key}:${c.count}`).join('|')
+        setChannelOrder(previous)
+      },
+    )
+  }, [channelOrder, saveOrder])
 
   // Changing where you are always goes back to page one, drops whichever
   // conversation was open - it belongs to the list being left - and lets go of
@@ -377,104 +552,52 @@ export function NavRail({
       ...changes,
     })
 
-  // Only the addresses in the shared list can be dragged, and the ones under
-  // Yours are not among them: they are where they are because of whose they
-  // are, not because of the order.
-  const draggable = canReorder && shared.length > 1
+  // Three lists that can be put in an order, and one that cannot. The addresses
+  // under Yours sit still: they are where they are because of whose they are,
+  // and a person's own inbox moving about the top of the rail would be one
+  // colleague rearranging what everybody else opens first. Everything else -
+  // the shared addresses, the colleagues' inboxes, the channels - is a list
+  // somebody looks after, and looking after it means saying what order it is in.
+  const sharedDraggable = canReorder && shared.length > 1
+  const teamDraggable = canReorder && team.length > 1
+  const channelsDraggable = canReorder && channelOrder.length > 1
 
-  /** One address. `movable` is false for everything under Yours, which sits
-   *  still. An individual one says so out loud, because "only you can see this"
-   *  is worth knowing before you answer from it and not after. */
-  const inboxEntry = (inbox: TabInbox, movable: boolean): RailItem => ({
+  // One of these per group: a row lifted out of one list must not light up a
+  // row in another, and three groups sharing one pair of ids is exactly how
+  // that happens.
+  const sharedDrag = useRailDrag(sharedDraggable, move)
+  const teamDrag = useRailDrag(teamDraggable, move)
+  const channelDrag = useRailDrag(channelsDraggable, moveChannel)
+
+  /** One address. `drag` is null for everything under Yours, which sits still.
+   *  An individual one says so out loud, because "only you can see this" is
+   *  worth knowing before you answer from it and not after. */
+  const inboxEntry = (inbox: TabInbox, drag: RailDragState | null): RailItem => ({
     key: inbox.id,
     href: link(inbox.id),
     active: current === inbox.id,
     tone: toneFor(inbox.id),
     name: inbox.name,
-    title: movable
+    title: drag
       ? inbox.address
       : inbox.kind === 'individual'
         ? `${inbox.address} - yours, and nobody else can see it`
         : `${inbox.address} - your own inbox`,
     count: <Count value={inbox.count} />,
-    hint: movable
-      ? 'Hold Alt and press the up or down arrow keys to move it along the rail.'
+    hint: drag
+      ? REORDER_HINT
       : inbox.kind === 'individual'
         ? 'Your own inbox. Nobody else can see it.'
         : 'Your own inbox.',
-    dragId: movable ? inbox.id : undefined,
-    dragging: movable && dragId === inbox.id,
-    over: movable && overId === inbox.id && dragId !== inbox.id,
+    dragId: drag ? inbox.id : undefined,
+    dragging: drag ? drag.dragId === inbox.id : undefined,
+    over: drag ? drag.overId === inbox.id && drag.dragId !== inbox.id : undefined,
   })
 
-  /** Which address the pointer is over, off the element under it. The drag is
-   *  hung on the list rather than on each of its rows: fourteen addresses is
-   *  fourteen sets of five handlers, all of them saying the same thing, and one
-   *  set that asks the DOM what it landed on says it once. */
-  const addressUnder = (event: React.DragEvent<HTMLElement>): string | null =>
-    (event.target as HTMLElement).closest<HTMLElement>('[data-uin-id]')?.dataset.uinId ?? null
-
-  const onDragStart = (event: React.DragEvent<HTMLUListElement>) => {
-    const id = addressUnder(event)
-    if (!id) return
-    setDragId(id)
-    // Overwritten deliberately: a dragged link otherwise carries its own URL,
-    // and dropping it on the address bar or another window would be a surprise
-    // nobody asked for.
-    event.dataTransfer.effectAllowed = 'move'
-    event.dataTransfer.setData('text/plain', id)
-  }
-  const onDragOver = (event: React.DragEvent<HTMLUListElement>) => {
-    if (!dragId) return
-    const id = addressUnder(event)
-    if (!id) return
-    event.preventDefault()
-    event.dataTransfer.dropEffect = 'move'
-    setOverId(id)
-  }
-  const onDragLeave = (event: React.DragEvent<HTMLUListElement>) => {
-    const id = addressUnder(event)
-    if (id) setOverId((c) => (c === id ? null : c))
-  }
-  const onDrop = (event: React.DragEvent<HTMLUListElement>) => {
-    const id = addressUnder(event)
-    if (!dragId || !id) return
-    event.preventDefault()
-    const from = dragId
-    setDragId(null)
-    setOverId(null)
-    move(from, id)
-  }
-  const onDragEnd = () => { setDragId(null); setOverId(null) }
-
-  // Alt and an arrow key does what dragging does, because a rearrangement only a
-  // mouse can perform is a rearrangement some people cannot perform at all. The
-  // handler sits on the team list, which holds nothing but movable addresses -
-  // so the index of a link in it IS the position of that address, and there is
-  // no offset to keep in step with the order of the rail any more.
-  const onAddressKeyDown = (event: React.KeyboardEvent<HTMLUListElement>) => {
-    if (!draggable || !event.altKey) return
-    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
-    // Held in a local: React empties currentTarget the moment the handler
-    // returns, and the focus below happens a frame later.
-    const list = event.currentTarget
-    const links = Array.from(list.querySelectorAll<HTMLAnchorElement>('a[href]'))
-    const index = links.indexOf((event.target as HTMLElement).closest('a') as HTMLAnchorElement)
-    if (index < 0 || index >= shared.length) return
-    const to = event.key === 'ArrowUp' ? index - 1 : index + 1
-    if (to < 0 || to >= shared.length) return
-    event.preventDefault()
-    move(shared[index]!.id, shared[to]!.id)
-    // The keyboard follows the address it just moved, so a second press carries
-    // on from where it is rather than from whatever landed under the cursor.
-    requestAnimationFrame(() => {
-      list.querySelectorAll<HTMLAnchorElement>('a[href]')[to]?.focus()
-    })
-  }
 
   const mine: RailItem[] = [
     // Ahead of All, because they are what this person opened the hub to read.
-    ...yours.map((inbox) => inboxEntry(inbox, false)),
+    ...yours.map((inbox) => inboxEntry(inbox, null)),
     {
       key: 'all',
       // Named rather than left out: with an address of their own, an empty
@@ -591,13 +714,22 @@ export function NavRail({
     showing.includes(id) ? showing.filter((i) => i !== id) : [...showing, id]
   ))
 
-  const channelEntries: RailItem[] = channels.map((channel) => ({
-    key: `m:${channel.moduleName}`,
-    href: link(`m:${channel.moduleName}`),
-    active: current === `m:${channel.moduleName}`,
-    tone: toneFor(channel.moduleName),
+  // The channels another module owns, in whatever order the site has put them
+  // in. Keyed by the channel's own key rather than by an inbox id: a channel
+  // sits in no inbox, which is rather the point of it.
+  const channelEntries: RailItem[] = channelOrder.map((channel) => ({
+    key: `m:${channel.key}`,
+    href: link(`m:${channel.key}`),
+    active: current === `m:${channel.key}`,
+    tone: toneFor(channel.key),
     name: channel.label,
     count: <Count value={channel.count} />,
+    hint: channelsDraggable ? REORDER_HINT : undefined,
+    dragId: channelsDraggable ? channel.key : undefined,
+    dragging: channelsDraggable && channelDrag.state.dragId === channel.key,
+    over: channelsDraggable
+      && channelDrag.state.overId === channel.key
+      && channelDrag.state.dragId !== channel.key,
   }))
 
   const elsewhere: RailItem[] = [
@@ -653,8 +785,8 @@ export function NavRail({
             base={base}
             params={params}
             inboxes={inboxes.map((inbox) => ({ id: inbox.id, name: inbox.name }))}
-            channels={channels.map((channel) => ({
-              moduleName: channel.moduleName,
+            channels={channelOrder.map((channel) => ({
+              key: channel.key,
               label: channel.label,
             }))}
             showUnrouted={showUnrouted}
@@ -674,18 +806,12 @@ export function NavRail({
         {shared.length > 0 && (
           <div className="uin-rail-group">
             <p className="uin-rail-heading" id="uin-rail-team">Shared inboxes</p>
-            <ul
-              className="uin-rail-list"
-              aria-labelledby="uin-rail-team"
-              onKeyDown={onAddressKeyDown}
-              onDragStart={draggable ? onDragStart : undefined}
-              onDragOver={draggable ? onDragOver : undefined}
-              onDragLeave={draggable ? onDragLeave : undefined}
-              onDrop={draggable ? onDrop : undefined}
-              onDragEnd={draggable ? onDragEnd : undefined}
-            >
+            <ul className="uin-rail-list" aria-labelledby="uin-rail-team" {...sharedDrag.handlers}>
               {shared.map((inbox) => (
-                <Entry key={inbox.id} item={inboxEntry(inbox, draggable)} />
+                <Entry
+                  key={inbox.id}
+                  item={inboxEntry(inbox, sharedDraggable ? sharedDrag.state : null)}
+                />
               ))}
             </ul>
           </div>
@@ -694,7 +820,7 @@ export function NavRail({
         {team.length > 0 && (
           <div className="uin-rail-group">
             <p className="uin-rail-heading" id="uin-rail-people">Team inboxes</p>
-            <ul className="uin-rail-list" aria-labelledby="uin-rail-people">
+            <ul className="uin-rail-list" aria-labelledby="uin-rail-people" {...teamDrag.handlers}>
               {team.map((inbox) => {
                 // The colleague's name, falling back to the address's own when
                 // the account behind it has gone: an address that belongs to
@@ -726,10 +852,22 @@ export function NavRail({
                         href={link(inbox.id)}
                         aria-current={current === inbox.id ? 'page' : undefined}
                         title={`${inbox.address} - ${label}'s own post, shared with you`}
+                        draggable={teamDraggable ? true : undefined}
+                        data-uin-drag={teamDraggable ? '1' : undefined}
+                        data-uin-id={teamDraggable ? inbox.id : undefined}
+                        data-uin-dragging={teamDraggable && teamDrag.state.dragId === inbox.id ? '1' : undefined}
+                        data-uin-over={
+                          teamDraggable
+                            && teamDrag.state.overId === inbox.id
+                            && teamDrag.state.dragId !== inbox.id
+                            ? '1'
+                            : undefined
+                        }
                       >
                         <span className="uin-rail-dot" data-tone={toneFor(inbox.id)} aria-hidden="true" />
                         <span className="uin-rail-name">{label}</span>
                         <Count value={inbox.count} />
+                        {teamDraggable && <span className="sr-only">. {REORDER_HINT}</span>}
                       </Link>
                     </div>
                     {/* Hidden rather than unmounted, so the button above always
@@ -751,7 +889,7 @@ export function NavRail({
         {channelEntries.length > 0 && (
           <div className="uin-rail-group">
             <p className="uin-rail-heading" id="uin-rail-channels">Channels</p>
-            <ul className="uin-rail-list" aria-labelledby="uin-rail-channels">
+            <ul className="uin-rail-list" aria-labelledby="uin-rail-channels" {...channelDrag.handlers}>
               {channelEntries.map((item) => <Entry key={item.key} item={item} />)}
             </ul>
           </div>

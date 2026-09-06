@@ -378,8 +378,8 @@ export async function canOpenThread(user: SessionUser, thread: ThreadShape): Pro
 async function openThreadByRule(user: SessionUser, thread: ThreadShape): Promise<boolean> {
   switch (threadAccessKind(thread)) {
     case 'channel': {
-      const { visibleProviderModules } = await import('./provider-registry')
-      const allowed = await visibleProviderModules(user)
+      const { visibleChannelKeys } = await import('./provider-registry')
+      const allowed = await visibleChannelKeys(user)
       return allowed.includes(thread.providerModule as string)
     }
     case 'filed': {

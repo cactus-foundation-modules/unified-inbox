@@ -167,9 +167,6 @@ export function NoteBar({ threadId, staff }: Props) {
     }
   }, [router, tagged, text, threadId])
 
-  /** Whoever the note as it stands would actually tell. */
-  const chosen = tagged.filter((person) => text.includes(`@${person.name}`))
-
   return (
     <div className="uin-notebar">
       <span className="uin-notebar-icon" aria-hidden="true">{NoteIcon}</span>
@@ -267,17 +264,6 @@ export function NoteBar({ threadId, staff }: Props) {
             </li>
           ))}
         </ul>
-      )}
-
-      {/* Said out loud, because it is the surprising half: a tag hands somebody
-          a job AND lets them into this one conversation, which is not what
-          "mention" means anywhere else. */}
-      {chosen.length > 0 && (
-        <p className="uin-notebar-tagnote">
-          {chosen.length === 1
-            ? `${chosen[0]!.name} will see this conversation and be able to work through it, whether or not this inbox is one of theirs.`
-            : 'They will each see this conversation and be able to work through it, whether or not this inbox is one of theirs.'}
-        </p>
       )}
 
       {/* Above the line rather than beside it: the bar is one line by design and

@@ -57,6 +57,11 @@ export const PROVIDER_BUDGET_MS = 6_000
 const FIRST_PASS_DAYS = 90
 
 export type ProviderOutcome = {
+  /** The channel's key - the manifest entry id, which is what its conversations
+   *  are stored under. Not the module name: one module may publish several
+   *  channels, and the telephony one does. */
+  channelKey: string
+  /** Which module published it, for saying where a failure came from. */
   moduleName: string
   ok: boolean
   conversations: number
@@ -83,7 +88,7 @@ function usableSummary(summary: ConversationSummary): boolean {
   return !Number.isNaN(at.getTime())
 }
 
-const CHANNELS = new Set(['email', 'chat', 'form', 'phone', 'sms'])
+const CHANNELS = new Set(['email', 'chat', 'form', 'phone', 'sms', 'whatsapp'])
 
 function channelOf(value: string | undefined, fallback: string): string {
   return value && CHANNELS.has(value) ? value : CHANNELS.has(fallback) ? fallback : 'form'
@@ -147,8 +152,9 @@ export async function syncProvider(
   resolved: ResolvedConversationProvider,
   opts: { since?: Date; deadline?: number } = {},
 ): Promise<ProviderOutcome> {
-  const { moduleName, provider } = resolved
+  const { moduleName, id: channelKey, provider } = resolved
   const outcome: ProviderOutcome = {
+    channelKey,
     moduleName,
     ok: true,
     conversations: 0,
@@ -163,7 +169,7 @@ export async function syncProvider(
   } catch (err) {
     outcome.ok = false
     outcome.error = err instanceof Error ? err.message : 'That channel could not be read.'
-    console.error(`[unified-inbox] could not read conversations from ${moduleName}:`, err)
+    console.error(`[unified-inbox] could not read conversations from ${channelKey}:`, err)
     return outcome
   }
 
@@ -184,10 +190,10 @@ export async function syncProvider(
     const channel = channelOf(summary.channel, provider.channel)
     const subject = typeof summary.subject === 'string' && summary.subject.trim() ? summary.subject.trim() : null
 
-    const existing = await providerThreadState(moduleName, summary.id)
+    const existing = await providerThreadState(channelKey, summary.id)
 
     const { id: threadId } = await upsertProviderThread({
-      providerModule: moduleName,
+      providerModule: channelKey,
       externalId: summary.id,
       channel,
       subject,
@@ -212,7 +218,7 @@ export async function syncProvider(
       existing.lastMessageAt.getTime() >= lastMessageAt.getTime()
     if (settled) continue
 
-    const messages = await messagesFor(provider, summary.id, moduleName)
+    const messages = await messagesFor(provider, summary.id, channelKey)
     if (messages === null) continue
     opened += 1
 
@@ -244,7 +250,7 @@ export async function syncProvider(
 
       const id = await insertProviderMessage({
         threadId,
-        providerModule: moduleName,
+        providerModule: channelKey,
         providerMessageId: message.id,
         direction,
         channel,
@@ -280,7 +286,7 @@ export async function syncProvider(
       // that owns the channel - either way the conversation is live again and
       // belongs in Open, whether it was snoozed or marked done.
       const was = await reopenOnReply(threadId)
-      if (was) await recordEvent(threadId, null, 'woken', { was, providerModule: moduleName })
+      if (was) await recordEvent(threadId, null, 'woken', { was, providerModule: channelKey })
     }
   }
 
@@ -290,13 +296,13 @@ export async function syncProvider(
 async function messagesFor(
   provider: ResolvedConversationProvider['provider'],
   id: string,
-  moduleName: string,
+  channelKey: string,
 ): Promise<ConversationMessage[] | null> {
   try {
     const thread = await provider.thread(id)
     return thread?.messages ?? []
   } catch (err) {
-    console.error(`[unified-inbox] could not read a conversation from ${moduleName}:`, err)
+    console.error(`[unified-inbox] could not read a conversation from ${channelKey}:`, err)
     return null
   }
 }
@@ -322,8 +328,8 @@ export async function syncAllProviders(opts: { deadline?: number } = {}): Promis
         // The newest thing we hold from them, less a minute of slack: a
         // conversation touched in the same second as the last pass would
         // otherwise fall down the gap between two ticks.
-        since: watermarks[resolved.moduleName]
-          ? new Date(watermarks[resolved.moduleName]!.getTime() - 60_000)
+        since: watermarks[resolved.id]
+          ? new Date(watermarks[resolved.id]!.getTime() - 60_000)
           : firstPassSince,
         deadline: opts.deadline,
       }),

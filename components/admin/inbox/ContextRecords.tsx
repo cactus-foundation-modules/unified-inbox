@@ -48,6 +48,15 @@ type Props = {
   /** Which of them the picker opens on, decided from what the inbox is used
    *  for. */
   defaultKind: LinkKind | null
+  /** Drawn as the arrow on its own, with no line beside it.
+   *
+   *  A conversation with nothing attached and nothing to say about where it came
+   *  from used to get a bordered strip of its own reading "No context yet",
+   *  which is a row of the reading pane spent saying that there is nothing to
+   *  say. In that case the arrow moves up onto the end of the line that already
+   *  says "Email - General Enquiries - 1 message", where it costs nothing and is
+   *  still where somebody would look to attach the first one. */
+  compact?: boolean
 }
 
 /** How wide the menu is drawn, in pixels, so the maths below can keep it on
@@ -60,7 +69,7 @@ const MENU_HEIGHT = 260
 const GAP = 6
 
 export function ContextRecords({
-  threadId, adminPath, sourceLabel, links, canEdit, kinds, defaultKind,
+  threadId, adminPath, sourceLabel, links, canEdit, kinds, defaultKind, compact = false,
 }: Props) {
   const [open, setOpen] = useState(false)
   // Where to draw it, in window coordinates. Fixed rather than absolute,
@@ -136,9 +145,10 @@ export function ContextRecords({
   const summary = parts.length > 0 ? parts.join(', ') : 'No context yet'
 
   return (
-    <div className="uin-ctxbar" ref={wrap}>
+    <div className={compact ? 'uin-ctxbar uin-ctxbar-compact' : 'uin-ctxbar'} ref={wrap}>
       {/* The title carries the whole list, because the line itself may be cut
           short - and being cut short is exactly when somebody wants the rest. */}
+      {!compact && (
       <span className="uin-ctxbar-line" title={summary}>
         {sourceLabel && <span className="uin-ctxbar-source">{sourceLabel}</span>}
         {links.length > 0
@@ -158,6 +168,7 @@ export function ContextRecords({
           })
           : !sourceLabel && summary}
       </span>
+      )}
       <button
         type="button"
         className="uin-ctxbar-more"

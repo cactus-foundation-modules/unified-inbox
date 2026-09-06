@@ -49,11 +49,10 @@ type Props = {
   /** Told whenever the campaign might have started or stopped, so the list
    *  beside this screen - and the ticker that rides on it - keeps up. */
   onStatusChanged: () => void
-  onClose: () => void
 }
 
 export function CampaignEditor({
-  campaignId, inboxes, categories, tickUrl, onStatusChanged, onClose,
+  campaignId, inboxes, categories, tickUrl, onStatusChanged,
 }: Props) {
   const [detail, setDetail] = useState<CampaignDetail | null>(null)
   const [error, setError] = useState('')
@@ -80,21 +79,19 @@ export function CampaignEditor({
       categories={categories}
       tickUrl={tickUrl}
       onStatusChanged={onStatusChanged}
-      onClose={onClose}
       onReload={load}
     />
   )
 }
 
 function Campaign({
-  detail, inboxes, categories, tickUrl, onStatusChanged, onClose, onReload,
+  detail, inboxes, categories, tickUrl, onStatusChanged, onReload,
 }: {
   detail: CampaignDetail
   inboxes: CampaignInbox[]
   categories: CampaignCategory[]
   tickUrl: string | null
   onStatusChanged: () => void
-  onClose: () => void
   onReload: () => Promise<void>
 }) {
   const { campaign, readiness, timezone, tally } = detail
@@ -265,12 +262,10 @@ function Campaign({
             {detail.finishesAbout && <span>Finishes about {when(detail.finishesAbout, timezone)}</span>}
           </div>
         </div>
-        {/* One way out, and it only does anything on a phone - where the list
-            column and this pane are the same strip of screen. On anything
-            wider the list is already beside this. */}
-        <div className="uin-camp-actions uin-camp-close">
-          <button type="button" className="btn btn-secondary btn-sm" onClick={onClose}>All campaigns</button>
-        </div>
+        {/* No way-back button of its own. The list this came from is the column
+            beside it, and on a phone the rail's Campaigns link goes back to it -
+            a button that repeats a link already on screen is one more thing to
+            read past. */}
       </div>
 
       {campaign.pauseReason && campaign.status !== 'running' && (

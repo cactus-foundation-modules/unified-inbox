@@ -8,7 +8,7 @@ import { applyFollowUpAfterSend } from '@/modules/unified-inbox/lib/follow-up'
 import { htmlToText } from '@/modules/unified-inbox/lib/html'
 import { sendMessage } from '@/modules/unified-inbox/lib/send'
 import { sendProviderReply } from '@/modules/unified-inbox/lib/provider-send'
-import { visibleProviderModules } from '@/modules/unified-inbox/lib/provider-registry'
+import { visibleChannelKeys } from '@/modules/unified-inbox/lib/provider-registry'
 import { SendBody } from '@/modules/unified-inbox/lib/validation'
 
 // Sending a message: a reply, a reply to everybody, a forward, or a new
@@ -46,7 +46,7 @@ export async function POST(request: Request) {
 
   // ---- a channel somebody else owns --------------------------------------
   if (thread?.providerModule) {
-    const allowed = await visibleProviderModules(user)
+    const allowed = await visibleChannelKeys(user)
     if (!allowed.includes(thread.providerModule)) {
       return errorResponse('You do not have permission to answer this conversation.', 403)
     }
