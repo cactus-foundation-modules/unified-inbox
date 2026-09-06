@@ -35,7 +35,7 @@ const KINDS: ReadonlyArray<{ value: InboxKind; label: string; hint: string }> = 
   {
     value: 'individual',
     label: 'Individual - one colleague\u2019s',
-    hint: 'Their own post at work. Nobody else opens it: not their colleagues, and not whoever looks after the site.',
+    hint: 'Their own post at work. Nobody else opens it - not their colleagues, and not whoever looks after the site - unless you name somebody below to cover it.',
   },
 ]
 
@@ -228,6 +228,13 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
       : [...current, userId])
   }
 
+  // Who can be named on an individual inbox. Everybody but its owner, who is on
+  // it by definition and would otherwise be a tick box that does nothing and
+  // cannot be unticked.
+  const guests = draft.kind === 'individual'
+    ? users.filter((u) => u.id !== draft.ownerUserId)
+    : users
+
   // The mail account this address is collected from, and therefore whose
   // folders the two pickers below offer. An address needs no mail account at
   // all - a contact form writes into one - and in that case there is nothing to
@@ -336,10 +343,10 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
                   </select>
                   <span className="field-hint">
                     Only they will see it - not their colleagues, and not whoever looks after the
-                    site. Whoever looks after the site can still rename it, re-point it or delete it;
-                    they simply cannot read a word of it. It also becomes the address that person
-                    opens the hub on, so naming somebody who already has one of their own moves them
-                    here.
+                    site - until you name somebody below to cover it. Whoever looks after the site
+                    can still rename it, re-point it or delete it; they simply cannot read a word of
+                    it. It also becomes the address that person opens the hub on, so naming somebody
+                    who already has one of their own moves them here.
                   </span>
                 </>
               )}
@@ -472,13 +479,64 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
 
         {draft.kind === 'individual' ? (
           <FieldGroup
-            title="Who can read it"
-            hint="Settled by whose it is, further up. There is no guest list on an individual inbox - that is the whole of the difference between the two kinds."
+            title="Who else can read it"
+            hint={<>
+              Whoever it belongs to, always - and nobody else unless you say so here. Tick a
+              colleague and this address joins their inbox under &ldquo;Team inboxes&rdquo;, where
+              they can open its post, its sent messages, its drafts and whatever its owner has been
+              tagged in. For covering somebody&rsquo;s post while they are away, and for an
+              assistant who works their diary. Leave it empty and it stays theirs alone.
+            </>}
           >
-            <p className="field-hint" style={{ margin: 0 }}>
-              {ownerName(draft.ownerUserId) ?? 'Whoever you name above'}, and nobody else. Anybody
-              who was on this address before will stop seeing it the moment you save.
-            </p>
+            <div className="field">
+              <p className="field-hint" style={{ margin: '0 0 0.5rem' }}>
+                <strong style={{ fontWeight: 'var(--font-medium)' }}>
+                  {ownerName(draft.ownerUserId) ?? 'Whoever you name above'}
+                </strong>{' '}
+                reads and answers this address whatever is ticked below - it is their post.
+              </p>
+              {guests.length === 0 ? (
+                <p className="field-hint" style={{ margin: 0 }}>
+                  Nobody else has an account on this site yet, so there is nobody to share it with.
+                </p>
+              ) : (
+                <div style={{
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-md)',
+                  overflow: 'hidden',
+                }}>
+                  {guests.map((u, index) => {
+                    const row = staff.find((s) => s.userId === u.id)
+                    return (
+                      <div
+                        key={u.id}
+                        style={{
+                          display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap',
+                          justifyContent: 'space-between',
+                          padding: '0.5rem 0.75rem',
+                          borderTop: index === 0 ? 'none' : '1px solid var(--color-border)',
+                          background: row ? 'var(--color-primary-subtle)' : 'transparent',
+                        }}
+                      >
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 400, cursor: 'pointer' }}>
+                          <input type="checkbox" checked={!!row} onChange={() => toggleStaff(u.id)} />
+                          <span>
+                            {u.name}{' '}
+                            <span style={{ ...MUTED, fontSize: '0.8125rem' }}>{u.email}</span>
+                          </span>
+                        </label>
+                        {row && (
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontWeight: 400, fontSize: '0.8125rem', cursor: 'pointer' }}>
+                            <input type="checkbox" checked={row.canReply} onChange={() => toggleReply(u.id)} />
+                            Can reply as this address
+                          </label>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </FieldGroup>
         ) : (
         <FieldGroup
@@ -603,6 +661,13 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
         const connection = inbox.connectionId ? connectionsById.get(inbox.connectionId) : null
         const individual = inbox.kind === 'individual'
         const owner = individual ? ownerName(inbox.ownerUserId) : null
+        // Everybody named on an individual address except the person whose it
+        // is: they are on their own guest list by definition, and counting them
+        // as somebody it has been shared with would say it was shared when it
+        // is not.
+        const guestCount = individual
+          ? rows.filter((r) => r.userId !== inbox.ownerUserId).length
+          : 0
         return (
           <ListRow key={inbox.id}>
             <ListRowHeader
@@ -614,6 +679,9 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
                 {inbox.isCatchAll && <Chip tone="info">Catch-all</Chip>}
                 {inbox.folderOwnsMail && <Chip tone="info">Whole folder</Chip>}
                 {!individual && rows.length > 0 && <Chip tone="plain">{rows.length === 1 ? '1 person' : `${rows.length} people`}</Chip>}
+                {individual && guestCount > 0 && (
+                  <Chip tone="plain">{guestCount === 1 ? 'Shared with 1' : `Shared with ${guestCount}`}</Chip>
+                )}
                 {!individual && owners.length > 0 && (
                   <Chip tone="info">
                     {owners.length === 1 ? 'Somebody\u2019s own' : `${owners.length} people\u2019s own`}
@@ -629,7 +697,9 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
                 {' · '}
                 {individual
                   ? owner
-                    ? `${owner}’s own post. Nobody else can read it, an administrator included.`
+                    ? guestCount > 0
+                      ? `${owner}’s own post, shared with ${guestCount === 1 ? '1 colleague' : `${guestCount} colleagues`}. Nobody else can read it, an administrator included.`
+                      : `${owner}’s own post. Nobody else can read it, an administrator included.`
                     : 'Whoever it belonged to no longer has an account here, so only an administrator can read it.'
                   : rows.length === 0
                     ? 'Anybody who can see the inbox can read this one.'

@@ -79,8 +79,18 @@ export type Draft = {
   mode: DraftMode
   to: string[]
   cc: string[]
+  /** The copies nobody else on the message can see. Kept apart from `cc`
+   *  rather than merged into it, because that separation IS what a blind copy
+   *  is - see migrations/033_bcc.sql. */
+  bcc: string[]
   subject: string | null
   body: string
+  /** What `body` is written in. 'html' is what both writing boxes save now;
+   *  'text' is every draft written before they could hold a typeface, and
+   *  every one of those is still opened, printed and sent correctly - see
+   *  migrations/034_draft_body_format.sql for why this is a column rather than
+   *  a guess at the content. */
+  bodyFormat: DraftBodyFormat
   attachments: DraftAttachment[]
   /** When it should leave on its own, or null for one that goes when somebody
    *  presses Send. */
@@ -106,6 +116,9 @@ export type Draft = {
   createdAt: Date
   updatedAt: Date
 }
+
+/** Which of the two things the body column holds. */
+export type DraftBodyFormat = 'text' | 'html'
 
 /** Where a scheduled message has got to. Null is an ordinary draft, which is
  *  what every draft is until somebody puts a time on it. */

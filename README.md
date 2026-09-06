@@ -43,7 +43,25 @@ the same human collapse into one story.
   lot - the conversations below, and whichever one you have open beside them.
   Reply, reply to everybody, forward, or leave a note only your colleagues see.
   A brand new message opens in a box over the top, so the list stays where it
-  was.
+  was. A conversation read the ordinary way round - oldest first - opens on
+  what was last said rather than at the beginning, so a thread with forty
+  messages in it does not have to be scrolled through to reach the one that has
+  just arrived.
+- **Several at once.** Click a conversation to read it, then hold shift and
+  click one further down: everything between the two is picked, and the bar
+  above the list marks the lot as done, read or unread, or puts them back.
+  Cmd-click - ctrl on Windows - picks out odd ones anywhere in the list, and
+  there is a box above it for the whole screenful. No tick box sitting in front
+  of every row for the two mornings a week anybody wants one.
+- **Merging conversations.** One conversation sometimes arrives as two - a
+  different address on Thursday, a subject line somebody edited, a colleague
+  forwarding it in. Pick them and press Merge, and everything folds into the one
+  that started it, in date order, under the subject people recognise. Nothing is
+  thrown away and it can be separated out again afterwards. Merging across two
+  of your addresses is allowed and is the point of it - a conversation between
+  four people spanning two inboxes becomes one - and it lets everybody on either
+  address read the whole of it, which the confirmation says in as many words
+  before it happens. It stays merged when somebody replies.
 - **A discussion, a call or a text.** The arrow beside the write button opens
   the three things that are not an email. A **discussion** is a conversation
   with your colleagues in one of your own addresses - subject, message, and
@@ -54,6 +72,14 @@ the same human collapse into one story.
   is offered when there is not one. Neither is written down here either: the
   part of the site that placed the call files it back as a phone conversation,
   which is one record rather than two disagreeing ones.
+- **Asking a colleague.** Tag somebody in an internal note - the @ button on
+  the note line at the foot of a conversation - and it lands on their own
+  **Asked me** list, beside "Assigned to me". Theirs alone: they can set it
+  aside until Thursday, mark it done and open it again, and none of that touches
+  where the conversation itself stands, so three people asked about one order do
+  not close it from under each other. Being asked also lets them read that one
+  conversation whether or not the address it sits in was ever shared with them -
+  one conversation, not the address, and reading rather than answering.
 - **Sent.** One row per message that has left, newest first, across every
   address you can read, with who it went to, which address it left as, and what
   became of it where the site is watching. Opening one opens the conversation it
@@ -62,14 +88,34 @@ the same human collapse into one story.
   starting, and it waits under the **Drafts** tab until you come back to it. Your own only: a shared address does not mean a shared
   notepad. A reply goes back under its conversation with the words still in the
   box; a new message opens where you left it. Sending one clears it away.
+- **Writing one.** Both boxes - the reply under a conversation and the new
+  message over the list - open on who it is going to, in a box you can change
+  rather than a sentence you cannot. **Cc**, **Bcc** and **Subject** are links
+  at the end of that line, each opening its own when it is wanted, and a reply's
+  subject opens on what it would have said. A blind copy is its own list the
+  whole way to the mail server, which is the only version of that promise worth
+  making. The reply box also pops out into a window of its own for the reply
+  that turns out to be a letter - the same box, moved, with nothing lost either
+  way.
+- **Enough formatting to write an email in.** Bold, italic, a colour, a link and
+  the two kinds of list, on a strip above the words. No typefaces, no sizes, no
+  alignment: those are how an email comes to look assembled rather than written,
+  and half of them are rendered differently by every inbox they land in. Pasting
+  brings the words and leaves the layout, the fonts and the tracking pixels
+  behind.
 - **Send it later, and chase it up.** A message written at half past eleven at
-  night can be set to go out at nine in the morning, and can carry a follow-up
-  with it - offered in the same words, and with the same day-and-time box, as
-  putting a conversation to sleep: once it has gone, the conversation goes quiet
-  until whenever you said and comes back if nobody has answered. A reply cancels the chase on its own,
-  so you only see it when there was nothing to see. And if the person it is
-  addressed to writes to you before it leaves, the message is held rather than
-  sent - their conversation says so, with a link to what was waiting.
+  night can be set to go out at nine in the morning - off the alarm clock under
+  the box, which offers the same times, in the same words, as the clock that
+  puts a conversation to sleep. It can carry a follow-up with it: once it has
+  gone, the conversation goes quiet until whenever you said and comes back if
+  nobody has answered. A reply cancels the chase on its own, so you only see it
+  when there was nothing to see. And if the person it is addressed to writes to
+  you before it leaves, the message is held rather than sent - their
+  conversation says so, with a link to what was waiting.
+- **Send it and put it to bed.** **Send & snooze** sends the message and puts
+  the conversation to sleep in one press, and **Send later & snooze** does both
+  to a message that has not gone yet. Their reply wakes it either way, so you
+  only see it again if nobody answered.
 - **Getting through it.** Hand a conversation to somebody, set it to come back
   later, mark it done, and search everything you are allowed to see. Both of
   those are bets on silence - "nothing until Thursday" and "nothing more at

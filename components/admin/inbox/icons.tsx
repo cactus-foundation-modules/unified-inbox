@@ -46,3 +46,15 @@ export const MoreIcon = <svg {...ICON}><circle cx="12" cy="5.5" r="1.4" fill="cu
 export const AlarmIcon = <svg {...ICON}><circle cx="12" cy="13" r="7" /><path d="M12 9.5V13l2.5 1.5" /><path d="m4 6 3-2.5" /><path d="m20 6-3-2.5" /></svg>
 export const ChevronRightIcon = <svg {...ICON}><path d="m9.5 6 6 6-6 6" /></svg>
 export const ChevronLeftIcon = <svg {...ICON}><path d="m14.5 6-6 6 6 6" /></svg>
+export const AtIcon = <svg {...ICON}><circle cx="12" cy="12" r="3.4" /><path d="M15.4 8.6v4.7a2.6 2.6 0 0 0 5.1 0V12a8.5 8.5 0 1 0-3.3 6.7" /></svg>
+/** Take the box out of the page and put it in front of everything, and put it
+ *  back again. The same diagonal, pointing the other way. */
+export const ExpandIcon = <svg {...ICON}><path d="M14 5h5v5" /><path d="M19 5l-7 7" /><path d="M10 19H5v-5" /><path d="m5 19 7-7" /></svg>
+export const CollapseIcon = <svg {...ICON}><path d="M19 10h-5V5" /><path d="m14 10 5-5" /><path d="M5 14h5v5" /><path d="m10 14-5 5" /></svg>
+/** The six things the writing box can do to a selection. B and I are drawn as
+ *  letters rather than as icons - every mail program in the world draws them
+ *  that way, and a glyph for "bold" is a glyph nobody recognises. */
+export const LinkIcon = <svg {...ICON}><path d="M10.5 13.5a3.5 3.5 0 0 0 5 0l3-3a3.5 3.5 0 0 0-5-5l-1.5 1.5" /><path d="M13.5 10.5a3.5 3.5 0 0 0-5 0l-3 3a3.5 3.5 0 0 0 5 5l1.5-1.5" /></svg>
+export const ListIcon = <svg {...ICON}><path d="M9 6.5h11" /><path d="M9 12h11" /><path d="M9 17.5h11" /><circle cx="4.75" cy="6.5" r="1.1" fill="currentColor" stroke="none" /><circle cx="4.75" cy="12" r="1.1" fill="currentColor" stroke="none" /><circle cx="4.75" cy="17.5" r="1.1" fill="currentColor" stroke="none" /></svg>
+export const NumberedListIcon = <svg {...ICON}><path d="M9.5 6.5h10.5" /><path d="M9.5 12h10.5" /><path d="M9.5 17.5h10.5" /><path d="M3.6 4.6h1.1v3.6" /><path d="M3.4 10.6a1.1 1.1 0 0 1 1.9.8c0 .8-1.9 1.6-1.9 2.4h2.1" /><path d="M3.5 16.1h1.9l-1.1 1.4a1.1 1.1 0 1 1-.8 1.9" /></svg>
+export const PaletteIcon = <svg {...ICON}><path d="M12 4a8 8 0 1 0 0 16 2 2 0 0 0 1.6-3.2 2 2 0 0 1 1.6-3.2H18a3 3 0 0 0 3-3A7.8 7.8 0 0 0 12 4" /><circle cx="8" cy="11" r="1" fill="currentColor" stroke="none" /><circle cx="11.5" cy="8" r="1" fill="currentColor" stroke="none" /><circle cx="15.5" cy="9.5" r="1" fill="currentColor" stroke="none" /></svg>

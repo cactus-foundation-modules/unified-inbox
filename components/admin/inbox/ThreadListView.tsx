@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import type { ThreadListRow } from '@/modules/unified-inbox/lib/db'
@@ -14,8 +14,10 @@ import {
   participantLabel,
   PER_PAGE,
 } from '@/modules/unified-inbox/lib/list'
-import { ChatIcon, FormIcon, InboundIcon, NoteIcon, PaperclipIcon, PhoneIcon, ReplyIcon } from './icons'
+import { pickWinner, widenedAccessWarning } from '@/modules/unified-inbox/lib/thread-merge'
+import { ChatIcon, FormIcon, InboundIcon, NoteIcon, PaperclipIcon, PhoneIcon, ReplyIcon, TickIcon } from './icons'
 import { Avatar } from './Avatar'
+import { ConfirmDialog } from './ConfirmDialog'
 
 // The list of conversations. Every state it can be in - filtered to nothing,
 // searched for something that is not there, an inbox that has never collected
@@ -28,11 +30,28 @@ import { Avatar } from './Avatar'
 // line when the list is the whole screen, stacked when it is a column beside an
 // open conversation. Same markup either way.
 //
-// A client component for one reason: the tick boxes down the left. Working
-// through a morning's post one conversation at a time - open it, mark it done,
-// open the next - is four presses per message when three of them say the same
-// thing. Ticking six and pressing Mark as done once is the whole point of a
-// list. Everything else here is still plain markup and plain links.
+// A client component for one reason: picking several conversations at once.
+// Working through a morning's post one at a time - open it, mark it done, open
+// the next - is four presses per message when three of them say the same thing.
+// Picking six and pressing Mark as done once is the whole point of a list.
+//
+// There is no tick box in front of each row to do it with. A column of them is
+// a column of clutter on every row on every screen, for something that happens
+// twice a week. Rows are picked the way a mail program has picked them for
+// thirty years:
+//
+//   - a plain click opens the conversation, as it always did, and marks that
+//     row as where a run would start from;
+//   - shift-click picks everything between that row and this one, which is the
+//     three-in-a-row case: click the top one, shift-click the third, done;
+//   - cmd-click (ctrl on Windows) adds or removes one on its own;
+//   - space does the same as cmd-click, for anybody on the keyboard, and
+//     shift-space extends the run - the tick box's job, without the tick box.
+//
+// A plain click also drops whatever was picked, exactly as it does in Finder
+// and in Mail: a set of rows nobody can see any more, still armed behind a
+// button that says Mark as done, is a worse thing to leave lying about than a
+// selection somebody has to make twice.
 
 type Props = {
   base: string
@@ -93,17 +112,76 @@ export function ThreadListView({
   const [selected, setSelected] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [merging, setMerging] = useState(false)
+  // Where a shift-clicked run is measured from: the row picked last on its own.
+  // A ref rather than state - nothing on the screen draws it, so changing it
+  // has no business redrawing forty rows.
+  const anchorRef = useRef<number | null>(null)
 
   // Anything ticked on a page that has since been replaced - by a filter, a
   // search or the next page - is not on the screen any more, and acting on it
   // would be acting on something nobody can see.
   const onScreen = useMemo(() => new Set(rows.map((r) => r.id)), [rows])
   const picked = useMemo(() => selected.filter((id) => onScreen.has(id)), [selected, onScreen])
+  const pickedSet = useMemo(() => new Set(picked), [picked])
   const allPicked = rows.length > 0 && picked.length === rows.length
 
-  const toggle = useCallback((id: string) => {
+  const clearPicked = useCallback(() => {
+    anchorRef.current = null
+    setSelected([])
+  }, [])
+
+  /** One row on or off, and the point any later run is measured from. */
+  const toggle = useCallback((id: string, index: number) => {
+    anchorRef.current = index
     setSelected((current) => current.includes(id) ? current.filter((x) => x !== id) : [...current, id])
   }, [])
+
+  /** Everything from the last row picked to this one, added to whatever was
+   *  already picked. Added rather than replacing: picking three at the top,
+   *  then a run further down, is one job and not two. With nothing picked yet
+   *  the run starts where it ends, which picks the one row pressed. */
+  const extendTo = useCallback((index: number) => {
+    // Nothing pressed yet this visit, but a conversation is open beside the
+    // list: that is the one the reader last chose, so a run measured from it is
+    // the run they mean. It survives a reload, which a ref does not.
+    const openIndex = openThreadId ? rows.findIndex((r) => r.id === openThreadId) : -1
+    const from = anchorRef.current ?? (openIndex >= 0 ? openIndex : index)
+    const [lo, hi] = from <= index ? [from, index] : [index, from]
+    const run = rows.slice(lo, hi + 1).map((r) => r.id)
+    setSelected((current) => [...new Set([...current, ...run])])
+  }, [rows, openThreadId])
+
+  const onRowClick = useCallback((e: React.MouseEvent, id: string, index: number) => {
+    if (e.shiftKey) {
+      e.preventDefault()
+      // A shift-press over text also drags a text selection across everything
+      // between the two presses, which down a list of forty rows is a page of
+      // blue nobody asked for.
+      window.getSelection()?.removeAllRanges()
+      extendTo(index)
+      return
+    }
+    if (e.metaKey || e.ctrlKey) {
+      e.preventDefault()
+      toggle(id, index)
+      return
+    }
+    // An ordinary press on an ordinary link: let it open the conversation, and
+    // remember the row it opened, because that is where the next shift-click
+    // measures its run from.
+    anchorRef.current = index
+    setSelected([])
+  }, [extendTo, toggle])
+
+  const onRowKeyDown = useCallback((e: React.KeyboardEvent, id: string, index: number) => {
+    // Space on a link does nothing at all by default, so it is free to mean
+    // "pick this one" - the keyboard's way in, now the tick box has gone.
+    if (e.key !== ' ') return
+    e.preventDefault()
+    if (e.shiftKey) extendTo(index)
+    else toggle(id, index)
+  }, [extendTo, toggle])
 
   /** One request per conversation rather than a bulk endpoint: the thread PATCH
    *  already exists, already checks who may touch which inbox, and six of them
@@ -127,12 +205,54 @@ export function ThreadListView({
           ? 'None of those could be changed.'
           : `${failed} of ${picked.length} could not be changed. The rest were.`)
       }
-      setSelected([])
+      clearPicked()
       router.refresh()
     } finally {
       setBusy(false)
     }
-  }, [picked, router])
+  }, [picked, router, clearPicked])
+
+  /** What merging the picked rows would do, worked out before anybody is asked
+   *  to agree to it: which conversation the rest fold into, and whether doing it
+   *  would let more people read something than can read it now. */
+  const mergePlan = useMemo(() => {
+    if (picked.length < 2) return null
+    const chosen = rows.filter((row) => picked.includes(row.id))
+    const winner = pickWinner(chosen)
+    if (!winner) return null
+    const losers = chosen.filter((row) => row.id !== winner.id)
+    const names = new Map(Object.entries(inboxNames))
+    return {
+      winner,
+      losers,
+      warning: widenedAccessWarning({ winner, losers, inboxNames: names }),
+    }
+  }, [picked, rows, inboxNames])
+
+  /** One request, not one per conversation: a merge is a single transaction on
+   *  the server and half a merge is not a thing anybody wants to be left with. */
+  const merge = useCallback(async () => {
+    if (!mergePlan) return
+    setBusy(true)
+    setError('')
+    try {
+      const response = await fetch(`/api/m/unified-inbox/threads/${mergePlan.winner.id}/merge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ loserIds: mergePlan.losers.map((row) => row.id) }),
+      })
+      if (!response.ok) {
+        setError((await response.json().catch(() => null))?.error ?? 'They could not be merged.')
+        return
+      }
+      setSelected([])
+      router.refresh()
+    } catch {
+      setError('The site could not be reached, so nothing changed.')
+    } finally {
+      setBusy(false)
+    }
+  }, [mergePlan, router])
 
   if (rows.length === 0) {
     return (
@@ -185,7 +305,16 @@ export function ThreadListView({
                   onClick={() => void applyToPicked({ status: 'open' })}>
             Open again
           </button>
-          <button type="button" className="uin-chip" disabled={busy} onClick={() => setSelected([])}>
+          {/* Two or more, because merging one conversation into itself is not a
+              thing - and only for whoever set the addresses up, since a merge
+              across two of them changes who can read what. */}
+          {canManage && picked.length > 1 && (
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                    onClick={() => setMerging(true)}>
+              Merge
+            </button>
+          )}
+          <button type="button" className="uin-chip" disabled={busy} onClick={clearPicked}>
             Clear
           </button>
         </div>
@@ -201,14 +330,24 @@ export function ThreadListView({
             // Ticked none of them, ticked some of them, ticked the lot: the box
             // says which without anybody having to count the rows.
             ref={(el) => { if (el) el.indeterminate = picked.length > 0 && !allPicked }}
-            onChange={() => setSelected(allPicked ? [] : rows.map((r) => r.id))}
+            onChange={() => {
+              anchorRef.current = null
+              setSelected(allPicked ? [] : rows.map((r) => r.id))
+            }}
           />
           Select everything on this page
         </label>
+        {/* Said once, quietly, above the list: a way of picking things that
+            leaves no mark on the screen is a way of picking things nobody
+            finds. */}
+        <span className="uin-bulk-hint">
+          or shift-click a second conversation to take everything between the two,
+          cmd-click to add one at a time
+        </span>
       </div>
 
       <ul className="uin-list">
-        {rows.map((row) => {
+        {rows.map((row, index) => {
           const who = participantLabel(row)
           // Whether there is a human here to take initials off, asked separately
           // from what the row says. "Unknown sender" is a sentence standing in
@@ -222,27 +361,32 @@ export function ThreadListView({
           // more useful of the two anyway. Nothing at all on a conversation
           // that landed in no inbox and belongs to nobody.
           const other = assignee ?? (row.inboxId ? inboxNames[row.inboxId] ?? null : null)
-          const ticked = picked.includes(row.id)
+          const ticked = pickedSet.has(row.id)
           return (
             <li key={row.id} className="uin-list-item" data-selected={ticked ? 'true' : undefined}>
-              {/* Beside the link rather than inside it: a tick box inside a link
-                  is a tick box you cannot press without opening the thing. */}
-              <label className="uin-pick">
-                <input type="checkbox" checked={ticked} onChange={() => toggle(row.id)} />
-                <span className="sr-only">Select this conversation</span>
-              </label>
               <Link
                 className={`uin-row${row.unread ? ' uin-row-unread' : ''}`}
                 href={inboxHref(base, params, { id: row.id })}
                 aria-current={open ? 'true' : undefined}
+                onClick={(e) => onRowClick(e, row.id, index)}
+                onKeyDown={(e) => onRowKeyDown(e, row.id, index)}
               >
-                <Avatar
-                  src={showAvatars ? avatarHref('person', row.personId) : null}
-                  badge={<ChannelBadge channel={row.channel} />}
-                  title={named ?? undefined}
-                >
-                  {named ? initialsFor(named) : InboundIcon}
-                </Avatar>
+                {/* A picked row wears a tick where its face was. The circle is
+                    already there on every row and already the right size, so
+                    saying it this way costs the list no width at all. */}
+                {ticked ? (
+                  <span className="uin-avatar-wrap">
+                    <span className="uin-avatar uin-avatar-ticked" aria-hidden="true">{TickIcon}</span>
+                  </span>
+                ) : (
+                  <Avatar
+                    src={showAvatars ? avatarHref('person', row.personId) : null}
+                    badge={<ChannelBadge channel={row.channel} />}
+                    title={named ?? undefined}
+                  >
+                    {named ? initialsFor(named) : InboundIcon}
+                  </Avatar>
+                )}
                 <span className="uin-row-main">
                   <span className="uin-row-who">
                     {row.unread && <span className="uin-row-dot" aria-hidden="true" />}
@@ -259,6 +403,7 @@ export function ThreadListView({
                       </>
                     )}
                     {row.unread && <span className="sr-only">(unread)</span>}
+                    {ticked && <span className="sr-only">(selected)</span>}
                   </span>
                   <span className="uin-row-subject">{row.subject || '(no subject)'}</span>
                   {/* Nothing rather than an empty line: a blank preview left a gap
@@ -328,6 +473,30 @@ export function ThreadListView({
           ) : <span />}
         </div>
       )}
+
+      {/* Not destructive - nothing is thrown away and it can be put back - so
+          the keyboard starts on the yes, as it does everywhere else in here
+          that a stray Return would do something harmless. */}
+      <ConfirmDialog
+        open={merging && !!mergePlan}
+        title={mergePlan && mergePlan.losers.length > 1
+          ? `Merge ${mergePlan.losers.length + 1} conversations into one?`
+          : 'Merge these two conversations into one?'}
+        body={mergePlan && (
+          <>
+            <p>
+              Everything goes into <strong>{mergePlan.winner.subject?.trim() || 'the oldest of them'}</strong>,
+              which is the one that started it. Nothing is thrown away, and you can
+              put it back from the conversation itself afterwards.
+            </p>
+            {mergePlan.warning && <p><strong>{mergePlan.warning}</strong></p>}
+          </>
+        )}
+        confirmLabel="Merge them"
+        busy={busy}
+        onCancel={() => setMerging(false)}
+        onConfirm={() => { setMerging(false); void merge() }}
+      />
     </>
   )
 }

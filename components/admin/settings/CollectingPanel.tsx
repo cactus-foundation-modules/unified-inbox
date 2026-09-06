@@ -156,7 +156,7 @@ export function CollectingPanel({ settings, inboxes, retention, busy, call }: {
           label="Show the newest message at the top of a conversation"
           checked={draft.newestFirst}
           onChange={(newestFirst) => setDraft({ ...draft, newestFirst })}
-          hint="Off, a conversation reads top to bottom the way it happened. On, the latest message is the first thing you see and the writing box sits with it, which saves scrolling past a long back and forth to find out what was last said."
+          hint="Off, a conversation reads top to bottom the way it happened, and opens on whatever was said last rather than at the beginning. On, the latest message is the first thing you see and the writing box sits with it."
         />
         <FieldRow>
           <div className="field">

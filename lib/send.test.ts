@@ -426,6 +426,38 @@ describe('sendMessage - recipients', () => {
     expect(transport.deliver).not.toHaveBeenCalled()
   })
 
+  it('carries a blind copy to the transport and to the row, apart from Cc', async () => {
+    // The whole of what a Bcc is is that it is not in the headers the other
+    // recipients read. Anything that folded it in with Cc would deliver the
+    // same mail and tell everybody who was quietly copied in.
+    const result = await sendMessage(baseRequest({ bcc: ['owner@deskwell.co.uk'] }))
+    expect(result.ok).toBe(true)
+
+    const sent = transport.deliver.mock.calls[0]![0]
+    expect(sent.bcc).toEqual(['owner@deskwell.co.uk'])
+    expect(sent.cc).not.toContain('owner@deskwell.co.uk')
+    expect(sent.to).not.toContain('owner@deskwell.co.uk')
+
+    // Stored, so the Sent copy is honest and a retry sends the same message
+    // rather than a narrower one.
+    expect(db.insertOutboundMessage.mock.calls[0]![0].bccAddresses).toEqual(['owner@deskwell.co.uk'])
+    const raw = mime.buildRawMessage.mock.calls[0]![0] as { bcc: string[] }
+    expect(raw.bcc).toEqual(['owner@deskwell.co.uk'])
+  })
+
+  it('never works a blind copy out from the conversation, whatever the mode', async () => {
+    // Nobody was ever blind-copied by a message we can read - the header is not
+    // there to read - so reply-all must not invent one.
+    await sendMessage(baseRequest({ mode: 'reply-all' }))
+    expect(transport.deliver.mock.calls[0]![0].bcc).toEqual([])
+  })
+
+  it('refuses an address that is not one, in the blind copies as well', async () => {
+    const result = await sendMessage(baseRequest({ bcc: ['not an address'] }))
+    expect(result).toEqual({ ok: false, reason: '"not an address" does not look like an email address.' })
+    expect(transport.deliver).not.toHaveBeenCalled()
+  })
+
   it('a forward goes out as the inbox, not as whoever wrote the original (E12)', async () => {
     const result = await sendMessage(
       baseRequest({ mode: 'forward', to: ['supplier@example.com'] }),
@@ -648,6 +680,7 @@ describe('retrySend', () => {
     deliveryStatus: 'failed',
     toAddresses: ['jane@customer.com'],
     ccAddresses: [],
+    bccAddresses: [] as string[],
     subject: 'Re: Chairs',
     bodyHtml: '<p>Yes, in blue.</p>',
     bodyText: 'Yes, in blue.',
@@ -669,6 +702,12 @@ describe('retrySend', () => {
       name: 'Deskwell',
       address: 'hi@deskwell.co.uk',
     })
+  })
+
+  it('sends the same blind copies the first attempt carried', async () => {
+    db.getMessage.mockResolvedValue({ ...FAILED, bccAddresses: ['owner@deskwell.co.uk'] })
+    await retrySend('msg-out-1')
+    expect(transport.deliver.mock.calls[0]![0].bcc).toEqual(['owner@deskwell.co.uk'])
   })
 
   it('reuses the same Message-ID, so it is one message having another go', async () => {

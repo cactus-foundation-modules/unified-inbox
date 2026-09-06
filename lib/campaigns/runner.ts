@@ -499,6 +499,7 @@ async function sendToRecipient(
         from: built.sendable.from,
         to: built.sendable.to,
         cc: built.sendable.cc,
+        bcc: built.sendable.bcc,
         replyTo: built.sendable.replyTo,
         subject: built.sendable.subject,
         html: built.sendable.html,

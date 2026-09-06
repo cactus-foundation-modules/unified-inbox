@@ -75,9 +75,11 @@ export async function POST(request: NextRequest) {
     await recordEvent(threadId, user.id, 'note', { messageId })
     await notifyMentions({
       threadId,
-      thread: { inboxId, providerModule: null },
+      thread: { id: threadId, inboxId, providerModule: null },
       mentions,
       byUserId: user.id,
+      messageId,
+      note: body,
     })
     threadIds.push(threadId)
   }

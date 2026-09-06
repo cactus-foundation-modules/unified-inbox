@@ -5,7 +5,7 @@ import type { DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
 import { avatarHref, channelLabel, formatFull, formatWhen, inboxHref, initialsFor, splitQuotedText } from '@/modules/unified-inbox/lib/list'
 import { draftHref } from '@/modules/unified-inbox/lib/drafts'
 import { describeSendAt } from '@/modules/unified-inbox/lib/scheduled'
-import { BackIcon, ClockIcon, CloseIcon, InboundIcon, NoteIcon, OutboundIcon, PaperclipIcon, TickIcon } from './icons'
+import { AtIcon, BackIcon, ClockIcon, CloseIcon, InboundIcon, NoteIcon, OutboundIcon, PaperclipIcon, TickIcon } from './icons'
 import { Avatar } from './Avatar'
 import { MessageBody } from './MessageBody'
 import { MessageText } from './MessageText'
@@ -17,15 +17,21 @@ import { ComposerOpenProvider, ComposerSlot } from './ComposerOpen'
 import { MessageMenu } from './MessageMenu'
 import { NoteBar } from './NoteBar'
 import { ThreadContext, type ThreadContextView } from './ThreadContext'
+import { MergedFrom, type MergedFromView } from './MergedFrom'
+import { AddressLine } from './AddressLine'
+import { ScrollToMessage } from './ScrollToMessage'
+import { MentionActions } from './MentionActions'
 
 // One conversation, oldest message first - the order the story happened in.
 //
-// Which way a message went is said four ways over, because saying it in colour
+// Which way a message went is said three ways over, because saying it in colour
 // alone fails anybody who cannot tell the two colours apart: the words in the
-// header, an arrow beside them, the style of the left edge, and the tint. An
-// internal note is a fifth thing again and says so in as many words, since a
-// note that reads as a reply is how something private ends up sounding like it
-// was sent to the customer.
+// header, the style of the left edge, and the tint. There used to be an arrow
+// beside the words as well; it was a fourth telling of something the words
+// already said outright, and it read as a download button. An internal note is
+// a fourth thing again and says so in as many words, since a note that reads
+// as a reply is how something private ends up sounding like it was sent to the
+// customer.
 
 export type ThreadMessageView = ThreadMessageRow & {
   attachments: AttachmentRow[]
@@ -38,12 +44,24 @@ type Props = {
   inboxName: string | null
   messages: ThreadMessageView[]
   events: ThreadEventRow[]
+  /** Who this conversation can be HANDED to. Narrowed on somebody's own inbox,
+   *  where the only person who can open it is the one it already belongs to. */
   staff: Array<{ id: string; name: string }>
+  /** Who can be ASKED to look at it, which is a different list and a longer
+   *  one. Being tagged lets somebody into this one conversation, so asking a
+   *  colleague outside the address is the whole point rather than a mistake -
+   *  and on a private inbox the narrowed list above would be this reader
+   *  alone, which is nobody. */
+  taggable: Array<{ id: string; name: string }>
   staffById: Record<string, string>
   canReply: boolean
   cannotReplyReason: string | null
   replyTo: string[]
   replyAllTo: string[]
+  /** What the subject line would say if nobody opened it in the reply box,
+   *  worked out on the server the same way the send route works it out. */
+  replySubject: string
+  forwardSubject: string
   /** What this reader left half-written under this conversation, if anything.
    *  Nobody else's, ever - a shared inbox is not a shared notepad. */
   draft: DraftForComposer | null
@@ -64,9 +82,6 @@ type Props = {
   /** The site's timezone. Every clock time on this pane is stamped in it: the
    *  server renders these, and its own clock is UTC. */
   timezone: string
-  /** The earliest a reply may be set to go out on its own, already in the
-   *  picker's shape and in that same timezone. */
-  minSendAt: string
   /** Messages that were set to go out to this person and were stood down when
    *  this conversation arrived. Almost always empty; when it is not, it is the
    *  most important thing on the screen. */
@@ -75,6 +90,41 @@ type Props = {
    *  rest of the site knows ABOUT that person - their orders, their quotes -
    *  is a different question and stays in the panel beside the conversation. */
   context: ThreadContextView
+  /** THIS READER's own ask on this conversation, when a colleague has tagged
+   *  them in a note on it. Never anybody else's: what a colleague was asked and
+   *  whether they have got to it yet is between them and whoever asked. Null on
+   *  the ordinary conversation nobody has been pulled into. */
+  asked: AskedView | null
+  /** Conversations merged into this one that could still be separated out
+   *  again. Empty on everything that has never been merged, which is nearly
+   *  everything. */
+  merges: MergedFromView[]
+  /** The site's other addresses this conversation also belongs to, by name.
+   *  Only a merge across two addresses puts anything here - it is what makes
+   *  the conversation visible in both of their tabs, so the header says so
+   *  rather than leaving somebody to wonder why it is in theirs. */
+  otherInboxNames: string[]
+  /** The message this conversation should open on, when it should open on one
+   *  rather than at the top. Only ever set when the site reads oldest first, in
+   *  which case the top of the pane is the oldest message and the one worth
+   *  reading is at the far end of it. Worked out on the server, because it turns
+   *  on whether the conversation was unread when it was opened - which stops
+   *  being true the moment it is. */
+  scrollToMessageId: string | null
+}
+
+/** One ask, in the little the banner needs. Dates are already words by the time
+ *  they get here - the banner is rendered on the server and the controls under
+ *  it are not, and a Date handed to a client component arrives as an empty
+ *  object. */
+export type AskedView = {
+  id: string
+  status: string
+  note: string | null
+  /** Who wanted them, by name. Null when that colleague has since left. */
+  askedBy: string | null
+  /** When it comes back, said the way the rest of this pane says a date. */
+  backWhen: string | null
 }
 
 /** One stood-down message, said in the little the warning needs: who it was
@@ -207,8 +257,12 @@ function MessageHeader({ message, personId, showAvatars, staffById, now, timezon
         <Avatar src={picture('user', message.authorUserId)} title={author ?? undefined}>
           {author ? initialsFor(author) : NoteIcon}
         </Avatar>
-        <span className="uin-msg-who">{author ?? 'Somebody here'}</span>
-        <span className="uin-msg-dir">{NoteIcon} Internal note, not sent</span>
+        <div className="uin-msg-head-lines">
+          <div className="uin-msg-head-line">
+            <span className="uin-msg-who">{author ?? 'Somebody here'}</span>
+            <span className="uin-msg-dir">{NoteIcon} Internal note, not sent</span>
+          </div>
+        </div>
         <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
         {tools}
       </div>
@@ -221,14 +275,18 @@ function MessageHeader({ message, personId, showAvatars, staffById, now, timezon
         <Avatar src={picture('user', message.authorUserId)} title={author ?? undefined}>
           {author ? initialsFor(author) : OutboundIcon}
         </Avatar>
-        <span className="uin-msg-who">{author ? `${author} replied` : 'Sent from here'}</span>
-        <span className="uin-msg-dir">
-          {/* A live chat or a web form has no email address to have been sent to,
-              so there is nothing missing to report. Saying "nobody recorded"
-              there invented an absence, and read as a fault. */}
-          {OutboundIcon}
-          {message.toAddresses.length > 0 ? ` Sent to ${message.toAddresses.join(', ')}` : ' Sent'}
-        </span>
+        <div className="uin-msg-head-lines">
+          <div className="uin-msg-head-line">
+            <span className="sr-only">Sent by</span>
+            <span className="uin-msg-who">{author ? `${author} replied` : 'Sent from here'}</span>
+            {message.fromAddress ? <AddressLine text={`<${message.fromAddress}>`} /> : null}
+          </div>
+          {/* A live chat or a web form has no email address to have been sent
+              to, so there is nothing missing to report and no second line.
+              Saying "nobody recorded" there invented an absence, and read as a
+              fault. */}
+          <ToLine addresses={message.toAddresses} />
+        </div>
         <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
         {tools}
       </div>
@@ -240,14 +298,50 @@ function MessageHeader({ message, personId, showAvatars, staffById, now, timezon
       <Avatar src={picture('person', personId)} title={named ?? undefined}>
         {named ? initialsFor(named) : InboundIcon}
       </Avatar>
-      <span className="uin-msg-who">{named ?? 'Unknown sender'}</span>
-      <span className="uin-msg-dir">
-        {InboundIcon} Received{message.fromName && message.fromAddress ? ` from ${message.fromAddress}` : ''}
-      </span>
+      <div className="uin-msg-head-lines">
+        <div className="uin-msg-head-line">
+          {/* The words "Received from" used to sit here in front of the
+              address. They said out loud what the header says three other ways
+              - the sender's name right beside it, the solid left edge, the
+              tint - and it was the words, not the address, taking up the width
+              a narrow column has to find. Kept for a screen reader, which has
+              none of those three to go on. */}
+          <span className="sr-only">Received from</span>
+          <span className="uin-msg-who">{named ?? 'Unknown sender'}</span>
+          {/* Only where the name is a name: with no name to go on, the bold
+              part is already the address, and showing it twice was never the
+              idea. */}
+          {message.fromName && message.fromAddress
+            ? <AddressLine text={`<${message.fromAddress}>`} />
+            : null}
+        </div>
+        <ToLine addresses={message.toAddresses} />
+      </div>
       <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
       {tools}
     </div>
   )
+}
+
+/** Who a message went to, on a line of its own under the sender - the way a
+ *  mail program has always laid a message out. Nothing at all where there is
+ *  nobody to name, which is every message on a channel that has no addresses
+ *  in it. */
+function ToLine({ addresses }: { addresses: string[] }) {
+  if (addresses.length === 0) return null
+  return (
+    <div className="uin-msg-head-line uin-msg-head-to">
+      <span className="uin-msg-dir-label">To:</span>
+      <AddressLine text={addresses.join(', ')} />
+    </div>
+  )
+}
+
+/** What a message is called in the page, so that the pane can be opened on one.
+ *  In one place because two things need to agree on it: the message that gets
+ *  the attribute, and the island that goes looking for it. */
+function messageDomId(messageId: string): string {
+  return `uin-msg-${messageId}`
 }
 
 function Message({ message, personId, showAvatars, staffById, now, timezone, canDelete, tools }: {
@@ -272,7 +366,7 @@ function Message({ message, personId, showAvatars, staffById, now, timezone, can
   const offerDelete = canDelete && message.source === 'provider'
 
   return (
-    <article className={`uin-msg uin-msg-${kind}`}>
+    <article id={messageDomId(message.id)} className={`uin-msg uin-msg-${kind}`}>
       <MessageHeader
         message={message}
         personId={personId}
@@ -388,6 +482,18 @@ const EVENT_WORDS: Record<string, string> = {
   merged: 'merged it with another',
 }
 
+/** What one entry says the person did. Named where naming them is the point:
+ *  "asked somebody to look" is the one line in this log where the interesting
+ *  half is who was asked rather than who asked, and it was the half being
+ *  thrown away. */
+function eventWords(event: ThreadEventRow, staffById: Record<string, string>): string {
+  if (event.kind === 'mentioned') {
+    const wanted = typeof event.detail?.userId === 'string' ? staffById[event.detail.userId] : null
+    return wanted ? `asked ${wanted} to look` : 'asked somebody to look'
+  }
+  return EVENT_WORDS[event.kind] ?? 'changed something'
+}
+
 /** Entries nobody did. The rest of the log reads "<name> <did something>", and
  *  putting "Somebody" in front of an automatic one invents a colleague who was
  *  never there - so these carry their own whole sentence instead.
@@ -420,10 +526,10 @@ function unattendedEvent(event: ThreadEventRow, staffById: Record<string, string
 }
 
 export function ThreadPane({
-  base, params, thread, inboxName, messages, events, staff, staffById,
-  canReply, cannotReplyReason, replyTo, replyAllTo, draft, newestFirst,
-  canDeleteMessages, blockState, now, timezone, minSendAt, heldDrafts, showAvatars,
-  context,
+  base, params, thread, inboxName, messages, events, staff, taggable, staffById,
+  canReply, cannotReplyReason, replyTo, replyAllTo, replySubject, forwardSubject, draft, newestFirst,
+  canDeleteMessages, blockState, now, timezone, heldDrafts, showAvatars,
+  context, asked, merges, otherInboxNames, scrollToMessageId,
 }: Props) {
   // The list arrives oldest first. Reversing a copy rather than sorting again:
   // the query already decided the order, and this only says which end to read
@@ -437,6 +543,12 @@ export function ThreadPane({
   // A draft opens the box on the way in, and nothing else does: a conversation
   // is opened to be read far more often than to be answered.
   const openAs = draft && draft.mode !== 'new' ? draft.mode : null
+
+  // Where to open the conversation, when it is not at the top. Not while the
+  // writing box is opening: somebody who came back to a half-written reply came
+  // for the box, which is at the far end of the thread from anything worth
+  // scrolling to.
+  const openOn = openAs ? null : scrollToMessageId
 
   return (
     // Keyed on the conversation, so opening the next one starts shut again
@@ -452,6 +564,19 @@ export function ThreadPane({
             whole - which there was previously no way at all to do. */}
         <div className="uin-thread-top">
           <h2 className="uin-thread-subject">{thread.subject || '(no subject)'}</h2>
+          {/* What can be done TO the conversation, on the subject's own line and
+              hard against the way out of it. Answering is not up here: the arrow
+              lives on the message being answered, which is the one thing this
+              row could never say which of. The subject gives up the width -
+              two lines of it, then an ellipsis. */}
+          <ThreadActions
+            threadId={thread.id}
+            status={thread.status}
+            assigneeUserId={thread.assigneeUserId}
+            snoozeUntil={thread.snoozeUntil ? thread.snoozeUntil.toISOString() : null}
+            staff={staff}
+            timezone={timezone}
+          />
           <Link className="uin-thread-close" href={inboxHref(base, params, { id: null })}>
             <span className="uin-back-phone" aria-hidden="true">{BackIcon} Back to the list</span>
             <span className="uin-back-wide" aria-hidden="true">{CloseIcon}</span>
@@ -463,6 +588,7 @@ export function ThreadPane({
         <div className="uin-thread-meta">
           <span>{channelLabel(thread.channel)}</span>
           {inboxName && <span>&middot; {inboxName}</span>}
+          {otherInboxNames.map((name) => <span key={name}>&middot; {name}</span>)}
           <span>&middot; {messages.length} message{messages.length === 1 ? '' : 's'}</span>
           {/* Said as a label with a date after it. "last Fri" on its own reads as
               the Friday before this one, and disagreed with the row in the list
@@ -475,22 +601,16 @@ export function ThreadPane({
           )}
           {thread.status === 'done' && <span className="uin-tag uin-tag-done">Done</span>}
         </div>
-        {/* What can be done TO the conversation. Answering it is not up here any
-            more: the arrow lives on the message being answered, which is the
-            one thing this row could never say which of. */}
-        <ThreadActions
-          threadId={thread.id}
-          status={thread.status}
-          assigneeUserId={thread.assigneeUserId}
-          staff={staff}
-          timezone={timezone}
-        />
         {/* Why there is no arrow on any of the messages. Without it, a
             conversation with the obvious thing missing and no explanation is
             the sort of thing people report as broken. */}
         {!canReply && cannotReplyReason && (
           <p className="uin-thread-cannot">{cannotReplyReason}</p>
         )}
+        {/* What this conversation is made of, when it is made of more than one.
+            Under the controls rather than above the messages: it is a fact
+            about the conversation, not a thing that has just happened. */}
+        <MergedFrom merges={merges} />
         {/* Beside what is done TO the conversation, because that is what this
             is: it changes what happens next, not what is in the thread. */}
         {blockState && (
@@ -500,16 +620,46 @@ export function ThreadPane({
             channelLabel={blockState.channelLabel}
           />
         )}
-        {/* Last in the header, under everything that can be pressed: who this
-            is, and what it is about. */}
-        <ThreadContext threadId={thread.id} base={base} params={params} {...context} />
+        {/* Last in the header, under everything that can be pressed: what this
+            conversation is about. */}
+        <ThreadContext threadId={thread.id} {...context} />
       </div>
 
       <div className="uin-thread-body">
-        {/* First thing in the body, above the messages, because it changes what
-            you are about to do: something we had queued to this person was
-            standing by, and reading their message without knowing that is how
-            you answer a question twice. Nothing has been sent, and the writing
+        {/* Nothing to draw - it moves the pane and gets out of the way. Keyed on
+            the conversation so that opening another one starts again rather
+            than carrying on with the last one's corrections. */}
+        {openOn && (
+          <ScrollToMessage key={thread.id} threadId={thread.id} targetId={messageDomId(openOn)} />
+        )}
+        {/* Before anything else, because on the conversations that have one it
+            is the reason this reader is here at all: a colleague put their name
+            on it. Its buttons settle THEIR ask and nothing else - the
+            conversation's own status, up in the header, is shared by everybody
+            who can read it, and three people asked about one order must not
+            close it from under each other. */}
+        {asked && (
+          <div className="uin-asked" role="status">
+            <span className="uin-asked-icon" aria-hidden="true">{AtIcon}</span>
+            <div className="uin-asked-said">
+              <strong>
+                {asked.askedBy ? `${asked.askedBy} asked you to look at this.` : 'You were asked to look at this.'}
+              </strong>
+              {asked.note && <span className="uin-asked-note">&ldquo;{asked.note}&rdquo;</span>}
+              {asked.status === 'done' && (
+                <span className="uin-asked-state">You have marked this one done.</span>
+              )}
+              {asked.status === 'snoozed' && asked.backWhen && (
+                <span className="uin-asked-state">Set to come back to you {asked.backWhen}.</span>
+              )}
+            </div>
+            <MentionActions mentionId={asked.id} status={asked.status} timezone={timezone} />
+          </div>
+        )}
+
+        {/* Then anything we had queued to this person, because it changes what
+            you are about to do: something was standing by, and reading their
+            message without knowing that is how you answer a question twice. Nothing has been sent, and the writing
             is untouched - the link opens it exactly where it was left. */}
         {heldDrafts.map((heldDraft) => (
           <div key={heldDraft.id} className="alert alert-info" role="status">
@@ -537,14 +687,16 @@ export function ThreadPane({
         {newestFirst && (
           <ComposerSlot
             threadId={thread.id}
+            inboxId={thread.inboxId}
             replyTo={replyTo}
             replyAllTo={replyAllTo}
             canReply={canReply}
             canForward={canReply}
-            staff={staff}
+            staff={taggable}
             cannotReplyReason={cannotReplyReason}
+            replySubject={replySubject}
+            forwardSubject={forwardSubject}
             draft={draft}
-            minSendAt={minSendAt}
             timezone={timezone}
           />
         )}
@@ -584,14 +736,16 @@ export function ThreadPane({
         {!newestFirst && (
           <ComposerSlot
             threadId={thread.id}
+            inboxId={thread.inboxId}
             replyTo={replyTo}
             replyAllTo={replyAllTo}
             canReply={canReply}
             canForward={canReply}
-            staff={staff}
+            staff={taggable}
             cannotReplyReason={cannotReplyReason}
+            replySubject={replySubject}
+            forwardSubject={forwardSubject}
             draft={draft}
-            minSendAt={minSendAt}
             timezone={timezone}
           />
         )}
@@ -605,7 +759,7 @@ export function ThreadPane({
                   {unattendedEvent(event, staffById) ?? (
                     <>
                       {(event.userId && staffById[event.userId]) || 'Somebody'}{' '}
-                      {EVENT_WORDS[event.kind] ?? 'changed something'}
+                      {eventWords(event, staffById)}
                     </>
                   )}
                   {' - '}
@@ -620,7 +774,7 @@ export function ThreadPane({
       {/* Last inside the conversation and pinned to the bottom of it, so it is
           there whether you are at the top of a thread or four thousand pixels
           down one. Outside the body on purpose: the body is what scrolls. */}
-      <NoteBar threadId={thread.id} />
+      <NoteBar threadId={thread.id} staff={taggable} />
     </div>
     </ComposerOpenProvider>
   )

@@ -35,7 +35,9 @@ type Props = {
    *  of this screen uses. */
   className?: string
   disabled?: boolean
-  /** How wide the panel is drawn, in pixels. */
+  /** How wide the panel is drawn, in pixels. Left off, the panel is only as
+   *  wide as what is in it - which is what a menu of two one-word answers
+   *  wants, and what a fixed 200 gave it three times over. */
   width?: number
   /** Which edge of the button the panel lines up with. 'end' for anything at
    *  the right-hand end of a row, so the panel opens inwards. */
@@ -61,7 +63,7 @@ export function useDropdownClose(): () => void {
 }
 
 export function Dropdown({
-  label, ariaLabel, title, className, disabled, width = 240, align = 'start',
+  label, ariaLabel, title, className, disabled, width, align = 'start',
   panelClassName, children,
 }: Props) {
   const [open, setOpen] = useState(false)
@@ -70,7 +72,11 @@ export function Dropdown({
   const trigger = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
 
-  const place = useCallback((height: number) => {
+  // Both measurements are passed in rather than read off the props, because a
+  // panel left to size itself only knows how wide it is once it is on the page,
+  // and where it goes depends on that: an 'end' panel is placed from its own
+  // right-hand edge.
+  const place = useCallback((height: number, panelWidth: number) => {
     const box = trigger.current?.getBoundingClientRect()
     if (!box) return
     const room = window.innerHeight - box.bottom - GAP
@@ -80,9 +86,9 @@ export function Dropdown({
     const top = height <= room || box.top - GAP < room
       ? Math.min(box.bottom + GAP, Math.max(GAP, window.innerHeight - height - GAP))
       : Math.max(GAP, box.top - height - GAP)
-    const wanted = align === 'end' ? box.right - width : box.left
-    setAt({ top, left: Math.max(GAP, Math.min(wanted, window.innerWidth - width - GAP)) })
-  }, [align, width])
+    const wanted = align === 'end' ? box.right - panelWidth : box.left
+    setAt({ top, left: Math.max(GAP, Math.min(wanted, window.innerWidth - panelWidth - GAP)) })
+  }, [align])
 
   const close = useCallback((focusTrigger = false) => {
     setOpen(false)
@@ -95,11 +101,16 @@ export function Dropdown({
   const closeAndFocus = useCallback(() => close(true), [close])
 
   // Measured once it is on the page, so a tall panel - the calendar is four
-  // hundred pixels of it - opens the right way up rather than off the bottom.
+  // hundred pixels of it - opens the right way up rather than off the bottom,
+  // and a panel that sized itself to its contents is placed from the width it
+  // actually took. Before paint, so the guess below is a guess and not a jump.
   useLayoutEffect(() => {
     if (!open) return
-    place(panel.current?.offsetHeight ?? ASSUMED_HEIGHT)
-  }, [open, place])
+    place(
+      panel.current?.offsetHeight ?? ASSUMED_HEIGHT,
+      panel.current?.offsetWidth ?? width ?? 0,
+    )
+  }, [open, place, width])
 
   useEffect(() => {
     if (!open) return
@@ -164,7 +175,10 @@ export function Dropdown({
         aria-expanded={open}
         disabled={disabled}
         onClick={() => {
-          if (!open) place(ASSUMED_HEIGHT)
+          // The button's own width stands in for a panel nobody has measured
+          // yet: it is the closest thing to hand, and the layout effect above
+          // corrects it on the same frame.
+          if (!open) place(ASSUMED_HEIGHT, width ?? trigger.current?.offsetWidth ?? 0)
           setOpen((was) => !was)
         }}
       >

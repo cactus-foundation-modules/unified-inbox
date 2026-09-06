@@ -56,6 +56,9 @@ export const SendBody = z.object({
   mode: z.enum(['reply', 'reply-all', 'forward', 'new']),
   to: z.array(z.string().min(1)).max(50).optional(),
   cc: z.array(z.string().min(1)).max(50).optional(),
+  /** Copies the other recipients never see. A list of its own rather than more
+   *  entries in `cc`, because that separation is the entire feature. */
+  bcc: z.array(z.string().min(1)).max(50).optional(),
   subject: z.string().max(500).optional(),
   bodyHtml: z.string().max(500_000),
   attachments: z
@@ -109,10 +112,15 @@ export const DraftBody = z.object({
   mode: z.enum(['new', 'reply', 'reply-all', 'forward']).default('new'),
   to: z.array(z.string().min(1)).max(50).optional(),
   cc: z.array(z.string().min(1)).max(50).optional(),
+  bcc: z.array(z.string().min(1)).max(50).optional(),
   subject: z.string().max(500).nullable().optional(),
-  /** As typed, not as HTML: what goes back into the box has to be what came
-   *  out of it. */
+  /** As typed: the markup the writing box holds, or the plain lines every draft
+   *  written before it could hold a typeface holds. Either way, what goes back
+   *  into the box has to be what came out of it. */
   body: z.string().max(500_000),
+  /** Which of those two. Left out is 'text', which is what every caller written
+   *  before the box could hold markup meant. */
+  bodyFormat: z.enum(['text', 'html']).optional(),
   attachments: z.array(AttachmentRef).max(20).optional(),
   /** When it should go out on its own, as the wall clock somebody typed:
    *  "2026-09-04T09:00", with no zone on it. It is turned into an instant on
@@ -139,6 +147,15 @@ export const ThreadPatchBody = z.object({
   snoozeUntil: z.string().datetime().nullable().optional(),
   /** A user id, or null to hand it back to nobody in particular. */
   assigneeUserId: z.string().min(1).nullable().optional(),
+})
+
+/** Where one colleague's own ask stands. Deliberately the same three words the
+ *  conversation itself uses, because they mean the same thing at a smaller
+ *  scale - the difference is whose they are. */
+export const MentionPatchBody = z.object({
+  status: z.enum(['open', 'snoozed', 'done']),
+  /** An ISO stamp. Only read when the status is 'snoozed'. */
+  snoozeUntil: z.string().datetime().nullable().optional(),
 })
 
 /** An internal note. `mentions` carries user ids chosen from the list rather
@@ -378,4 +395,11 @@ export const CampaignTestBody = z.object({
 export const SuppressionBody = z.object({
   address: z.string().trim().min(3).max(255),
   note: z.string().trim().max(500).nullable().optional(),
+})
+
+/** What the merge screen posts: the other conversations to fold into the one in
+ *  the address. Capped at the same number the merge itself refuses above, so an
+ *  over-long list is turned away before a database is opened. */
+export const ThreadMergeBody = z.object({
+  loserIds: z.array(z.string().min(1).max(200)).min(1).max(20),
 })

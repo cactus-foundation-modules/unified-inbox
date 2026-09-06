@@ -3,7 +3,9 @@ import {
   canEditDraft,
   canReadDraft,
   draftHref,
+  draftBodyText,
   draftPreview,
+  htmlHasWriting,
   draftRecipientLabel,
   draftSubjectLabel,
   isWorthSaving,
@@ -27,6 +29,9 @@ describe('isWorthSaving', () => {
     // Otherwise every conversation somebody merely opened leaves a blank row,
     // and a Drafts list full of blanks is worse than no Drafts list.
     expect(isWorthSaving({ to: [], cc: [], subject: '', body: '   ', attachments: [] })).toBe(false)
+    // A blind copy is somebody deliberately naming a recipient, which is as
+    // much of a draft as a recipient in the To line is.
+    expect(isWorthSaving({ to: [], cc: [], bcc: ['owner@deskwell.co.uk'], body: '' })).toBe(true)
   })
 
   it('keeps anything with words in it', () => {
@@ -76,6 +81,61 @@ describe('draftPreview', () => {
     const preview = draftPreview('x'.repeat(400), 20)
     expect(preview).toHaveLength(20)
     expect(preview.endsWith('…')).toBe(true)
+  })
+})
+
+describe('draftBodyText', () => {
+  // The column holds two different things now - markup from the writing box, or
+  // the plain lines every draft written before it holds - and the row says
+  // which. Guessing from the content is how "a < b" ends up rendered as broken
+  // markup, and how a pasted line of HTML ends up sent as live markup.
+
+  it('leaves a body written as text exactly as it was typed', () => {
+    expect(draftBodyText({ body: 'a < b, and 3 > 2', bodyFormat: 'text' })).toBe('a < b, and 3 > 2')
+  })
+
+  it('says what a body written as markup actually says', () => {
+    expect(draftBodyText({
+      body: '<b>Dear Marcus</b>,<br>about the <a href="https://example.com">quote</a>.',
+      bodyFormat: 'html',
+    })).toBe('Dear Marcus,\nabout the quote.')
+  })
+
+  it('gives a list its lines back rather than running it together', () => {
+    expect(draftBodyText({
+      body: '<ul><li>Chairs</li><li>Desks</li></ul>',
+      bodyFormat: 'html',
+    })).toBe('Chairs\nDesks')
+  })
+
+  it('turns an escaped angle bracket back into one, and not into a tag', () => {
+    // The order of the unescaping matters: turning &amp; back first would make
+    // "&amp;lt;" into "&lt;" and then into "<", which is a tag somebody never
+    // wrote reappearing in a preview.
+    expect(draftBodyText({ body: '<p>a &amp;lt; b</p>', bodyFormat: 'html' })).toBe('a &lt; b')
+  })
+
+  it('takes a body with no format on it as text, which is the harmless reading', () => {
+    expect(draftBodyText({ body: '<not a tag>' })).toBe('<not a tag>')
+  })
+})
+
+describe('htmlHasWriting', () => {
+  // A writing box somebody has cleared out does not hand back an empty string,
+  // and "there is nothing to send yet" is the wrong thing to say to somebody
+  // who has written something - and the wrong thing NOT to say to somebody who
+  // has not.
+
+  it('is false for what an emptied box actually contains', () => {
+    expect(htmlHasWriting('')).toBe(false)
+    expect(htmlHasWriting('<br>')).toBe(false)
+    expect(htmlHasWriting('<div><br></div>')).toBe(false)
+    expect(htmlHasWriting('<p>&nbsp;</p>')).toBe(false)
+  })
+
+  it('is true the moment there is a word in it', () => {
+    expect(htmlHasWriting('<div>Yes</div>')).toBe(true)
+    expect(htmlHasWriting('<ul><li>Chairs</li></ul>')).toBe(true)
   })
 })
 

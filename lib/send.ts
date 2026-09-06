@@ -78,6 +78,9 @@ export type SendRequest = {
   /** Overrides the recipients worked out from the conversation. */
   to?: string[]
   cc?: string[]
+  /** Copies nobody else on the message can see. Never worked out from the
+   *  conversation - a blind copy is only ever somebody's deliberate choice. */
+  bcc?: string[]
   subject?: string
   bodyHtml: string
   /** Files already in storage - a media library item, or something just
@@ -113,6 +116,7 @@ export async function prepareSend(request: SendRequest): Promise<
       threadId: string | null
       to: string[]
       cc: string[]
+      bcc: string[]
       subject: string
       parent: Awaited<ReturnType<typeof getQuotableMessage>>
     }
@@ -143,6 +147,10 @@ export async function prepareSend(request: SendRequest): Promise<
 
   let to = (request.to ?? []).map(normaliseAddress).filter(Boolean)
   let cc = (request.cc ?? []).map(normaliseAddress).filter(Boolean)
+  // Never filled in from the conversation, whatever the mode: a reply to all
+  // answers everybody the original named, and nobody was ever blind-copied by
+  // a message we can read - the header is not there to read.
+  const bcc = (request.bcc ?? []).map(normaliseAddress).filter(Boolean)
 
   if (to.length === 0 && parent && (request.mode === 'reply' || request.mode === 'reply-all')) {
     const worked = replyRecipients(
@@ -162,7 +170,7 @@ export async function prepareSend(request: SendRequest): Promise<
   if (to.length === 0) {
     return { ok: false, reason: 'There is nobody to send this to. Add an address.' }
   }
-  const bad = [...to, ...cc].find((address) => !isValidAddress(address))
+  const bad = [...to, ...cc, ...bcc].find((address) => !isValidAddress(address))
   if (bad) return { ok: false, reason: `"${bad}" does not look like an email address.` }
 
   const subject =
@@ -175,7 +183,7 @@ export async function prepareSend(request: SendRequest): Promise<
 
   if (!subject) return { ok: false, reason: 'Give the message a subject.' }
 
-  return { ok: true, inboxId, threadId: thread?.id ?? null, to, cc, subject, parent }
+  return { ok: true, inboxId, threadId: thread?.id ?? null, to, cc, bcc, subject, parent }
 }
 
 /**
@@ -287,6 +295,7 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
     fromAddress: identity.address,
     toAddresses: prepared.to,
     ccAddresses: prepared.cc,
+    bccAddresses: prepared.bcc,
     subject: prepared.subject,
     bodyText: body.text,
     bodyHtml: body.html,
@@ -330,6 +339,7 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
   const sendable: SendableMessage = {
     to: prepared.to,
     cc: prepared.cc,
+    bcc: prepared.bcc,
     from: identity,
     transport: await transportForInbox(inbox),
     replyTo: replyToWorthSending({ from: identity, replyTo: inbox.address }),
@@ -404,6 +414,7 @@ async function copyToSentFolder(input: {
       from: input.identity,
       to: input.sendable.to,
       cc: input.sendable.cc,
+      bcc: input.sendable.bcc,
       replyTo: input.sendable.replyTo,
       subject: input.sendable.subject,
       html: input.sendable.html,
@@ -580,6 +591,10 @@ export async function retrySend(messageId: string): Promise<SendResult> {
   const sendable: SendableMessage = {
     to: message.toAddresses,
     cc: message.ccAddresses,
+    // The same blind copies the first attempt carried. A retry that quietly
+    // narrowed the recipients would be a different message wearing the same
+    // Message-ID.
+    bcc: message.bccAddresses,
     from: identity,
     transport: await transportForInbox(inbox),
     replyTo: replyToWorthSending({ from: identity, replyTo: inbox.address }),

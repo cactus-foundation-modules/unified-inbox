@@ -68,6 +68,7 @@ export async function loadContext(user: SessionUser, query: ContextQuery): Promi
   const adapters = await usableAdapters(user)
   const settled = await Promise.all(
     adapters.map(async (adapter) => {
+      if (!adapter.load) return null
       try {
         return await adapter.load(query)
       } catch (err) {

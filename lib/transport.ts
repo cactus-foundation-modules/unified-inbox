@@ -24,6 +24,9 @@ import type { Inbox } from './types'
 export type SendableMessage = {
   to: string[]
   cc: string[]
+  /** Recipients the others never see. Handed to core as its own list, never
+   *  folded into `cc` - a blind copy written into Cc is not a blind copy. */
+  bcc: string[]
   /** The inbox answering: the address the message goes out as. */
   from: { name: string | null; address: string }
   /** The inbox's own sending account, or null for the site's. */
@@ -139,6 +142,7 @@ export async function deliver(message: SendableMessage): Promise<SendOutcome> {
       ...(message.to.length > 1 || message.cc.length
         ? { cc: [...message.to.slice(1), ...message.cc] }
         : {}),
+      ...(message.bcc.length ? { bcc: message.bcc } : {}),
       ...(message.replyTo ? { replyTo: message.replyTo } : {}),
       subject: message.subject,
       html: message.html,

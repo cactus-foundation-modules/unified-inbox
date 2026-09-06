@@ -1,23 +1,50 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
-import { isWorthSaving, splitAddresses, type DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
-import { AttachmentChips, AttachmentPicker, plainReason, toHtml, type Attachment } from './AttachmentPicker'
+import {
+  htmlHasWriting,
+  isWorthSaving,
+  splitAddresses,
+  type DraftForComposer,
+} from '@/modules/unified-inbox/lib/drafts'
+import { plainTextToHtml, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
+import { AttachmentChips, AttachmentPicker, plainReason, type Attachment } from './AttachmentPicker'
 import { AttachmentDropNotice, AttachmentDropOverlay } from './AttachmentDropChrome'
 import { useAttachmentDrop } from './useAttachmentDrop'
 import { ConfirmDialog } from './ConfirmDialog'
-import { SendLater } from './SendLater'
+import { Dropdown } from './Dropdown'
+import { PendingSend } from './PendingSend'
+import { RecipientField } from './RecipientField'
+import { RichText } from './RichText'
+import { ScheduleNotice } from './ScheduleNotice'
+import { SendLaterPanel } from './SendLaterPanel'
+import { SnoozePanel } from './SnoozePanel'
+import { AlarmIcon, CollapseIcon, ExpandIcon, PaperclipIcon } from './icons'
 import type { DraftSendState } from '@/modules/unified-inbox/lib/types'
 
 // The composer: reply, reply to everybody, forward, and an internal note.
 //
 // Almost nothing about a message is decided here. The signature, the quoted
-// original, the Message-ID, the References chain and who a reply actually goes
-// to all live in the module's own pure code on the server, where they are
-// tested - this is a box to type in and a button to press. Sending the same
-// thing twice is the one thing the browser has to help with, and it does it by
-// carrying a token.
+// original, the Message-ID and the References chain all live in the module's
+// own pure code on the server, where they are tested - this is a box to type in
+// and a button to press. Sending the same thing twice is the one thing the
+// browser has to help with, and it does it by carrying a token.
+//
+// Who it goes to IS decided here now, which it was not before. The server still
+// works out who a plain reply would go to and that is still what the box opens
+// on - but it opens in a box rather than in a sentence, so the one address that
+// wants taking off, or the colleague who wants adding, is a click rather than a
+// forward. Cc, Bcc and the subject are one link each above the writing, closed
+// until somebody wants them: a reply that needs none of the three - which is
+// nearly every reply - should not have to look at three empty lines to find
+// that out.
+//
+// The pop-out puts the same box in front of everything else, for the reply that
+// turns out to be a letter. It is the SAME composer either way - the state is
+// held here and only the frame around it moves - so nothing is lost by popping
+// out halfway through a sentence.
 
 export type ComposerMode = 'reply' | 'reply-all' | 'forward' | 'note'
 type Mode = ComposerMode
@@ -31,8 +58,12 @@ const MENTION_CHIPS = 8
 
 type Props = {
   threadId: string
-  /** Who a plain reply would go to, worked out on the server. Shown so nobody
-   *  has to press Send to find out. */
+  /** Which address it leaves as, so the suggestions under To are the people
+   *  this address deals with rather than the whole site's. Null on a
+   *  conversation another module owns, which has no sending address. */
+  inboxId: string | null
+  /** Who a plain reply would go to, worked out on the server. What the To box
+   *  opens on, rather than what it is stuck with. */
   replyTo: string[]
   replyAllTo: string[]
   canReply: boolean
@@ -41,6 +72,11 @@ type Props = {
   /** Left over when the inbox this conversation belongs to cannot send - no
    *  sending identity, or the person may read it but not answer it. */
   cannotReplyReason: string | null
+  /** What the subject line would say if nobody touched it, worked out on the
+   *  server the same way the send route works it out. Only ever seen once
+   *  somebody opens the Subject line to change it. */
+  replySubject: string
+  forwardSubject: string
   /** What this person left in this box last time, if they left anything. */
   draft: DraftForComposer | null
   /** Which of the three the button at the top of the conversation asked for.
@@ -50,16 +86,12 @@ type Props = {
   /** Counts those presses, so pressing Forward twice still reads as a second
    *  instruction rather than as nothing having changed. */
   requestedAt?: number
-  /** The earliest a message may be set to go, in the picker's own shape and in
-   *  the site's zone. Worked out on the server, because this browser may be
-   *  standing somewhere else entirely. */
-  minSendAt: string
   timezone: string
 }
 
 export function Composer({
-  threadId, replyTo, replyAllTo, canReply, canForward, staff, cannotReplyReason, draft,
-  requestedMode, requestedAt, minSendAt, timezone,
+  threadId, inboxId, replyTo, replyAllTo, canReply, canForward, staff,
+  cannotReplyReason, replySubject, forwardSubject, draft, requestedMode, requestedAt, timezone,
 }: Props) {
   const router = useRouter()
   // A saved draft says which of the three it was, and opening the conversation
@@ -75,8 +107,50 @@ export function Composer({
     if (wanted === 'forward' && !canForward) return canReply ? 'reply' : 'note'
     return wanted
   })
-  const [text, setText] = useState(draft?.body ?? '')
-  const [forwardTo, setForwardTo] = useState((draft?.to ?? []).join(', '))
+  // The markup in the writing box. A draft written before the box could hold
+  // any is turned into markup on the way in, so its line breaks survive - and
+  // is saved back as markup the first time anybody touches it.
+  const [text, setText] = useState(
+    draft ? (draft.bodyFormat === 'html' ? draft.body : plainTextToHtml(draft.body)) : '',
+  )
+
+  /** Who a reply of this kind would go to, as one line of text. */
+  const defaultRecipients = useCallback(
+    (which: Mode) => (which === 'reply-all' ? replyAllTo : replyTo).join(', '),
+    [replyAllTo, replyTo],
+  )
+
+  // Two boxes rather than one, because they answer different questions. A reply
+  // is addressed to whoever wrote, a forward to somebody who has not seen it at
+  // all, and switching between the two must not hand a forward the customer's
+  // address by default. Within reply and reply-all the box refills itself as
+  // the chips are pressed - until somebody edits it, at which point their
+  // answer beats ours.
+  const [replyRecipients, setReplyRecipients] = useState(() => {
+    const saved = draft && draft.mode !== 'forward' ? draft.to : []
+    if (saved.length > 0) return saved.join(', ')
+    return defaultRecipients(mode)
+  })
+  const [recipientsEdited, setRecipientsEdited] = useState(
+    () => !!draft && draft.mode !== 'forward' && draft.to.length > 0,
+  )
+  const [forwardTo, setForwardTo] = useState(
+    () => (draft?.mode === 'forward' ? draft.to : []).join(', '),
+  )
+  const [cc, setCc] = useState((draft?.cc ?? []).join(', '))
+  const [bcc, setBcc] = useState((draft?.bcc ?? []).join(', '))
+  const [subject, setSubject] = useState(draft?.subject ?? '')
+  // Each of the three lines is closed until somebody wants it - and open from
+  // the start on a draft that already has something on it, because a saved Bcc
+  // that nobody could see would be the worst of both worlds.
+  const [showCc, setShowCc] = useState((draft?.cc ?? []).length > 0)
+  const [showBcc, setShowBcc] = useState((draft?.bcc ?? []).length > 0)
+  const [showSubject, setShowSubject] = useState(!!draft?.subject?.trim())
+  /** Whether the box is drawn over the whole screen rather than under the
+   *  conversation. State, not a route: the reply is half written, and a
+   *  navigation would take it off the page. */
+  const [poppedOut, setPoppedOut] = useState(false)
+
   const [mentions, setMentions] = useState<string[]>([])
   const [mentionQuery, setMentionQuery] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>(
@@ -105,6 +179,12 @@ export function Composer({
   // here: the server decides what a saved schedule means.
   const [followUpMinutes, setFollowUpMinutes] = useState<number | null>(draft?.followUpMinutes ?? null)
   const [held, setHeld] = useState(draft?.held ?? false)
+  // A time somebody has picked off the alarm clock and not yet committed. It is
+  // deliberately not saved on the spot: "send it later" and "send it later and
+  // put this conversation to sleep until then" are two instructions, and the
+  // menu cannot know which one is coming.
+  const [pendingSendAt, setPendingSendAt] = useState<Date | null>(null)
+  const [pendingFollowUp, setPendingFollowUp] = useState<number | null>(draft?.followUpMinutes ?? null)
   // Waiting for its own time, or going out this minute. Either way it is out of
   // this composer's hands.
   const waiting = sendState === 'scheduled' || sendState === 'sending'
@@ -125,12 +205,40 @@ export function Composer({
     if (requestedMode) setMode(requestedMode)
   }
 
+  /** Switching between a reply and a reply to everybody refills the To box,
+   *  because that is the whole of what the two chips mean - unless somebody has
+   *  already edited it, in which case their answer stands and the chip only
+   *  changes what the server quotes. */
+  const changeMode = useCallback((next: Mode) => {
+    setMode(next)
+    setError('')
+    setNote('')
+    if (!recipientsEdited && next !== 'forward' && next !== 'note') {
+      setReplyRecipients(defaultRecipients(next))
+    }
+  }, [defaultRecipients, recipientsEdited])
+
+  const forwarding = mode === 'forward'
+  const noting = mode === 'note'
+  /** The line the message is actually addressed by, whichever box it came out
+   *  of. */
+  const recipients = forwarding ? forwardTo : replyRecipients
+  const setRecipients = forwarding
+    ? (value: string) => { setForwardTo(value); setDirty(true) }
+    : (value: string) => { setReplyRecipients(value); setRecipientsEdited(true); setDirty(true) }
+  const nobodyToSendTo = !noting && splitAddresses(recipients).length === 0
+
+  /** What the subject would be if nobody touched it. Only ever shown once the
+   *  Subject line has been opened - a reply with a subject nobody typed is what
+   *  every reply has always been. */
+  const defaultSubject = forwarding ? forwardSubject : replySubject
+
   /** A file dragged straight onto the box, rather than found in the library.
    *  Off for an internal note, which is not sent anywhere and has nothing to
    *  carry a file on, and off while something is in flight for the reason the
    *  chips are greyed then: a message on its way is not one to add to. */
   const drop = useAttachmentDrop({
-    disabled: busy || mode === 'note',
+    disabled: busy || noting,
     onAttached: (item) => {
       setAttachments((prev) => (prev.some((a) => a.key === item.key) ? prev : [...prev, item]))
       setDirty(true)
@@ -159,10 +267,15 @@ export function Composer({
     return list
   }, [canReply, canForward, replyTo.length, replyAllTo.length])
 
-  const recipients = mode === 'reply' ? replyTo : mode === 'reply-all' ? replyAllTo : []
-  const nobodyToReplyTo = (mode === 'reply' || mode === 'reply-all') && recipients.length === 0
-
-  const hasUnsaved = dirty && (text.trim().length > 0 || forwardTo.trim().length > 0 || attachments.length > 0)
+  const hasUnsaved = dirty && (
+    htmlHasWriting(text)
+    || recipientsEdited
+    || forwardTo.trim().length > 0
+    || cc.trim().length > 0
+    || bcc.trim().length > 0
+    || subject.trim().length > 0
+    || attachments.length > 0
+  )
 
   // Closing the tab on half an answer is the one loss nothing in here can undo,
   // so the browser is asked to check. It only fires when there is something to
@@ -218,17 +331,61 @@ export function Composer({
     return () => document.removeEventListener('click', onClick, true)
   }, [])
 
-  const submit = useCallback(async () => {
-    if (!text.trim()) {
+  // Popped out, the box is a dialog and behaves like one: the page behind it
+  // does not scroll under it, and Escape puts it back. Nothing is lost either
+  // way - collapsing is not closing, and what is typed is held here rather than
+  // in the frame around it.
+  useEffect(() => {
+    if (!poppedOut) return
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setPoppedOut(false)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = previous
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [poppedOut])
+
+  /** Puts the conversation to sleep. Its own small request rather than part of
+   *  the send: the message going out and the conversation going quiet are two
+   *  separate facts, and a failure to do the second must not be reported as a
+   *  failure to do the first. */
+  const snoozeThread = useCallback(async (until: Date) => {
+    try {
+      const response = await fetch(`/api/m/unified-inbox/threads/${threadId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'snoozed', snoozeUntil: until.toISOString() }),
+      })
+      if (!response.ok) {
+        setError(plainReason(
+          (await response.json().catch(() => null))?.error,
+          'That went, but the conversation could not be put to sleep.',
+        ))
+        return
+      }
+      router.refresh()
+    } catch {
+      setError('That went, but the site could not be reached to put the conversation to sleep.')
+    }
+  }, [router, threadId])
+
+  const submit = useCallback(async (): Promise<boolean> => {
+    if (!htmlHasWriting(text)) {
       setError('There is nothing to send yet.')
-      return
+      return false
     }
-    if ((mode === 'reply' || mode === 'reply-all')
-      && (mode === 'reply' ? replyTo : replyAllTo).length === 0) {
-      setError('There is nobody to reply to on this conversation.')
-      return
+    const to = splitAddresses(recipients)
+    if (mode !== 'note' && to.length === 0) {
+      setError(mode === 'forward' ? 'Say who to forward it to.' : 'Say who this is going to.')
+      return false
     }
-    if (inFlight.current) return
+    if (inFlight.current) return false
     inFlight.current = true
     setBusyWith('send')
     setError('')
@@ -244,16 +401,9 @@ export function Composer({
             (await response.json().catch(() => null))?.error,
             'That note could not be saved.',
           ))
-          return
+          return false
         }
       } else {
-        const to = mode === 'forward'
-          ? forwardTo.split(/[,;]/).map((a) => a.trim()).filter(Boolean)
-          : undefined
-        if (mode === 'forward' && (!to || to.length === 0)) {
-          setError('Say who to forward it to.')
-          return
-        }
         const response = await fetch('/api/m/unified-inbox/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -261,7 +411,14 @@ export function Composer({
             threadId,
             mode,
             to,
-            bodyHtml: toHtml(text),
+            cc: splitAddresses(cc),
+            bcc: splitAddresses(bcc),
+            // Left out is "whatever the server would have called it", which is
+            // what every reply nobody touched the subject on wants.
+            subject: subject.trim() || undefined,
+            // Already markup. It is sanitised on the server, at the last gate
+            // before it leaves, exactly as a pasted signature is.
+            bodyHtml: text,
             attachments: attachments.map(({ key, url, filename, contentType }) => ({
               key, url, filename, contentType,
             })),
@@ -275,11 +432,19 @@ export function Composer({
             (await response.json().catch(() => null))?.error,
             'That message could not be sent.',
           ))
-          return
+          return false
         }
       }
       setText('')
       setForwardTo('')
+      setCc('')
+      setBcc('')
+      setSubject('')
+      setShowCc(false)
+      setShowBcc(false)
+      setShowSubject(false)
+      setReplyRecipients(defaultRecipients(mode))
+      setRecipientsEdited(false)
       setAttachments([])
       setMentions([])
       setMentionQuery('')
@@ -288,6 +453,7 @@ export function Composer({
       setSendAt(null)
       setSendState(null)
       setSendError(null)
+      setPendingSendAt(null)
       // Said out loud, because the box emptying could as easily mean something
       // went wrong as mean it went.
       setNote(mode === 'note' ? 'Your note is on the conversation.' : 'Sent. It is on the conversation above.')
@@ -297,27 +463,37 @@ export function Composer({
       setDraftId(null)
       token.current = crypto.randomUUID()
       router.refresh()
+      return true
     } catch {
       setError('The site could not be reached. Nothing was sent.')
+      return false
     } finally {
       inFlight.current = false
       setBusyWith(null)
     }
-  }, [attachments, draftId, forwardTo, mentions, mode, replyAllTo, replyTo, router, text, threadId])
+  }, [
+    attachments, bcc, cc, defaultRecipients, draftId, mentions, mode, recipients, router,
+    subject, text, threadId,
+  ])
 
   /** Puts the box down as a draft, with or without a time on it. Saving and
    *  scheduling are one request on purpose: a scheduled message IS a draft with
    *  a departure time, and two requests would leave a window where the writing
    *  was saved and the time was not. `wallClock` null takes a time back off. */
-  const save = useCallback(async (wallClock?: string | null, followUp?: number | null) => {
+  const save = useCallback(async (
+    wallClock?: string | null,
+    followUp?: number | null,
+  ): Promise<boolean> => {
     const payload = {
       id: draftId ?? undefined,
       threadId,
       mode: mode === 'note' ? ('reply' as const) : mode,
-      to: mode === 'forward' ? splitAddresses(forwardTo) : [],
-      cc: [],
-      subject: null,
+      to: mode === 'note' ? [] : splitAddresses(recipients),
+      cc: splitAddresses(cc),
+      bcc: splitAddresses(bcc),
+      subject: subject.trim() || null,
       body: text,
+      bodyFormat: 'html' as const,
       attachments: attachments.map(({ key, url, filename, contentType, sizeBytes }) => ({
         key, url, filename, contentType, sizeBytes,
       })),
@@ -331,9 +507,9 @@ export function Composer({
     }
     if (!isWorthSaving(payload)) {
       setError('There is nothing to save yet.')
-      return
+      return false
     }
-    if (inFlight.current) return
+    if (inFlight.current) return false
     inFlight.current = true
     setBusyWith('save')
     setError('')
@@ -347,7 +523,7 @@ export function Composer({
       const data = await response.json().catch(() => null)
       if (!response.ok) {
         setError(plainReason(data?.error, 'That draft could not be saved.'))
-        return
+        return false
       }
       if (data?.id) setDraftId(data.id as string)
       // What came back rather than what was asked for: the server is the one
@@ -360,18 +536,23 @@ export function Composer({
       // Saving with a time on it stands the message back up: whatever mail held
       // it has been read by whoever is scheduling it again.
       if (at) setHeld(false)
+      // The time that was pending is on the row now, so it is no longer
+      // something waiting to be committed.
+      if (wallClock !== undefined) setPendingSendAt(null)
       setDirty(false)
       setNote(at
         ? 'Saved, and set to go out on its own.'
         : 'Saved. It is waiting under Drafts, and here.')
       router.refresh()
+      return true
     } catch {
       setError('The site could not be reached. Nothing was saved.')
+      return false
     } finally {
       inFlight.current = false
       setBusyWith(null)
     }
-  }, [attachments, draftId, forwardTo, mode, router, text, threadId])
+  }, [attachments, bcc, cc, draftId, mode, recipients, router, subject, text, threadId])
 
   const discard = useCallback(async () => {
     if (!draftId) return
@@ -384,10 +565,14 @@ export function Composer({
       setDraftId(null)
       setText('')
       setForwardTo('')
+      setCc('')
+      setBcc('')
+      setSubject('')
       setAttachments([])
       setSendAt(null)
       setSendState(null)
       setSendError(null)
+      setPendingSendAt(null)
       setDirty(false)
       setNote('')
       router.refresh()
@@ -398,6 +583,10 @@ export function Composer({
       setBusyWith(null)
     }
   }, [draftId, router])
+
+  /** The chosen departure time in the shape the server reads it in: a wall
+   *  clock with no zone on it, meant in the SITE's zone. */
+  const pendingWallClock = pendingSendAt ? toWallClock(pendingSendAt, timezone) : null
 
   // Whoever is already picked stays on screen whatever is typed, so a name
   // cannot be taken off by a search that hides the chip it was on.
@@ -413,7 +602,17 @@ export function Composer({
     return { shown: [...picked, ...shown], hidden: Math.max(0, matches.length - shown.length) }
   }, [mentionQuery, mentions, staff])
 
-  return (
+  /** Return in one of the short lines at the top moves on to the next one,
+   *  which is what every mail program does and what fingers expect. It never
+   *  sends: Send is a button, and a message posted by a stray Return in the To
+   *  box is not a message anybody meant to send. */
+  const onLineEnter = (nextId: string) => (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Enter') return
+    event.preventDefault()
+    document.getElementById(nextId)?.focus()
+  }
+
+  const body = (
     <div className="uin-composer uin-droppable" {...drop.dropProps}>
       <AttachmentDropOverlay dragging={drop.dragging} />
       {/* Above the chips, and shown whenever there is a reason at all. It used
@@ -432,114 +631,208 @@ export function Composer({
             type="button"
             className="uin-chip"
             aria-pressed={mode === m.id}
-            onClick={() => { setMode(m.id); setError(''); setNote('') }}
+            onClick={() => changeMode(m.id)}
           >
             {m.label}
           </button>
         ))}
       </div>
 
-      {mode === 'forward' ? (
-        <div className="field">
-          <label htmlFor="uin-forward-to">Forward to</label>
-          <input
-            id="uin-forward-to"
-            type="text"
-            value={forwardTo}
-            onChange={(e) => { setForwardTo(e.target.value); setDirty(true) }}
-            placeholder="name@example.com"
-            autoComplete="off"
-          />
-        </div>
-      ) : mode === 'note' ? (
-        <p className="uin-recipients">
+      {noting ? (
+        <p className="uin-recipients uin-composer-aside">
           Only your colleagues see this. Nothing is sent to the customer.
         </p>
       ) : (
-        <p className="uin-recipients">
-          {recipients.length > 0 ? `To ${recipients.join(', ')}` : 'There is nobody to reply to on this conversation.'}
-        </p>
+        <div className="uin-fields">
+          <div className="uin-field-row">
+            <label htmlFor="uin-reply-to">To</label>
+            <div className="uin-field-control">
+              <RecipientField
+                id="uin-reply-to"
+                value={recipients}
+                onChange={setRecipients}
+                inboxId={inboxId}
+                onEnter={onLineEnter(showCc ? 'uin-reply-cc' : showBcc ? 'uin-reply-bcc' : showSubject ? 'uin-reply-subject' : 'uin-composer-text')}
+                placeholder="name@example.com"
+              />
+              {/* The three lines nobody usually wants, and the way to make the
+                  box bigger. All four are one press each, and none of them is
+                  taking up a line until it is asked for. */}
+              <div className="uin-field-links">
+                {!showCc && (
+                  <button type="button" className="uin-field-add" onClick={() => setShowCc(true)}>Cc</button>
+                )}
+                {!showBcc && (
+                  <button type="button" className="uin-field-add" onClick={() => setShowBcc(true)}>Bcc</button>
+                )}
+                {!showSubject && (
+                  <button
+                    type="button"
+                    className="uin-field-add"
+                    onClick={() => {
+                      setShowSubject(true)
+                      // Opened to be changed, so it opens on what it would have
+                      // said - an empty subject box on a reply is a trap.
+                      setSubject((was) => was || defaultSubject)
+                    }}
+                  >
+                    Subject
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="uin-icon-btn uin-field-pop"
+                  aria-label={poppedOut ? 'Put it back under the conversation' : 'Open it in a window of its own'}
+                  title={poppedOut ? 'Put it back' : 'Open it in a window of its own'}
+                  onClick={() => setPoppedOut((was) => !was)}
+                >
+                  {poppedOut ? CollapseIcon : ExpandIcon}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {showCc && (
+            <div className="uin-field-row">
+              <label htmlFor="uin-reply-cc">Cc</label>
+              <div className="uin-field-control">
+                <RecipientField
+                  id="uin-reply-cc"
+                  value={cc}
+                  onChange={(next) => { setCc(next); setDirty(true) }}
+                  inboxId={inboxId}
+                  onEnter={onLineEnter(showBcc ? 'uin-reply-bcc' : showSubject ? 'uin-reply-subject' : 'uin-composer-text')}
+                  placeholder="somebody.else@example.com"
+                />
+                {/* Only while it is empty: a line with an address on it is taken
+                    away by clearing it, and a button that quietly dropped
+                    somebody off the message would be worse. */}
+                {!cc.trim() && (
+                  <button
+                    type="button"
+                    className="uin-field-add"
+                    onClick={() => setShowCc(false)}
+                    aria-label="Take the Cc line off"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {showBcc && (
+            <div className="uin-field-row">
+              <label htmlFor="uin-reply-bcc">Bcc</label>
+              <div className="uin-field-control">
+                <RecipientField
+                  id="uin-reply-bcc"
+                  value={bcc}
+                  onChange={(next) => { setBcc(next); setDirty(true) }}
+                  inboxId={inboxId}
+                  onEnter={onLineEnter(showSubject ? 'uin-reply-subject' : 'uin-composer-text')}
+                  placeholder="somebody.quiet@example.com"
+                />
+                {!bcc.trim() && (
+                  <button
+                    type="button"
+                    className="uin-field-add"
+                    onClick={() => setShowBcc(false)}
+                    aria-label="Take the Bcc line off"
+                  >
+                    Remove
+                  </button>
+                )}
+                {bcc.trim() && (
+                  <span className="uin-field-hint">Nobody else on the message sees these.</span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {showSubject && (
+            <div className="uin-field-row">
+              <label htmlFor="uin-reply-subject">Subject</label>
+              <div className="uin-field-control">
+                <input
+                  id="uin-reply-subject"
+                  type="text"
+                  value={subject}
+                  onChange={(e) => { setSubject(e.target.value); setDirty(true) }}
+                  onKeyDown={onLineEnter('uin-composer-text')}
+                  placeholder={defaultSubject}
+                  autoComplete="off"
+                />
+                {!subject.trim() && (
+                  <button
+                    type="button"
+                    className="uin-field-add"
+                    onClick={() => setShowSubject(false)}
+                    aria-label="Take the Subject line off"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
-      <div className="field">
-        <label htmlFor="uin-composer-text">
-          {mode === 'note' ? 'Your note' : 'Your message'}
-        </label>
-        <textarea
+      <div className="uin-compose-message">
+        <RichText
           id="uin-composer-text"
+          aria-label={noting ? 'Your note' : 'Your message'}
           value={text}
-          onChange={(e) => { setText(e.target.value); setDirty(true); setNote('') }}
-          placeholder={mode === 'note' ? 'Something for the others to see' : 'Write your reply'}
+          onChange={(html) => { setText(html); setDirty(true); setNote('') }}
+          placeholder={noting ? 'Something for the others to see' : 'Write your reply'}
         />
       </div>
 
-      {mode === 'note' && staff.length > 0 && (
-        <div className="uin-actions">
-          {staff.length > MENTION_CHIPS && (
-            <div className="field">
-              <label htmlFor="uin-mention-search">Let somebody know</label>
+      {noting && staff.length > 0 && (
+        <div className="uin-composer-row">
+          {staff.length > MENTION_CHIPS ? (
+            <div className="uin-mention-search">
+              <label className="sr-only" htmlFor="uin-mention-search">Let somebody know</label>
               <input
                 id="uin-mention-search"
                 type="search"
                 value={mentionQuery}
-                placeholder="Start typing a name"
+                placeholder="Let somebody know - start typing a name"
                 autoComplete="off"
                 onChange={(e) => setMentionQuery(e.target.value)}
               />
             </div>
+          ) : (
+            <span className="uin-recipients">Let somebody know</span>
           )}
-          <div className="uin-composer-row">
-            {staff.length <= MENTION_CHIPS && <span className="uin-recipients">Let somebody know</span>}
-            {mentionable.shown.map((person) => (
-              <button
-                key={person.id}
-                type="button"
-                className="uin-chip"
-                aria-pressed={mentions.includes(person.id)}
-                onClick={() => setMentions((prev) =>
-                  prev.includes(person.id) ? prev.filter((id) => id !== person.id) : [...prev, person.id],
-                )}
-              >
-                {person.name}
-              </button>
-            ))}
-            {mentionable.shown.length === 0 && (
-              <span className="uin-recipients">Nobody here goes by that.</span>
-            )}
-            {mentionable.hidden > 0 && (
-              <span className="uin-recipients">
-                {mentionable.hidden === 1
-                  ? 'One more. Keep typing to find them.'
-                  : `${mentionable.hidden} more. Keep typing to find them.`}
-              </span>
-            )}
-          </div>
+          {mentionable.shown.map((person) => (
+            <button
+              key={person.id}
+              type="button"
+              className="uin-chip"
+              aria-pressed={mentions.includes(person.id)}
+              onClick={() => setMentions((prev) =>
+                prev.includes(person.id) ? prev.filter((id) => id !== person.id) : [...prev, person.id],
+              )}
+            >
+              {person.name}
+            </button>
+          ))}
+          {mentionable.shown.length === 0 && (
+            <span className="uin-recipients">Nobody here goes by that.</span>
+          )}
+          {mentionable.hidden > 0 && (
+            <span className="uin-recipients">
+              {mentionable.hidden === 1
+                ? 'One more. Keep typing to find them.'
+                : `${mentionable.hidden} more. Keep typing to find them.`}
+            </span>
+          )}
         </div>
       )}
 
-      {mode !== 'note' && (
-        <div className="uin-composer-row">
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => setPicking(true)}
-            disabled={busy}
-          >
-            Attach a file
-          </button>
-          <AttachmentChips
-            attachments={attachments}
-            disabled={busy}
-            onRemove={(key) => {
-              setAttachments((prev) => prev.filter((p) => p.key !== key))
-              setDirty(true)
-            }}
-          />
-          <span className="uin-recipients">or drag one onto this box</span>
-        </div>
-      )}
-
-      {mode !== 'note' && (
+      {!noting && (
         <AttachmentDropNotice
           progress={drop.progress}
           errors={drop.errors}
@@ -547,47 +840,91 @@ export function Composer({
         />
       )}
 
-      {/* An internal note is not sent to anybody, so there is nothing to send
-          later. Neither is a reply with nobody to reply to. */}
-      {mode !== 'note' && (
-        <SendLater
+      {/* An internal note is not sent to anybody, so it has no departure time
+          to have anything to say about. */}
+      {!noting && (
+        <ScheduleNotice
           sendAt={sendAt}
           sendState={sendState}
           sendError={sendError}
           followUpMinutes={followUpMinutes}
           held={held}
-          minWallClock={minSendAt}
+          timezone={timezone}
+        />
+      )}
+
+      {!noting && pendingSendAt && !waiting && (
+        <PendingSend
+          at={pendingSendAt}
+          followUp={pendingFollowUp}
+          onFollowUp={(minutes) => { setPendingFollowUp(minutes); setError('') }}
+          onProblem={setError}
+          onClear={() => setPendingSendAt(null)}
           timezone={timezone}
           busy={busy}
-          disabled={nobodyToReplyTo}
-          onSchedule={(wallClock, followUp) => { void save(wallClock, followUp) }}
-          onCancel={() => { void save(null) }}
         />
       )}
 
       {error && <div className="alert alert-danger" role="alert">{error}</div>}
       {note && !error && <div className="alert alert-success" role="status">{note}</div>}
 
-      <div className="uin-composer-row">
+      {/* Everything you can do to the message, on one strip along the bottom -
+          the place every mail program has kept it. The two icons on the left are
+          things you do TO the message, the buttons on the right are the ways it
+          leaves, and the gap between them is deliberate. */}
+      <div className="uin-composer-row uin-composer-actions">
+        {!noting && (
+          <>
+            <button
+              type="button"
+              className="uin-icon-btn"
+              title="Attach a file, or drag one onto this box"
+              aria-label="Attach a file, or drag one onto this box"
+              onClick={() => setPicking(true)}
+              disabled={busy}
+            >
+              {PaperclipIcon}
+            </button>
+            <Dropdown
+              className="uin-icon-btn"
+              label={AlarmIcon}
+              ariaLabel="Send it later"
+              title="Send it later"
+              width={280}
+              panelClassName="uin-menu-snooze"
+              disabled={busy || nobodyToSendTo}
+            >
+              <SendLaterPanel
+                timezone={timezone}
+                busy={busy}
+                scheduled={waiting}
+                onPick={(at) => { setPendingSendAt(at); setError('') }}
+                onCancelTimer={() => { setPendingSendAt(null); void save(null) }}
+              />
+            </Dropdown>
+            <AttachmentChips
+              attachments={attachments}
+              disabled={busy}
+              onRemove={(key) => {
+                setAttachments((prev) => prev.filter((p) => p.key !== key))
+                setDirty(true)
+              }}
+            />
+          </>
+        )}
+
+        <span className="uin-composer-gap" />
+
         {/* A reply with a time on it has already been decided about. Send would
             post it now and Save would look like the way to keep it, which it is
-            not - so while it is waiting, the panel above is the whole of what is
-            left to do: move it, or cancel the timer and have these back. */}
-        {!waiting && (
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            onClick={submit}
-            // Nothing to reply to means the server would refuse it anyway, and
-            // finding that out by pressing Send is finding it out too late.
-            disabled={busy || nobodyToReplyTo}
-          >
-            {busyWith === 'send'
-              ? (mode === 'note' ? 'Saving...' : 'Sending...')
-              : mode === 'note' ? 'Save note' : 'Send'}
+            not - so while it is waiting, the notice above is the whole of what
+            is left to do: move it, or cancel the timer and have these back. */}
+        {!noting && draftId && (
+          <button type="button" className="uin-chip" onClick={() => setAsking(true)} disabled={busy}>
+            {busyWith === 'discard' ? 'Throwing it away...' : 'Throw the draft away'}
           </button>
         )}
-        {mode !== 'note' && !waiting && (
+        {!noting && !waiting && (
           <button
             type="button"
             className="btn btn-secondary btn-sm"
@@ -597,9 +934,71 @@ export function Composer({
             {busyWith === 'save' ? 'Saving...' : 'Save as a draft'}
           </button>
         )}
-        {mode !== 'note' && draftId && (
-          <button type="button" className="uin-chip" onClick={() => setAsking(true)} disabled={busy}>
-            {busyWith === 'discard' ? 'Throwing it away...' : 'Throw the draft away'}
+
+        {!noting && !waiting && pendingWallClock && (
+          <>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => { void save(pendingWallClock, pendingFollowUp) }}
+              disabled={busy || nobodyToSendTo}
+            >
+              Send later
+            </button>
+            <Dropdown
+              className="btn btn-secondary btn-sm"
+              label={'Send later & snooze'}
+              align="end"
+              width={280}
+              panelClassName="uin-menu-snooze"
+              disabled={busy || nobodyToSendTo}
+            >
+              <SnoozePanel
+                timezone={timezone}
+                busy={busy}
+                title="Send it later, then sleep until"
+                onSnooze={(until) => {
+                  void save(pendingWallClock, pendingFollowUp).then((ok) => {
+                    if (ok) void snoozeThread(until)
+                  })
+                }}
+              />
+            </Dropdown>
+          </>
+        )}
+
+        {!noting && !waiting && (
+          <Dropdown
+            className="btn btn-secondary btn-sm"
+            label={'Send & snooze'}
+            align="end"
+            width={280}
+            panelClassName="uin-menu-snooze"
+            disabled={busy || nobodyToSendTo}
+          >
+            <SnoozePanel
+              timezone={timezone}
+              busy={busy}
+              title="Send it, then sleep until"
+              onSnooze={(until) => {
+                void submit().then((ok) => { if (ok) void snoozeThread(until) })
+              }}
+            />
+          </Dropdown>
+        )}
+
+        {!waiting && (
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => { void submit() }}
+            // Nothing to send to means the server would refuse it anyway, and
+            // finding that out by pressing Send is finding it out too late.
+            disabled={busy || nobodyToSendTo}
+          >
+            {busyWith === 'send'
+              ? (noting ? 'Saving...' : 'Sending...')
+              : noting ? 'Save note' : 'Send now'}
           </button>
         )}
       </div>
@@ -616,7 +1015,11 @@ export function Composer({
           }}
         />
       )}
+    </div>
+  )
 
+  const dialogs = (
+    <>
       <ConfirmDialog
         open={leavingTo !== null}
         title="Leave this reply?"
@@ -644,6 +1047,40 @@ export function Composer({
         onCancel={() => { if (busyWith !== 'discard') setAsking(false) }}
         onConfirm={() => { void discard().then(() => setAsking(false)) }}
       />
-    </div>
+    </>
+  )
+
+  if (!poppedOut) {
+    return <>{body}{dialogs}</>
+  }
+
+  // Drawn into the body rather than where the composer sits, so it is over the
+  // conversation rather than inside a pane that scrolls. It is still the same
+  // component - only the frame around it moved - so nothing typed is lost by
+  // popping out or by putting it back.
+  return createPortal(
+    <div className="uin-modal">
+      <div
+        className="uin-modal-card uin-modal-card-compose"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Your reply"
+      >
+        <div className="uin-modal-head">
+          <h2 className="uin-modal-title">Your reply</h2>
+          <button
+            type="button"
+            className="uin-modal-close"
+            aria-label="Put it back under the conversation"
+            onClick={() => setPoppedOut(false)}
+          >
+            {CollapseIcon}
+          </button>
+        </div>
+        <div className="uin-modal-body">{body}</div>
+      </div>
+      {dialogs}
+    </div>,
+    document.body,
   )
 }

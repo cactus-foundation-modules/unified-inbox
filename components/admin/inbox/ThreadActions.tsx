@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Dropdown, MenuItem } from './Dropdown'
 import { SnoozePanel } from './SnoozePanel'
+import { UndoToast } from './UndoToast'
 import { AlarmIcon, ChevronDownIcon } from './icons'
 
 // What is done TO a conversation: whose desk it is on, where it stands, and
@@ -23,6 +24,10 @@ type Props = {
   threadId: string
   status: string
   assigneeUserId: string | null
+  /** When a snoozed conversation is due back, as an ISO string. Only used to
+   *  put it back the way it was if marking it done is undone - the API will
+   *  not take a snooze with no date on it. */
+  snoozeUntil: string | null
   staff: Array<{ id: string; name: string }>
   /** The site's timezone, so "tomorrow morning" is nine o'clock here rather
    *  than nine o'clock UTC. */
@@ -38,12 +43,19 @@ const STATUS_WORDS: Record<string, string> = {
   snoozed: 'Snoozed',
 }
 
-export function ThreadActions({ threadId, status, assigneeUserId, staff, timezone }: Props) {
+export function ThreadActions({ threadId, status, assigneeUserId, snoozeUntil, staff, timezone }: Props) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  /** What putting it back would mean, while the offer to do so is still on the
+   *  screen. Null the rest of the time, which is also what says there is no
+   *  toast. Held as the whole change rather than a status, because a snooze
+   *  without the date it is due back is a change the API refuses. */
+  const [undoTo, setUndoTo] = useState<Record<string, unknown> | null>(null)
   const assignedTo = staff.find((person) => person.id === assigneeUserId)?.name ?? null
 
+  /** Says whether it saved, because marking done only offers to undo itself
+   *  once the site has agreed that it happened. */
   const patch = useCallback(async (body: Record<string, unknown>) => {
     setBusy(true)
     setError('')
@@ -55,25 +67,64 @@ export function ThreadActions({ threadId, status, assigneeUserId, staff, timezon
       })
       if (!response.ok) {
         setError((await response.json().catch(() => null))?.error ?? 'That did not save.')
-        return
+        return false
       }
       router.refresh()
+      return true
     } catch {
       setError('The site could not be reached, so nothing changed.')
+      return false
     } finally {
       setBusy(false)
     }
   }, [router, threadId])
 
+  /** Done is the one change that hides the conversation from the view it was
+   *  found in, so it is the one that offers to take itself back - to where it
+   *  actually stood, which for something asleep until Monday is asleep until
+   *  Monday rather than open on the list this morning. */
+  const markDone = useCallback(async () => {
+    const back = status === 'snoozed' && snoozeUntil
+      ? { status: 'snoozed', snoozeUntil }
+      : { status: 'open' }
+    if (await patch({ status: 'done' })) setUndoTo(back)
+  }, [patch, snoozeUntil, status])
+
   return (
-    <div className="uin-actions">
+    <>
       <div className="uin-thread-actions">
-        {/* Whose it is, on the left. It said "With nobody yet", which describes
-            the state rather than offering the thing you press it to do - and
-            the state is already written on the row in the list. */}
+        {/* The clock first, then whose it is, then where it stands. All three
+            sit on the subject line now, hard against the way out of the
+            conversation: they are what you press on the way OUT of one, and a
+            row of them on a line of their own was a band of chrome between the
+            subject and the message. */}
         <Dropdown
-          label={assignedTo ? `With ${assignedTo}` : 'Assign'}
+          className="uin-icon-btn uin-icon-btn-framed"
+          label={AlarmIcon}
+          ariaLabel="Set when this comes back"
+          title="Snooze"
+          align="end"
+          width={280}
           disabled={busy}
+          panelClassName="uin-menu-snooze"
+        >
+          <SnoozePanel
+            status={status}
+            timezone={timezone}
+            busy={busy}
+            onSnooze={(until) => void patch({ status: 'snoozed', snoozeUntil: until.toISOString() })}
+            onWake={() => void patch({ status: 'open' })}
+          />
+        </Dropdown>
+
+        {/* Whose it is. It said "With nobody yet", which describes the state
+            rather than offering the thing you press it to do - and the state is
+            already written on the row in the list. */}
+        <Dropdown
+          label={<>{assignedTo ? `With ${assignedTo}` : 'Assign'}{ChevronDownIcon}</>}
+          className="btn btn-secondary btn-sm uin-status-btn"
+          disabled={busy}
+          align="end"
           width={220}
         >
           <div className="uin-menu-title">Hand it to</div>
@@ -96,48 +147,46 @@ export function ThreadActions({ threadId, status, assigneeUserId, staff, timezon
           ))}
         </Dropdown>
 
-        {/* The clock and where it stands, hard against the far edge - the two
-            things you press on the way OUT of a conversation, together, at the
-            end of the row rather than scattered through it. */}
-        <div className="uin-thread-actions-end">
-          <Dropdown
-            className="uin-icon-btn uin-icon-btn-framed"
-            label={AlarmIcon}
-            ariaLabel="Set when this comes back"
-            title="Snooze"
-            align="end"
-            width={280}
-            disabled={busy}
-            panelClassName="uin-menu-snooze"
-          >
-            <SnoozePanel
-              status={status}
-              timezone={timezone}
-              busy={busy}
-              onSnooze={(until) => void patch({ status: 'snoozed', snoozeUntil: until.toISOString() })}
-              onWake={() => void patch({ status: 'open' })}
-            />
-          </Dropdown>
-
-          <Dropdown
-            label={<>{STATUS_WORDS[status] ?? 'Open'}{ChevronDownIcon}</>}
-            className="btn btn-secondary btn-sm uin-status-btn"
-            title="Where this conversation stands"
-            align="end"
-            width={200}
-            disabled={busy}
-          >
-            {status !== 'open' && (
-              <MenuItem disabled={busy} onClick={() => void patch({ status: 'open' })}>Open</MenuItem>
-            )}
-            {status !== 'done' && (
-              <MenuItem disabled={busy} onClick={() => void patch({ status: 'done' })}>Done</MenuItem>
-            )}
-          </Dropdown>
-        </div>
+        {/* No width on this one: two one-word answers do not want two hundred
+            pixels of panel, and the panel now takes only what is in it. */}
+        <Dropdown
+          label={<>{STATUS_WORDS[status] ?? 'Open'}{ChevronDownIcon}</>}
+          className="btn btn-secondary btn-sm uin-status-btn"
+          title="Where this conversation stands"
+          align="end"
+          disabled={busy}
+        >
+          {status !== 'open' && (
+            <MenuItem
+              disabled={busy}
+              onClick={() => {
+                setUndoTo(null)
+                void patch({ status: 'open' })
+              }}
+            >
+              Open
+            </MenuItem>
+          )}
+          {status !== 'done' && (
+            <MenuItem disabled={busy} onClick={() => void markDone()}>Done</MenuItem>
+          )}
+        </Dropdown>
       </div>
 
-      {error && <div className="alert alert-danger" role="alert">{error}</div>}
-    </div>
+      {/* The five seconds in which marking something done is still a mistake
+          you can take back. It puts it back where it was rather than simply
+          opening it: something snoozed until Monday that was closed by
+          accident wants to be snoozed until Monday again. */}
+      {undoTo && (
+        <UndoToast onUndo={() => void patch(undoTo)} onDone={() => setUndoTo(null)}>
+          Marked as done.
+        </UndoToast>
+      )}
+
+      {/* Its own line under the subject rather than squeezed onto the end of
+          it: the row above is three controls on one line by design and a whole
+          sentence in it would push them off the screen. */}
+      {error && <div className="alert alert-danger uin-thread-actions-error" role="alert">{error}</div>}
+    </>
   )
 }

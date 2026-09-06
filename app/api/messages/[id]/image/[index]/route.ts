@@ -32,7 +32,9 @@ export async function GET(
   const message = await getMessageHtml(id)
   if (!message) return errorResponse('That message no longer exists.', 404)
 
-  if (!await canOpenThread(user, message)) return errorResponse('Forbidden', 403)
+  if (!await canOpenThread(user, { ...message, id: message.threadId })) {
+    return errorResponse('Forbidden', 403)
+  }
 
   const urls = remoteImageUrls(message.html)
   const position = Number.parseInt(index, 10)

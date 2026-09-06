@@ -41,6 +41,21 @@ export type InboxParams = {
   /** The "Campaigns" tab: the same email to a great many people. Same slot
    *  again, and the same reason. */
   campaignsOnly: boolean
+  /** The "Mentioned" tab: conversations colleagues have tagged this person in.
+   *  Same slot again - it is a list of things to work through, and which list
+   *  is on the left is one choice. */
+  mentionsOnly: boolean
+  /** Which colleague's address the Sent, Drafts or Mentioned list above is
+   *  narrowed to, or null for this reader's own across every address they can
+   *  read.
+   *
+   *  Written into the same slot as everything else - `sent:<id>` - because it is
+   *  the same choice, what the list on the left is a list of, and two params
+   *  that cannot both be true have no business being two params. Null on every
+   *  other tab: an inbox chosen in the ordinary way is `inboxId`, and reading
+   *  one out of the other is how a Sent folder ends up scoped to a conversation
+   *  list's address. */
+  folderInboxId: string | null
   /** Which campaign is open, if any. */
   campaignId: string | null
   /** Which half of the address book is being listed. Only read on the Contacts
@@ -139,6 +154,32 @@ function calendarDate(raw: string | undefined): string | null {
   return date.getUTCMonth() === m - 1 && date.getUTCDate() === d ? value : null
 }
 
+/** The three lists that can be looked at inside ONE address as well as across
+ *  every address somebody can read. Written `sent:<inbox id>` in the query
+ *  string, which is what the folders under a colleague's name on the rail point
+ *  at. */
+const SCOPED_FOLDERS = ['sent', 'drafts', 'mentions'] as const
+
+type ScopedFolder = (typeof SCOPED_FOLDERS)[number]
+
+/**
+ * What the `inbox` param says, once the prefixes are off it.
+ *
+ * Pure and tiny, and out here because "sent" and "sent:abc" mean the same list
+ * scoped two different ways, and reading that in three separate ternaries below
+ * is how one of them ends up disagreeing with the other two. An empty id after
+ * the colon is not a scope - it is a link that lost its value - and falls back
+ * to the unscoped folder rather than to an address nobody has.
+ */
+function readFolder(inbox: string): { folder: ScopedFolder | null; inboxId: string | null } {
+  for (const folder of SCOPED_FOLDERS) {
+    if (!inbox.startsWith(`${folder}:`)) continue
+    const id = inbox.slice(folder.length + 1)
+    return { folder, inboxId: id.length > 0 ? id : null }
+  }
+  return { folder: null, inboxId: null }
+}
+
 /**
  * The query string, read defensively. A mistyped ?page= once reached a database
  * query as NaN elsewhere in this codebase and rendered an error page instead of
@@ -152,18 +193,23 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
   // names a real one - "m:" alone is nobody's inbox id either.
   const isChannel = inbox.startsWith('m:')
   const channel = isChannel ? inbox.slice(2) : ''
+  const scoped = readFolder(inbox)
   return {
     inboxId:
-      !isChannel && inbox && inbox !== 'all' && inbox !== 'none' && inbox !== 'drafts'
+      !isChannel && !scoped.folder
+        && inbox && inbox !== 'all' && inbox !== 'none' && inbox !== 'drafts'
         && inbox !== 'sent' && inbox !== 'contacts' && inbox !== 'campaigns'
+        && inbox !== 'mentions'
         ? inbox
         : null,
     providerModule: channel.length > 0 ? channel : null,
     unroutedOnly: inbox === 'none',
-    draftsOnly: inbox === 'drafts',
-    sentOnly: inbox === 'sent',
+    draftsOnly: inbox === 'drafts' || scoped.folder === 'drafts',
+    sentOnly: inbox === 'sent' || scoped.folder === 'sent',
     contactsOnly: inbox === 'contacts',
     campaignsOnly: inbox === 'campaigns',
+    mentionsOnly: inbox === 'mentions' || scoped.folder === 'mentions',
+    folderInboxId: scoped.inboxId,
     campaignId: sp.campaign ? sp.campaign : null,
     contactsView: sp.view === 'organisations' ? 'organisations' : 'people',
     organisationId: sp.org ? sp.org : null,
@@ -348,6 +394,11 @@ const NOT_A_SCOPE = ['drafts', 'sent', 'contacts', 'campaigns']
 
 function searchableScope(inbox: string): string {
   if (!inbox || NOT_A_SCOPE.includes(inbox)) return 'all'
+  // One colleague's Sent or Drafts is the same kind of thing narrowed to one
+  // address, and searching it means searching that address - not a folder the
+  // dialog has no way to express.
+  const scoped = readFolder(inbox)
+  if (scoped.folder) return scoped.inboxId ?? 'all'
   return inbox
 }
 
@@ -433,30 +484,42 @@ export function pinDefaultInbox<T extends { id: string }>(
 }
 
 /**
- * The rail's two groups of addresses: the ones that are this person's, and the
- * ones the business shares.
+ * The rail's three groups of addresses: the ones that are this person's, the
+ * ones the business shares, and colleagues' own post this person has been let
+ * in to.
  *
  * Built on `pinDefaultInbox` rather than beside it, because there are two
  * different ways an address ends up under Yours and they are not the same fact.
- * An INDIVIDUAL inbox is theirs by its nature - nobody else can see it, so it
- * could not sensibly appear anywhere else on anybody's rail. A SHARED inbox
+ * An INDIVIDUAL inbox this person OWNS is theirs by its nature. A SHARED inbox
  * pinned as their own is a preference: purchasing@ is still the team's, it is
  * simply the one this person opens the hub on. Both belong at the top, and only
  * the second of them is per person.
  *
+ * The third group is what an individual inbox someone ELSE owns became the day
+ * one could be opened to a colleague - covering somebody's post while they are
+ * away, working their diary. It is emphatically not "Yours", it is not the
+ * business's either, and it must not be draggable: where it sits is decided by
+ * whose it is. An individual inbox whose owner's account has gone belongs to
+ * nobody, so it sits here too rather than being called somebody's.
+ *
  * `shared` stays in the site's own order, which is what the drag saves and what
  * everybody else sees.
  */
-export function splitInboxes<T extends { id: string; kind: 'individual' | 'shared' }>(
+export function splitInboxes<
+  T extends { id: string; kind: 'individual' | 'shared'; ownerUserId?: string | null },
+>(
   inboxes: T[],
   defaultInboxId: string | null,
-): { yours: T[]; shared: T[] } {
-  const mine = inboxes.filter((i) => i.kind === 'individual')
+  meUserId: string,
+): { yours: T[]; shared: T[]; team: T[] } {
+  const individual = inboxes.filter((i) => i.kind === 'individual')
+  const mine = individual.filter((i) => i.ownerUserId === meUserId)
+  const team = individual.filter((i) => i.ownerUserId !== meUserId)
   const { pinned, rest } = pinDefaultInbox(
     inboxes.filter((i) => i.kind !== 'individual'),
     defaultInboxId,
   )
-  return { yours: pinned ? [...mine, pinned] : mine, shared: rest }
+  return { yours: pinned ? [...mine, pinned] : mine, shared: rest, team }
 }
 
 export function pageCount(total: number, perPage: number = PER_PAGE): number {

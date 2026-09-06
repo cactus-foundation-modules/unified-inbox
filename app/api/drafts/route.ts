@@ -2,10 +2,11 @@ import { NextResponse } from 'next/server'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
+import { sanitizeEmailHtml } from '@/lib/sanitize'
 import { getSiteTimezone } from '@/lib/config/timezone.server'
 import { canOpenThread, canReplyToInbox, replyableInboxIds } from '@/modules/unified-inbox/lib/access'
 import { allInboxIds, getThreadDetail, saveDraft } from '@/modules/unified-inbox/lib/db'
-import { isWorthSaving } from '@/modules/unified-inbox/lib/drafts'
+import { htmlHasWriting, isWorthSaving } from '@/modules/unified-inbox/lib/drafts'
 import { decideFollowUp, decideSendAt } from '@/modules/unified-inbox/lib/scheduled'
 import { visibleProviderModules } from '@/modules/unified-inbox/lib/provider-registry'
 import { DraftBody } from '@/modules/unified-inbox/lib/validation'
@@ -36,8 +37,21 @@ export async function POST(request: Request) {
 
   const to = body.to ?? []
   const cc = body.cc ?? []
+  const bcc = body.bcc ?? []
   const attachments = body.attachments ?? []
-  if (!isWorthSaving({ to, cc, subject: body.subject, body: body.body, attachments })) {
+  // A draft is markup now, and a draft is not private to whoever wrote it: a
+  // colleague who may read the address may open it, and their browser is what
+  // puts it back in the writing box. So it is cleaned HERE, once, on the way in
+  // - the same allow-list the send path applies at the other end. Cleaning it
+  // on the way out instead would leave the stored row a loaded gun for anything
+  // that ever read it without remembering to.
+  const bodyFormat = body.bodyFormat ?? 'text'
+  const cleaned = bodyFormat === 'html' ? sanitizeEmailHtml(body.body) : body.body
+  // A writing box somebody has cleared out hands back a stray break rather than
+  // an empty string, and a draft that is nothing but a line break is a row in
+  // the Drafts list saying nothing.
+  const draftBody = bodyFormat === 'html' && !htmlHasWriting(cleaned) ? '' : cleaned
+  if (!isWorthSaving({ to, cc, bcc, subject: body.subject, body: draftBody, attachments })) {
     return errorResponse('There is nothing to save yet.', 400)
   }
 
@@ -86,7 +100,7 @@ export async function POST(request: Request) {
     if (!inboxId && !thread) {
       return errorResponse('Pick which of your addresses it should go out from first.', 400)
     }
-    if (!body.body.trim()) {
+    if (!draftBody.trim()) {
       return errorResponse('There is nothing written in it to send.', 400)
     }
     // A reply takes its recipients and its subject off the conversation when
@@ -110,8 +124,10 @@ export async function POST(request: Request) {
     mode: body.mode,
     to,
     cc,
+    bcc,
     subject: body.subject?.trim() || null,
-    body: body.body,
+    body: draftBody,
+    bodyFormat,
     attachments,
     sendAt,
     followUpMinutes: followUp.minutes,

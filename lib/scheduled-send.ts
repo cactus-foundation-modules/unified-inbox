@@ -7,6 +7,7 @@ import {
   releaseStaleScheduledClaims,
 } from './db'
 import { canUserOpenThread, canUserReplyToInbox, userCanReply } from './access'
+import { draftBodyText } from './drafts'
 import { applyFollowUpAfterSend } from './follow-up'
 import { plainTextToHtml, STALE_CLAIM_MS } from './scheduled'
 import { sendMessage } from './send'
@@ -116,7 +117,7 @@ export async function runDueScheduledSends(options?: {
 async function sendOneScheduled(
   draft: Draft,
 ): Promise<{ ok: true; threadId: string | null } | { ok: false; reason: string }> {
-  if (!draft.body.trim()) {
+  if (!draftBodyText(draft).trim()) {
     return { ok: false, reason: 'There was nothing written in it by the time it was due.' }
   }
 
@@ -139,8 +140,9 @@ async function sendOneScheduled(
     const result = await sendProviderReply({
       threadId: thread.id,
       // These channels carry words, not markup - a chat window and a text
-      // message have nowhere to put a typeface.
-      text: draft.body,
+      // message have nowhere to put a typeface, and sending one the tags would
+      // put "<strong>" in front of a customer.
+      text: draftBodyText(draft),
       authorUserId: draft.authorUserId,
       authorName: null,
     })
@@ -175,11 +177,13 @@ async function sendOneScheduled(
     mode: draft.mode,
     to: draft.to.length > 0 ? draft.to : undefined,
     cc: draft.cc.length > 0 ? draft.cc : undefined,
+    bcc: draft.bcc.length > 0 ? draft.bcc : undefined,
     subject: draft.subject ?? undefined,
     // Stored as it was typed, which is what makes the box give back what went
-    // into it. The markup is made here, at the last moment, the same way the
-    // composer makes it.
-    bodyHtml: plainTextToHtml(draft.body),
+    // into it. A body written in the new box already IS markup and goes as it
+    // stands; one written before the box could hold any is escaped here, at the
+    // last moment, the same way the composer used to do it.
+    bodyHtml: draft.bodyFormat === 'html' ? draft.body : plainTextToHtml(draft.body),
     attachments: draft.attachments.map((file) => ({
       key: file.key,
       url: file.url,

@@ -1,5 +1,5 @@
 import { inboxHref } from './list'
-import type { Draft, DraftAttachment, DraftSendState } from './types'
+import type { Draft, DraftAttachment, DraftBodyFormat, DraftSendState } from './types'
 
 // ---------------------------------------------------------------------------
 // Drafts: the pure half.
@@ -31,6 +31,7 @@ export function splitAddresses(value: string): string[] {
 export function isWorthSaving(draft: {
   to?: string[]
   cc?: string[]
+  bcc?: string[]
   subject?: string | null
   body?: string
   attachments?: unknown[]
@@ -39,6 +40,7 @@ export function isWorthSaving(draft: {
   if ((draft.subject ?? '').trim()) return true
   if ((draft.to ?? []).length > 0) return true
   if ((draft.cc ?? []).length > 0) return true
+  if ((draft.bcc ?? []).length > 0) return true
   return (draft.attachments ?? []).length > 0
 }
 
@@ -59,9 +61,50 @@ export function draftSubjectLabel(draft: { subject: string | null }): string {
   return subject || '(no subject)'
 }
 
+/**
+ * What a draft says, as words rather than as whatever it is stored in.
+ *
+ * A body written in the new box is markup, and the two places that show one
+ * without sending it - the row in the Drafts list and the read-only view of a
+ * colleague's - both want the words. Deliberately a flattener rather than a
+ * sanitiser: nothing here goes into the page as markup, it goes in as TEXT, so
+ * the tags are stripped for legibility and never trusted. The one place markup
+ * is actually rendered is the writing box itself, and what it is handed was
+ * cleaned on the way into the database.
+ *
+ * A body stored as text is handed back untouched, because "a < b" is a thing
+ * somebody typed and not a tag.
+ */
+export function draftBodyText(draft: { body: string; bodyFormat?: DraftBodyFormat }): string {
+  if (draft.bodyFormat !== 'html') return draft.body
+  return draft.body
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|h[1-6]|blockquote)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    // Last, or an escaped "&lt;" turns back into a tag on the way through.
+    .replace(/&amp;/g, '&')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+/** Whether there is anything actually written in a box that holds markup. An
+ *  empty one is not always an empty string - a browser will leave a stray break
+ *  or a non-breaking space behind - and "you have written nothing" is the wrong
+ *  thing to say to somebody who has, or the wrong thing to refuse to say to
+ *  somebody who has not. */
+export function htmlHasWriting(html: string): boolean {
+  return draftBodyText({ body: html, bodyFormat: 'html' }).length > 0
+}
+
 /** The first line or so of what was written, for the list. Nothing is
- *  sanitised here because nothing is rendered as markup - a draft's body is
- *  text somebody typed, and it goes into the page as text. */
+ *  sanitised here because nothing is rendered as markup - what it is handed is
+ *  words by the time it gets here, and it goes into the page as text. */
 export function draftPreview(body: string, limit = 140): string {
   const flat = body.replace(/\s+/g, ' ').trim()
   if (flat.length <= limit) return flat
@@ -108,8 +151,12 @@ export type DraftForComposer = {
   mode: Draft['mode']
   to: string[]
   cc: string[]
+  bcc: string[]
   subject: string | null
   body: string
+  /** What `body` is written in, so the box knows whether to drop it straight
+   *  back in or turn its line breaks into markup first. */
+  bodyFormat: DraftBodyFormat
   attachments: DraftAttachment[]
   /** When it goes out on its own, as an ISO stamp. A Date in props arrives at a
    *  client component as an empty object, so it makes the trip as a string. */
@@ -132,8 +179,10 @@ export function forComposer(draft: Draft): DraftForComposer {
     mode: draft.mode,
     to: draft.to,
     cc: draft.cc,
+    bcc: draft.bcc,
     subject: draft.subject,
     body: draft.body,
+    bodyFormat: draft.bodyFormat,
     attachments: draft.attachments,
     sendAt: draft.sendAt ? draft.sendAt.toISOString() : null,
     sendState: draft.sendState,

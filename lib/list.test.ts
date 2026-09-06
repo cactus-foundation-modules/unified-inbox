@@ -100,6 +100,47 @@ describe('parseInboxParams', () => {
   })
 })
 
+// Sent, Drafts and Mentioned can each be looked at across every address or
+// narrowed to one - the folders under a colleague's name on the rail. Reading
+// the scoped form as an ordinary inbox id is what turns "Sam's sent post" into
+// a conversation list of an address called "sent:in1".
+describe('parseInboxParams, on one colleague\u2019s folders', () => {
+  it('reads a scoped folder as that folder, narrowed to that address', () => {
+    expect(parseInboxParams({ inbox: 'sent:in1' })).toMatchObject({
+      sentOnly: true, draftsOnly: false, mentionsOnly: false,
+      folderInboxId: 'in1', inboxId: null,
+    })
+    expect(parseInboxParams({ inbox: 'drafts:in1' })).toMatchObject({
+      draftsOnly: true, sentOnly: false, folderInboxId: 'in1', inboxId: null,
+    })
+    expect(parseInboxParams({ inbox: 'mentions:in1' })).toMatchObject({
+      mentionsOnly: true, folderInboxId: 'in1', inboxId: null,
+    })
+  })
+
+  it('leaves the unscoped folders exactly as they were', () => {
+    expect(parseInboxParams({ inbox: 'sent' })).toMatchObject({
+      sentOnly: true, folderInboxId: null, inboxId: null,
+    })
+    expect(parseInboxParams({ inbox: 'mentions' })).toMatchObject({
+      mentionsOnly: true, folderInboxId: null, inboxId: null,
+    })
+  })
+
+  it('treats a link that lost its address as the whole folder, not as an inbox', () => {
+    expect(parseInboxParams({ inbox: 'sent:' })).toMatchObject({
+      sentOnly: true, folderInboxId: null, inboxId: null,
+    })
+  })
+
+  it('does not mistake an ordinary address for a folder', () => {
+    expect(parseInboxParams({ inbox: 'in1' })).toMatchObject({
+      inboxId: 'in1', sentOnly: false, draftsOnly: false, mentionsOnly: false,
+      folderInboxId: null,
+    })
+  })
+})
+
 describe('chooseSendingInbox', () => {
   it('writes as the inbox you are standing in', () => {
     expect(chooseSendingInbox(['a', 'b'], 'b')).toBe('b')

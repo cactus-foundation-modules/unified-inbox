@@ -326,6 +326,14 @@ const CSS = `
   }
   .uin-rail-item { padding-block: 0.3rem; }
   .uin-rail-notice { padding: 0 0.5rem 0.45rem; }
+  /* Lying down there is no room for a tree, so a colleague's folders run along
+     after their name with the same hairline turned on its side. */
+  .uin-rail-sub {
+    margin-left: 0;
+    padding-left: 0.35rem;
+    border-left: 1px solid var(--color-border);
+  }
+  .uin-rail-branch { gap: 0; }
 }
 .uin-rail-group { display: grid; gap: 0.2rem; min-width: 0; }
 .uin-rail-heading {
@@ -400,6 +408,44 @@ const CSS = `
 .uin-rail-item[aria-current="page"] .uin-rail-count-quiet {
   background: var(--color-surface);
 }
+/* A colleague's own post, and the folders of it that open out underneath.
+   The twist is its own control beside the link rather than inside it: a button
+   inside a link is one nobody can press without going where the link goes. It
+   is 18px because that is the width of the sub-list's own indent, so the
+   folders line up under the name rather than under the arrow. */
+.uin-rail-branch { display: flex; align-items: center; gap: 0.1rem; min-width: 0; }
+.uin-rail-branch > .uin-rail-item { flex: 1 1 auto; }
+.uin-rail-twist {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.125rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm, 0.25rem);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.uin-rail-twist:hover { background: var(--color-surface); color: var(--color-text); }
+.uin-rail-twist-icon { display: grid; place-items: center; transition: transform 0.12s ease; }
+.uin-rail-twist-icon svg { display: block; width: 13px; height: 13px; }
+.uin-rail-twist[aria-expanded="true"] .uin-rail-twist-icon { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) {
+  .uin-rail-twist-icon { transition: none; }
+}
+/* A hairline down the left rather than an indent alone: three folders floating
+   under a name read as three more names. */
+.uin-rail-sub {
+  margin-left: 1.4rem;
+  padding-left: 0.35rem;
+  border-left: 1px solid var(--color-border);
+}
+/* The group's own display rule would otherwise beat the hidden attribute. */
+.uin-rail-sub[hidden] { display: none; }
+.uin-rail-sub .uin-rail-item { font-size: 0.78125rem; }
+
 /* Rearranging the addresses. The grab cursor is the only thing that says so
    until somebody takes hold of one - a column of handles would put furniture
    beside every address to serve a job done once a year. While one is in the air
@@ -829,26 +875,12 @@ const CSS = `
    whole screen any more, so the old across-in-one-line variant had nowhere left
    to happen. */
 .uin-list { display: block; list-style: none; margin: 0; padding: 0; }
-/* A row and its tick box. The box sits beside the link rather than inside it -
-   one inside would be a box that cannot be pressed without opening the
-   conversation - so the two share a line and the line carries the rule between
-   rows on both halves, or the list would look combed. */
+/* A row is the whole line. There was a tick box beside it once, in a column of
+   its own on every row on every screen, for something done twice a week - see
+   ThreadListView for what picks rows now. */
 .uin-list-item { display: flex; align-items: stretch; }
 .uin-list-item > .uin-row { flex: 1 1 auto; min-width: 0; }
-.uin-pick {
-  display: flex;
-  align-items: flex-start;
-  padding: 0.7rem 0.1rem 0 0.6rem;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface);
-  flex: none;
-  cursor: pointer;
-}
-.uin-list > li:last-child .uin-pick { border-bottom: 0; }
-.uin-list-item:has(.uin-row:hover) .uin-pick,
-.uin-pick:hover { background: var(--color-surface-raised); }
-.uin-list-item[data-selected="true"] > .uin-row,
-.uin-list-item[data-selected="true"] > .uin-pick { background: var(--color-primary-subtle); }
+.uin-list-item[data-selected="true"] > .uin-row { background: var(--color-primary-subtle); }
 /* What is ticked, and what can be done with the lot of them. Sits above the
    list rather than floating over it: a bar that covers the first row hides the
    thing somebody is deciding about. */
@@ -864,7 +896,55 @@ const CSS = `
   background: var(--color-bg);
 }
 .uin-bulk-count { font-size: 0.75rem; font-weight: 600; }
+
+/* What a merged conversation is made of, under the controls in its header.
+   Deliberately quiet: it is a note about how the conversation came to be, not
+   a thing that has just happened, and it sits on every merged conversation for
+   ever. Tokens throughout - this is chrome, and chrome that hard-codes a colour
+   is chrome that is wrong in one of the two themes. */
+.uin-merged-from {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 0.35rem);
+  background: var(--color-bg);
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+.uin-merged-from-title { font-weight: 600; color: var(--color-text); }
+.uin-merged-from-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.uin-merged-from-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+/* Takes what room there is and gives it back when the row has to wrap, so a
+   long subject never pushes the way out off the end of the line. */
+.uin-merged-from-what {
+  flex: 1 1 8rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text);
+}
+.uin-merged-from-when { color: var(--color-text-muted); }
 .uin-bulk-all { padding: 0.35rem 0.65rem; }
+/* The how-to beside the select-all box. Quieter than the words it follows, and
+   left to wrap onto a line of its own where the column is too narrow to hold
+   both - the bar wraps already, and a hint cut off mid-word helps nobody. */
+.uin-bulk-hint { font-size: 0.75rem; color: var(--color-text-muted); }
 .uin-pick-all {
   display: flex;
   align-items: center;
@@ -938,6 +1018,14 @@ const CSS = `
   border: 1px solid var(--color-border);
   color: var(--color-text-secondary);
   font-size: 0.625rem; font-weight: 700;
+}
+/* A picked row, wearing a tick in place of whoever wrote in. Filled rather than
+   outlined: this is the one thing on the row that is about what the reader has
+   done rather than about the message. */
+.uin-avatar-ticked {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-on-primary);
 }
 /* Somebody's own picture, laid over their initials rather than instead of them.
    Absolute, so the row does not move when one arrives and there is no gap while
@@ -1117,24 +1205,6 @@ const CSS = `
   background: var(--color-error-bg);
   color: var(--color-destructive-hover);
 }
-/* ---- sending it later ---------------------------------------------------- */
-/* The picker sits inside the composer rather than in a dialog of its own: it is
-   one more thing to say about the message being written, not a trip somewhere
-   else. Set apart with a rule above it so a date box never reads as another
-   field of the message. */
-.uin-sendlater { display: flex; flex-direction: column; gap: 0.4rem; }
-.uin-sendlater-picker {
-  display: flex; flex-direction: column; gap: 0.4rem;
-  padding: 0.5rem 0.625rem;
-  border-top: 1px solid var(--color-border);
-  margin-top: 0.15rem;
-  font-size: 0.8125rem;
-}
-.uin-sendlater-picker input[type="datetime-local"] {
-  max-width: 16rem;
-  font-size: 0.8125rem;
-}
-
 /* ---- pagination --------------------------------------------------------- */
 /* Hairline above it rather than a tinted bar: it is the end of the list, not a
    different kind of thing. */
@@ -1235,6 +1305,17 @@ const CSS = `
 @media (max-width: 899px) {
   .uin-thread-close { order: -1; flex: 1 1 100%; justify-content: flex-start; padding-left: 0; }
 }
+/* On a narrow window the three controls take their own line under the subject.
+   They are about thirteen ems wide together, which on a phone leaves the
+   subject four - and four ems of subject is not a subject. */
+@media (max-width: 639px) {
+  .uin-thread-actions { flex: 1 1 100%; margin-left: 0; }
+}
+/* Two lines of it, then an ellipsis. The three controls and the way out share
+   this line now, so a subject that used to run the width of the pane gives up
+   whatever they need - but a supplier's "Sales Order 0000966554 - PO-00012" is
+   two lines rather than one truncated at "Sales Order 00009...", which is a
+   subject you cannot tell from the next one. */
 .uin-thread-subject {
   flex: 1 1 auto;
   min-width: 0;
@@ -1242,6 +1323,14 @@ const CSS = `
   font-size: 1rem;
   font-weight: 650;
   line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  /* A reference with no spaces in it is one word as far as wrapping goes, and
+     one word wider than the column pushes the buttons off the end. */
+  overflow-wrap: anywhere;
 }
 .uin-thread-close {
   flex: none;
@@ -1274,19 +1363,83 @@ const CSS = `
   color: var(--color-text);
   font-weight: 600;
 }
-.uin-thread-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+/* The three controls, on the subject's own line. They keep their own width and
+   the subject gives up its own; the whole group wraps to a line of its own only
+   when there is genuinely no room beside a two-line subject. */
+.uin-thread-actions {
+  display: flex;
+  flex: none;
+  gap: 0.35rem;
+  align-items: center;
+  margin-left: auto;
+}
+/* Whatever went wrong takes the line under the row rather than a slot in it. */
+.uin-thread-actions-error { flex: 1 1 100%; margin: 0; }
+/* ---- the five seconds after marking something done ---------------------- */
+/* Bottom centre of the WINDOW, not of the pane: this screen is a box of panes
+   that each scroll their own contents, and a receipt that scrolled away with
+   the conversation would be a receipt nobody read in time. Above the panels
+   for the same reason they are - core's own chrome sits high - and out of the
+   way of the pointer, so it never sits on top of what it is offering to undo.
+   It fades once, on its way out; there is nothing to announce on the way in
+   that the words do not already say. */
+.uin-toast {
+  position: fixed;
+  z-index: 10001;
+  left: 50%;
+  bottom: 1.25rem;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: calc(100vw - 2rem);
+  padding: 0.55rem 0.6rem 0.55rem 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-xl);
+  font-size: 0.8125rem;
+  color: var(--color-text);
+  opacity: 1;
+  transition: opacity 300ms ease;
+}
+.uin-toast[data-going="1"] { opacity: 0; }
+.uin-toast-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The only thing on it worth pressing, so it looks like the link it is rather
+   than competing with the buttons on the conversation behind it. */
+.uin-toast-undo {
+  flex: none;
+  padding: 0.25rem 0.5rem;
+  border: 0;
+  border-radius: var(--radius, 0.375rem);
+  background: none;
+  color: var(--color-primary);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+.uin-toast-undo:hover { background: var(--color-surface-raised); }
+.uin-toast-undo:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 1px;
+}
+/* Asked for less movement: it still goes after its five seconds, it just goes
+   rather than fades. */
+@media (prefers-reduced-motion: reduce) {
+  .uin-toast { transition: none; }
+}
 .uin-thread-meta {
   display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center;
   color: var(--color-text-muted);
   font-size: 0.75rem;
 }
-/* ---- who this is, and what it is about ---------------------------------- */
+/* ---- what this conversation is about ------------------------------------ */
 /* The last thing in the pinned header, under everything that can be pressed.
-   Two lines, both of them one line each and clipped rather than wrapped: this
-   band is over the messages on every window wide enough to pin it, so a
-   conversation with nine orders on it must not be allowed to push the message
-   itself down the screen. Whatever will not fit ends in an ellipsis and lives
-   behind the arrow. */
+   One line, clipped rather than wrapped: this band is over the messages on
+   every window wide enough to pin it, so a conversation with nine orders on it
+   must not be allowed to push the message itself down the screen. Whatever will
+   not fit ends in an ellipsis and lives behind the arrow. */
 .uin-thread-ctx {
   display: grid;
   gap: 0.1rem;
@@ -1294,28 +1447,6 @@ const CSS = `
   padding-top: 0.4rem;
   border-top: 1px solid var(--color-border);
 }
-.uin-thread-who {
-  margin: 0;
-  min-width: 0;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.uin-thread-who a { color: var(--color-text); }
-/* Told apart from the name by a hairline rather than by a middot in the markup:
-   a punctuation character between two names is read out as punctuation. */
-.uin-thread-org {
-  margin-left: 0.45rem;
-  padding-left: 0.45rem;
-  border-left: 1px solid var(--color-border);
-  color: var(--color-text-secondary);
-  font-weight: 400;
-}
-/* Nobody on the other end. It is a note about the conversation rather than a
-   name, so it is not dressed as one. */
-.uin-thread-who-none { font-weight: 400; color: var(--color-text-secondary); font-size: 0.75rem; }
 .uin-attached {
   display: flex;
   align-items: center;
@@ -1417,16 +1548,60 @@ const CSS = `
 .uin-msg-in { border-left: 3px solid var(--color-primary); }
 .uin-msg-out { border-left: 3px dashed var(--color-border-strong); background: var(--color-surface-raised); }
 .uin-msg-note { border-left: 3px dotted var(--color-warning); background: var(--color-warning-bg); }
+/* The picture, the two lines of addresses, then the time and the tools hard
+   against the far edge - and never wrapping. It used to be one wrapping row,
+   and the first thing to drop onto a second line of its own was that tail,
+   which put the arrow for answering a message a row away from the message.
+   Nothing wraps now: the address gives way instead (see .uin-msg-address). */
 .uin-msg-head {
-  display: flex; flex-wrap: wrap; gap: 0.15rem 0.5rem; align-items: center;
-  padding: 0.5rem 0.75rem 0.15rem;
+  display: flex; flex-wrap: nowrap; gap: 0 0.5rem; align-items: center;
+  padding: 0.5rem 0.75rem 0.35rem;
 }
-/* Smaller than a row's: a conversation has the sender's name in words right
-   beside it and does not need a second thing the same size as the list's. */
-.uin-msg-head .uin-avatar { width: 1.5rem; height: 1.5rem; font-size: 0.5625rem; }
-.uin-msg-who { font-size: 0.8125rem; font-weight: 600; }
-.uin-msg-dir { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.6875rem; color: var(--color-text-secondary); }
-.uin-msg-when { margin-left: auto; font-size: 0.6875rem; color: var(--color-text-muted); }
+/* Tall enough to stand beside both lines rather than beside the first one. */
+.uin-msg-head .uin-avatar { width: 2rem; height: 2rem; font-size: 0.6875rem; flex: 0 0 auto; }
+/* The two lines: who it is from, then who it went to. Everything the header has
+   to give is given from in here, which is why this is the item that flexes and
+   the time and the tools beside it are the ones that do not. */
+.uin-msg-head-lines {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; flex-direction: column; gap: 0.05rem;
+}
+.uin-msg-head-line {
+  display: flex; align-items: baseline; gap: 0.3rem;
+  min-width: 0; overflow: hidden; white-space: nowrap;
+  font-size: 0.8125rem; color: var(--color-text-secondary);
+}
+/* Quieter again, and smaller: who it went to is the answer to a question
+   nobody asked until they went looking for it. */
+.uin-msg-head-to { font-size: 0.6875rem; }
+/* The name holds its full width until it would take up most of the line, which
+   is the point at which it is the greedy one rather than the address. */
+.uin-msg-who {
+  font-size: 0.8125rem; font-weight: 600; color: var(--color-text);
+  flex: 0 1 auto; max-width: 60%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Everything the header has to give is taken from here. min-width: 0 is what
+   lets it shrink below the width of its own text at all - a flex item will not,
+   by default, and without it the header would simply overflow. */
+.uin-msg-dir {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap;
+  font-size: 0.6875rem; color: var(--color-text-secondary);
+}
+/* The words keep their full width - it is the address that gives way, not
+   "Received from" turning into "Receiv". */
+.uin-msg-dir-label { flex: 0 0 auto; }
+/* The address itself, cut off with an ellipsis when the column is too narrow.
+   AdminTooltip is the anchor and carries the first class; the span inside it
+   is what actually clips, and what AddressLine measures to decide whether
+   there is anything hidden worth a tooltip. */
+.uin-msg-address { min-width: 0; overflow: hidden; }
+.uin-msg-address-text {
+  display: block; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.uin-msg-when { margin-left: auto; flex: 0 0 auto; font-size: 0.6875rem; color: var(--color-text-muted); }
 /* Same again on the note's amber ground and on the outbound tint, both of which
    are darker than the surfaces the muted tier was measured against. */
 .uin-msg-note .uin-msg-when,
@@ -1445,6 +1620,11 @@ const CSS = `
   color: var(--color-text);
 }
 .uin-frame { width: 100%; border: 0; display: block; background: var(--color-surface); }
+/* The remote-picture notice, kept deliberately quiet. It sits above every
+   marketing email there is, and at the standard alert size it read as a warning
+   about the message rather than as a footnote on how it was loaded. The button
+   beside it keeps its own size - it is still something to press. */
+.uin-remote-note { font-size: 10px; line-height: 1.5; }
 .uin-msg-foot {
   display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center;
   padding: 0.4rem 0.75rem 0.55rem;
@@ -1763,21 +1943,47 @@ const CSS = `
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
+  gap: 0.05rem;
   max-height: 9rem;
   overflow-y: auto;
   padding: 0.25rem 0;
 }
+/* One address a line, and the whole line the thing you click. Baseline sat the
+   tick box on the text's baseline, which left it hanging low beside a name;
+   beside a name it belongs in the middle. */
 .uin-pick {
   display: flex;
-  align-items: baseline;
-  gap: 0.4rem;
-  padding: 0.15rem 0;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.3rem 0.4rem;
+  border-radius: 0.375rem;
   font-size: 0.8125rem;
   color: var(--color-text);
   cursor: pointer;
 }
-.uin-pick input { flex: none; margin: 0; }
+.uin-pick:hover { background: var(--color-surface-raised); }
+.uin-pick input { flex: none; margin: 0; accent-color: var(--color-primary); }
+/* The name takes what it needs, the address takes the rest, and both stop at an
+   ellipsis rather than wrapping. Three stacked lines of "Emma (Marketing
+   Manager)" is not a tidier answer than one line you can hover to read in full,
+   and an address broken mid-word reads as a fault. */
+.uin-pick-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.uin-pick:has(input:checked) .uin-pick-name { font-weight: 600; }
+.uin-pick .uin-recipients {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
 /* Borderless inside a ruled block: a box drawn round every line would be four
    boxes inside a box, and the row itself already says where to type. */
 .uin-field-control input,
@@ -1801,6 +2007,24 @@ const CSS = `
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* A row whose note is a sentence rather than three words. Beside the field, a
+   nowrap sentence takes the whole row and leaves the box a centimetre wide -
+   which is precisely what "Call me at" looked like. Under it, the field gets
+   the full width and the sentence gets to wrap. */
+.uin-field-row--stack { align-items: start; }
+.uin-field-row--stack > label,
+.uin-field-row--stack > .uin-field-label { padding-top: 0.5rem; }
+.uin-field-row--stack .uin-field-control {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding-bottom: 0.35rem;
+}
+.uin-field-row--stack .uin-field-hint {
+  white-space: normal;
+  overflow: visible;
+  line-height: 1.45;
 }
 .uin-field-add {
   flex: none;
@@ -1904,6 +2128,9 @@ const CSS = `
 @media (max-width: 599px) {
   .uin-field-row { grid-template-columns: 3.25rem minmax(0, 1fr); }
   .uin-field-hint { display: none; }
+  /* Except where the note is the point rather than a gloss - a stacked row is
+     stacked because somebody needs to read it. */
+  .uin-field-row--stack .uin-field-hint { display: block; }
 }
 
 /* ---- empty and error states -------------------------------------------- */
@@ -1933,6 +2160,16 @@ const CSS = `
 .uin-modal textarea:focus-visible {
   outline: 2px solid var(--color-border-focus);
   outline-offset: 2px;
+}
+/* Except in a field row, where the box has no box of its own. A ring offset two
+   pixels from a borderless full-width input lands on the hairlines above and
+   below it and reads as something having gone wrong. The rule under the field
+   goes solid instead: same "the keyboard is here", drawn where the field is. */
+.uin-field-control input:focus-visible,
+.uin-field-control select:focus-visible,
+.uin-field-control textarea:focus-visible {
+  outline: none;
+  box-shadow: inset 0 -2px 0 0 var(--color-border-focus);
 }
 
 /* ---- the context panel -------------------------------------------------- */
@@ -2708,14 +2945,15 @@ const CSS = `
 /* ---- answering a message ------------------------------------------------ */
 /* The arrow and the dots, at the trailing end of the message header. After the
    time, which already has the margin that pushes the whole tail over. */
-.uin-msg-tools { display: inline-flex; align-items: center; gap: 0.1rem; margin-left: 0.15rem; }
+.uin-msg-tools { display: inline-flex; align-items: center; gap: 0.1rem; margin-left: 0.15rem; flex: 0 0 auto; }
 /* Why there is no arrow anywhere on this conversation. */
 .uin-thread-cannot { margin: 0; font-size: 0.75rem; color: var(--color-text-secondary); }
 
 /* ---- where the conversation stands -------------------------------------- */
 /* Whose it is on the left, the clock and the state hard against the far edge -
-   the two you press on the way out of a conversation, together. */
-.uin-thread-actions-end { display: flex; align-items: center; gap: 0.35rem; margin-left: auto; }
+   the two you press on the way out of a conversation, together. Both the word
+   buttons carry the arrow, so a menu behind a word looks like a menu whichever
+   of them you are looking at. */
 .uin-status-btn { display: inline-flex; align-items: center; gap: 0.2rem; }
 .uin-status-btn svg { margin-right: -0.15rem; }
 
@@ -2858,6 +3096,240 @@ const CSS = `
   font-size: 0.75rem;
   color: var(--color-destructive-hover);
 }
+
+/* ---- being asked to look at something ----------------------------------- */
+/* A colleague tagging you in an internal note. The rows in "Asked me", the
+   banner at the top of a conversation somebody put your name on, and the
+   controls that settle YOUR copy of it - which are not the conversation's own
+   buttons, and must not read as though they were.
+   Primary rather than amber: amber is this module's colour for "the customer
+   never sees this", and it is already carrying the notes themselves and the bar
+   they are written in. A third amber thing on the same screen says nothing. */
+.uin-ask-item > .uin-ask-actions {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: 0.3rem;
+  padding: 0.55rem 0.65rem 0 0.3rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.uin-list > li:last-child > .uin-ask-actions { border-bottom: 0; }
+.uin-list-item:has(.uin-row:hover) > .uin-ask-actions { background: var(--color-surface-raised); }
+/* What they actually said, which is why the row is here at all. Given the
+   subject line's weight, since it is doing the subject line's job. */
+.uin-ask-note { font-style: italic; }
+.uin-ask-about { display: inline-flex; vertical-align: -0.15em; margin-right: 0.3rem; opacity: 0.75; }
+.uin-ask-channel { color: var(--color-text-muted); }
+
+/* The banner at the top of a conversation somebody was asked about. */
+.uin-asked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--color-primary-border);
+  border-radius: var(--radius, 0.375rem);
+  background: var(--color-primary-subtle);
+  color: var(--color-text);
+  font-size: 0.8125rem;
+}
+.uin-asked-icon { flex: none; display: inline-flex; color: var(--color-primary); }
+.uin-asked-said { flex: 1 1 14rem; min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+.uin-asked-note { color: var(--color-text-secondary); }
+.uin-asked-state { color: var(--color-text-muted); font-size: 0.75rem; }
+.uin-asked .uin-ask-actions { display: flex; flex: none; align-items: center; gap: 0.3rem; }
+
+/* ---- tagging a colleague from the note bar ------------------------------ */
+/* The names sit under the line rather than in a panel over it: they are wanted
+   at the same time as the sentence rather than instead of it, and a menu that
+   covers the note being written is a menu you close to check what you said. */
+.uin-notebar-tag { flex: none; position: relative; }
+.uin-notebar-tag-count {
+  position: absolute;
+  top: -0.25rem;
+  right: -0.25rem;
+  min-width: 1rem;
+  padding: 0 0.2rem;
+  border-radius: 0.5rem;
+  background: var(--color-primary);
+  color: var(--color-surface);
+  font-size: 0.625rem;
+  line-height: 1rem;
+  text-align: center;
+}
+.uin-notebar-tags {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  padding-top: 0.15rem;
+}
+.uin-notebar-find {
+  flex: 0 1 11rem;
+  min-width: 0;
+  height: 1.75rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 0.375rem);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 0.75rem;
+}
+.uin-notebar-find:focus {
+  outline: none;
+  border-color: var(--color-border-focus);
+  box-shadow: 0 0 0 3px var(--color-primary-glow);
+}
+/* The surprising half, said out loud: a tag hands somebody a job AND lets them
+   into this one conversation, which is not what a mention means anywhere else. */
+.uin-notebar-tagnote {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+/* ---- the reply box's own header block ----------------------------------- */
+/* The reply box now opens with the same ruled lines the new-message dialog has
+   had all along: who it is going to, and whichever of Cc, Bcc and Subject
+   somebody has asked for. Under a conversation it needs the padding the dialog
+   gets from the card around it; popped out it is inside that card and must not
+   have it twice. */
+.uin-composer > .uin-fields {
+  padding-inline: 0.625rem;
+  background: var(--color-surface-raised);
+}
+.uin-modal .uin-composer > .uin-fields { padding-inline: 0; background: none; }
+.uin-composer-aside { margin: 0; padding: 0.5rem 0.625rem; }
+.uin-modal .uin-composer-aside { padding-inline: 0; }
+/* Cc, Bcc, Subject and the way out to a window of its own, at the right-hand
+   end of the To line. None of them takes a line of its own until it is asked
+   for, which is the point: a reply that wants none of them - nearly every
+   reply - never sees them. */
+.uin-field-links {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+.uin-field-pop { width: 1.6rem; height: 1.6rem; }
+
+/* ---- the strip along the bottom ----------------------------------------- */
+/* Two icons on the left for what you do TO the message, the ways it can leave
+   on the right, and a gap between them so the two groups do not read as one
+   row of six buttons. */
+.uin-composer-actions { gap: 0.35rem; }
+.uin-composer-gap { flex: 1 1 auto; min-width: 0.5rem; }
+/* A time picked off the alarm clock and not yet committed, on the line above
+   the buttons that commit it. */
+.uin-pending-send { border-top: 0; padding-top: 0; }
+/* The box that narrows a long list of colleagues, on the same line as the names
+   rather than above them - it is a filter, not a field. */
+.uin-mention-search { flex: 0 1 14rem; min-width: 8rem; display: flex; }
+.uin-mention-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8125rem;
+}
+@media (max-width: 599px) {
+  /* Four ways to send will not sit on one phone-width line, so they wrap - and
+     the gap that pushed them right would otherwise leave a whole empty row
+     above them. */
+  .uin-composer-gap { flex-basis: 0; min-width: 0; }
+}
+
+/* ---- the writing box, and what it can be made to say --------------------- */
+/* Six buttons and seven colours: bold, italic, a colour, a link and the two
+   kinds of list. Everything past that is a way to make an email look assembled
+   rather than written, and half of it is rendered differently by every inbox it
+   lands in. The strip sits above the words rather than below them, which is
+   where every mail program has kept it. */
+.uin-richtext { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.uin-richtext-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.35rem 0.625rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.uin-modal .uin-richtext-bar { padding-inline: 0; }
+.uin-rt-btn { width: 1.7rem; height: 1.7rem; font-size: 0.8125rem; line-height: 1; }
+/* The colours are content, not chrome: they are read in somebody else's inbox,
+   where this site's tokens mean nothing. The frame round them is chrome, and is
+   tokens as usual. */
+.uin-rt-ink {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.1rem 0.3rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 0.375rem);
+  color: var(--color-text-muted);
+}
+.uin-rt-ink-icon { display: inline-flex; }
+.uin-rt-swatch {
+  width: 0.95rem;
+  height: 0.95rem;
+  padding: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.uin-rt-swatch:hover { outline: 2px solid var(--color-border-focus); outline-offset: 1px; }
+.uin-rt-swatch:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: 1px; }
+/* Where a link is typed. A line that appears when it is wanted rather than a
+   browser dialog: a prompt() box cannot say what went wrong, and "that does not
+   look like an address" is the whole of what somebody needs told. */
+.uin-rt-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.625rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-raised);
+}
+.uin-modal .uin-rt-link { padding-inline: 0; background: none; }
+.uin-rt-link input {
+  flex: 1 1 12rem;
+  min-width: 0;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.8125rem;
+}
+.uin-rt-link-problem { flex: 1 1 100%; font-size: 0.75rem; color: var(--color-destructive-hover); }
+/* The words themselves. Same measurements the box had when it was a textarea,
+   so nothing about the writing moved when the formatting arrived. */
+.uin-richtext-box {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 8rem;
+  max-height: 32rem;
+  overflow-y: auto;
+  padding: 0.7rem 0.75rem;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: var(--color-text);
+  outline: none;
+  overflow-wrap: anywhere;
+}
+.uin-modal .uin-richtext-box { padding-inline: 0; max-height: none; }
+.uin-richtext-box:empty::before {
+  content: attr(data-placeholder);
+  color: var(--color-text-muted);
+  pointer-events: none;
+}
+/* What the six buttons produce, drawn as the recipient will see it rather than
+   as the admin's own body text. */
+.uin-richtext-box a { color: var(--color-link, var(--color-primary)); }
+.uin-richtext-box ul, .uin-richtext-box ol { margin: 0.4rem 0; padding-left: 1.5rem; }
+.uin-richtext-box li { margin: 0.15rem 0; }
 
 `
 

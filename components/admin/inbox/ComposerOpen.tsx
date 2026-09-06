@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Composer, type ComposerMode } from './Composer'
 import type { DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
 
@@ -54,16 +54,19 @@ export function ComposerOpenProvider({
 
 type SlotProps = {
   threadId: string
+  /** The address it would leave as, for the suggestions under To. */
+  inboxId: string | null
   replyTo: string[]
   replyAllTo: string[]
   canReply: boolean
   canForward: boolean
   staff: Array<{ id: string; name: string }>
   cannotReplyReason: string | null
+  /** What the subject would say if nobody opened the Subject line, worked out
+   *  on the server exactly as the send route works it out. */
+  replySubject: string
+  forwardSubject: string
   draft: DraftForComposer | null
-  /** The earliest a reply may be set to go out, in the picker's own shape and
-   *  in the site's zone. Worked out on the server and carried through. */
-  minSendAt: string
   timezone: string
 }
 
@@ -76,9 +79,32 @@ type SlotProps = {
  */
 export function ComposerSlot(props: SlotProps) {
   const { opened } = useComposerOpen()
+  const slot = useRef<HTMLDivElement | null>(null)
+
+  // Pressing Reply on a message halfway up a long conversation opened the box
+  // and left the reader where they were, looking at the message they had just
+  // answered, with no sign anything had happened. So the pane comes to the box.
+  //
+  // `at` counts presses, so switching from Reply to Forward brings it back into
+  // view as well. Not on the way in, though: a half-written draft opens the box
+  // on arrival, and scrolling to it there would fight the pane's own opening
+  // position - which is deliberately the newest message. Hence the first-run
+  // guard rather than a plain effect.
+  const at = opened?.at ?? null
+  const mode = opened?.mode ?? null
+  const opening = useRef(true)
+  useEffect(() => {
+    if (opening.current) { opening.current = false; return }
+    if (at === null) return
+    const box = slot.current
+    if (!box) return
+    const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    box.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'nearest' })
+  }, [at, mode])
+
   if (!opened) return null
   return (
-    <div id="uin-composer">
+    <div id="uin-composer" ref={slot}>
       <Composer {...props} requestedMode={opened.mode} requestedAt={opened.at} />
     </div>
   )

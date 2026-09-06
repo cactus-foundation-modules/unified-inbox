@@ -18,6 +18,11 @@ export type RawMessageInput = {
   from: { name: string | null; address: string }
   to: string[]
   cc: string[]
+  /** On the Sent copy only. The message that went to everybody else carried no
+   *  Bcc header at all - that is what makes it blind - but the copy filed in
+   *  the owner's own mailbox is the one place the list belongs, because it is
+   *  the only record of who was actually sent it. */
+  bcc: string[]
   replyTo?: string | null
   subject: string
   html: string
@@ -45,6 +50,7 @@ export async function buildRawMessage(input: RawMessageInput): Promise<Buffer> {
       : input.from.address,
     to: input.to,
     ...(input.cc.length ? { cc: input.cc } : {}),
+    ...(input.bcc.length ? { bcc: input.bcc } : {}),
     ...(input.replyTo ? { replyTo: input.replyTo } : {}),
     subject: input.subject,
     html: input.html,

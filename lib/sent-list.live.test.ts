@@ -92,6 +92,8 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
 
   let chrisInbox = ''
   let emmaInbox = ''
+  const chris = 'user-chris'
+  const emma = 'user-emma'
   let connectionId = ''
 
   beforeAll(async () => {
@@ -223,6 +225,40 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
       customerThread,
       emmaInbox,
     )
+    // Two real staff accounts, because the drafts table has a foreign key to
+    // "User" and the Drafts folder is scoped by both address and author.
+    await db.$executeRawUnsafe(`INSERT INTO "Role" ("id", "name") VALUES ('role-staff', 'Staff')`)
+    for (const [id, email, username] of [
+      [chris, 'chris@deskwell.co.uk', 'chris'],
+      [emma, 'emma@deskwell.co.uk', 'emma'],
+    ]) {
+      await db.$executeRawUnsafe(
+        `INSERT INTO "User" ("id", "email", "username", "roleId", "updatedAt")
+         VALUES ($1, $2, $3, 'role-staff', now())`,
+        id, email, username,
+      )
+    }
+
+    // One draft on each address, and one on no address at all - the half-written
+    // answer to a chat, which belongs to its author rather than to a folder.
+    for (const [author, inboxId, subject] of [
+      [chris, chrisInbox, 'Half-written, from Chris'],
+      [emma, emmaInbox, 'Half-written, from Emma'],
+      [chris, null, 'Half-written, filed nowhere'],
+    ] as Array<[string, string | null, string]>) {
+      await lib.saveDraft({
+        authorUserId: author,
+        replyableInboxIds: inboxId ? [inboxId] : [],
+        inboxId,
+        threadId: null,
+        mode: 'new',
+        to: ['someone@example.com'],
+        cc: [],
+        subject,
+        body: 'not finished',
+        attachments: [],
+      })
+    }
   }, 600_000)
 
   afterAll(async () => {
@@ -273,5 +309,39 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
     // An administrator sees unfiled mail as well. The clause is built
     // differently in that case and has to parse too.
     expect(await lib.countSentMessages([], true, [])).toBe(0)
+  })
+
+  // The Drafts folder has the same two shapes the Sent one does - across every
+  // address somebody can read, or narrowed to the one a colleague's folder
+  // names - and the narrowing turns OFF the "or my own, filed nowhere" half of
+  // the clause. Both halves are raw SQL and neither is run by anything else.
+  describe('the drafts folder', () => {
+    it('lists anybody\u2019s draft on an address, and this person\u2019s own unfiled ones', async () => {
+      const rows = await lib.listDrafts(chris, [chrisInbox, emmaInbox])
+      expect(rows.map((r) => r.subject).sort()).toEqual([
+        'Half-written, filed nowhere',
+        'Half-written, from Chris',
+        'Half-written, from Emma',
+      ])
+      expect(await lib.countDrafts(chris, [chrisInbox, emmaInbox])).toBe(3)
+    })
+
+    it('leaves somebody else\u2019s unfiled draft out of it', async () => {
+      // Emma may read both addresses, so she sees both drafts filed on them -
+      // and not the one Chris started on no address at all.
+      expect(await lib.countDrafts(emma, [chrisInbox, emmaInbox])).toBe(2)
+    })
+
+    it('narrows to one address, without dragging the reader\u2019s own unfiled drafts in', async () => {
+      const rows = await lib.listDrafts(chris, [emmaInbox], false)
+      expect(rows.map((r) => r.subject)).toEqual(['Half-written, from Emma'])
+      expect(await lib.countDrafts(chris, [emmaInbox], false)).toBe(1)
+      expect(await lib.countDrafts(chris, [chrisInbox], false)).toBe(1)
+    })
+
+    it('lists nothing at all when the address asked for is not one they can read', async () => {
+      expect(await lib.listDrafts(chris, [], false)).toEqual([])
+      expect(await lib.countDrafts(chris, [], false)).toBe(0)
+    })
   })
 })

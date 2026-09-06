@@ -83,10 +83,18 @@ export type ContextAdapter = {
   moduleName: string
   /** What the viewer must hold before anything at all is fetched. */
   permission: string
-  /** Every table `load` and `lookup` touch. All must exist or neither runs. */
+  /** Every table `load`, `lookup` and `suggest` touch. All must exist or none
+   *  of them runs. */
   tables: string[]
-  /** The records this person has here, or null for "nothing worth a block". */
-  load(query: ContextQuery): Promise<ContextSection | null>
+  /**
+   * The records this person has here, or null for "nothing worth a block".
+   *
+   * Optional, because a module can be worth attaching a record FROM without
+   * being worth a block of its own beside every conversation - purchasing is
+   * exactly that. An adapter with no `load` still confirms references and still
+   * offers its records to the attach picker; it simply draws nothing.
+   */
+  load?(query: ContextQuery): Promise<ContextSection | null>
   /**
    * Confirm a reference a pattern proposed (auto-linking). Returning null is
    * the normal answer and means the pattern matched something that is not one

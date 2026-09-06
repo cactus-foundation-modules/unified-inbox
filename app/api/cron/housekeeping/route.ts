@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { errorResponse } from '@/lib/utils'
 import { sweepAbandonedUploads, sweepRetention, sweepStalledSends } from '@/modules/unified-inbox/lib/retention'
 import { pruneDeliveries } from '@/modules/unified-inbox/lib/webhooks-db'
-import { getSettings } from '@/modules/unified-inbox/lib/db'
+import { getSettings, wakeDueMentions } from '@/modules/unified-inbox/lib/db'
 import { pruneCampaignLogs } from '@/modules/unified-inbox/lib/campaigns/store'
 
 // The daily tidy: the retention window, and the people it leaves holding
@@ -38,6 +38,12 @@ export async function GET(request: NextRequest) {
   // site whose mail tick is failing for some other reason still gets its stuck
   // messages marked rather than being left staring at "sending" for a week.
   const stalledSends = await sweepStalledSends()
+
+  // Asks a colleague put off until later. The hub wakes these itself every time
+  // somebody opens it, which covers the case that matters; this is for the
+  // conversation nobody has looked at, so the number beside "Asked me" is right
+  // when they do.
+  const wokenMentions = await wakeDueMentions()
   const retention = await sweepRetention({ deadline: Date.now() + BUDGET_MS })
 
   // What was sent, or given up on, a month ago is a log rather than a queue,
@@ -62,6 +68,7 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     ok: true,
     stalledSends,
+    wokenMentions,
     webhookAttempts,
     abandonedUploads: uploads.removed,
     abandonedUploadFailures: uploads.failures,

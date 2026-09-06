@@ -31,7 +31,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const message = await getMessageHtml(id)
   if (!message) return errorResponse('That message no longer exists.', 404)
 
-  if (!await canOpenThread(user, message)) return errorResponse('Forbidden', 403)
+  if (!await canOpenThread(user, { ...message, id: message.threadId })) {
+    return errorResponse('Forbidden', 403)
+  }
 
   const showImages = request.nextUrl.searchParams.get('images') === '1'
   const collapseQuoted = request.nextUrl.searchParams.get('quoted') !== '1'

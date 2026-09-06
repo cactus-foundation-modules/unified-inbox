@@ -1,7 +1,9 @@
 'use client'
 
 import { useCallback, useRef, useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { toE164 } from '@/lib/phone'
 import { inboxHref } from '@/modules/unified-inbox/lib/list'
 import { plainReason } from './AttachmentPicker'
 import { ComposeCancel, ComposeModal } from './ComposeModal'
@@ -11,12 +13,22 @@ import { ComposeCancel, ComposeModal } from './ComposeModal'
 // TWO LEGS, AND THE FORM SAYS SO. The site rings YOU first, from the number you
 // picked, tells you who is about to be rung, and connects the two once you
 // answer. Nothing here dials a customer and hopes somebody is holding the
-// phone - and the "call me at" box is the visible half of that, rather than a
-// setting somebody has to have filled in months ago.
+// phone - and the "call me at" box is the visible half of that.
+//
+// It is filled in from your account rather than typed out every time, and still
+// editable, because the usual answer is the same number every day and the
+// exception - you are at a customer's desk, ring the mobile - is the reason it
+// is a box and not a fixed setting.
 //
 // The number you dial FROM is the caller ID they see, which is the reason it is
 // a menu rather than a fixed value: a supplier rung from the sales number is a
 // supplier who rings the sales number back.
+//
+// NUMBERS ARE TYPED THE WAY PEOPLE TYPE THEM. "020 8138 0512" off the bottom of
+// an email is a whole number to the person reading it, so it is a whole number
+// here: core's toE164 puts the country code on as the box is left, and the same
+// sum is done again on the way in (see ../../../app/api/calls/route.ts) rather
+// than trusting a browser to have done it.
 //
 // The call itself is recorded by whoever placed it and comes back to this hub
 // as a phone conversation. Nothing is written down here, so there is nothing to
@@ -32,13 +44,21 @@ type Props = {
   numbers: CallerNumber[]
   /** Who the open conversation is with, when the screen already knew. */
   defaultTo: string | null
+  /** This person's own number from their account, when they have given one. */
+  defaultCallMeAt: string | null
+  /** Which country a number typed without one belongs to (Settings > General). */
+  diallingCode: string
+  /** Their account page, for the one sentence that sends them to fill it in. */
+  accountHref: string
 }
 
-export function CallView({ base, params, numbers, defaultTo }: Props) {
+export function CallView({
+  base, params, numbers, defaultTo, defaultCallMeAt, diallingCode, accountHref,
+}: Props) {
   const router = useRouter()
   const [to, setTo] = useState(defaultTo ?? '')
   const [from, setFrom] = useState(numbers[0]?.number ?? '')
-  const [callMeAt, setCallMeAt] = useState('')
+  const [callMeAt, setCallMeAt] = useState(defaultCallMeAt ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
@@ -49,9 +69,24 @@ export function CallView({ base, params, numbers, defaultTo }: Props) {
   // closing it - three phone numbers typed once are not a half-written letter.
   const guard = false
 
+  /** Tidy a box into international form as it is left, when it can be read at
+   *  all. A number it cannot read is left exactly as typed: rewriting somebody's
+   *  half-finished number under their cursor is worse than leaving it be, and
+   *  pressing the button says what is wrong with it. */
+  const tidy = useCallback((value: string, set: (v: string) => void) => {
+    const tidied = toE164(value, diallingCode)
+    if (tidied && tidied !== value) set(tidied)
+  }, [diallingCode])
+
   const submit = useCallback(async () => {
+    setNote('')
     if (!to.trim()) {
       setError('Say which number to ring.')
+      return
+    }
+    const dialTo = toE164(to, diallingCode)
+    if (!dialTo) {
+      setError('That does not look like a number to ring. Try it as 020 8138 0512, or in full as +44 20 8138 0512.')
       return
     }
     if (!from) {
@@ -62,16 +97,20 @@ export function CallView({ base, params, numbers, defaultTo }: Props) {
       setError('Say where to ring you first.')
       return
     }
+    const dialMe = toE164(callMeAt, diallingCode)
+    if (!dialMe) {
+      setError('Your own number does not look right. Try it as 07700 900123, or in full as +44 7700 900123.')
+      return
+    }
     if (inFlight.current) return
     inFlight.current = true
     setBusy(true)
     setError('')
-    setNote('')
     try {
       const response = await fetch('/api/m/unified-inbox/calls', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: to.trim(), from, callMeAt: callMeAt.trim() }),
+        body: JSON.stringify({ to: dialTo, from, callMeAt: dialMe }),
       })
       const data = await response.json().catch(() => null)
       if (!response.ok) {
@@ -86,7 +125,7 @@ export function CallView({ base, params, numbers, defaultTo }: Props) {
       inFlight.current = false
       setBusy(false)
     }
-  }, [callMeAt, from, router, to])
+  }, [callMeAt, diallingCode, from, router, to])
 
   return (
     <ComposeModal
@@ -99,7 +138,7 @@ export function CallView({ base, params, numbers, defaultTo }: Props) {
       {({ askToLeave }) => (
         <>
           <div className="uin-fields">
-            <div className="uin-field-row">
+            <div className="uin-field-row uin-field-row--stack">
               <label htmlFor="uin-call-to">Ring</label>
               <div className="uin-field-control">
                 <input
@@ -107,13 +146,17 @@ export function CallView({ base, params, numbers, defaultTo }: Props) {
                   type="tel"
                   value={to}
                   onChange={(e) => { setTo(e.target.value); setError(''); setNote('') }}
-                  placeholder="+447700900123"
+                  onBlur={(e) => tidy(e.target.value, setTo)}
+                  placeholder="020 8138 0512"
                   autoComplete="off"
                 />
+                <span className="uin-field-hint">
+                  Their number. A number without a country code is taken as {diallingCode}.
+                </span>
               </div>
             </div>
 
-            <div className="uin-field-row">
+            <div className="uin-field-row uin-field-row--stack">
               <label htmlFor="uin-call-from">As</label>
               <div className="uin-field-control">
                 <select
@@ -129,7 +172,7 @@ export function CallView({ base, params, numbers, defaultTo }: Props) {
               </div>
             </div>
 
-            <div className="uin-field-row">
+            <div className="uin-field-row uin-field-row--stack">
               <label htmlFor="uin-call-me-at">Call me at</label>
               <div className="uin-field-control">
                 <input
@@ -137,14 +180,18 @@ export function CallView({ base, params, numbers, defaultTo }: Props) {
                   type="tel"
                   value={callMeAt}
                   onChange={(e) => { setCallMeAt(e.target.value); setError(''); setNote('') }}
-                  placeholder="+447700900456"
+                  onBlur={(e) => tidy(e.target.value, setCallMeAt)}
+                  placeholder="07700 900123"
                   /* The one box on this screen the browser can sensibly fill in:
                      it is the same number every time, and it is this person's
                      own. Nothing else here is theirs to remember. */
                   autoComplete="tel"
                 />
                 <span className="uin-field-hint">
-                  Your phone rings first. Answer it, press any key, and you are put through.
+                  Your phone rings first. Answer it, press any key, and you are put through.{' '}
+                  {defaultCallMeAt
+                    ? <>Filled in from <Link href={accountHref}>your account</Link>; change it here for this call only.</>
+                    : <>Put your number on <Link href={accountHref}>your account</Link> and it will be filled in next time.</>}
                 </span>
               </div>
             </div>

@@ -6,13 +6,14 @@ import { prisma } from '@/lib/db/prisma'
 import { getSiteTimezone } from '@/lib/config/timezone.server'
 import { instantAtWallClock } from '@/lib/config/timezone'
 import { getSiteUrlOrNull } from '@/lib/config/env'
-import { canReplyToInbox, canViewInbox, replyableInboxIds, visibleInboxIds } from '@/modules/unified-inbox/lib/access'
+import { canOpenThread, canReplyToInbox, replyableInboxIds, visibleInboxIds } from '@/modules/unified-inbox/lib/access'
 import {
   attachmentsForThread,
   countDrafts,
   categoriesForPeople,
   categoriesForPerson,
   countThreadsForPerson,
+  countMentions,
   defaultInboxIdFor,
   countThreads,
   draftForThread,
@@ -24,12 +25,14 @@ import {
   getOrganisation,
   linksForPerson,
   linksForThread,
+  undoableThreadMerges,
   ensureCampaignTickToken,
   listConnections,
   listDrafts,
   listIdentities,
   listCategories,
   listInboxes,
+  listMentions,
   listOrganisations,
   listPeople,
   listPersonEvents,
@@ -43,20 +46,24 @@ import {
   peopleInOrganisation,
   setThreadRead,
   latestPhoneOnThread,
+  mentionForThread,
+  mentionStatusCounts,
+  openMentionCount,
   statusCounts,
   threadsForPerson,
   undoableMerges,
   unreadCounts,
   wakeDueThreads,
+  wakeDueMentions,
   type AttachmentRow,
 } from '@/modules/unified-inbox/lib/db'
 import { isSmsAvailable } from '@/lib/sms/send'
 import { callerNumbers, firstDialler } from '@/lib/dialler/registry'
+import { siteDiallingCode } from '@/lib/phone.server'
 import { attachableKinds, loadContext } from '@/modules/unified-inbox/lib/adapters'
 import { defaultLinkKind } from '@/modules/unified-inbox/lib/link-kinds'
 import { modulesForInbox } from '@/modules/unified-inbox/lib/module-senders'
 import { canEditDraft, forComposer } from '@/modules/unified-inbox/lib/drafts'
-import { MIN_LEAD_MS, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
 import { addressesForPerson, buildContextQuery } from '@/modules/unified-inbox/lib/identity'
 import { ContextRail } from './inbox/ContextRail'
 import { PersonView } from './inbox/PersonView'
@@ -68,8 +75,8 @@ import { ContactCard } from './inbox/ContactCard'
 import { OrganisationCard, EMPTY_ORGANISATION } from './inbox/OrganisationCard'
 import { ContactImport } from './inbox/ContactImport'
 import { joinCategories, splitName } from '@/modules/unified-inbox/lib/contacts'
-import { replyRecipients } from '@/modules/unified-inbox/lib/compose'
-import { chooseSendingInbox, effectiveInboxParam, inboxHref, isSearching, NEW_CONTACT, parseInboxParams, PER_PAGE } from '@/modules/unified-inbox/lib/list'
+import { forwardSubject, replyRecipients, replySubject } from '@/modules/unified-inbox/lib/compose'
+import { chooseSendingInbox, effectiveInboxParam, formatWhen, inboxHref, isSearching, NEW_CONTACT, parseInboxParams, PER_PAGE } from '@/modules/unified-inbox/lib/list'
 import { providerForModule, visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
 import { InboxStyles } from './inbox/styles'
 import { InboxIcon } from './inbox/icons'
@@ -78,6 +85,7 @@ import { CampaignsPanel } from './inbox/campaigns/CampaignsPanel'
 import { StatusTabs } from './inbox/StatusTabs'
 import { Filters } from './inbox/Filters'
 import { ThreadListView } from './inbox/ThreadListView'
+import { MentionListView } from './inbox/MentionListView'
 import { DraftListView } from './inbox/DraftListView'
 import { SentListView } from './inbox/SentListView'
 import { ThreadPane, type ThreadMessageView } from './inbox/ThreadPane'
@@ -123,10 +131,6 @@ export async function UnifiedInboxPanel({
   // out in UTC - an hour behind the site for most of the year.
   const timezone = await getSiteTimezone()
   const canManage = await hasPermission(user, 'unifiedinbox.manage')
-  // The earliest a message may be set to go out, worked out here in the site's
-  // own zone rather than in whichever one the reader's browser is standing in.
-  // Both composers hand it straight to the date box as its floor.
-  const minSendAt = toWallClock(new Date(new Date().getTime() + MIN_LEAD_MS), timezone)
   // Whether this person may put anything OUT of the building at all - a reply,
   // a text, a call. Asked once and reused: it decides three different things
   // further down, and three copies of the same question is three round trips.
@@ -139,8 +143,10 @@ export async function UnifiedInboxPanel({
 
   // Anything whose snooze has elapsed is open again by the time the list is
   // drawn. Doing it here rather than on a tick means a conversation is back the
-  // moment somebody looks, which is the only moment it matters.
-  await wakeDueThreads()
+  // moment somebody looks, which is the only moment it matters. The same is
+  // true of something a colleague was asked to look at and put off until
+  // Thursday, so the two sweeps run together.
+  await Promise.all([wakeDueThreads(), wakeDueMentions()])
 
   const allInboxes = await listInboxes()
   const visibleIds = await visibleInboxIds(user, allInboxes.map((i) => i.id))
@@ -201,11 +207,33 @@ export async function UnifiedInboxPanel({
 
   const staffRows = await prisma.user.findMany({
     where: { suspendedAt: null },
-    select: { id: true, displayName: true, username: true },
+    select: {
+      id: true,
+      displayName: true,
+      username: true,
+      roleId: true,
+      role: { select: { isProtected: true } },
+    },
     orderBy: { username: 'asc' },
   })
   const staff = staffRows.map((s) => ({ id: s.id, name: s.displayName || s.username }))
   const staffById = Object.fromEntries(staff.map((s) => [s.id, s.name]))
+
+  // Who can be ASKED to look at something, which is not everybody with an
+  // account. A tag lands on somebody's own list inside this hub, so tagging a
+  // colleague who has never been given the hub tells them nothing at all - and
+  // a picker offering a name that quietly does nothing is worse than one that
+  // does not offer it. One query for every role that holds the grant, rather
+  // than one question per colleague.
+  const hubRoleIds = new Set(
+    (await prisma.rolePermission.findMany({
+      where: { permissionKey: { in: ['unifiedinbox.view', 'unifiedinbox.manage'] } },
+      select: { roleId: true },
+    })).map((row) => row.roleId),
+  )
+  const taggable = staffRows
+    .filter((person) => person.role.isProtected || hubRoleIds.has(person.roleId))
+    .map((person) => ({ id: person.id, name: person.displayName || person.username }))
 
   const counts = await unreadCounts(visibleIds, canManage, channelModules)
   const allUnread = Object.values(counts).reduce((a, b) => a + b, 0)
@@ -222,6 +250,12 @@ export async function UnifiedInboxPanel({
     page: 1,
     perPage: PER_PAGE,
   })
+
+  // What colleagues have asked this person to look at and they have not dealt
+  // with yet. One cheap COUNT on every draw, because it rides on the rail; the
+  // list itself is only fetched when that is the tab open, the same as Drafts,
+  // Sent and Contacts.
+  const askedCount = await openMentionCount(user.id)
 
   // Writing a new one is a different grant from reading (D16), so the From menu
   // and the button that opens it are both built from the inboxes this person may
@@ -268,21 +302,71 @@ export async function UnifiedInboxPanel({
     }] : []),
   ]
 
+  // ---- one colleague's folders ------------------------------------------
+  //
+  // Sent, Drafts and Mentioned can each be looked at across every address this
+  // person may read - which is what they have always been - or narrowed to ONE
+  // address, which is what the folders under a colleague's name on the rail
+  // ask for.
+  //
+  // The id is resolved against the addresses this person may read rather than
+  // trusted. Anybody can type one into the address bar, and a Sent folder that
+  // quietly fell back to everything because the id did not resolve is the E17
+  // breach wearing a folder's name - so an id that is not on their list yields
+  // nothing at all rather than something.
+  const folderAsked = params.folderInboxId !== null
+  const folderInbox = params.folderInboxId && visible.has(params.folderInboxId)
+    ? allInboxes.find((i) => i.id === params.folderInboxId) ?? null
+    : null
+  const folderIds = folderAsked ? (folderInbox ? [folderInbox.id] : []) : visibleIds
+  // Whose asks the Mentioned list is of. This reader's own on their own tab;
+  // the address's owner on a colleague's. An address whose owner's account has
+  // gone belongs to nobody, so there is nobody to have been asked - and the
+  // rail does not offer the folder in that case either.
+  const folderOwnerId = folderAsked ? folderInbox?.ownerUserId ?? null : user.id
+  // The name at the head of a colleague's folder, and the one the Mentioned
+  // rows are written in. Null on this person's own lists, which say "you".
+  const folderOwnerName = folderAsked && folderInbox
+    ? (folderInbox.ownerUserId ? staffById[folderInbox.ownerUserId] ?? null : null) ?? folderInbox.name
+    : null
+
   // Drafts filed on an address are read by whoever can read that address, the
   // same as every other message on it, and the query says so rather than the
   // caller (see lib/db.ts). The count is what the Drafts tab shows; the list
   // itself is only fetched when that tab is the one open.
   const draftCount = await countDrafts(user.id, visibleIds)
-  const drafts = params.draftsOnly ? await listDrafts(user.id, visibleIds) : []
+  const drafts = params.draftsOnly
+    ? await listDrafts(user.id, folderIds, !folderAsked)
+    : []
 
-  // Everything that has left, across every address this person may read. Only
-  // fetched when that is the list being looked at.
+  // Everything that has left, across every address this person may read, or out
+  // of the one a colleague's folder names. Only fetched when that is the list
+  // being looked at.
   const [sent, sentTotal] = params.sentOnly
     ? await Promise.all([
-        listSentMessages(visibleIds, canManage, channelModules, params.page, PER_PAGE),
-        countSentMessages(visibleIds, canManage, channelModules),
+        listSentMessages(folderIds, !folderAsked && canManage, folderAsked ? [] : channelModules, params.page, PER_PAGE),
+        countSentMessages(folderIds, !folderAsked && canManage, folderAsked ? [] : channelModules),
       ])
     : [[] as Awaited<ReturnType<typeof listSentMessages>>, 0]
+
+  // Everything colleagues have asked this person about, when that is the list
+  // being looked at. Scoped to them in the SQL rather than after it, like every
+  // other list on this screen (E17) - this table is the one place that knows a
+  // colleague was let into a conversation their inbox guest list does not
+  // cover, and a row of it belongs to exactly one person.
+  const [asks, askTotal, askCounts] = params.mentionsOnly && folderOwnerId
+    ? await Promise.all([
+        listMentions({
+          userId: folderOwnerId,
+          status: params.status,
+          page: params.page,
+          perPage: PER_PAGE,
+          inboxId: folderInbox?.id ?? null,
+        }),
+        countMentions(folderOwnerId, params.status, folderInbox?.id ?? null),
+        mentionStatusCounts(folderOwnerId, folderInbox?.id ?? null),
+      ])
+    : [[] as Awaited<ReturnType<typeof listMentions>>, 0, {} as Record<string, number>]
 
   const filters = {
     inboxIds: visibleIds,
@@ -321,6 +405,7 @@ export async function UnifiedInboxPanel({
   // The status tabs count what is behind them given everything else already
   // chosen, so they come from the same filters with the status left out.
   const listing = params.draftsOnly || params.sentOnly || params.contactsOnly || params.campaignsOnly
+    || params.mentionsOnly
   const [rows, total, statuses] = listing
     ? [[] as Awaited<ReturnType<typeof listThreads>>, 0, {} as Record<string, number>]
     : await Promise.all([listThreads(filters), countThreads(filters), statusCounts(filters)])
@@ -550,16 +635,22 @@ export async function UnifiedInboxPanel({
   let threadPane: React.ReactNode = null
   let contextRail: React.ReactNode = null
   if (!params.composing && !params.personId && params.threadId) {
-    const thread = await getThreadDetail(params.threadId)
-    const allowed = thread
-      ? thread.providerModule
-        // A conversation from another channel answers to that module's own
-        // permission, not to the inbox guest lists - it never had an address.
-        ? channelModules.includes(thread.providerModule)
-        : thread.inboxId
-          ? await canViewInbox(user, thread.inboxId)
-          : canManage
-      : false
+    // A link to a conversation that has since been merged into another opens
+    // the one it became. Without this a bookmark, a search result somebody
+    // pasted into a chat, or a notification from before the merge lands on a
+    // conversation no list shows, holding at most the duplicate copies the
+    // merge could not move - which reads as a conversation that has lost its
+    // messages rather than one that was tidied up.
+    const opened = await getThreadDetail(params.threadId)
+    const thread = opened?.mergedIntoId
+      ? await getThreadDetail(opened.mergedIntoId)
+      : opened
+    // The whole rule in one call rather than a copy of it here: the guest list,
+    // the channel's own permission, and - since colleagues can tag each other -
+    // whether this person was asked to look at this one conversation. The copy
+    // that used to live here would have let somebody follow a link to a
+    // conversation they had been asked about and be told it was not there.
+    const allowed = thread ? await canOpenThread(user, thread) : false
     if (!thread || !allowed) {
       threadPane = (
         <div className="uin-empty">
@@ -569,7 +660,9 @@ export async function UnifiedInboxPanel({
       )
     } else {
       // Opening a conversation is what marks it read, which is what everybody
-      // means by opening one.
+      // means by opening one. Taken first, because where the pane opens turns on
+      // it and it stops being true one line below.
+      const wasUnread = thread.unread
       if (thread.unread) await setThreadRead(thread.id, false)
 
       const [messages, files, events, ownDraft, heldDrafts] = await Promise.all([
@@ -593,6 +686,21 @@ export async function UnifiedInboxPanel({
         ...m,
         attachments: byMessage.get(m.id) ?? [],
       }))
+
+      // Which message the pane opens on. Reading newest first it is already the
+      // one at the top and there is nothing to do; reading oldest first the
+      // newest message is at the BOTTOM, so a conversation with forty messages
+      // in it opens four thousand pixels from the one that has just arrived.
+      //
+      // Unread when it was opened means something came in that nobody has read,
+      // so that is what it opens on. Otherwise it is the last message of any
+      // kind - a colleague's note included, since a note is the most recent
+      // thing said about the conversation whether or not it was sent anywhere.
+      const openOnMessage = settings.newestFirst
+        ? null
+        : (wasUnread ? [...messages].reverse().find((m) => m.direction === 'in') : null)
+          ?? messages[messages.length - 1]
+          ?? null
 
       const newest = [...messages].reverse().find((m) => m.direction !== 'note') ?? null
       const ownAddresses = allInboxes.map((i) => i.address)
@@ -622,6 +730,15 @@ export async function UnifiedInboxPanel({
             ownAddresses,
           )
         : { to: [], cc: [] }
+
+      // What the subject line would say if nobody opened it in the reply box,
+      // worked out the same way the send route works it out: off the message
+      // being answered, falling back to the conversation's own. The box only
+      // shows it once somebody asks to change it, but it has to be the same
+      // words the server would have used or opening the line would silently
+      // rewrite the subject.
+      const replySubjectLine = replySubject(newest?.subject ?? thread.subject)
+      const forwardSubjectLine = forwardSubject(newest?.subject ?? thread.subject)
 
       const channel = thread.providerModule
         ? channels.find((c) => c.moduleName === thread.providerModule) ?? null
@@ -697,12 +814,26 @@ export async function UnifiedInboxPanel({
       // used for. An address purchasing sends from is an address suppliers
       // answer purchase orders at, and that is worth one less choice made by
       // hand on every conversation in it.
-      const [sections, links, kindOptions, senderModules] = await Promise.all([
+      // This reader's own ask on this conversation, when a colleague put their
+      // name on it. Nobody else's: what somebody was asked and whether they
+      // have got to it is between them and whoever asked them.
+      const ask = await mentionForThread(user.id, thread.id)
+
+      const [sections, links, kindOptions, senderModules, merges] = await Promise.all([
         query ? loadContext(user, query) : Promise.resolve([]),
         linksForThread(thread.id),
         canEditLinks ? attachableKinds(user) : Promise.resolve([]),
         canEditLinks && thread.inboxId ? modulesForInbox(thread.inboxId) : Promise.resolve([]),
+        // Only asked for when there is somebody who could act on the answer.
+        canManage ? undoableThreadMerges(thread.id) : Promise.resolve([]),
       ])
+
+      // The site's other addresses this conversation belongs to. Its own is
+      // already named beside the channel, so only the extras go here.
+      const otherInboxNames = thread.absorbedInboxIds
+        .filter((id) => id !== thread.inboxId)
+        .map((id) => allInboxes.find((i) => i.id === id)?.name)
+        .filter((name): name is string => !!name)
 
       threadPane = (
         <ThreadPane
@@ -710,22 +841,36 @@ export async function UnifiedInboxPanel({
           params={carried}
           thread={thread}
           inboxName={threadInbox?.name ?? null}
+          otherInboxNames={otherInboxNames}
+          merges={merges.map((merge) => ({
+            id: merge.id,
+            subject: merge.loserSubject,
+            // A Date in props reaches a client component as an empty object.
+            when: formatWhen(merge.createdAt, new Date(), timezone),
+            by: merge.userId ? staffById[merge.userId] ?? null : null,
+          }))}
           messages={view}
           events={events}
           staff={threadStaff}
+          /* The full list, not the narrowed one: a tag is how somebody outside
+             an address is asked to look at one conversation in it, and on a
+             private inbox the narrowed list is this reader on their own. */
+          taggable={taggable}
           staffById={staffById}
           canReply={canReply}
           cannotReplyReason={cannotReplyReason}
           replyTo={[...reply.to, ...reply.cc]}
           replyAllTo={[...replyAll.to, ...replyAll.cc]}
+          replySubject={replySubjectLine}
+          forwardSubject={forwardSubjectLine}
           draft={ownDraft ? forComposer(ownDraft) : null}
           newestFirst={settings.newestFirst}
+          scrollToMessageId={openOnMessage?.id ?? null}
           showAvatars={settings.showAvatars}
           canDeleteMessages={canDeleteMessages}
           blockState={blockState}
           now={new Date()}
           timezone={timezone}
-          minSendAt={minSendAt}
           heldDrafts={heldDrafts.map((held) => ({
             id: held.id,
             threadId: held.threadId,
@@ -736,10 +881,15 @@ export async function UnifiedInboxPanel({
             // it makes the trip as a string either way.
             sendAt: held.sendAt ? held.sendAt.toISOString() : null,
           }))}
+          asked={ask && {
+            id: ask.id,
+            status: ask.status,
+            note: ask.note,
+            askedBy: ask.byUserId ? staffById[ask.byUserId] ?? null : null,
+            backWhen: ask.snoozeUntil ? formatWhen(ask.snoozeUntil, new Date(), timezone) : null,
+          }}
           context={{
             adminPath,
-            person,
-            noPersonReason: person ? null : reasonThereIsNobody(thread.channel),
             links,
             canEditLinks,
             linkKinds: kindOptions,
@@ -792,7 +942,9 @@ export async function UnifiedInboxPanel({
             .filter((i) => visibleIds.includes(i.id))
             .map((i) => ({ id: i.id, name: i.name, address: i.address }))}
           defaultInboxId={params.inboxId ?? pinnedInboxId}
-          staff={staff}
+          /* The names here are people to ASK, not people to hand it to, so it
+             is the list of colleagues who can actually use the hub. */
+          staff={taggable}
         />
       ) : (
         <div className="uin-empty">
@@ -818,8 +970,25 @@ export async function UnifiedInboxPanel({
       // this is a screen saying so, which is the honest answer whether the
       // cause is no credentials or no number.
       const numbers = dialler ? await callerNumbers(user) : []
+      // Their own number and the site's dialling code, so the form arrives
+      // filled in and reads a number typed the way people type one. Both are
+      // core's - this module keeps no phone book of its own for staff.
+      const [me, diallingCode] = numbers.length > 0
+        ? await Promise.all([
+          prisma.user.findUnique({ where: { id: user.id }, select: { phone: true } }),
+          siteDiallingCode(),
+        ])
+        : [null, '']
       composePane = numbers.length > 0 ? (
-        <CallView base={base} params={carried} numbers={numbers} defaultTo={knownPhone} />
+        <CallView
+          base={base}
+          params={carried}
+          numbers={numbers}
+          defaultTo={knownPhone}
+          defaultCallMeAt={me?.phone ?? null}
+          diallingCode={diallingCode}
+          accountHref={`/${adminPath}/account`}
+        />
       ) : (
         <div className="uin-empty">
           <strong>There is no number to call from</strong>
@@ -859,7 +1028,6 @@ export async function UnifiedInboxPanel({
           inboxes={sendable.map((i) => ({ id: i.id, name: i.name, address: i.address }))}
           defaultInboxId={chooseSendingInbox(sendableIds, editing?.inboxId ?? params.inboxId)}
           draft={editing ? forComposer(editing) : null}
-          minSendAt={minSendAt}
           timezone={timezone}
         />
       )
@@ -877,7 +1045,13 @@ export async function UnifiedInboxPanel({
     }
   }
 
-  const currentTab = params.draftsOnly
+  // A folder under a colleague's name says which folder AND whose, in one
+  // value, because the rail highlights one entry and there are three of them
+  // under every colleague.
+  const folderTab = params.draftsOnly ? 'drafts' : params.sentOnly ? 'sent' : 'mentions'
+  const currentTab = params.folderInboxId
+    ? `${folderTab}:${params.folderInboxId}`
+    : params.draftsOnly
     ? 'drafts'
     : params.sentOnly
       ? 'sent'
@@ -885,6 +1059,8 @@ export async function UnifiedInboxPanel({
         ? 'contacts'
         : params.campaignsOnly
           ? 'campaigns'
+          : params.mentionsOnly
+          ? 'mentions'
           : params.unroutedOnly
             ? 'none'
             : params.providerModule
@@ -899,13 +1075,19 @@ export async function UnifiedInboxPanel({
   const currentChannel = params.providerModule
     ? channels.find((c) => c.moduleName === params.providerModule) ?? null
     : null
+  // Whose folder it is, said in front of which folder it is: "Sam Blake ·
+  // Sent". The name first because on this screen the surprising half is whose
+  // post you are looking at, not that it is the sent one.
+  const folderPrefix = folderOwnerName ? `${folderOwnerName} \u00b7 ` : ''
   const viewTitle = params.draftsOnly
-    ? 'Drafts'
+    ? `${folderPrefix}Drafts`
     : params.sentOnly
-      ? 'Sent'
+      ? `${folderPrefix}Sent`
       : params.contactsOnly
         ? (showingOrganisations ? 'Organisations' : 'Contacts')
-        : params.unroutedOnly
+        : params.mentionsOnly
+          ? `${folderPrefix}Mentioned`
+          : params.unroutedOnly
           ? 'Not filed'
           : currentChannel
             ? currentChannel.label
@@ -920,7 +1102,9 @@ export async function UnifiedInboxPanel({
         ? (showingOrganisations
             ? plural(organisationsTotal, 'organisation', 'organisations')
             : plural(contactsTotal, 'contact', 'contacts'))
-        : plural(total, 'conversation', 'conversations')
+        : params.mentionsOnly
+          ? plural(askTotal, 'conversation', 'conversations')
+          : plural(total, 'conversation', 'conversations')
 
   // The rail, built once and used by both shapes this screen takes: the
   // ordinary reading layout, and campaigns, which is one full-width column
@@ -934,6 +1118,11 @@ export async function UnifiedInboxPanel({
         name: i.name,
         address: i.address,
         kind: i.kind,
+        ownerUserId: i.ownerUserId,
+        /* The colleague's name, for the Team inboxes group. Null when the
+           account behind the address has gone, and the rail then falls back to
+           what the address is called. */
+        ownerName: i.ownerUserId ? staffById[i.ownerUserId] ?? null : null,
         count: counts[i.id] ?? 0,
       }))}
       channels={channels.map((c) => ({
@@ -946,6 +1135,7 @@ export async function UnifiedInboxPanel({
       me={{ id: user.id, name: staffById[user.id] ?? 'You' }}
       showAvatars={settings.showAvatars}
       assignedCount={assignedCount}
+      askedCount={askedCount}
       assignee={params.assignee}
       showUnrouted={canManage}
       unroutedCount={counts[''] ?? 0}
@@ -1046,6 +1236,26 @@ export async function UnifiedInboxPanel({
         canEdit={canEditLinks}
       />
     )
+  ) : params.mentionsOnly ? (
+    <MentionListView
+      base={base}
+      params={carried}
+      rows={asks}
+      total={askTotal}
+      page={params.page}
+      openThreadId={params.threadId}
+      staffById={staffById}
+      inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
+      status={params.status}
+      /* Whose list it is. Null on this reader's own, which says "you"; a
+         colleague's name on theirs, where the controls also come off - where
+         somebody else's job stands is between them and whoever asked, and a
+         button that the route would refuse is worse than no button. */
+      ownerName={folderOwnerName}
+      canSettle={!folderAsked}
+      now={new Date()}
+      timezone={timezone}
+    />
   ) : params.draftsOnly ? (
     <DraftListView
       base={base}
@@ -1127,7 +1337,10 @@ export async function UnifiedInboxPanel({
                 they are an unlabelled column of rows; everywhere else the tab
                 row carries the total and the rail carries the name, and a third
                 thing saying it is a third thing to read. */}
-            {listing && !params.contactsOnly && (
+            {/* A colleague's Mentioned list is the one that DOES want a title
+                over its tabs: the tabs say where the jobs stand and nothing
+                else on the screen says whose they are. */}
+            {listing && !params.contactsOnly && (!params.mentionsOnly || !!folderOwnerName) && (
               <div className="uin-col-title">
                 <h2>{viewTitle}</h2>
                 <span className="uin-col-total">{headTotal}</span>
@@ -1149,6 +1362,22 @@ export async function UnifiedInboxPanel({
                 canImport={canManage}
                 categories={categoryList.map((c) => ({ id: c.id, name: c.name, people: c.peopleCount }))}
                 categoryId={params.categoryId}
+              />
+            ) : params.mentionsOnly ? (
+              /* The same four choices the conversation list has, narrowing the
+                 same three states - the difference being whose they are. Only
+                 the tabs: the other filters up here cut a list of post by who
+                 sent it and when, and this is a list of jobs. */
+              <StatusTabs
+                base={base}
+                params={carried}
+                status={params.status}
+                counts={askCounts}
+                total={headTotal}
+                unit="asked about"
+                ariaLabel={folderOwnerName
+                  ? `Where an ask stands with ${folderOwnerName}`
+                  : 'Where an ask stands with you'}
               />
             ) : listing ? null : (
               <>
@@ -1220,15 +1449,6 @@ export async function UnifiedInboxPanel({
  *  head of the list column says it about four different things. */
 function plural(n: number, one: string, many: string): string {
   return n === 1 ? `1 ${one}` : `${n.toLocaleString('en-GB')} ${many}`
-}
-
-/** Why a conversation has nobody attached to it. Said plainly rather than left
- *  blank: an empty panel reads as broken, and every one of these is a decision
- *  somebody made on purpose. */
-function reasonThereIsNobody(channel: string): string {
-  if (channel === 'discussion') return 'A discussion is between colleagues, so there is nobody outside it.'
-  if (channel !== 'email') return 'Nobody is attached to this one yet.'
-  return 'Nobody is attached to this one. That happens with automatic mail, and with anything from one of your own addresses.'
 }
 
 /** Reading the address book and writing in it are different grants, and a

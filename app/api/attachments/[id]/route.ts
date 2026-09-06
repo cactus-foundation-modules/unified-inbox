@@ -3,7 +3,7 @@ import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { canViewInbox } from '@/modules/unified-inbox/lib/access'
-import { getAttachment } from '@/modules/unified-inbox/lib/db'
+import { getAttachment, hasMentionOn } from '@/modules/unified-inbox/lib/db'
 import { loadAttachmentBytes } from '@/modules/unified-inbox/lib/attachments'
 
 // The only way to get at an email attachment.
@@ -18,6 +18,12 @@ import { loadAttachmentBytes } from '@/modules/unified-inbox/lib/attachments'
 // A message that landed in no inbox at all (nothing matched and no catch-all
 // was set) is treated as the most private case there is: only somebody who can
 // administer the whole thing may open it.
+//
+// The one way past the guest list is the same one the conversation itself has:
+// a colleague tagged in a note on it was deliberately asked to look at that one
+// conversation, and being let in to read it and then refused the invoice
+// attached to it would be a grant that does not cover the thing it was granted
+// for. It is still one conversation rather than the address it sits in.
 export const maxDuration = 60
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -32,7 +38,9 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const allowed = attachment.inboxId
     ? await canViewInbox(user, attachment.inboxId)
     : await hasPermission(user, 'unifiedinbox.manage')
-  if (!allowed) return errorResponse('Forbidden', 403)
+  if (!allowed && !await hasMentionOn(attachment.threadId, user.id)) {
+    return errorResponse('Forbidden', 403)
+  }
 
   const result = await loadAttachmentBytes(id)
   if (!result.ok) return errorResponse(result.reason, result.status)

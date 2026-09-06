@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { LinkPeek, type PeekedLink } from './LinkPeek'
+import { hasShownImages, rememberShownImages } from './remote-images'
 
 // An email's own HTML, rendered in a frame of its own (E16).
 //
@@ -65,6 +66,13 @@ export function MessageBody({ messageId, hasRemoteImages }: Props) {
   const frame = useRef<HTMLIFrameElement | null>(null)
   const [height, setHeight] = useState(OPENING_HEIGHT)
   const [showImages, setShowImages] = useState(false)
+  // Whether the record of what has already been shown has been consulted yet.
+  // It is read after mount and never during render: the server has no
+  // localStorage, so deciding the frame's address from it on the first render
+  // is a hydration mismatch on the src. Nothing below is drawn until it has
+  // been read, which costs a tick and saves loading the message twice - once
+  // without the pictures and again with them.
+  const [restored, setRestored] = useState(false)
   // Which message would not open, rather than a plain yes or no: showing the
   // pictures loads a different address, and the answer for one is not the answer
   // for the other. Held this way round so that changing address clears it
@@ -110,11 +118,21 @@ export function MessageBody({ messageId, hasRemoteImages }: Props) {
     return () => window.removeEventListener('message', onMessage)
   }, [onMessage])
 
+  // Asked again per message rather than once for the component: the same
+  // frame is reused as somebody moves down a thread, and one message having
+  // been shown says nothing about the next.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- must read localStorage after mount or the client's first render diverges from the server's HTML
+    setShowImages(hasShownImages(messageId))
+    setRestored(true)
+  }, [messageId])
+
   const src = `/api/m/unified-inbox/messages/${encodeURIComponent(messageId)}/body${showImages ? '?images=1' : ''}`
 
   const failed = failedSrc === src
 
   useEffect(() => {
+    if (!restored) return
     heard.current = false
     const stop = new AbortController()
     const timer = setTimeout(() => {
@@ -126,22 +144,26 @@ export function MessageBody({ messageId, hasRemoteImages }: Props) {
         .catch(() => {})
     }, SILENCE_MS)
     return () => { clearTimeout(timer); stop.abort() }
-  }, [src])
+  }, [src, restored])
 
   return (
     <div>
       <LinkPeek link={peek} onClose={() => setPeek(null)} />
 
-      {hasRemoteImages && !showImages && (
+      {restored && hasRemoteImages && !showImages && (
         <div
-          className="alert alert-info"
+          className="alert alert-info uin-remote-note"
           style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}
         >
           <span style={{ flex: '1 1 14rem' }}>
             Pictures in this message have not been loaded. Loading them tells the sender the
             message was opened.
           </span>
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowImages(true)}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => { setShowImages(true); rememberShownImages(messageId) }}
+          >
             Show pictures
           </button>
         </div>
@@ -154,7 +176,7 @@ export function MessageBody({ messageId, hasRemoteImages }: Props) {
       )}
       {/* Taken off the page rather than hidden: .uin-frame sets display and an
           author rule beats the browser's own for a hidden element. */}
-      {!failed && (
+      {restored && !failed && (
       <iframe
         ref={frame}
         className="uin-frame"

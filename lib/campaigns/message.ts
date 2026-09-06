@@ -143,6 +143,9 @@ export async function buildCampaignMessage(ctx: CampaignMessageContext): Promise
     sendable: {
       to: [recipient.address],
       cc: [],
+      // A campaign goes to one person at a time, by name, on purpose. There is
+      // nobody to copy in and nobody to copy in quietly.
+      bcc: [],
       from: sendingIdentity(inbox),
       transport: ctx.transport,
       // Replies come back to the address it went out as, which is what makes a

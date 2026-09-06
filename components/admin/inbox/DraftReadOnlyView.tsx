@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import type { Draft } from '@/modules/unified-inbox/lib/types'
 import { inboxHref } from '@/modules/unified-inbox/lib/list'
-import { draftRecipientLabel, draftSubjectLabel } from '@/modules/unified-inbox/lib/drafts'
+import { draftBodyText, draftRecipientLabel, draftSubjectLabel } from '@/modules/unified-inbox/lib/drafts'
 import { describeSendAt } from '@/modules/unified-inbox/lib/scheduled'
 import { CloseIcon, PaperclipIcon } from './icons'
 
@@ -98,8 +98,11 @@ export function DraftReadOnlyView({
             <dd>{draftSubjectLabel(draft)}</dd>
           </dl>
 
-          {draft.body.trim()
-            ? <pre className="uin-msg-text">{draft.body}</pre>
+          {/* Flattened to words and printed as TEXT. It is somebody else's
+              unsent markup; reading whose draft it is does not extend to
+              rendering what they wrote into this page. */}
+          {draftBodyText(draft).trim()
+            ? <pre className="uin-msg-text">{draftBodyText(draft)}</pre>
             : <p className="uin-ctx-sub">Nothing has been typed into it yet.</p>}
 
           {draft.attachments.length > 0 && (

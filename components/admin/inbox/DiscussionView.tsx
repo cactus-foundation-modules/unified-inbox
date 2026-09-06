@@ -129,7 +129,7 @@ export function DiscussionView({ base, params, inboxes, defaultInboxId, staff }:
       {({ askToLeave }) => (
         <>
           <div className="uin-fields">
-            <div className="uin-field-row">
+            <div className="uin-field-row uin-field-row--stack">
               <span className="uin-field-label" id="uin-discussion-to">To</span>
               <div className="uin-field-control">
                 <div className="uin-pick-list" role="group" aria-labelledby="uin-discussion-to">
@@ -140,8 +140,8 @@ export function DiscussionView({ base, params, inboxes, defaultInboxId, staff }:
                         checked={chosen.includes(inbox.id)}
                         onChange={() => toggle(inbox.id)}
                       />
-                      <span>{inbox.name}</span>
-                      <span className="uin-recipients">{inbox.address}</span>
+                      <span className="uin-pick-name" title={inbox.name}>{inbox.name}</span>
+                      <span className="uin-recipients" title={inbox.address}>{inbox.address}</span>
                     </label>
                   ))}
                 </div>

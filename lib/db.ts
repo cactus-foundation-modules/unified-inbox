@@ -4,6 +4,7 @@ import { prisma } from '@/lib/db/prisma'
 import { encryptSecret, tryDecryptSecret } from '@/lib/crypto/secrets'
 import { normaliseAddress } from './addresses'
 import type { ThreadRef } from './threading'
+import { mergedStatus, mergedUnread, validateMerge } from './thread-merge'
 import type { OutboundCandidate } from './relay-copy'
 import { remoteImageUrls } from './remote-images'
 import { DRAFT_MODES, DRAFT_SEND_STATES, isInboxKind, isSignatureKind } from './types'
@@ -15,6 +16,7 @@ import type {
   DiscoveredFolder,
   Draft,
   DraftAttachment,
+  DraftBodyFormat,
   DraftMode,
   DraftSendState,
   IdentityKind,
@@ -1049,14 +1051,30 @@ export async function threadsForMessageIds(
   messageIds: string[]
 ): Promise<Map<string, ThreadRef[]>> {
   if (messageIds.length === 0) return new Map()
-  const rows = await prisma.$queryRaw<{ message_id_header: string; thread_id: string; inbox_id: string | null }[]>`
-    SELECT m."message_id_header", m."thread_id", t."inbox_id" FROM "uin_messages" m
+  // A conversation that lost a merge is skipped. Its messages moved to the
+  // winner, so the winner is what a reference resolves to - but the duplicate
+  // copies a merge deliberately leaves behind (see mergeThreads) still carry
+  // the same Message-ID, and following one of those would file the reply onto a
+  // conversation no list shows.
+  const rows = await prisma.$queryRaw<{
+    message_id_header: string
+    thread_id: string
+    inbox_id: string | null
+    absorbed_inbox_ids: string[] | null
+  }[]>`
+    SELECT m."message_id_header", m."thread_id", t."inbox_id",
+           ${ABSORBED_INBOX_IDS} AS absorbed_inbox_ids
+      FROM "uin_messages" m
       JOIN "uin_threads" t ON t."id" = m."thread_id"
      WHERE m."message_id_header" = ANY(${messageIds}::text[])
+       AND t."merged_into_id" IS NULL
     UNION ALL
-    SELECT m."provider_message_id" AS "message_id_header", m."thread_id", t."inbox_id" FROM "uin_messages" m
+    SELECT m."provider_message_id" AS "message_id_header", m."thread_id", t."inbox_id",
+           ${ABSORBED_INBOX_IDS} AS absorbed_inbox_ids
+      FROM "uin_messages" m
       JOIN "uin_threads" t ON t."id" = m."thread_id"
      WHERE m."provider_message_id" = ANY(${messageIds}::text[])
+       AND t."merged_into_id" IS NULL
   `
   // Every thread a referenced id sits on, not just the first. Internal mail is
   // held once per inbox involved, and the caller picks the side it belongs to.
@@ -1064,7 +1082,11 @@ export async function threadsForMessageIds(
   for (const row of rows) {
     const refs = map.get(row.message_id_header) ?? []
     if (refs.some((ref) => ref.threadId === row.thread_id)) continue
-    refs.push({ threadId: row.thread_id, inboxId: row.inbox_id })
+    refs.push({
+      threadId: row.thread_id,
+      inboxId: row.inbox_id,
+      absorbedInboxIds: row.absorbed_inbox_ids ?? [],
+    })
     map.set(row.message_id_header, refs)
   }
   return map
@@ -1089,10 +1111,21 @@ export async function threadsHoldingIdentity(
 export type ThreadCandidateRow = {
   id: string
   inboxId: string | null
+  absorbedInboxIds?: string[]
   subjectNormalised: string | null
   lastMessageAt: Date | null
   participants: string[]
 }
+
+/** The addresses a conversation belongs to, as a column. Empty for everything
+ *  that has never been merged, which is what `effectiveInboxIds` reads as
+ *  "just the one in inbox_id". Written once because three separate queries
+ *  need it and a fourth will. */
+const ABSORBED_INBOX_IDS = Prisma.sql`
+  COALESCE(
+    ARRAY(SELECT ti."inbox_id" FROM "uin_thread_inboxes" ti WHERE ti."thread_id" = t."id"),
+    ARRAY[]::text[]
+  )`
 
 /** Threads that could be the same conversation as a message the headers cannot
  *  place: same normalised subject, recent enough to still be one. */
@@ -1103,6 +1136,7 @@ export async function candidateThreads(
   if (!subjectNormalised) return []
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT t."id", t."inbox_id", t."subject_normalised", t."last_message_at",
+           ${ABSORBED_INBOX_IDS} AS absorbed_inbox_ids,
            COALESCE(
              ARRAY(
                SELECT DISTINCT m."from_address" FROM "uin_messages" m
@@ -1114,6 +1148,7 @@ export async function candidateThreads(
       FROM "uin_threads" t
      WHERE t."subject_normalised" = ${subjectNormalised}
        AND t."channel" = 'email'
+       AND t."merged_into_id" IS NULL
        AND (t."last_message_at" IS NULL OR t."last_message_at" >= ${since})
      ORDER BY t."last_message_at" DESC NULLS LAST
      LIMIT 25
@@ -1121,6 +1156,7 @@ export async function candidateThreads(
   return rows.map((r) => ({
     id: r.id as string,
     inboxId: (r.inbox_id as string | null) ?? null,
+    absorbedInboxIds: (r.absorbed_inbox_ids as string[] | null) ?? [],
     subjectNormalised: (r.subject_normalised as string | null) ?? null,
     lastMessageAt: (r.last_message_at as Date | null) ?? null,
     participants: (r.participants as string[] | null) ?? [],
@@ -1578,6 +1614,11 @@ export type OutboundMessageInput = {
   fromAddress: string
   toAddresses: string[]
   ccAddresses: string[]
+  /** The blind copies. Stored so the copy filed in the mailbox's own Sent
+   *  folder is honest about who actually got it, and so a retry sends the same
+   *  message rather than a narrower one. Left out is none, which is what mail a
+   *  module sends on its own always has. */
+  bccAddresses?: string[]
   subject: string
   bodyText: string
   bodyHtml: string
@@ -1605,6 +1646,7 @@ export type OutboundMessageRow = {
   fromAddress: string | null
   toAddresses: string[]
   ccAddresses: string[]
+  bccAddresses: string[]
   subject: string | null
   bodyText: string | null
   bodyHtml: string | null
@@ -1630,6 +1672,7 @@ function mapOutbound(r: Record<string, unknown>): OutboundMessageRow {
     fromAddress: (r.from_address as string | null) ?? null,
     toAddresses: (r.to_addresses as string[] | null) ?? [],
     ccAddresses: (r.cc_addresses as string[] | null) ?? [],
+    bccAddresses: (r.bcc_addresses as string[] | null) ?? [],
     subject: (r.subject as string | null) ?? null,
     bodyText: (r.body_text as string | null) ?? null,
     bodyHtml: (r.body_html as string | null) ?? null,
@@ -1652,12 +1695,13 @@ export async function insertOutboundMessage(
     INSERT INTO "uin_messages"
       ("thread_id", "inbox_id", "direction", "channel", "message_id_header", "in_reply_to",
        "references_header", "from_name", "from_address", "to_addresses", "cc_addresses",
-       "subject", "body_text", "body_html", "snippet", "sent_at", "has_attachments",
-       "size_bytes", "source", "delivery_status", "author_user_id", "idempotency_key",
-       "thread_match", "routed_on")
+       "bcc_addresses", "subject", "body_text", "body_html", "snippet", "sent_at",
+       "has_attachments", "size_bytes", "source", "delivery_status", "author_user_id",
+       "idempotency_key", "thread_match", "routed_on")
     VALUES (${data.threadId}, ${data.inboxId}, 'out', 'email', ${data.messageIdHeader},
             ${data.inReplyTo}, ${data.references}::text[], ${data.fromName}, ${data.fromAddress},
-            ${data.toAddresses}::text[], ${data.ccAddresses}::text[], ${data.subject},
+            ${data.toAddresses}::text[], ${data.ccAddresses}::text[],
+            ${data.bccAddresses ?? []}::text[], ${data.subject},
             ${data.bodyText}, ${data.bodyHtml}, ${data.snippet}, now(), ${data.hasAttachments},
             ${data.sizeBytes}, 'brevo', 'sending', ${data.authorUserId}, ${data.idempotencyKey},
             'new', 'outbound')
@@ -1811,6 +1855,14 @@ export async function getQuotableMessage(id: string): Promise<QuotableMessage | 
 export type ThreadRow = {
   id: string
   inboxId: string | null
+  /** Every address the conversation belongs to, where a merge has given it more
+   *  than one. Empty on everything that has never been merged. Carried on the
+   *  row because the guest list reads it (see access.ts): a conversation
+   *  fetched without it would be judged on its own inbox alone, which locks the
+   *  other side out of something they were merged into. */
+  absorbedInboxIds: string[]
+  /** Set on the losing side of a merge, pointing at what it became part of. */
+  mergedIntoId: string | null
   channel: string
   /** Set when the conversation belongs to another module's channel, along with
    *  that module's own id for it. Null on email, which is ours. */
@@ -1823,15 +1875,18 @@ export type ThreadRow = {
 
 export async function getThread(id: string): Promise<ThreadRow | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT "id", "inbox_id", "channel", "provider_module", "external_id",
-           "subject", "subject_normalised", "status"
-      FROM "uin_threads" WHERE "id" = ${id}
+    SELECT t."id", t."inbox_id", t."channel", t."provider_module", t."external_id",
+           t."subject", t."subject_normalised", t."status", t."merged_into_id",
+           ${ABSORBED_INBOX_IDS} AS absorbed_inbox_ids
+      FROM "uin_threads" t WHERE t."id" = ${id}
   `
   const r = rows[0]
   if (!r) return null
   return {
     id: r.id as string,
     inboxId: (r.inbox_id as string | null) ?? null,
+    absorbedInboxIds: (r.absorbed_inbox_ids as string[] | null) ?? [],
+    mergedIntoId: (r.merged_into_id as string | null) ?? null,
     channel: r.channel as string,
     providerModule: (r.provider_module as string | null) ?? null,
     externalId: (r.external_id as string | null) ?? null,
@@ -2027,6 +2082,15 @@ export type ThreadListRow = {
   lastDirection: string | null
   unread: boolean
   messageCount: number
+  /** When the conversation was opened. The list itself never shows it - it is
+   *  ordered by when something last arrived - but merging needs it: the
+   *  conversation that STARTED an exchange is the one the others fold into, and
+   *  the screen has to be able to say which that is before anybody presses the
+   *  button. */
+  createdAt: Date
+  /** Every address the conversation belongs to, where a merge has given it more
+   *  than one. Empty on everything else. */
+  absorbedInboxIds: string[]
   /** The other party. Taken from their newest message to us where there is
    *  one, because that is the only place their NAME appears - our own replies
    *  carry an address and nothing else - and from the newest thing we sent them
@@ -2034,6 +2098,24 @@ export type ThreadListRow = {
   participantName: string | null
   participantAddress: string | null
   hasAttachments: boolean
+}
+
+/**
+ * "This conversation belongs to one of these addresses."
+ *
+ * Its own inbox, or any address a merge has since added to it. Written once
+ * because the guest list, the chosen tab and the unread tallies all ask it, and
+ * a merged conversation that showed in one of the three and not the others
+ * would look like a conversation that had gone missing.
+ */
+function inboxMatch(inboxIds: string[]): Prisma.Sql {
+  return Prisma.sql`(
+    t."inbox_id" IN (${Prisma.join(inboxIds)})
+    OR EXISTS (
+      SELECT 1 FROM "uin_thread_inboxes" ti
+       WHERE ti."thread_id" = t."id" AND ti."inbox_id" IN (${Prisma.join(inboxIds)})
+    )
+  )`
 }
 
 /** The access half of the WHERE clause, built once and reused by the list, the
@@ -2045,7 +2127,7 @@ function visibilityClause(
 ): Prisma.Sql | null {
   const parts: Prisma.Sql[] = []
   if (inboxIds.length > 0) {
-    parts.push(Prisma.sql`t."inbox_id" IN (${Prisma.join(inboxIds)})`)
+    parts.push(inboxMatch(inboxIds))
   }
   if (includeUnrouted) {
     // Mail that reached the account and matched none of the site's addresses.
@@ -2065,12 +2147,19 @@ function visibilityClause(
 
 function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
   const where: Prisma.Sql[] = []
+  // A conversation that lost a merge is not a conversation any more. It is kept
+  // so the merge can be undone and holds nothing but the duplicates the merge
+  // could not move, and every list, count and tally in this file goes through
+  // here - which is the point of putting it here rather than in each of them.
+  where.push(Prisma.sql`t."merged_into_id" IS NULL`)
   if (f.unroutedOnly) {
     where.push(Prisma.sql`t."inbox_id" IS NULL AND t."provider_module" IS NULL`)
   } else if (f.providerModule) {
     where.push(Prisma.sql`t."provider_module" = ${f.providerModule}`)
   } else if (f.inboxId) {
-    where.push(Prisma.sql`t."inbox_id" = ${f.inboxId}`)
+    // The merged conversation shows in EVERY address's tab, which is what
+    // merging across two of them was asked for.
+    where.push(inboxMatch([f.inboxId]))
   }
   if (f.status && f.status !== 'all') where.push(Prisma.sql`t."status" = ${f.status}`)
   if (f.unreadOnly) where.push(Prisma.sql`t."unread" = true`)
@@ -2220,6 +2309,11 @@ function threadListQuery(
     SELECT t."id", t."inbox_id", t."person_id", t."channel", t."provider_module", t."subject",
            t."preview", t."status", t."snooze_until", t."assignee_user_id",
            t."last_message_at", t."last_direction", t."unread", t."message_count",
+           t."created_at",
+           COALESCE(
+             ARRAY(SELECT ti."inbox_id" FROM "uin_thread_inboxes" ti WHERE ti."thread_id" = t."id"),
+             ARRAY[]::text[]
+           ) AS "absorbed_inbox_ids",
            lm."from_name"        AS "last_from_name",
            lm."from_address"     AS "last_from_address",
            lm."from_phone"       AS "last_from_phone",
@@ -2262,6 +2356,8 @@ function mapThreadListRow(r: Record<string, unknown>): ThreadListRow {
     lastDirection: (r.last_direction as string | null) ?? null,
     unread: !!r.unread,
     messageCount: Number(r.message_count ?? 0),
+    createdAt: r.created_at as Date,
+    absorbedInboxIds: (r.absorbed_inbox_ids as string[] | null) ?? [],
     participantName: inbound ? ((r.last_from_name as string | null) ?? null) : null,
     // A caller has a number where a correspondent has an address, and the row
     // says whichever of the two there is - "Unknown sender" beside a phone
@@ -2304,12 +2400,25 @@ export async function unreadCounts(
 ): Promise<Record<string, number>> {
   const visible = visibilityClause(inboxIds, includeUnrouted, providerModules)
   if (!visible) return {}
+  // The join is what makes a merged conversation count once under EVERY address
+  // it belongs to, so the tab a colleague is looking at agrees with the list
+  // behind it. LEFT, because a conversation that has never been merged has no
+  // rows here at all and must still be counted under its own inbox - which is
+  // every conversation on nearly every site.
+  const restrict = inboxIds.length > 0
+    ? Prisma.sql`AND (ti."inbox_id" IS NULL OR ti."inbox_id" IN (${Prisma.join(inboxIds)}))`
+    : Prisma.empty
   const rows = await prisma.$queryRaw<{ key: string | null; count: bigint }[]>`
-    SELECT COALESCE('m:' || t."provider_module", t."inbox_id") AS "key",
+    SELECT COALESCE('m:' || t."provider_module", ti."inbox_id", t."inbox_id") AS "key",
            COUNT(*)::bigint AS "count"
       FROM "uin_threads" t
-     WHERE ${visible} AND t."unread" = true AND t."status" <> 'done'
-     GROUP BY COALESCE('m:' || t."provider_module", t."inbox_id")
+      LEFT JOIN "uin_thread_inboxes" ti ON ti."thread_id" = t."id"
+     WHERE ${visible}
+       AND t."merged_into_id" IS NULL
+       AND t."unread" = true
+       AND t."status" <> 'done'
+       ${restrict}
+     GROUP BY COALESCE('m:' || t."provider_module", ti."inbox_id", t."inbox_id")
   `
   const out: Record<string, number> = {}
   for (const r of rows) out[r.key ?? ''] = Number(r.count)
@@ -2349,6 +2458,12 @@ export async function statusCounts(f: ThreadListFilters): Promise<Record<string,
 export type ThreadDetail = {
   id: string
   inboxId: string | null
+  /** Every address this conversation belongs to. Empty until a merge spans two
+   *  of them - see ThreadRow.absorbedInboxIds. */
+  absorbedInboxIds: string[]
+  /** Set on the losing side of a merge. A conversation with this set is not
+   *  shown in any list; it is kept so the merge can be put back. */
+  mergedIntoId: string | null
   channel: string
   providerModule: string | null
   externalId: string | null
@@ -2366,13 +2481,16 @@ export type ThreadDetail = {
 
 export async function getThreadDetail(id: string): Promise<ThreadDetail | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT * FROM "uin_threads" WHERE "id" = ${id}
+    SELECT t.*, ${ABSORBED_INBOX_IDS} AS absorbed_inbox_ids
+      FROM "uin_threads" t WHERE t."id" = ${id}
   `
   const r = rows[0]
   if (!r) return null
   return {
     id: r.id as string,
     inboxId: (r.inbox_id as string | null) ?? null,
+    absorbedInboxIds: (r.absorbed_inbox_ids as string[] | null) ?? [],
+    mergedIntoId: (r.merged_into_id as string | null) ?? null,
     channel: r.channel as string,
     providerModule: (r.provider_module as string | null) ?? null,
     externalId: (r.external_id as string | null) ?? null,
@@ -2519,6 +2637,9 @@ export async function attachmentsForThread(threadId: string): Promise<Attachment
 export async function getMessageHtml(id: string): Promise<{
   html: string | null
   text: string | null
+  /** The conversation it is on. Carried so the access check can consult a tag
+   *  as well as a guest list - see ThreadShape in lib/access.ts. */
+  threadId: string
   inboxId: string | null
   // Which channel owns it, when another module does. A message with neither an
   // inbox nor a channel is an email nobody could place, which is a different
@@ -2528,7 +2649,7 @@ export async function getMessageHtml(id: string): Promise<{
 } | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT m."body_html", m."body_text", m."subject", m."inbox_id",
-           t."inbox_id" AS "thread_inbox_id", t."provider_module"
+           m."thread_id", t."inbox_id" AS "thread_inbox_id", t."provider_module"
       FROM "uin_messages" m
       JOIN "uin_threads" t ON t."id" = m."thread_id"
      WHERE m."id" = ${id}
@@ -2538,6 +2659,7 @@ export async function getMessageHtml(id: string): Promise<{
   return {
     html: (r.body_html as string | null) ?? null,
     text: (r.body_text as string | null) ?? null,
+    threadId: r.thread_id as string,
     // An outbound message carries the inbox it was sent from; an inbound one
     // inherits its thread's.
     inboxId: ((r.inbox_id as string | null) ?? (r.thread_inbox_id as string | null)) ?? null,
@@ -2564,6 +2686,9 @@ export type ThreadEventKind =
   | 'linked'
   | 'unlinked'
   | 'merged'
+  /** A merge was put back. Recorded against the conversation that had absorbed
+   *  the other, which is the one still there to be looked at. */
+  | 'unmerged'
   /** Mail arrived from somebody a scheduled message was addressed to, so that
    *  message was stood down before it could ask a question that had already
    *  been answered. */
@@ -2726,6 +2851,269 @@ export async function insertNote(data: {
 }
 
 // ---------------------------------------------------------------------------
+// Being asked to look at something.
+//
+// One row per person per conversation (migrations/032_mentions.sql), with its
+// own open / snoozed / done. The conversation's own status is a different fact
+// and is never touched from here: that one is shared, and three colleagues
+// asked about one order would otherwise settle it from under each other.
+//
+// Every read is scoped to one user id, in the SQL rather than after it. The
+// same rule the lists follow (E17), and for the same reason: this table is the
+// one place that knows a colleague was let into a conversation their inbox
+// guest list does not cover.
+// ---------------------------------------------------------------------------
+
+/** Is this colleague one of the people asked to look at this conversation?
+ *  Asked on every request against a conversation somebody may not otherwise
+ *  open, so it is one indexed lookup and nothing else. */
+export async function hasMentionOn(threadId: string, userId: string): Promise<boolean> {
+  const rows = await prisma.$queryRaw<{ one: number }[]>`
+    SELECT 1 AS "one" FROM "uin_mentions"
+     WHERE "thread_id" = ${threadId} AND "user_id" = ${userId}
+     LIMIT 1
+  `
+  return rows.length > 0
+}
+
+/**
+ * Ask somebody to look at a conversation.
+ *
+ * Asked again about the same one, they get the SAME piece of work back rather
+ * than a second one beside it - so a colleague who marked theirs done a
+ * fortnight ago and has been asked again finds it waiting, open, with the new
+ * note against it. That is what the unique index on (thread_id, user_id) is
+ * for, and why this is an upsert rather than an insert.
+ */
+export async function upsertMention(data: {
+  threadId: string
+  userId: string
+  byUserId: string
+  messageId: string | null
+  note: string | null
+}): Promise<void> {
+  await prisma.$executeRaw`
+    INSERT INTO "uin_mentions" ("thread_id", "user_id", "by_user_id", "message_id", "note")
+    VALUES (${data.threadId}, ${data.userId}, ${data.byUserId}, ${data.messageId}, ${data.note})
+    ON CONFLICT ("thread_id", "user_id") DO UPDATE
+       SET "by_user_id"   = EXCLUDED."by_user_id",
+           "message_id"   = EXCLUDED."message_id",
+           "note"         = EXCLUDED."note",
+           "status"       = 'open',
+           "snooze_until" = NULL,
+           "settled_at"   = NULL,
+           "updated_at"   = now()
+  `
+}
+
+/** One ask, as the list and the badge in a conversation's header need it. */
+export type MentionRow = {
+  id: string
+  threadId: string
+  status: string
+  snoozeUntil: Date | null
+  note: string | null
+  byUserId: string | null
+  createdAt: Date
+  /** The conversation it is about, in the little a row needs to say which. */
+  subject: string | null
+  channel: string
+  inboxId: string | null
+  providerModule: string | null
+  lastMessageAt: Date | null
+  participantName: string | null
+  participantAddress: string | null
+}
+
+function mapMentionRow(r: Record<string, unknown>): MentionRow {
+  const direction = (r.last_direction as string | null) ?? null
+  const to = (r.last_to as string[] | null) ?? []
+  const inbound = direction !== 'out'
+  return {
+    id: r.id as string,
+    threadId: r.thread_id as string,
+    status: r.status as string,
+    snoozeUntil: (r.snooze_until as Date | null) ?? null,
+    note: (r.note as string | null) ?? null,
+    byUserId: (r.by_user_id as string | null) ?? null,
+    createdAt: r.created_at as Date,
+    subject: (r.subject as string | null) ?? null,
+    channel: r.channel as string,
+    inboxId: (r.inbox_id as string | null) ?? null,
+    providerModule: (r.provider_module as string | null) ?? null,
+    lastMessageAt: (r.last_message_at as Date | null) ?? null,
+    participantName: inbound ? ((r.last_from_name as string | null) ?? null) : null,
+    participantAddress: inbound
+      ? ((r.last_from_address as string | null) ?? (r.last_from_phone as string | null) ?? null)
+      : (to[0] ?? (r.last_from_phone as string | null) ?? null),
+  }
+}
+
+/** 'all' means every one of them, which is the status tabs' fourth choice. */
+export type MentionStatusFilter = 'open' | 'snoozed' | 'done' | 'all'
+
+function mentionStatusClause(status: MentionStatusFilter): Prisma.Sql {
+  return status === 'all' ? Prisma.sql`TRUE` : Prisma.sql`x."status" = ${status}`
+}
+
+/**
+ * Whose asks, and optionally on which address.
+ *
+ * The address half is what the Mentioned folder under a colleague's name on the
+ * rail asks for: not everything that person has ever been tagged in, which
+ * would reach into inboxes the reader has no business in, but the asks on the
+ * one address they were let in to. Scoped in the SQL beside the user id rather
+ * than filtered afterwards, for the same reason every other list on this screen
+ * is (E17).
+ *
+ * `inboxMatch` rather than a bare column test, so a conversation merged across
+ * two addresses is in the folder of both of them - which is what merging across
+ * them was asked for, and what the conversation lists themselves already do.
+ */
+function mentionScope(userId: string, inboxId: string | null): Prisma.Sql {
+  const mine = Prisma.sql`x."user_id" = ${userId}`
+  return inboxId ? Prisma.sql`${mine} AND ${inboxMatch([inboxId])}` : mine
+}
+
+/**
+ * What one colleague has been asked to look at.
+ *
+ * Ordered by when they were asked rather than by when the conversation last
+ * moved: this is somebody's own list of jobs, and the oldest ask is the one
+ * that has been waiting longest whatever the customer has been doing since.
+ */
+export async function listMentions(f: {
+  userId: string
+  status: MentionStatusFilter
+  page: number
+  perPage: number
+  /** One address, for a colleague's Mentioned folder; null for everything this
+   *  person has been asked about, wherever it sits. */
+  inboxId?: string | null
+}): Promise<MentionRow[]> {
+  const offset = Math.max(0, (f.page - 1) * f.perPage)
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT x."id", x."thread_id", x."status", x."snooze_until", x."note", x."by_user_id",
+           x."created_at",
+           t."subject", t."channel", t."inbox_id", t."provider_module", t."last_message_at",
+           lm."from_name"    AS "last_from_name",
+           lm."from_address" AS "last_from_address",
+           lm."from_phone"   AS "last_from_phone",
+           lm."to_addresses" AS "last_to",
+           lm."direction"    AS "last_direction"
+      FROM "uin_mentions" x
+      JOIN "uin_threads" t ON t."id" = x."thread_id"
+      LEFT JOIN LATERAL (
+        SELECT m."from_name", m."from_address", m."from_phone", m."to_addresses", m."direction"
+          FROM "uin_messages" m
+         WHERE m."thread_id" = t."id" AND m."direction" <> 'note'
+         ORDER BY (m."direction" = 'in') DESC, m."sent_at" DESC
+         LIMIT 1
+      ) lm ON true
+     WHERE ${mentionScope(f.userId, f.inboxId ?? null)} AND ${mentionStatusClause(f.status)}
+     ORDER BY x."created_at" DESC
+     LIMIT ${f.perPage} OFFSET ${offset}
+  `
+  return rows.map(mapMentionRow)
+}
+
+export async function countMentions(
+  userId: string,
+  status: MentionStatusFilter,
+  inboxId: string | null = null,
+): Promise<number> {
+  const rows = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(*)::bigint AS "count" FROM "uin_mentions" x
+      JOIN "uin_threads" t ON t."id" = x."thread_id"
+     WHERE ${mentionScope(userId, inboxId)} AND ${mentionStatusClause(status)}
+  `
+  return Number(rows[0]?.count ?? 0)
+}
+
+/** All four numbers for the status tabs in one query rather than four. */
+export async function mentionStatusCounts(
+  userId: string,
+  inboxId: string | null = null,
+): Promise<Record<string, number>> {
+  const rows = await prisma.$queryRaw<{ status: string; count: bigint }[]>`
+    SELECT x."status", COUNT(*)::bigint AS "count" FROM "uin_mentions" x
+      JOIN "uin_threads" t ON t."id" = x."thread_id"
+     WHERE ${mentionScope(userId, inboxId)}
+     GROUP BY x."status"
+  `
+  const out: Record<string, number> = { open: 0, snoozed: 0, done: 0, all: 0 }
+  let all = 0
+  for (const r of rows) {
+    out[r.status] = Number(r.count)
+    all += Number(r.count)
+  }
+  out.all = all
+  return out
+}
+
+/** The number beside "Asked me" on the rail. Open only: a place with nothing
+ *  waiting in it should read as empty, and something set aside until Thursday
+ *  is not waiting. */
+export async function openMentionCount(userId: string): Promise<number> {
+  return await countMentions(userId, 'open')
+}
+
+/** This reader's own ask on one conversation, for the banner at the top of it.
+ *  Nobody else's, ever: what a colleague was asked and whether they have got to
+ *  it yet is between them and whoever asked. */
+export async function mentionForThread(userId: string, threadId: string): Promise<MentionRow | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT x."id", x."thread_id", x."status", x."snooze_until", x."note", x."by_user_id",
+           x."created_at",
+           t."subject", t."channel", t."inbox_id", t."provider_module", t."last_message_at",
+           NULL::text AS "last_from_name", NULL::text AS "last_from_address",
+           NULL::text AS "last_from_phone", NULL::text[] AS "last_to",
+           NULL::text AS "last_direction"
+      FROM "uin_mentions" x
+      JOIN "uin_threads" t ON t."id" = x."thread_id"
+     WHERE x."user_id" = ${userId} AND x."thread_id" = ${threadId}
+     LIMIT 1
+  `
+  const r = rows[0]
+  return r ? mapMentionRow(r) : null
+}
+
+/**
+ * Where one person's own ask stands.
+ *
+ * Scoped to the person in the UPDATE itself rather than checked first and
+ * written afterwards: an id is guessable, and "settle somebody else's job for
+ * them" is not a thing this module offers. Returns false when nothing matched,
+ * which the route says out loud rather than pretending it worked.
+ */
+export async function setMentionStatus(input: {
+  id: string
+  userId: string
+  status: 'open' | 'snoozed' | 'done'
+  until: Date | null
+}): Promise<boolean> {
+  const changed = await prisma.$executeRaw`
+    UPDATE "uin_mentions"
+       SET "status"       = ${input.status},
+           "snooze_until" = ${input.status === 'snoozed' ? input.until : null},
+           "settled_at"   = ${input.status === 'done' ? new Date() : null},
+           "updated_at"   = now()
+     WHERE "id" = ${input.id} AND "user_id" = ${input.userId}
+  `
+  return changed > 0
+}
+
+/** Asks that were put off until now. The same sweep the conversations
+ *  themselves get, run beside it. */
+export async function wakeDueMentions(): Promise<number> {
+  return prisma.$executeRaw`
+    UPDATE "uin_mentions"
+       SET "status" = 'open', "snooze_until" = NULL, "updated_at" = now()
+     WHERE "status" = 'snoozed' AND "snooze_until" IS NOT NULL AND "snooze_until" <= now()
+  `
+}
+
+// ---------------------------------------------------------------------------
 // Drafts.
 //
 // READING one now follows the address it is filed on, exactly as every other
@@ -2765,8 +3153,13 @@ function mapDraft(r: Record<string, unknown>): Draft {
     mode: DRAFT_MODES.includes(mode) ? mode : 'new',
     to: (r.to_addresses as string[] | null) ?? [],
     cc: (r.cc_addresses as string[] | null) ?? [],
+    bcc: (r.bcc_addresses as string[] | null) ?? [],
     subject: (r.subject as string | null) ?? null,
     body: (r.body as string | null) ?? '',
+    // A value the check constraint could not have allowed is a row somebody has
+    // been at by hand. Read as text, which is the reading that renders markup
+    // harmlessly rather than the one that runs it.
+    bodyFormat: r.body_format === 'html' ? 'html' : 'text',
     // jsonb comes back parsed, and can be any shape at all if somebody has been
     // at the table by hand. Anything that is not a list of files is no files.
     attachments: Array.isArray(r.attachments) ? (r.attachments as DraftAttachment[]) : [],
@@ -2790,9 +3183,16 @@ function mapDraft(r: Record<string, unknown>): Draft {
 
 /** Anybody's draft on an address this person can read, or this person's own on
  *  a conversation another module owns (which has no address to read through).
- *  The SQL twin of canReadDraft in lib/drafts.ts. */
-function draftScope(userId: string, inboxIds: string[]): Prisma.Sql {
-  return Prisma.sql`(d."inbox_id" = ANY(${inboxIds}::text[])
+ *  The SQL twin of canReadDraft in lib/drafts.ts.
+ *
+ *  `includeUnfiled` is off for a Drafts folder looked at inside ONE address:
+ *  the reader's own half-written chat replies belong to nowhere in particular,
+ *  and a colleague's Drafts folder with the reader's own writing in it is a
+ *  list that says the wrong thing about whose it is. */
+function draftScope(userId: string, inboxIds: string[], includeUnfiled = true): Prisma.Sql {
+  const filed = Prisma.sql`d."inbox_id" = ANY(${inboxIds}::text[])`
+  if (!includeUnfiled) return Prisma.sql`(${filed})`
+  return Prisma.sql`(${filed}
       OR (d."inbox_id" IS NULL AND d."author_user_id" = ${userId}))`
 }
 
@@ -2803,10 +3203,14 @@ function editScope(userId: string, replyableInboxIds: string[]): Prisma.Sql {
       OR ("inbox_id" IS NOT NULL AND "inbox_id" = ANY(${replyableInboxIds}::text[])))`
 }
 
-export async function listDrafts(userId: string, inboxIds: string[]): Promise<Draft[]> {
+export async function listDrafts(
+  userId: string,
+  inboxIds: string[],
+  includeUnfiled = true,
+): Promise<Draft[]> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT d.* FROM "uin_drafts" d
-     WHERE ${draftScope(userId, inboxIds)}
+     WHERE ${draftScope(userId, inboxIds, includeUnfiled)}
      ORDER BY d."updated_at" DESC
      LIMIT 200
   `
@@ -2814,10 +3218,14 @@ export async function listDrafts(userId: string, inboxIds: string[]): Promise<Dr
 }
 
 /** How many are waiting, for the number on the Drafts tab. */
-export async function countDrafts(userId: string, inboxIds: string[]): Promise<number> {
+export async function countDrafts(
+  userId: string,
+  inboxIds: string[],
+  includeUnfiled = true,
+): Promise<number> {
   const rows = await prisma.$queryRaw<{ count: bigint }[]>`
     SELECT COUNT(*)::bigint AS "count" FROM "uin_drafts" d
-     WHERE ${draftScope(userId, inboxIds)}
+     WHERE ${draftScope(userId, inboxIds, includeUnfiled)}
   `
   return Number(rows[0]?.count ?? 0)
 }
@@ -2998,8 +3406,14 @@ export type DraftInput = {
   mode: DraftMode
   to: string[]
   cc: string[]
+  /** Copies nobody else on the message sees. Left out is an empty list, which
+   *  is what every draft written before there was such a thing has. */
+  bcc?: string[]
   subject: string | null
   body: string
+  /** What `body` is written in. Left out is 'text', which is what every caller
+   *  written before the boxes could hold a typeface means. */
+  bodyFormat?: DraftBodyFormat
   attachments: DraftAttachment[]
   /** When it should leave on its own. A date puts it in the queue; null takes
    *  it back out and leaves an ordinary draft, which is also what clears the
@@ -3040,6 +3454,8 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
   // the draft back up: whatever mail stood it down has been read by whoever is
   // scheduling it again.
   const followUp = sendAt ? data.followUpMinutes ?? null : null
+  const bcc = data.bcc ?? []
+  const bodyFormat = data.bodyFormat ?? 'text'
   const schedule = keep
     ? Prisma.sql`"send_at" = "send_at", "send_state" = "send_state", "send_error" = "send_error"`
     : Prisma.sql`"send_at" = ${sendAt}, "send_state" = ${sendState}, "send_error" = NULL, "claimed_at" = NULL, "follow_up_minutes" = ${followUp}, "held_by_thread_id" = NULL, "held_at" = NULL`
@@ -3053,8 +3469,10 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
              "mode"         = ${data.mode},
              "to_addresses" = ${data.to}::text[],
              "cc_addresses" = ${data.cc}::text[],
+             "bcc_addresses" = ${bcc}::text[],
              "subject"      = ${data.subject},
              "body"         = ${data.body},
+             "body_format"  = ${bodyFormat},
              "attachments"  = ${JSON.stringify(data.attachments)}::jsonb,
              ${schedule},
              "updated_at"   = now()
@@ -3069,19 +3487,21 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     INSERT INTO "uin_drafts"
       ("author_user_id", "inbox_id", "thread_id", "mode", "to_addresses",
-       "cc_addresses", "subject", "body", "attachments", "send_at", "send_state",
-       "follow_up_minutes")
+       "cc_addresses", "bcc_addresses", "subject", "body", "body_format", "attachments",
+       "send_at", "send_state", "follow_up_minutes")
     VALUES (${data.authorUserId}, ${data.inboxId}, ${data.threadId}, ${data.mode},
-            ${data.to}::text[], ${data.cc}::text[], ${data.subject}, ${data.body},
-            ${JSON.stringify(data.attachments)}::jsonb, ${sendAt}, ${sendState},
-            ${followUp})
+            ${data.to}::text[], ${data.cc}::text[], ${bcc}::text[], ${data.subject},
+            ${data.body}, ${bodyFormat}, ${JSON.stringify(data.attachments)}::jsonb,
+            ${sendAt}, ${sendState}, ${followUp})
     ON CONFLICT ("thread_id", "author_user_id") WHERE "thread_id" IS NOT NULL
     DO UPDATE SET "inbox_id"     = EXCLUDED."inbox_id",
                   "mode"         = EXCLUDED."mode",
                   "to_addresses" = EXCLUDED."to_addresses",
                   "cc_addresses" = EXCLUDED."cc_addresses",
+                  "bcc_addresses" = EXCLUDED."bcc_addresses",
                   "subject"      = EXCLUDED."subject",
                   "body"         = EXCLUDED."body",
+                  "body_format"  = EXCLUDED."body_format",
                   "attachments"  = EXCLUDED."attachments",
                   ${scheduleOnConflict},
                   "updated_at"   = now()
@@ -3417,7 +3837,8 @@ export async function listPeople(opts: {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT ${PERSON_SELECT},
            (SELECT COUNT(*) FROM "uin_person_identities" i WHERE i."person_id" = p."id") AS identity_count,
-           (SELECT COUNT(*) FROM "uin_threads" t WHERE t."person_id" = p."id") AS thread_count,
+           (SELECT COUNT(*) FROM "uin_threads" t
+             WHERE t."person_id" = p."id" AND t."merged_into_id" IS NULL) AS thread_count,
            (SELECT i."value" FROM "uin_person_identities" i
              WHERE i."person_id" = p."id" AND i."kind" = 'phone'
              ORDER BY i."created_at" ASC LIMIT 1) AS phone
@@ -4001,7 +4422,7 @@ export async function setThreadPerson(
 export async function unresolvedThreads(limit: number): Promise<Array<{ id: string }>> {
   return prisma.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "uin_threads"
-     WHERE "person_id" IS NULL AND "provider_module" IS NULL
+     WHERE "person_id" IS NULL AND "provider_module" IS NULL AND "merged_into_id" IS NULL
      ORDER BY "last_message_at" DESC NULLS LAST
      LIMIT ${limit}
   `
@@ -4077,7 +4498,8 @@ export async function threadsForPerson(
  */
 export async function countThreadsForPerson(personId: string): Promise<number> {
   const rows = await prisma.$queryRaw<{ count: bigint }[]>`
-    SELECT COUNT(*)::bigint AS count FROM "uin_threads" WHERE "person_id" = ${personId}
+    SELECT COUNT(*)::bigint AS count FROM "uin_threads"
+     WHERE "person_id" = ${personId} AND "merged_into_id" IS NULL
   `
   return Number(rows[0]?.count ?? 0)
 }
@@ -4494,8 +4916,9 @@ export async function splitPerson(
 export async function threadsNeedingLinks(limit: number): Promise<Array<{ id: string }>> {
   return prisma.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "uin_threads"
-     WHERE "linked_at" IS NULL
-        OR ("last_message_at" IS NOT NULL AND "linked_at" < "last_message_at")
+     WHERE "merged_into_id" IS NULL
+       AND ("linked_at" IS NULL
+            OR ("last_message_at" IS NOT NULL AND "linked_at" < "last_message_at"))
      ORDER BY "last_message_at" DESC NULLS LAST
      LIMIT ${limit}
   `
@@ -4663,7 +5086,7 @@ export async function providerWatermarks(): Promise<Record<string, Date>> {
   const rows = await prisma.$queryRaw<{ provider_module: string; newest: Date | null }[]>`
     SELECT "provider_module", MAX("last_message_at") AS "newest"
       FROM "uin_threads"
-     WHERE "provider_module" IS NOT NULL
+     WHERE "provider_module" IS NOT NULL AND "merged_into_id" IS NULL
      GROUP BY "provider_module"
   `
   const out: Record<string, Date> = {}
@@ -4678,10 +5101,19 @@ export async function providerThreadState(
   providerModule: string,
   externalId: string,
 ): Promise<{ id: string; lastMessageAt: Date | null; messageCount: number } | null> {
+  // Follows a merge. The module's own id for a conversation stays on the side
+  // that lost one - it is that side's identity, and the winner has its own - so
+  // reading the row straight would hand the next chat message to a conversation
+  // no list shows, and the customer's reply would simply never appear. One hop
+  // is enough: merging into something already merged is refused, and a merge
+  // re-points every pointer aimed at what it just absorbed.
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT "id", "last_message_at", "message_count"
-      FROM "uin_threads"
-     WHERE "provider_module" = ${providerModule} AND "external_id" = ${externalId}
+    SELECT CASE WHEN w."id" IS NULL THEN t."id"            ELSE w."id" END            AS "id",
+           CASE WHEN w."id" IS NULL THEN t."last_message_at" ELSE w."last_message_at" END AS "last_message_at",
+           CASE WHEN w."id" IS NULL THEN t."message_count"   ELSE w."message_count"   END AS "message_count"
+      FROM "uin_threads" t
+      LEFT JOIN "uin_threads" w ON w."id" = t."merged_into_id"
+     WHERE t."provider_module" = ${providerModule} AND t."external_id" = ${externalId}
      LIMIT 1
   `
   const r = rows[0]
@@ -4700,7 +5132,7 @@ export async function providerThreadsNeedingPeople(
 ): Promise<Array<{ id: string; providerModule: string }>> {
   const rows = await prisma.$queryRaw<{ id: string; provider_module: string }[]>`
     SELECT "id", "provider_module" FROM "uin_threads"
-     WHERE "person_id" IS NULL AND "provider_module" IS NOT NULL
+     WHERE "person_id" IS NULL AND "provider_module" IS NOT NULL AND "merged_into_id" IS NULL
      ORDER BY "last_message_at" DESC NULLS LAST
      LIMIT ${limit}
   `
@@ -4809,7 +5241,14 @@ export async function threadsDueForRetention(
   const linkCheck = Prisma.sql`EXISTS (
     SELECT 1 FROM "uin_record_links" rl WHERE rl."thread_id" = t."id"
   )`
-  const where: Prisma.Sql[] = [Prisma.sql`t."last_message_at" < ${cutoff}`]
+  const where: Prisma.Sql[] = [
+    Prisma.sql`t."last_message_at" < ${cutoff}`,
+    // Never chosen on its own. A conversation that lost a merge is deleted with
+    // the one it was merged into, by deleteThreads, so that the pointer holding
+    // it out of sight can never be cleared while it still has a thread to point
+    // at (see migrations/031_thread_merges.sql).
+    Prisma.sql`t."merged_into_id" IS NULL`,
+  ]
   if (keepLinked) where.push(Prisma.sql`NOT ${linkCheck}`)
   // With keepLinked on, every row that survives the WHERE is unlinked by
   // definition, so asking again in the SELECT list is a second pass over the
@@ -4840,7 +5279,7 @@ export async function retentionDueCounts(cutoff: Date): Promise<{ due: number; l
              WHERE EXISTS (SELECT 1 FROM "uin_record_links" rl WHERE rl."thread_id" = t."id")
            )::bigint AS "linked"
       FROM "uin_threads" t
-     WHERE t."last_message_at" < ${cutoff}
+     WHERE t."last_message_at" < ${cutoff} AND t."merged_into_id" IS NULL
   `
   return { due: Number(rows[0]?.due ?? 0), linked: Number(rows[0]?.linked ?? 0) }
 }
@@ -4851,11 +5290,16 @@ export type StoredObjectRef = { attachmentId: string; mediaKey: string; mediaPro
 
 export async function storedObjectsForThreads(threadIds: string[]): Promise<StoredObjectRef[]> {
   if (threadIds.length === 0) return []
+  // `merged_from_thread_id` as well as `thread_id`, or a merge would quietly
+  // exempt somebody's attachments from their own erasure: a message a merge
+  // moved onto another conversation is no longer ON one of these threads, and
+  // the bytes behind it would sit in storage for ever.
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT a."id", a."media_key", a."media_provider"
       FROM "uin_attachments" a
       JOIN "uin_messages" m ON m."id" = a."message_id"
-     WHERE m."thread_id" IN (${Prisma.join(threadIds)})
+     WHERE (m."thread_id" IN (${Prisma.join(threadIds)})
+            OR m."merged_from_thread_id" IN (${Prisma.join(threadIds)}))
        AND a."media_key" IS NOT NULL
        AND a."media_provider" IS NOT NULL
   `
@@ -4872,6 +5316,26 @@ export async function storedObjectsForThreads(threadIds: string[]): Promise<Stor
  *  very mail the owner has just asked us to stop holding. */
 export async function deleteThreads(threadIds: string[]): Promise<number> {
   if (threadIds.length === 0) return 0
+
+  // Messages a merge moved off these conversations onto another one. They are
+  // still these conversations' messages - moving them was a filing decision,
+  // not a change of ownership - so a sweep or an erasure that took the thread
+  // and left them behind would leave the words sitting on somebody else's
+  // conversation, readable, after the conversation they belong to had gone.
+  await prisma.$executeRaw`
+    DELETE FROM "uin_messages" WHERE "merged_from_thread_id" IN (${Prisma.join(threadIds)})
+  `
+
+  // Anything merged INTO one of these goes with it. The losing side is kept
+  // only so the merge can be put back, and putting a merge back into a
+  // conversation that has since been deleted is not a thing that can happen -
+  // but leaving it would be far worse than useless: `merged_into_id` is ON
+  // DELETE SET NULL, so an orphaned loser would stop being merged away and
+  // reappear in every list as a conversation holding nothing but duplicates.
+  await prisma.$executeRaw`
+    DELETE FROM "uin_threads" WHERE "merged_into_id" IN (${Prisma.join(threadIds)})
+  `
+
   return prisma.$executeRaw`
     DELETE FROM "uin_threads" WHERE "id" IN (${Prisma.join(threadIds)})
   `
@@ -4974,12 +5438,17 @@ export async function personErasePreview(personId: string): Promise<PersonEraseP
   const emails = identities.filter((i) => i.kind === 'email').map((i) => i.value.toLowerCase())
 
   const [counts] = await prisma.$queryRaw<Array<{ conversations: bigint; messages: bigint; attachments: bigint; stored: bigint }>>`
-    SELECT COUNT(DISTINCT t."id")::bigint AS "conversations",
+    -- Conversations as the person's own page counts them, so the confirmation
+    -- and the screen behind it agree: a conversation that lost a merge is part
+    -- of one that is still listed, not a second one. Its messages and its
+    -- attachments still count - they go too.
+    SELECT COUNT(DISTINCT t."id") FILTER (WHERE t."merged_into_id" IS NULL)::bigint AS "conversations",
            COUNT(DISTINCT m."id")::bigint AS "messages",
            COUNT(DISTINCT a."id")::bigint AS "attachments",
            COUNT(DISTINCT a."id") FILTER (WHERE a."media_key" IS NOT NULL)::bigint AS "stored"
       FROM "uin_threads" t
-      LEFT JOIN "uin_messages" m ON m."thread_id" = t."id"
+      LEFT JOIN "uin_messages" m
+             ON m."thread_id" = t."id" OR m."merged_from_thread_id" = t."id"
       LEFT JOIN "uin_attachments" a ON a."message_id" = m."id"
      WHERE t."person_id" = ${personId}
   `
@@ -5060,8 +5529,16 @@ export type ExportMessageRow = {
 
 export async function exportMessagesForThreads(threadIds: string[]): Promise<ExportMessageRow[]> {
   if (threadIds.length === 0) return []
+  // A message a merge moved off one of these conversations is reported under
+  // the conversation it came FROM, which is the one being exported. Otherwise a
+  // person's own export would be missing everything they said before somebody
+  // tidied two threads into one, and an export with a hole in it is worse than
+  // no export: it looks complete.
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT m."id", m."thread_id", m."direction", m."channel", m."subject",
+    SELECT m."id",
+           CASE WHEN m."merged_from_thread_id" IN (${Prisma.join(threadIds)})
+                THEN m."merged_from_thread_id" ELSE m."thread_id" END AS "thread_id",
+           m."direction", m."channel", m."subject",
            m."from_name", m."from_address", m."from_phone", m."to_addresses",
            m."cc_addresses", m."sent_at", m."body_text", m."body_html",
            COALESCE(
@@ -5075,6 +5552,7 @@ export async function exportMessagesForThreads(threadIds: string[]): Promise<Exp
            ) AS "attachments"
       FROM "uin_messages" m
      WHERE m."thread_id" IN (${Prisma.join(threadIds)})
+        OR m."merged_from_thread_id" IN (${Prisma.join(threadIds)})
      ORDER BY m."sent_at" ASC NULLS LAST, m."created_at" ASC
   `
   return rows.map((r) => ({
@@ -5481,4 +5959,547 @@ export async function recentRecipients(opts: {
     organisation: (r.organisation as string | null) ?? null,
     lastAt: r.last_at as Date,
   }))
+}
+
+// ---------------------------------------------------------------------------
+// Merging conversations (migrations/031_thread_merges.sql).
+//
+// Everything happens in one transaction, and the losing conversation is KEPT
+// rather than deleted - `merged_into_id` hides it from every list, and it holds
+// enough for the merge to be walked back. That mirrors what person merges
+// already do, for the same reason: this is the operation people regret, and one
+// nobody can take back would genuinely lose somebody's history.
+//
+// Two things about the move are worth knowing before reading it.
+//
+// DUPLICATES ARE LEFT WHERE THEY ARE, not deleted. Merging the two sides of an
+// internal email means the winner already holds every message the loser does -
+// that is the entire point of 020_internal_threads.sql - and each of those
+// would collide with a unique index on the way across. Deleting the loser's
+// copy would make the merge lossy and the undo a lie, so the copy simply stays
+// on the losing conversation, out of sight, and comes back with it.
+//
+// CHAINS ARE FLATTENED. When something that has itself absorbed others is
+// merged onwards, every pointer aimed at it is re-aimed at the new winner, so
+// "what did this become?" is always one hop rather than a walk. Which pointers
+// moved is recorded, so undoing puts them back.
+// ---------------------------------------------------------------------------
+
+/** A conversation as a merge needs to see it: enough to decide the winner, the
+ *  merged state and the addresses, and nothing more. */
+export type MergeThreadRow = {
+  id: string
+  inboxId: string | null
+  absorbedInboxIds: string[]
+  mergedIntoId: string | null
+  providerModule: string | null
+  channel: string
+  subject: string | null
+  status: string
+  unread: boolean
+  personId: string | null
+  organisationId: string | null
+  lastMessageAt: Date | null
+  lastDirection: string | null
+  messageCount: number
+  createdAt: Date
+}
+
+/** The conversations named in a merge request, in one query. Anything asked for
+ *  that no longer exists is simply absent, and validateMerge says so. */
+export async function threadsForMerge(ids: string[]): Promise<MergeThreadRow[]> {
+  if (ids.length === 0) return []
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT t."id", t."inbox_id", t."merged_into_id", t."provider_module", t."channel",
+           t."subject", t."status", t."unread", t."person_id", t."organisation_id",
+           t."last_message_at", t."last_direction", t."message_count", t."created_at",
+           ${ABSORBED_INBOX_IDS} AS absorbed_inbox_ids
+      FROM "uin_threads" t
+     WHERE t."id" IN (${Prisma.join(ids)})
+  `
+  return rows.map((r) => ({
+    id: r.id as string,
+    inboxId: (r.inbox_id as string | null) ?? null,
+    absorbedInboxIds: (r.absorbed_inbox_ids as string[] | null) ?? [],
+    mergedIntoId: (r.merged_into_id as string | null) ?? null,
+    providerModule: (r.provider_module as string | null) ?? null,
+    channel: r.channel as string,
+    subject: (r.subject as string | null) ?? null,
+    status: r.status as string,
+    unread: !!r.unread,
+    personId: (r.person_id as string | null) ?? null,
+    organisationId: (r.organisation_id as string | null) ?? null,
+    lastMessageAt: (r.last_message_at as Date | null) ?? null,
+    lastDirection: (r.last_direction as string | null) ?? null,
+    messageCount: Number(r.message_count ?? 0),
+    createdAt: r.created_at as Date,
+  }))
+}
+
+/** The transaction handle Prisma hands an interactive transaction. Named so the
+ *  helpers below can say what they take without repeating the type. */
+type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0]
+
+/**
+ * A message the winner already holds, in any of the three senses a unique index
+ * cares about.
+ *
+ * All three are real. The Message-ID per account is how the same email in INBOX
+ * and in Archive is one message; `internal_key` catches the copy whose header a
+ * relay rewrote; the provider's own id is how a chat message is itself. Miss any
+ * one and the UPDATE fails on a constraint halfway through, taking the whole
+ * merge with it.
+ */
+const MESSAGE_ALREADY_ON_WINNER = (winnerId: string): Prisma.Sql => Prisma.sql`
+  EXISTS (
+    SELECT 1 FROM "uin_messages" w
+     WHERE w."thread_id" = ${winnerId}
+       AND (
+         (src."connection_id" IS NOT NULL AND src."message_id_header" IS NOT NULL
+            AND w."connection_id" = src."connection_id"
+            AND w."message_id_header" = src."message_id_header")
+         OR (src."internal_key" IS NOT NULL AND w."internal_key" = src."internal_key")
+         OR (src."source" = 'provider' AND src."provider_message_id" IS NOT NULL
+            AND w."source" = 'provider'
+            AND w."provider_message_id" = src."provider_message_id")
+       )
+  )`
+
+/** Everything a conversation says about itself that is really a summary of its
+ *  messages, worked out again from the messages. Called on both sides of a
+ *  merge and of an undo, because both sides change. */
+async function recomputeThreadCounters(tx: Tx, threadId: string): Promise<void> {
+  await tx.$executeRaw`
+    UPDATE "uin_threads" t
+       SET "message_count" = COALESCE(s."count", 0),
+           "last_message_at" = s."last_at",
+           "last_direction" = s."last_direction",
+           "preview" = COALESCE(s."snippet", t."preview"),
+           "updated_at" = now()
+      FROM (
+        SELECT COUNT(*)::int AS "count",
+               MAX(m."sent_at") AS "last_at",
+               (SELECT m2."direction" FROM "uin_messages" m2
+                 WHERE m2."thread_id" = ${threadId}
+                 ORDER BY m2."sent_at" DESC, m2."created_at" DESC LIMIT 1) AS "last_direction",
+               (SELECT m2."snippet" FROM "uin_messages" m2
+                 WHERE m2."thread_id" = ${threadId}
+                 ORDER BY m2."sent_at" DESC, m2."created_at" DESC LIMIT 1) AS "snippet"
+          FROM "uin_messages" m
+         WHERE m."thread_id" = ${threadId}
+      ) s
+     WHERE t."id" = ${threadId}
+  `
+}
+
+/**
+ * The addresses a conversation belongs to, worked out again from the merges
+ * that are still standing.
+ *
+ * Recomputed rather than adjusted, so an undo needs no bookkeeping of its own
+ * and a half-finished sequence of merges and undos cannot leave an address on
+ * the list that nothing puts it there any more. A conversation left belonging
+ * to nothing but its own inbox has its rows removed entirely - that is what
+ * "never been merged" looks like, and it keeps the common case free of rows.
+ */
+async function recomputeThreadInboxes(tx: Tx, threadId: string): Promise<void> {
+  await tx.$executeRaw`DELETE FROM "uin_thread_inboxes" WHERE "thread_id" = ${threadId}`
+  // Nothing merged into it any more, so it belongs to its own address and to
+  // nothing else - which is what having no rows here means. Undoing the last
+  // merge on a conversation therefore leaves it exactly as it was found.
+  await tx.$executeRaw`
+    INSERT INTO "uin_thread_inboxes" ("thread_id", "inbox_id")
+    SELECT ${threadId}, ids."inbox_id"
+      FROM (
+        SELECT w."inbox_id" FROM "uin_threads" w
+         WHERE w."id" = ${threadId} AND w."inbox_id" IS NOT NULL
+        UNION
+        -- Each losing side's own addresses: the ones IT absorbed if it was
+        -- itself a winner once, and its own inbox otherwise.
+        SELECT COALESCE(li."inbox_id", l."inbox_id") AS "inbox_id"
+          FROM "uin_threads" l
+          LEFT JOIN "uin_thread_inboxes" li ON li."thread_id" = l."id"
+         WHERE l."merged_into_id" = ${threadId}
+           AND COALESCE(li."inbox_id", l."inbox_id") IS NOT NULL
+      ) ids
+     WHERE EXISTS (
+       SELECT 1 FROM "uin_threads" l WHERE l."merged_into_id" = ${threadId}
+     )
+    ON CONFLICT DO NOTHING
+  `
+}
+
+export type ThreadMergeResult = { mergeIds: string[]; winnerId: string; merged: number }
+
+/**
+ * Fold several conversations into one.
+ *
+ * The caller has already checked that whoever is asking may open every one of
+ * them - that check needs a session and belongs in the route.
+ */
+export async function mergeThreads(
+  winnerId: string,
+  loserIdsIn: string[],
+  userId: string | null,
+): Promise<ThreadMergeResult | { error: string }> {
+  const loserIds = [...new Set(loserIdsIn)].filter((id) => id !== winnerId)
+  const found = await threadsForMerge([winnerId, ...loserIds])
+  const byId = new Map(found.map((t) => [t.id, t]))
+
+  const refusal = validateMerge({ winnerId, loserIds, found: byId })
+  if (refusal) return refusal
+
+  const winner = byId.get(winnerId)!
+  const losers = loserIds.map((id) => byId.get(id)!)
+
+  return prisma.$transaction(async (tx) => {
+    const mergeIds: string[] = []
+
+    // One at a time, and in the order given. Three conversations carrying the
+    // same internal email means the second loser's copy has to be weighed
+    // against a winner that has already taken the first's, which a single
+    // statement over all of them could not do.
+    for (const loser of losers) {
+      // COALESCE, never a plain assignment. A conversation being merged onwards
+      // may be carrying messages an EARLIER merge moved onto it, and those
+      // messages belong to the conversation they started on - overwriting that
+      // would make the first merge impossible to undo and, worse, would exempt
+      // those messages from their own person's erasure, since erasure finds
+      // them by exactly this column.
+      const moved = await tx.$queryRaw<{ id: string }[]>`
+        UPDATE "uin_messages" src
+           SET "thread_id" = ${winnerId},
+               "merged_from_thread_id" = COALESCE(src."merged_from_thread_id", ${loser.id})
+         WHERE src."thread_id" = ${loser.id}
+           AND NOT ${MESSAGE_ALREADY_ON_WINNER(winnerId)}
+        RETURNING src."id"
+      `
+
+      // An unsent reply follows its conversation. Where the same person already
+      // has one on the winner, theirs stays where it is rather than one of the
+      // two being thrown away - a draft is something somebody has written and
+      // not sent, which makes it the last thing in here worth losing.
+      const movedDrafts = await tx.$queryRaw<{ id: string }[]>`
+        UPDATE "uin_drafts" src
+           SET "thread_id" = ${winnerId},
+               "merged_from_thread_id" = COALESCE(src."merged_from_thread_id", ${loser.id})
+         WHERE src."thread_id" = ${loser.id}
+           AND NOT EXISTS (
+             SELECT 1 FROM "uin_drafts" w
+              WHERE w."thread_id" = ${winnerId} AND w."author_user_id" = src."author_user_id"
+           )
+        RETURNING src."id"
+      `
+      // A scheduled message waiting on this conversation waits on the merged
+      // one instead, or the reply it was holding off would never be recognised.
+      const heldDrafts = await tx.$queryRaw<{ id: string }[]>`
+        UPDATE "uin_drafts" SET "held_by_thread_id" = ${winnerId}
+         WHERE "held_by_thread_id" = ${loser.id}
+        RETURNING "id"
+      `
+
+      // A record the winner already has attached would collide with the unique
+      // index, and a merge that fails because both sides had the same order on
+      // them is a merge nobody can complete. The duplicate goes; the linker
+      // would put it back anyway.
+      await tx.$executeRaw`
+        DELETE FROM "uin_record_links" l
+         WHERE l."thread_id" = ${loser.id}
+           AND EXISTS (
+             SELECT 1 FROM "uin_record_links" w
+              WHERE w."thread_id" = ${winnerId}
+                AND w."module_name" = l."module_name"
+                AND w."record_type" = l."record_type"
+                AND w."record_id" = l."record_id"
+           )
+      `
+      const links = await tx.$queryRaw<{ id: string }[]>`
+        UPDATE "uin_record_links" SET "thread_id" = ${winnerId}
+         WHERE "thread_id" = ${loser.id}
+        RETURNING "id"
+      `
+
+      // Who snoozed it, who assigned it, who was asked to look at it. The whole
+      // point of the audit trail is that it can be read a fortnight later, and
+      // half of it left on a conversation nothing shows is not readable.
+      const events = await tx.$queryRaw<{ id: string }[]>`
+        UPDATE "uin_events" SET "thread_id" = ${winnerId}
+         WHERE "thread_id" = ${loser.id}
+        RETURNING "id"
+      `
+
+      // Flattening the chain: anything that had been merged into this loser is
+      // now merged into the winner instead, and so is the RECORD of how it got
+      // there. Both halves or neither - a thread pointing at the winner whose
+      // merge record still names the loser is a merge whose undo would look for
+      // its messages on a conversation they left.
+      const repointed = await tx.$queryRaw<{ id: string }[]>`
+        UPDATE "uin_threads" SET "merged_into_id" = ${winnerId}, "updated_at" = now()
+         WHERE "merged_into_id" = ${loser.id}
+        RETURNING "id"
+      `
+      const repointedMerges = await tx.$queryRaw<{ id: string }[]>`
+        UPDATE "uin_thread_merges" SET "winner_id" = ${winnerId}
+         WHERE "winner_id" = ${loser.id} AND "undone_at" IS NULL
+        RETURNING "id"
+      `
+
+      await tx.$executeRaw`
+        UPDATE "uin_threads"
+           SET "merged_into_id" = ${winnerId}, "updated_at" = now()
+         WHERE "id" = ${loser.id}
+      `
+
+      const snapshot = {
+        loser: {
+          inboxId: loser.inboxId,
+          channel: loser.channel,
+          subject: loser.subject,
+          status: loser.status,
+          unread: loser.unread,
+          personId: loser.personId,
+          organisationId: loser.organisationId,
+          lastMessageAt: loser.lastMessageAt ? loser.lastMessageAt.toISOString() : null,
+          lastDirection: loser.lastDirection,
+          messageCount: loser.messageCount,
+        },
+        // The exact rows that moved, rather than a rule for finding them again.
+        // A rule cannot tell this merge's messages from an earlier merge's that
+        // came across on the same conversation, and undoing the wrong ones is
+        // how a merge somebody regretted turns into two conversations neither
+        // of which reads properly.
+        messageIds: moved.map((r) => r.id),
+        draftIds: movedDrafts.map((r) => r.id),
+        linkIds: links.map((r) => r.id),
+        eventIds: events.map((r) => r.id),
+        heldDraftIds: heldDrafts.map((r) => r.id),
+        repointedThreadIds: repointed.map((r) => r.id),
+        repointedMergeIds: repointedMerges.map((r) => r.id),
+      }
+
+      const row = await tx.$queryRaw<{ id: string }[]>`
+        INSERT INTO "uin_thread_merges" ("winner_id", "loser_id", "user_id", "snapshot")
+        VALUES (${winnerId}, ${loser.id}, ${userId}, ${JSON.stringify(snapshot)}::jsonb)
+        RETURNING "id"
+      `
+      mergeIds.push(row[0]!.id)
+    }
+
+    await recomputeThreadInboxes(tx, winnerId)
+    await recomputeThreadCounters(tx, winnerId)
+
+    // Where the merged conversation stands, and who it is with. An open half
+    // makes the whole thing open and an unread half keeps it unread - see
+    // mergedStatus - because the alternative marks something done on the
+    // strength of the OTHER half having been dealt with.
+    const status = mergedStatus([winner.status, ...losers.map((l) => l.status)])
+    const unread = mergedUnread([winner.unread, ...losers.map((l) => l.unread)])
+    const personId = winner.personId ?? losers.find((l) => l.personId)?.personId ?? null
+    const organisationId = winner.organisationId
+      ?? losers.find((l) => l.organisationId)?.organisationId ?? null
+    await tx.$executeRaw`
+      UPDATE "uin_threads"
+         SET "status" = ${status},
+             "snooze_until" = CASE WHEN ${status} = 'snoozed' THEN "snooze_until" ELSE NULL END,
+             "unread" = ${unread},
+             "person_id" = ${personId},
+             "organisation_id" = ${organisationId},
+             "updated_at" = now()
+       WHERE "id" = ${winnerId}
+    `
+
+    await tx.$executeRaw`
+      INSERT INTO "uin_events" ("thread_id", "user_id", "kind", "detail")
+      VALUES (${winnerId}, ${userId}, 'merged',
+              ${JSON.stringify({
+                mergeIds,
+                loserIds: losers.map((l) => l.id),
+                subjects: losers.map((l) => l.subject),
+              })}::jsonb)
+    `
+
+    return { mergeIds, winnerId, merged: losers.length }
+  }, { timeout: 60_000, maxWait: 15_000 })
+}
+
+export type ThreadMergeRow = {
+  id: string
+  winnerId: string
+  loserId: string
+  userId: string | null
+  loserSubject: string | null
+  createdAt: Date
+}
+
+/** Merges into this conversation that could still be taken back, newest first. */
+export async function undoableThreadMerges(winnerId: string): Promise<ThreadMergeRow[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT m."id", m."winner_id", m."loser_id", m."user_id", m."created_at",
+           t."subject" AS loser_subject
+      FROM "uin_thread_merges" m
+      -- The conversation itself rather than the snapshot, so a subject somebody
+      -- has since corrected reads correctly. Gone entirely means the retention
+      -- sweep has been through, and the merge below will refuse.
+      LEFT JOIN "uin_threads" t ON t."id" = m."loser_id"
+     WHERE m."winner_id" = ${winnerId} AND m."undone_at" IS NULL
+     ORDER BY m."created_at" DESC
+     LIMIT 20
+  `
+  return rows.map((r) => ({
+    id: r.id as string,
+    winnerId: r.winner_id as string,
+    loserId: r.loser_id as string,
+    userId: (r.user_id as string | null) ?? null,
+    loserSubject: (r.loser_subject as string | null) ?? null,
+    createdAt: r.created_at as Date,
+  }))
+}
+
+/** One merge, for the route that is about to undo it. */
+export async function getThreadMerge(mergeId: string): Promise<{
+  id: string
+  winnerId: string
+  loserId: string
+  undoneAt: Date | null
+} | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "id", "winner_id", "loser_id", "undone_at" FROM "uin_thread_merges" WHERE "id" = ${mergeId}
+  `
+  const r = rows[0]
+  if (!r) return null
+  return {
+    id: r.id as string,
+    winnerId: r.winner_id as string,
+    loserId: r.loser_id as string,
+    undoneAt: (r.undone_at as Date | null) ?? null,
+  }
+}
+
+/**
+ * Put a merge back.
+ *
+ * Only what the merge itself moved goes back, and only from where it put it: a
+ * reply that arrived afterwards belongs to the merged conversation and stays
+ * there, which is the same rule person merges follow. Anything the merge moved
+ * that has since been deleted simply is not there to move, and the counters are
+ * worked out again from what is.
+ *
+ * The winning conversation keeps the state the merge gave it - if merging
+ * something unanswered into something finished reopened it, undoing does not
+ * quietly close it again. Reopened is the safe direction to be wrong in.
+ */
+export async function undoThreadMerge(
+  mergeId: string,
+  userId: string | null,
+): Promise<{ ok: true; winnerId: string; loserId: string } | { error: string }> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_thread_merges" WHERE "id" = ${mergeId}
+  `
+  const row = rows[0]
+  if (!row) return { error: 'That merge is not on record.' }
+  if (row.undone_at) return { error: 'That merge has already been undone.' }
+
+  const winnerId = row.winner_id as string
+  const loserId = row.loser_id as string
+  const snapshot = (row.snapshot ?? {}) as {
+    messageIds?: string[]
+    draftIds?: string[]
+    linkIds?: string[]
+    eventIds?: string[]
+    heldDraftIds?: string[]
+    repointedThreadIds?: string[]
+    repointedMergeIds?: string[]
+  }
+
+  const [winner, loser] = await Promise.all([getThreadDetail(winnerId), getThreadDetail(loserId)])
+  if (!winner || !loser) {
+    return { error: 'One of those conversations has since gone, so this cannot be put back.' }
+  }
+  if (loser.mergedIntoId !== winnerId) {
+    return { error: 'That conversation has moved on since, so this cannot be put back.' }
+  }
+
+  await prisma.$transaction(async (tx) => {
+    // By id, and only the ones still where the merge put them. The CASE is
+    // what keeps an EARLIER merge intact: a message that came onto the losing
+    // conversation from a third one carries that third one's id, and clearing
+    // it would strand the merge that put it there. Only provenance this merge
+    // itself wrote is taken back off.
+    const messageIds = snapshot.messageIds ?? []
+    if (messageIds.length > 0) {
+      await tx.$executeRaw`
+        UPDATE "uin_messages"
+           SET "thread_id" = ${loserId},
+               "merged_from_thread_id" = CASE WHEN "merged_from_thread_id" = ${loserId}
+                                              THEN NULL ELSE "merged_from_thread_id" END
+         WHERE "id" IN (${Prisma.join(messageIds)}) AND "thread_id" = ${winnerId}
+      `
+    }
+    const draftIds = snapshot.draftIds ?? []
+    if (draftIds.length > 0) {
+      await tx.$executeRaw`
+        UPDATE "uin_drafts"
+           SET "thread_id" = ${loserId},
+               "merged_from_thread_id" = CASE WHEN "merged_from_thread_id" = ${loserId}
+                                              THEN NULL ELSE "merged_from_thread_id" END
+         WHERE "id" IN (${Prisma.join(draftIds)}) AND "thread_id" = ${winnerId}
+      `
+    }
+    const heldDraftIds = snapshot.heldDraftIds ?? []
+    if (heldDraftIds.length > 0) {
+      await tx.$executeRaw`
+        UPDATE "uin_drafts" SET "held_by_thread_id" = ${loserId}
+         WHERE "id" IN (${Prisma.join(heldDraftIds)}) AND "held_by_thread_id" = ${winnerId}
+      `
+    }
+    const linkIds = snapshot.linkIds ?? []
+    if (linkIds.length > 0) {
+      await tx.$executeRaw`
+        UPDATE "uin_record_links" SET "thread_id" = ${loserId}
+         WHERE "id" IN (${Prisma.join(linkIds)}) AND "thread_id" = ${winnerId}
+      `
+    }
+    const eventIds = snapshot.eventIds ?? []
+    if (eventIds.length > 0) {
+      await tx.$executeRaw`
+        UPDATE "uin_events" SET "thread_id" = ${loserId}
+         WHERE "id" IN (${Prisma.join(eventIds)}) AND "thread_id" = ${winnerId}
+      `
+    }
+    const repointed = snapshot.repointedThreadIds ?? []
+    if (repointed.length > 0) {
+      await tx.$executeRaw`
+        UPDATE "uin_threads" SET "merged_into_id" = ${loserId}, "updated_at" = now()
+         WHERE "id" IN (${Prisma.join(repointed)}) AND "merged_into_id" = ${winnerId}
+      `
+    }
+    // And the records of how they got there, or their own undo would look for
+    // its messages on a conversation they are no longer on.
+    const repointedMerges = snapshot.repointedMergeIds ?? []
+    if (repointedMerges.length > 0) {
+      await tx.$executeRaw`
+        UPDATE "uin_thread_merges" SET "winner_id" = ${loserId}
+         WHERE "id" IN (${Prisma.join(repointedMerges)}) AND "winner_id" = ${winnerId}
+      `
+    }
+
+    await tx.$executeRaw`
+      UPDATE "uin_threads" SET "merged_into_id" = NULL, "updated_at" = now() WHERE "id" = ${loserId}
+    `
+
+    await recomputeThreadInboxes(tx, winnerId)
+    await recomputeThreadInboxes(tx, loserId)
+    await recomputeThreadCounters(tx, winnerId)
+    await recomputeThreadCounters(tx, loserId)
+
+    await tx.$executeRaw`
+      UPDATE "uin_thread_merges" SET "undone_at" = now(), "undone_by" = ${userId} WHERE "id" = ${mergeId}
+    `
+    await tx.$executeRaw`
+      INSERT INTO "uin_events" ("thread_id", "user_id", "kind", "detail")
+      VALUES (${winnerId}, ${userId}, 'unmerged', ${JSON.stringify({ mergeId, loserId })}::jsonb)
+    `
+  }, { timeout: 60_000, maxWait: 15_000 })
+
+  return { ok: true, winnerId, loserId }
 }

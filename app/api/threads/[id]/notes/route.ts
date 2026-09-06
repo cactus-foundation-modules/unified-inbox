@@ -16,8 +16,10 @@ import { noteHtml } from '@/modules/unified-inbox/lib/notes'
 // unread (see insertNote): us talking among ourselves should not look like the
 // customer writing again.
 //
-// Mentioning a colleague raises one of core's notifications - see
-// lib/mentions.ts, which the discussion route shares.
+// Tagging a colleague puts the conversation on their own list, with its own
+// snooze and its own done, and lets them into this one conversation whether or
+// not the inbox it sits in was ever shared with them - see lib/mentions.ts,
+// which the discussion route shares.
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getSessionFromCookie()
@@ -43,7 +45,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   })
   await recordEvent(id, user.id, 'note', { messageId })
 
-  await notifyMentions({ threadId: id, thread, mentions, byUserId: user.id })
+  await notifyMentions({ threadId: id, thread, mentions, byUserId: user.id, messageId, note: text })
 
   return NextResponse.json({ ok: true, messageId })
 }

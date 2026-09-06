@@ -12,7 +12,8 @@ const OUTSIDER = { canView: false, canReply: false, canManage: false }
 
 /** A shared address: the guest list decides, as it always has. */
 const SHARED = { kind: 'shared' as const, ownerUserId: null }
-/** One person's own post. The guest list is not consulted at all. */
+/** One person's own post. Its owner is in whatever the guest list says; anybody
+ *  else is in only if they are named on it. */
 const own = (userId: string | null) => ({ kind: 'individual' as const, ownerUserId: userId })
 
 describe('decideInboxAccess', () => {
@@ -50,7 +51,8 @@ describe('decideInboxAccess', () => {
 })
 
 // An individual inbox is the one place in this module where `manage` is not a
-// way past a list. Getting THAT backwards is the privacy defect the whole
+// way past a list, and where an EMPTY guest list means nobody rather than
+// everybody. Getting either backwards is the privacy defect the whole
 // distinction exists to prevent, so it gets its own block.
 describe('decideInboxAccess, on somebody\u2019s own inbox', () => {
   it('gives it to its owner', () => {
@@ -58,19 +60,38 @@ describe('decideInboxAccess, on somebody\u2019s own inbox', () => {
     expect(decideInboxAccess(own('u1'), [], 'u1', VIEWER)).toEqual({ view: true, reply: false })
   })
 
-  it('keeps it from a colleague, whatever the guest list happens to say', () => {
+  it('keeps it from a colleague nobody has named on it', () => {
     const rows = [{ userId: 'u2', canReply: true }]
-    expect(decideInboxAccess(own('u1'), rows, 'u2', REPLIER)).toEqual({ view: false, reply: false })
+    expect(decideInboxAccess(own('u1'), rows, 'u3', REPLIER)).toEqual({ view: false, reply: false })
+    expect(decideInboxAccess(own('u1'), [], 'u2', REPLIER)).toEqual({ view: false, reply: false })
   })
 
-  it('keeps it from an administrator too', () => {
+  it('lets in a colleague who HAS been named on it', () => {
+    const rows = [{ userId: 'u2', canReply: true }]
+    expect(decideInboxAccess(own('u1'), rows, 'u2', REPLIER)).toEqual({ view: true, reply: true })
+  })
+
+  it('lets a named colleague read without answering', () => {
+    const rows = [{ userId: 'u2', canReply: false }]
+    expect(decideInboxAccess(own('u1'), rows, 'u2', REPLIER)).toEqual({ view: true, reply: false })
+    // And the hub's own reply grant is still the other half of it.
+    expect(decideInboxAccess(own('u1'), [{ userId: 'u2', canReply: true }], 'u2', VIEWER))
+      .toEqual({ view: true, reply: false })
+  })
+
+  it('keeps it from an administrator who is not on it', () => {
     expect(decideInboxAccess(own('u1'), [], 'u2', MANAGER)).toEqual({ view: false, reply: false })
     expect(decideInboxAccess(own('u1'), [], 'u2', { canView: true, canReply: true, canManage: true }))
       .toEqual({ view: false, reply: false })
+    // Named on somebody else's address is not the same as named on this one.
+    expect(decideInboxAccess(own('u1'), [{ userId: 'u3', canReply: true }], 'u2', MANAGER))
+      .toEqual({ view: false, reply: false })
   })
 
-  it('still needs its owner to be allowed in the hub at all', () => {
+  it('still needs anybody on it to be allowed in the hub at all', () => {
     expect(decideInboxAccess(own('u1'), [], 'u1', OUTSIDER)).toEqual({ view: false, reply: false })
+    expect(decideInboxAccess(own('u1'), [{ userId: 'u2', canReply: true }], 'u2', OUTSIDER))
+      .toEqual({ view: false, reply: false })
   })
 
   it('leaves an inbox whose owner has gone to an administrator rather than to nobody', () => {
@@ -85,8 +106,22 @@ describe('audienceForSave', () => {
     expect(audienceForSave(SHARED, entries, ['u1'])).toEqual({ entries, defaultUserIds: ['u1'] })
   })
 
-  it('writes the owner, and only the owner, on a personal one', () => {
-    expect(audienceForSave(own('u1'), [{ userId: 'u2', canReply: true }], ['u2'])).toEqual({
+  it('always writes the owner on a personal one, whatever the form sent', () => {
+    expect(audienceForSave(own('u1'), [], ['u2'])).toEqual({
+      entries: [{ userId: 'u1', canReply: true }],
+      defaultUserIds: ['u1'],
+    })
+  })
+
+  it('keeps the colleagues the form named beside the owner', () => {
+    expect(audienceForSave(own('u1'), [{ userId: 'u2', canReply: false }], ['u2'])).toEqual({
+      entries: [{ userId: 'u1', canReply: true }, { userId: 'u2', canReply: false }],
+      defaultUserIds: ['u1'],
+    })
+  })
+
+  it('never lists the owner twice, however the form sent them', () => {
+    expect(audienceForSave(own('u1'), [{ userId: 'u1', canReply: false }], [])).toEqual({
       entries: [{ userId: 'u1', canReply: true }],
       defaultUserIds: ['u1'],
     })

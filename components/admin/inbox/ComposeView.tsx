@@ -8,14 +8,25 @@ import {
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { inboxHref } from '@/modules/unified-inbox/lib/list'
-import { isWorthSaving, splitAddresses, type DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
-import { AttachmentChips, AttachmentPicker, plainReason, toHtml, type Attachment } from './AttachmentPicker'
+import {
+  htmlHasWriting,
+  isWorthSaving,
+  splitAddresses,
+  type DraftForComposer,
+} from '@/modules/unified-inbox/lib/drafts'
+import { plainTextToHtml, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
+import { AttachmentChips, AttachmentPicker, plainReason, type Attachment } from './AttachmentPicker'
 import { AttachmentDropNotice, AttachmentDropOverlay } from './AttachmentDropChrome'
 import { useAttachmentDrop } from './useAttachmentDrop'
 import { ConfirmDialog } from './ConfirmDialog'
+import { Dropdown } from './Dropdown'
+import { PendingSend } from './PendingSend'
 import { RecipientField } from './RecipientField'
-import { CloseIcon } from './icons'
-import { SendLater } from './SendLater'
+import { RichText } from './RichText'
+import { ScheduleNotice } from './ScheduleNotice'
+import { SendLaterPanel } from './SendLaterPanel'
+import { SnoozePanel } from './SnoozePanel'
+import { AlarmIcon, CloseIcon, PaperclipIcon } from './icons'
 import type { DraftSendState } from '@/modules/unified-inbox/lib/types'
 
 // Writing a brand new message, rather than answering one somebody else started.
@@ -72,22 +83,28 @@ type Props = {
   defaultInboxId: string | null
   /** The draft being finished, when the address named one. */
   draft: DraftForComposer | null
-  /** The earliest a message may be set to go, in the picker's own shape and in
-   *  the site's zone rather than this browser's. */
-  minSendAt: string
   timezone: string
 }
 
 export function ComposeView({
-  base, params, inboxes, defaultInboxId, draft, minSendAt, timezone,
+  base, params, inboxes, defaultInboxId, draft, timezone,
 }: Props) {
   const router = useRouter()
   const [inboxId, setInboxId] = useState(draft?.inboxId ?? defaultInboxId ?? '')
   const [to, setTo] = useState((draft?.to ?? []).join(', '))
   const [cc, setCc] = useState((draft?.cc ?? []).join(', '))
   const [showCc, setShowCc] = useState((draft?.cc ?? []).length > 0)
+  // The copy nobody else on the message sees. Its own line, opened by its own
+  // link, and never folded in with Cc - that separation is the whole of what a
+  // blind copy is.
+  const [bcc, setBcc] = useState((draft?.bcc ?? []).join(', '))
+  const [showBcc, setShowBcc] = useState((draft?.bcc ?? []).length > 0)
   const [subject, setSubject] = useState(draft?.subject ?? '')
-  const [text, setText] = useState(draft?.body ?? '')
+  // The markup in the writing box. A draft written before the box could hold
+  // any is turned into markup on the way in, so its line breaks survive.
+  const [text, setText] = useState(
+    draft ? (draft.bodyFormat === 'html' ? draft.body : plainTextToHtml(draft.body)) : '',
+  )
   const [attachments, setAttachments] = useState<Attachment[]>(
     (draft?.attachments ?? []).map((file) => ({ ...file, sizeBytes: file.sizeBytes ?? null })),
   )
@@ -115,6 +132,12 @@ export function ComposeView({
   // here: the server decides what a saved schedule means.
   const [followUpMinutes, setFollowUpMinutes] = useState<number | null>(draft?.followUpMinutes ?? null)
   const [held, setHeld] = useState(draft?.held ?? false)
+  // A time picked off the alarm clock and not committed yet. The reply box
+  // makes the same bargain for the same reason: picking a time and deciding
+  // what that time means are one moment's thinking, and a menu that saved on
+  // the first click would have to guess which was meant.
+  const [pendingSendAt, setPendingSendAt] = useState<Date | null>(null)
+  const [pendingFollowUp, setPendingFollowUp] = useState<number | null>(draft?.followUpMinutes ?? null)
   // Waiting for its own time, or going out this minute. Either way it is out of
   // this composer's hands.
   const waiting = sendState === 'scheduled' || sendState === 'sending'
@@ -153,8 +176,9 @@ export function ComposeView({
   const hasUnsaved = dirty && (
     to.trim().length > 0
     || cc.trim().length > 0
+    || bcc.trim().length > 0
     || subject.trim().length > 0
-    || text.trim().length > 0
+    || htmlHasWriting(text)
     || attachments.length > 0
   )
 
@@ -250,7 +274,10 @@ export function ComposeView({
       card.current?.querySelector<HTMLElement>(`#${nextId}`)?.focus()
     }, [])
 
-  const submit = useCallback(async () => {
+  /** Sends it. `snoozeUntil` sends it and then puts the conversation it just
+   *  started to sleep - which only makes sense once there IS one, which is why
+   *  this is where it happens rather than in a second press afterwards. */
+  const submit = useCallback(async (snoozeUntil?: Date) => {
     if (!inboxId) {
       setError('Pick which of your addresses this should come from.')
       return
@@ -264,7 +291,7 @@ export function ComposeView({
       setError('Give the message a subject.')
       return
     }
-    if (!text.trim()) {
+    if (!htmlHasWriting(text)) {
       setError('There is nothing to send yet.')
       return
     }
@@ -281,8 +308,11 @@ export function ComposeView({
           mode: 'new',
           to: recipients,
           cc: splitAddresses(cc),
+          bcc: splitAddresses(bcc),
           subject: subject.trim(),
-          bodyHtml: toHtml(text),
+          // Already markup. It is sanitised on the server, at the last gate
+          // before it leaves, exactly as a pasted signature is.
+          bodyHtml: text,
           attachments: attachments.map(({ key, url, filename, contentType }) => ({
             key, url, filename, contentType,
           })),
@@ -298,6 +328,22 @@ export function ComposeView({
       // Nothing left to lose, and the guards above must not stop the screen
       // going where it is about to go.
       setDirty(false)
+      // Put to sleep before the screen moves, so the conversation it lands on
+      // is already showing what was asked for. Its own small request: the
+      // message has gone either way, and a conversation that failed to go quiet
+      // is not a message that failed to send.
+      if (snoozeUntil && typeof data?.threadId === 'string') {
+        try {
+          await fetch(`/api/m/unified-inbox/threads/${data.threadId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'snoozed', snoozeUntil: snoozeUntil.toISOString() }),
+          })
+        } catch {
+          // Said on the conversation it lands on, which is where somebody can
+          // do something about it. Nothing is lost: the message went.
+        }
+      }
       // It is a conversation now, so go and stand in it - and in the inbox it
       // was filed into, which is not necessarily the one the list was showing
       // when the menu was changed.
@@ -314,7 +360,7 @@ export function ComposeView({
       inFlight.current = false
       setBusyWith(null)
     }
-  }, [attachments, base, cc, draftId, inboxId, params, router, subject, text, to])
+  }, [attachments, base, bcc, cc, draftId, inboxId, params, router, subject, text, to])
 
   /** Puts the screenful down as a draft, with or without a time on it. One
    *  request for both, because a scheduled message IS a draft with a departure
@@ -327,8 +373,10 @@ export function ComposeView({
       mode: 'new' as const,
       to: splitAddresses(to),
       cc: splitAddresses(cc),
+      bcc: splitAddresses(bcc),
       subject: subject.trim() || null,
       body: text,
+      bodyFormat: 'html' as const,
       attachments: attachments.map(({ key, url, filename, contentType, sizeBytes }) => ({
         key, url, filename, contentType, sizeBytes,
       })),
@@ -371,6 +419,9 @@ export function ComposeView({
       // Saving with a time on it stands the message back up: whatever mail held
       // it has been read by whoever is scheduling it again.
       if (at) setHeld(false)
+      // The time that was pending is on the row now, so it is no longer
+      // something waiting to be committed.
+      if (wallClock !== undefined) setPendingSendAt(null)
       setDirty(false)
       setNote(at
         ? 'Saved, and set to go out on its own. It waits under Drafts until then.'
@@ -383,7 +434,7 @@ export function ComposeView({
       inFlight.current = false
       setBusyWith(null)
     }
-  }, [attachments, cc, draftId, inboxId, router, subject, text, to])
+  }, [attachments, bcc, cc, draftId, inboxId, router, subject, text, to])
 
   const discard = useCallback(async () => {
     if (!draftId) {
@@ -475,14 +526,21 @@ export function ComposeView({
                     value={to}
                     onChange={(next) => { setTo(next); setDirty(true) }}
                     inboxId={inboxId || null}
-                    onEnter={onLineKeyDown(showCc ? 'uin-new-cc' : 'uin-new-subject')}
+                    onEnter={onLineKeyDown(showCc ? 'uin-new-cc' : showBcc ? 'uin-new-bcc' : 'uin-new-subject')}
                     placeholder="name@example.com, somebody.else@example.com"
                   />
-                  {!showCc && (
-                    <button type="button" className="uin-field-add" onClick={() => setShowCc(true)}>
-                      Cc
-                    </button>
-                  )}
+                  <div className="uin-field-links">
+                    {!showCc && (
+                      <button type="button" className="uin-field-add" onClick={() => setShowCc(true)}>
+                        Cc
+                      </button>
+                    )}
+                    {!showBcc && (
+                      <button type="button" className="uin-field-add" onClick={() => setShowBcc(true)}>
+                        Bcc
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -495,7 +553,7 @@ export function ComposeView({
                       value={cc}
                       onChange={(next) => { setCc(next); setDirty(true) }}
                       inboxId={inboxId || null}
-                      onEnter={onLineKeyDown('uin-new-subject')}
+                      onEnter={onLineKeyDown(showBcc ? 'uin-new-bcc' : 'uin-new-subject')}
                       placeholder="somebody.else@example.com"
                     />
                     {/* Only while it is empty: a line with an address on it is
@@ -510,6 +568,35 @@ export function ComposeView({
                       >
                         Remove
                       </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {showBcc && (
+                <div className="uin-field-row">
+                  <label htmlFor="uin-new-bcc">Bcc</label>
+                  <div className="uin-field-control">
+                    <RecipientField
+                      id="uin-new-bcc"
+                      value={bcc}
+                      onChange={(next) => { setBcc(next); setDirty(true) }}
+                      inboxId={inboxId || null}
+                      onEnter={onLineKeyDown('uin-new-subject')}
+                      placeholder="somebody.quiet@example.com"
+                    />
+                    {!bcc.trim() && (
+                      <button
+                        type="button"
+                        className="uin-field-add"
+                        onClick={() => setShowBcc(false)}
+                        aria-label="Take the Bcc line off"
+                      >
+                        Remove
+                      </button>
+                    )}
+                    {bcc.trim() && (
+                      <span className="uin-field-hint">Nobody else on the message sees these.</span>
                     )}
                   </div>
                 </div>
@@ -532,33 +619,13 @@ export function ComposeView({
             </div>
 
             <div className="uin-compose-message">
-              <label className="sr-only" htmlFor="uin-new-text">Your message</label>
-              <textarea
+              <RichText
                 id="uin-new-text"
+                aria-label="Your message"
                 value={text}
-                onChange={(e) => { setText(e.target.value); setDirty(true); setNote('') }}
+                onChange={(html) => { setText(html); setDirty(true); setNote('') }}
                 placeholder="Write your message"
               />
-            </div>
-
-            <div className="uin-composer-row">
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => setPicking(true)}
-                disabled={busy}
-              >
-                Attach a file
-              </button>
-              <AttachmentChips
-                attachments={attachments}
-                disabled={busy}
-                onRemove={(key) => {
-                  setAttachments((prev) => prev.filter((p) => p.key !== key))
-                  setDirty(true)
-                }}
-              />
-              <span className="uin-recipients">or drag one onto this message</span>
             </div>
 
             <AttachmentDropNotice
@@ -567,43 +634,78 @@ export function ComposeView({
               dismissErrors={drop.dismissErrors}
             />
 
-            <SendLater
+            <ScheduleNotice
               sendAt={sendAt}
               sendState={sendState}
               sendError={sendError}
               followUpMinutes={followUpMinutes}
               held={held}
-              minWallClock={minSendAt}
               timezone={timezone}
-              busy={busy}
-              onSchedule={(wallClock, followUp) => { void save(wallClock, followUp) }}
-              onCancel={() => { void save(null) }}
             />
+
+            {pendingSendAt && !waiting && (
+              <PendingSend
+                at={pendingSendAt}
+                followUp={pendingFollowUp}
+                onFollowUp={(minutes) => { setPendingFollowUp(minutes); setError('') }}
+                onProblem={setError}
+                onClear={() => setPendingSendAt(null)}
+                timezone={timezone}
+                busy={busy}
+              />
+            )}
 
             {error && <div className="alert alert-danger" role="alert">{error}</div>}
             {note && !error && <div className="alert alert-success" role="status">{note}</div>}
 
-            <div className="uin-composer-row">
-              {/* A message with a time on it has already been decided about. Send
-                  and Save both contradict that decision - one would post it now
-                  and the other would look like the way to keep it, which it is
-                  not - so the panel above is the whole of what is left to do:
-                  move it, or cancel the timer and have these back. */}
-              {!waiting && (
-                <>
-                  <button type="button" className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
-                    {busyWith === 'send' ? 'Sending...' : 'Send'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => { void save() }}
-                    disabled={busy}
-                  >
-                    {busyWith === 'save' ? 'Saving...' : 'Save as a draft'}
-                  </button>
-                </>
-              )}
+            {/* The same strip the reply box has, for the same reason: the two
+                icons on the left are things you do TO the message, the buttons
+                on the right are the ways it leaves, and the gap between them
+                keeps the two from reading as one row of six. */}
+            <div className="uin-composer-row uin-composer-actions">
+              <button
+                type="button"
+                className="uin-icon-btn"
+                title="Attach a file, or drag one onto this message"
+                aria-label="Attach a file, or drag one onto this message"
+                onClick={() => setPicking(true)}
+                disabled={busy}
+              >
+                {PaperclipIcon}
+              </button>
+              <Dropdown
+                className="uin-icon-btn"
+                label={AlarmIcon}
+                ariaLabel="Send it later"
+                title="Send it later"
+                width={280}
+                panelClassName="uin-menu-snooze"
+                disabled={busy}
+              >
+                <SendLaterPanel
+                  timezone={timezone}
+                  busy={busy}
+                  scheduled={waiting}
+                  onPick={(at) => { setPendingSendAt(at); setError('') }}
+                  onCancelTimer={() => { setPendingSendAt(null); void save(null) }}
+                />
+              </Dropdown>
+              <AttachmentChips
+                attachments={attachments}
+                disabled={busy}
+                onRemove={(key) => {
+                  setAttachments((prev) => prev.filter((p) => p.key !== key))
+                  setDirty(true)
+                }}
+              />
+
+              <span className="uin-composer-gap" />
+
+              {/* A message with a time on it has already been decided about.
+                  Send and Save both contradict that decision - one would post
+                  it now and the other would look like the way to keep it, which
+                  it is not - so while it waits, the notice above is the whole of
+                  what is left to do: move it, or cancel the timer. */}
               {draftId ? (
                 <button
                   type="button"
@@ -625,6 +727,62 @@ export function ComposeView({
                 >
                   Cancel
                 </Link>
+              )}
+
+              {!waiting && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => { void save() }}
+                  disabled={busy}
+                >
+                  {busyWith === 'save' ? 'Saving...' : 'Save as a draft'}
+                </button>
+              )}
+
+              {!waiting && pendingSendAt && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => { void save(toWallClock(pendingSendAt, timezone), pendingFollowUp) }}
+                  disabled={busy}
+                >
+                  Send later
+                </button>
+              )}
+
+              {/* No "Send later & snooze" up here, and there cannot be one: a
+                  message that has not gone yet has not started a conversation,
+                  and there is nothing to put to sleep. The chase on the line
+                  above is what covers that case - it brings the conversation
+                  back after the message has actually left. */}
+              {!waiting && (
+                <Dropdown
+                  className="btn btn-secondary btn-sm"
+                  label={'Send & snooze'}
+                  align="end"
+                  width={280}
+                  panelClassName="uin-menu-snooze"
+                  disabled={busy}
+                >
+                  <SnoozePanel
+                    timezone={timezone}
+                    busy={busy}
+                    title="Send it, then sleep until"
+                    onSnooze={(until) => { void submit(until) }}
+                  />
+                </Dropdown>
+              )}
+
+              {!waiting && (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => { void submit() }}
+                  disabled={busy}
+                >
+                  {busyWith === 'send' ? 'Sending...' : 'Send now'}
+                </button>
               )}
             </div>
 

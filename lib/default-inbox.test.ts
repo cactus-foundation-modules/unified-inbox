@@ -51,30 +51,52 @@ describe('pinDefaultInbox', () => {
 // preference. Confusing them puts a colleague's private address in the shared
 // group, where it would be dragged about by whoever is tidying the rail.
 describe('splitInboxes', () => {
-  const shared = (id: string) => ({ id, kind: 'shared' as const })
-  const mine = (id: string) => ({ id, kind: 'individual' as const })
+  const ME = 'me'
+  const shared = (id: string) => ({ id, kind: 'shared' as const, ownerUserId: null })
+  const mine = (id: string) => ({ id, kind: 'individual' as const, ownerUserId: ME })
+  const theirs = (id: string, owner: string | null = 'them') =>
+    ({ id, kind: 'individual' as const, ownerUserId: owner })
 
-  it('puts every personal address under Yours, pinned or not', () => {
-    const { yours, shared: team } = splitInboxes([shared('a'), mine('b'), shared('c')], null)
+  it('puts this person’s own address under Yours, pinned or not', () => {
+    const { yours, shared: rest } = splitInboxes([shared('a'), mine('b'), shared('c')], null, ME)
     expect(yours.map((i) => i.id)).toEqual(['b'])
-    expect(team.map((i) => i.id)).toEqual(['a', 'c'])
+    expect(rest.map((i) => i.id)).toEqual(['a', 'c'])
   })
 
   it('puts a pinned shared address under Yours as well, after the personal ones', () => {
-    const { yours, shared: team } = splitInboxes([shared('a'), mine('b'), shared('c')], 'c')
+    const { yours, shared: rest } = splitInboxes([shared('a'), mine('b'), shared('c')], 'c', ME)
     expect(yours.map((i) => i.id)).toEqual(['b', 'c'])
-    expect(team.map((i) => i.id)).toEqual(['a'])
+    expect(rest.map((i) => i.id)).toEqual(['a'])
   })
 
   it('never lists an address twice when the pinned one is already theirs', () => {
-    const { yours, shared: team } = splitInboxes([mine('a'), shared('b')], 'a')
+    const { yours, shared: rest } = splitInboxes([mine('a'), shared('b')], 'a', ME)
     expect(yours.map((i) => i.id)).toEqual(['a'])
-    expect(team.map((i) => i.id)).toEqual(['b'])
+    expect(rest.map((i) => i.id)).toEqual(['b'])
   })
 
   it('leaves the shared group in the site’s own order', () => {
-    const { shared: team } = splitInboxes([shared('a'), shared('b'), mine('c')], null)
-    expect(team.map((i) => i.id)).toEqual(['a', 'b'])
+    const { shared: rest } = splitInboxes([shared('a'), shared('b'), mine('c')], null, ME)
+    expect(rest.map((i) => i.id)).toEqual(['a', 'b'])
+  })
+
+  // A colleague's own post this person has been let in to is neither theirs nor
+  // the business's. Putting it under Yours would say it was their own mail; put
+  // it in the shared group and it would be dragged about by whoever is tidying
+  // the rail, when where it sits is decided by whose it is.
+  it('puts a colleague’s own address in its own group', () => {
+    const { yours, shared: rest, team } = splitInboxes(
+      [shared('a'), mine('b'), theirs('c')], null, ME,
+    )
+    expect(yours.map((i) => i.id)).toEqual(['b'])
+    expect(rest.map((i) => i.id)).toEqual(['a'])
+    expect(team.map((i) => i.id)).toEqual(['c'])
+  })
+
+  it('puts an address whose owner has gone with the colleagues, not with Yours', () => {
+    const { yours, team } = splitInboxes([mine('a'), theirs('b', null)], null, ME)
+    expect(yours.map((i) => i.id)).toEqual(['a'])
+    expect(team.map((i) => i.id)).toEqual(['b'])
   })
 })
 

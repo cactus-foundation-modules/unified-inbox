@@ -32,6 +32,13 @@ type Props = {
   /** How many the whole set of choices comes to, said out loud so a filter that
    *  quietly matches nothing is obvious rather than mysterious. */
   total: string
+  /** What the row is a set of choices about. The same four words narrow a list
+   *  of conversations and a list of things colleagues have asked you to look
+   *  at, and only a screen reader is told which - so it is said once, here,
+   *  rather than by a second component that would be this one with two strings
+   *  changed. */
+  unit?: string
+  ariaLabel?: string
 }
 
 const STATUS_TABS: Array<{ value: StatusFilter; label: string; countKey: string }> = [
@@ -43,7 +50,10 @@ const STATUS_TABS: Array<{ value: StatusFilter; label: string; countKey: string 
   { value: 'all', label: 'All', countKey: 'all' },
 ]
 
-export function StatusTabs({ base, params, status, counts, total }: Props) {
+export function StatusTabs({
+  base, params, status, counts, total,
+  unit = 'conversations', ariaLabel = 'Where a conversation stands',
+}: Props) {
   // Any change starts again at page one and closes whatever was open, since the
   // conversation on screen may not survive the new filter. A person's page goes
   // with it: searching used to leave somebody's page pinned beside a list that
@@ -51,7 +61,7 @@ export function StatusTabs({ base, params, status, counts, total }: Props) {
   const reset = { page: null, id: null, person: null }
 
   return (
-    <div className="uin-tabs" role="group" aria-label="Where a conversation stands">
+    <div className="uin-tabs" role="group" aria-label={ariaLabel}>
       {STATUS_TABS.map((tab) => {
         const count = counts[tab.countKey] ?? 0
         return (
@@ -67,7 +77,7 @@ export function StatusTabs({ base, params, status, counts, total }: Props) {
                 {/* Same ceiling as the counts on the rail. Two thresholds on one
                     visual chip is one too many. */}
                 {count > 999 ? '999+' : count}
-                <span className="sr-only"> conversations</span>
+                <span className="sr-only"> {unit}</span>
               </span>
             )}
           </Link>

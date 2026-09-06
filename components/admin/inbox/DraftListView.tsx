@@ -2,6 +2,7 @@ import Link from 'next/link'
 import type { Draft } from '@/modules/unified-inbox/lib/types'
 import { formatWhen, initialsFor } from '@/modules/unified-inbox/lib/list'
 import {
+  draftBodyText,
   draftHref,
   draftPreview,
   draftRecipientLabel,
@@ -89,8 +90,12 @@ export function DraftListView({
                 <span className="uin-row-subject">{draftSubjectLabel(draft)}</span>
                 {/* Nothing rather than an empty line: a blank preview left a gap
                     under every draft that has none. */}
-                {draft.body.trim() && (
-                  <span className="uin-row-preview">{draftPreview(draft.body)}</span>
+                {/* The words rather than the markup: a body written in the
+                    new box is HTML, and a row reading "<p>Dear Marcus" is a row
+                    that has given up. It goes into the page as TEXT either
+                    way. */}
+                {draftBodyText(draft).trim() && (
+                  <span className="uin-row-preview">{draftPreview(draftBodyText(draft))}</span>
                 )}
               </span>
               <span className="uin-row-meta">

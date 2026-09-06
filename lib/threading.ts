@@ -1,4 +1,5 @@
 import { createHash } from 'crypto'
+import { belongsToInbox, effectiveInboxIds } from './thread-merge'
 
 // ---------------------------------------------------------------------------
 // What a message IS, and which conversation it belongs to. Kept pure and away
@@ -176,6 +177,9 @@ export function classifyAutomated(headers: {
 export type ThreadCandidate = {
   id: string
   inboxId: string | null
+  /** Every address the conversation belongs to, once it is the result of a
+   *  merge and belongs to more than the one in `inboxId`. */
+  absorbedInboxIds?: string[]
   subjectNormalised: string | null
   lastMessageAt: Date | null
   /** Addresses already seen on that thread, normalised. */
@@ -188,7 +192,15 @@ export type ThreadMatch =
 
 /** Where a Message-ID we already hold is filed. A list rather than one answer,
  *  because internal mail is held once per inbox involved in it. */
-export type ThreadRef = { threadId: string; inboxId: string | null }
+export type ThreadRef = {
+  threadId: string
+  inboxId: string | null
+  /** Every address the conversation belongs to, where a merge has given it more
+   *  than one. This is what makes a merge survive the next reply: without it,
+   *  the side whose own conversation was merged away finds nothing to join and
+   *  starts a fresh one, and the merge quietly comes apart. */
+  absorbedInboxIds?: string[]
+}
 
 /**
  * Of the threads a referenced message is filed on, the one this side should
@@ -208,7 +220,7 @@ export type ThreadRef = { threadId: string; inboxId: string | null }
 function pickThread(refs: ThreadRef[] | undefined, inboxId: string | null, restrict: boolean): string | null {
   if (!refs || refs.length === 0) return null
   if (!restrict) return refs[0]!.threadId
-  return refs.find((ref) => ref.inboxId === inboxId)?.threadId ?? null
+  return refs.find((ref) => belongsToInbox(ref, inboxId))?.threadId ?? null
 }
 
 /** How far apart two messages can be and still be judged the same conversation
@@ -260,8 +272,14 @@ export function chooseThread(input: {
     if (restrict) {
       // Each side of internal mail keeps to its own inbox, an unfiled thread
       // included - joining one would hand the conversation to the wrong tab.
-      if (candidate.inboxId !== input.inboxId) continue
-    } else if (input.inboxId && candidate.inboxId && candidate.inboxId !== input.inboxId) continue
+      // A merged conversation belongs to every address on it, so both sides
+      // land back on it rather than starting the split all over again.
+      if (!belongsToInbox(candidate, input.inboxId)) continue
+    } else if (
+      input.inboxId
+      && effectiveInboxIds(candidate).length > 0
+      && !belongsToInbox(candidate, input.inboxId)
+    ) continue
     const at = candidate.lastMessageAt ? candidate.lastMessageAt.getTime() : 0
     if (!at || Math.abs(input.sentAt.getTime() - at) > windowMs) continue
     if (!candidate.participants.some((p) => participants.has(p.toLowerCase()))) continue
