@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { formatCalendarDate, inboxHref } from '@/modules/unified-inbox/lib/list'
+import { BlockedAddresses } from './BlockedAddresses'
 import { FilterMenu } from './FilterMenu'
 import { QueryForm } from './QueryForm'
 import { FilterIcon, SearchIcon, SortIcon } from './icons'
@@ -11,10 +12,17 @@ import { FilterIcon, SearchIcon, SortIcon } from './icons'
 //
 // Search sits FIRST, above the tabs, which is where a mail program keeps it and
 // where somebody arriving to find one thing looks before they look anywhere
-// else. Beside it, the two controls that are about the list rather than in it:
-// the filters, behind one button (see FilterMenu), and the one that changes the
+// else. Beside it, the controls that are about the list rather than in it: the
+// filters, behind one button (see FilterMenu), and the one that changes the
 // order rather than the contents - newest first, or oldest first for working a
 // backlog off the bottom without the top moving under you.
+//
+// And, in the Spam folder alone, a fourth: who the site turns away. It sits
+// between the search and the filters because it is a question about this list
+// rather than a cut across it, and because the Spam folder is now where blocked
+// post lands - so it is where somebody is standing when they wonder who is on
+// the list. Nowhere else, since on every other list it would be a settings
+// screen wedged into a toolbar.
 //
 // The filters used to be laid out flat here: a chip, a menu of names, and a
 // Filter button to make the menu mean anything. That is a permanent row of
@@ -65,10 +73,15 @@ type Props = {
   /** Whether this is the reader's OWN address, where the menu collapses into a
    *  single unread toggle. See the note above the button below. */
   ownInbox: boolean
+  /** The Spam folder, which is the one list that gets a fourth control - the
+   *  addresses the site turns away. Null everywhere else, and that is the whole
+   *  of the condition: see the note beside the button. */
+  blockedAddresses: { canUnblock: boolean } | null
 }
 
 export function Filters({
   base, params, unreadOnly, assignee, search, narrowed, staff, oldestFirst, ownInbox,
+  blockedAddresses,
 }: Props) {
   // Any filter change starts again at page one and closes whatever was open,
   // since the conversation on screen may not survive the new filter. A person's
@@ -107,6 +120,17 @@ export function Filters({
           />
           <button type="submit" className="sr-only">Search</button>
         </QueryForm>
+        {/* On the Spam folder only, and between the search and the filters
+            because that is where the errand happens. Post from a blocked sender
+            is collected and dropped straight in here, so this folder is where
+            somebody is standing when the question occurs to them: who IS
+            blocked, and why has that customer stopped getting through? Sending
+            them to a settings page to find out is sending them somewhere they
+            then have to find their way back from. It is the same list and the
+            same route as Settings -> Collecting, not a second one. */}
+        {blockedAddresses && (
+          <BlockedAddresses staff={staff} canUnblock={blockedAddresses.canUnblock} />
+        )}
         {/* On the reader's OWN address the menu is a menu of one, so it is not
             a menu. Everything in that list is either post that came to them or
             work handed to them; "whose desk is this on" has the same answer all

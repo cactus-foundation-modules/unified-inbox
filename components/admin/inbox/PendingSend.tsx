@@ -19,20 +19,29 @@ import { describeSendAt } from '@/modules/unified-inbox/lib/scheduled'
 type Props = {
   /** When it is set to go. */
   at: Date
-  /** Take the time back off and go back to sending it now. */
+  /** Whether the message ALREADY has a departure time and this would replace
+   *  it. Changes both sentences, because "cancel send later" on a message that
+   *  is going out on Monday whatever happens would read as standing the whole
+   *  thing down, when all it does is drop the new time and leave Monday. */
+  replacing?: boolean
+  /** Take the picked time back off. */
   onClear: () => void
   timezone: string
   busy: boolean
 }
 
-export function PendingSend({ at, onClear, timezone, busy }: Props) {
+export function PendingSend({ at, replacing, onClear, timezone, busy }: Props) {
   const now = new Date()
 
   return (
     <div className="uin-composer-row uin-pending-send">
-      <span className="uin-recipients">Set to go out {describeSendAt(at, now, timezone)}.</span>
+      <span className="uin-recipients">
+        {replacing
+          ? `Move it to ${describeSendAt(at, now, timezone)}.`
+          : `Set to go out ${describeSendAt(at, now, timezone)}.`}
+      </span>
       <button type="button" className="uin-chip" disabled={busy} onClick={onClear}>
-        Cancel send later
+        {replacing ? 'Keep the time it has' : 'Cancel send later'}
       </button>
     </div>
   )

@@ -42,16 +42,17 @@ the same human collapse into one story.
   update: every address on an existing site stays shared until somebody says
   otherwise.
 - **Their own post, on their own desk.** Anything arriving at an address that
-  belongs to one colleague is handed to that colleague as it lands, so it stops
-  counting as work nobody has picked up when nobody else could pick it up
-  anyway. Shared addresses are left alone, a conversation somebody already has
-  is never taken off them, and there is a tick to switch the whole thing off.
+  belongs to one colleague is handed to that colleague as it lands, and so is
+  anything they send from it, so it stops counting as work nobody has picked up
+  when nobody else could pick it up anyway. Shared addresses are left alone, a
+  conversation somebody already has is never taken off them, and there is a tick
+  to switch the whole thing off.
 - **Everything of yours in one place.** Opening the hub lands you in your own
   inbox, and your own inbox is where everything handed to you shows up - even
   when it arrived at a shared address. There is no separate "assigned to me"
   list to remember to check, because a list you have to remember to check is a
   list that goes unchecked. The handful of places at the top of the rail -
-  your address, All, Mentioned, Drafts, Sent, Spam - can be dragged into
+  your address, All, Mentioned, Drafts, Scheduled, Sent, Spam - can be dragged into
   whatever order suits how you work, and that order is yours alone: nobody
   else's screen moves.
 - **Collecting the post.** Mail is gathered on the site's own schedule, from the
@@ -71,6 +72,30 @@ the same human collapse into one story.
   what was last said rather than at the beginning, so a thread with forty
   messages in it does not have to be scrolled through to reach the one that has
   just arrived.
+- **A queue on a shared address.** An address the whole team reads gets one
+  more tab in front of the rest: **Unassigned** - the open conversations nobody
+  has picked up yet. Take one and it leaves the tab, which is the point of it:
+  the morning is finished when that number is gone. It is only offered on a
+  shared address. Somebody's own inbox is on their desk by definition, and
+  across every address at once "has anybody taken this" is a question with no
+  one team behind it.
+- **A reply on another channel goes back the way it came.** A WhatsApp message,
+  a text, a live chat or an enquiry is answered down the channel it arrived on,
+  so the writing box on one of those does not ask who it is going to - it says
+  so, above the words. No To, Cc, Bcc or Subject line, no paperclip, and no
+  Forward, because there is nowhere to forward one to. Email keeps the whole
+  box, unchanged.
+- **Emphasis, where the channel has emphasis.** The strip is seven buttons on
+  an email: bold, italic, strikethrough, a colour, a link and the two kinds of
+  list. WhatsApp has three of those and writes them with a marker rather than a
+  tag - bold is `*like this*`, italic `_like this_`, strikethrough
+  `~like this~` - so a WhatsApp reply gets those three and no others, and what
+  you type in bold arrives in bold. A
+  channel declares its own markers on its provider (`capabilities.textStyles`),
+  and that one declaration decides both which buttons appear and what the words
+  are wrapped in on the way out, so a button on that strip can never be one
+  whose work is quietly thrown away. A channel that declares nothing takes
+  plain words and gets no strip at all.
 - **Several at once.** Click a conversation to read it, then hold shift and
   click one further down: everything between the two is picked, and the bar
   above the list marks the lot as done, read or unread, or puts them back.
@@ -121,7 +146,8 @@ the same human collapse into one story.
   else can read, finish or throw away what you have started - not even somebody
   who can send as the same address. A reply goes back under its conversation
   with the words still in the box; a new message opens where you left it.
-  Sending one clears it away. The tab is only there while there is something in
+  Sending one clears it away, and setting a time on one moves it next door to
+  **Scheduled**. The tab is only there while there is something in
   it - save nothing and there is nothing to see, so the folder appears the
   moment you put something down and goes again once the last one has left.
   Covering a colleague's address and left something half-written on it? It shows
@@ -152,6 +178,13 @@ the same human collapse into one story.
   when there was nothing to see. And if the person it is addressed to writes to
   you before it leaves, the message is held rather than sent - their
   conversation says so, with a link to what was waiting.
+- **Scheduled.** What you have set going waits under **Scheduled**, its own row
+  beside Drafts, soonest first - Drafts is what you have not finished, this is
+  what is going out without you. Nothing is settled until it leaves: open one
+  and you can correct the writing and keep the time, move it to another time,
+  send it on the spot, or cancel the timer and have an ordinary draft back. Only
+  there while there is something in it, and yours alone like a draft. One whose
+  send was refused goes back under Drafts with the reason on it.
 - **Send it and put it to bed.** **Send & snooze** sends the message and puts
   the conversation to sleep in one press, and **Send later & snooze** does both
   to a message that has not gone yet. Their reply wakes it either way, so you

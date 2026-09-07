@@ -39,11 +39,12 @@ import {
   threadsHoldingIdentity,
   touchThread,
   reopenOnReply,
+  setThreadBlocked,
   holdScheduledDraftsFor,
   recordEvent,
   type StoredMessageRef,
 } from './db'
-import { blockedSenderSet, shouldRefuseSender } from './blocked-senders'
+import { blockedSenderSet, shouldJunkSender } from './blocked-senders'
 import { ownPostAssignee, ownPostOwners } from './own-post'
 import { prepareInboundHtml, htmlToText } from './html'
 import { chooseRelayCopy, RELAY_COPY_WINDOW_MS } from './relay-copy'
@@ -108,12 +109,14 @@ export type FolderOutcome = {
   scanned: number
   stored: number
   duplicates: number
-  /** Mail dropped unread rather than filed. Two things land here: post
-   *  addressed to none of this site's addresses on an account set to discard
-   *  that, and post from a sender the site has blocked. Counted apart from
-   *  duplicates because both of these are decisions and a duplicate is
-   *  housekeeping. Nothing is deleted either way - the mail stays on the server
-   *  exactly where it landed. */
+  /** Mail dropped unread rather than filed: post addressed to none of this
+   *  site's addresses, on an account set to discard that. Counted apart from
+   *  duplicates because it is a decision and a duplicate is housekeeping.
+   *  Nothing is deleted - the mail stays on the server exactly where it landed.
+   *
+   *  Post from a blocked sender is NOT counted here and has not been since
+   *  migration 044: it is collected and filed into the Spam folder like
+   *  anything else, so it lands in `stored` with the rest of the post. */
   discarded: number
   backfillComplete: boolean
   error?: string
@@ -436,7 +439,7 @@ async function syncFolder(ctx: FolderContext): Promise<FolderOutcome> {
     while (pending.length > 0 && !outOfTime(ctx.deadline)) {
       const batch = pending.slice(0, BATCH_SIZE)
       pending = pending.slice(BATCH_SIZE)
-      const results = await processBatch(ctx, batch)
+      const results = await processBatch(ctx, batch, 'forward')
       outcome.scanned += results.scanned
       outcome.stored += results.stored
       outcome.duplicates += results.duplicates
@@ -463,7 +466,7 @@ async function syncFolder(ctx: FolderContext): Promise<FolderOutcome> {
       const seen = await getProcessedUids(ctx.connectionId, ctx.folder.path, list)
       const batch = list.filter((uid) => !seen.has(uid))
 
-      const results = batch.length > 0 ? await processBatch(ctx, batch) : { scanned: 0, stored: 0, duplicates: 0, discarded: 0, oldest: null as Date | null }
+      const results = batch.length > 0 ? await processBatch(ctx, batch, 'backfill') : { scanned: 0, stored: 0, duplicates: 0, discarded: 0, oldest: null as Date | null }
       outcome.scanned += results.scanned
       outcome.stored += results.stored
       outcome.duplicates += results.duplicates
@@ -498,6 +501,18 @@ async function syncFolder(ctx: FolderContext): Promise<FolderOutcome> {
 type BatchResult = { scanned: number; stored: number; duplicates: number; discarded: number; oldest: Date | null }
 
 /**
+ * Which half of a sweep a batch belongs to.
+ *
+ * The forward pass is post that has arrived since we last looked; the backfill
+ * is history, walked downwards. Everything else about filing a message is the
+ * same either way, and one thing is not: a message on the forward pass whose
+ * date sits behind the conversation it joins has genuinely just turned up and
+ * has to say so, where the same shape on the backfill is simply the past being
+ * read in order. See touchThread and migration 045.
+ */
+type SyncPass = 'forward' | 'backfill'
+
+/**
  * Fetch a bounded batch of whole messages, then file them.
  *
  * The two halves are deliberately separate. ImapFlow cannot run a second
@@ -505,7 +520,7 @@ type BatchResult = { scanned: number; stored: number; duplicates: number; discar
  * it deadlocks silently, with no error and no timeout - so the stream is drained
  * into memory first and everything else happens afterwards.
  */
-async function processBatch(ctx: FolderContext, uids: number[]): Promise<BatchResult> {
+async function processBatch(ctx: FolderContext, uids: number[], pass: SyncPass): Promise<BatchResult> {
   const result: BatchResult = { scanned: 0, stored: 0, duplicates: 0, discarded: 0, oldest: null }
   if (uids.length === 0) return result
 
@@ -518,7 +533,7 @@ async function processBatch(ctx: FolderContext, uids: number[]): Promise<BatchRe
   for (const entry of sources) {
     result.scanned++
     try {
-      const filed = await fileMessage(ctx, entry)
+      const filed = await fileMessage(ctx, entry, pass)
       if (filed.stored) result.stored++
       else if (filed.discarded) result.discarded++
       else result.duplicates++
@@ -620,7 +635,8 @@ async function matchRelayCopy(input: {
 
 async function fileMessage(
   ctx: FolderContext,
-  entry: { uid: number; source: Buffer; size: number | null }
+  entry: { uid: number; source: Buffer; size: number | null },
+  pass: SyncPass,
 ): Promise<{ stored: boolean; discarded?: boolean; sentAt: Date | null }> {
   const parsed = await simpleParser(entry.source)
 
@@ -762,30 +778,22 @@ async function fileMessage(
     folderInboxId: ctx.folderInboxId,
   })
 
-  // Turned away at the door.
+  // Blocked, so it is filed straight into the bin.
   //
-  // AFTER the outbound copy is claimed above and after placeMessage has said
-  // which way this is facing, and both of those orderings matter. A reply a
-  // colleague wrote on their phone comes back to us out of the Sent folder of
-  // an account whose owner might well be on somebody's block list, and refusing
-  // that would quietly stop our own writing reaching the conversations it
-  // belongs to.
+  // Worked out AFTER the outbound copy is claimed above and after placeMessage
+  // has said which way this is facing, and both of those orderings matter. A
+  // reply a colleague wrote on their phone comes back to us out of the Sent
+  // folder of an account whose owner might well be on somebody's block list,
+  // and binning that would quietly stop our own writing reaching the
+  // conversations it belongs to.
   //
-  // The location is recorded so the next pass walks past it rather than parsing
-  // it again for ever. The message itself is untouched and stays on the mail
-  // server, which is rather the point: nothing here deletes anybody's post, and
-  // unblocking somebody tomorrow leaves what was refused today exactly where
-  // its owner can still find it.
-  if (shouldRefuseSender({ direction, fromAddress, blocked: ctx.blockedSenders })) {
-    await markLocationProcessed({
-      connectionId: ctx.connectionId,
-      folder: ctx.folder.path,
-      uid: entry.uid,
-      messageIdHeader: identity,
-      threadId: null,
-    })
-    return { stored: false, discarded: true, sentAt }
-  }
+  // It is collected rather than left on the mail server, which is the change
+  // migration 044 explains: a block that dropped the post silently left "did
+  // they ever actually write?" with no answer anywhere on this site. So it is
+  // filed like anything else and then stamped - out of every list, in the Spam
+  // folder, marked done and left unread - and the whole of that difference is
+  // carried on this one flag through the filing below.
+  const junk = shouldJunkSender({ direction, fromAddress, blocked: ctx.blockedSenders })
 
   const automated = classifyAutomated({
     autoSubmitted: headerValue(parsed, 'auto-submitted'),
@@ -890,7 +898,13 @@ async function fileMessage(
       preview: snippet || null,
       lastMessageAt: sentAt,
       lastDirection: input.direction,
-      unread: input.direction === 'in' && !automated,
+      // Blocked post is unread whatever else it is. Everywhere else in this
+      // file an out-of-office or a bounce leaves the flag alone, because the
+      // mail system talking is not somebody writing - but the Spam folder's
+      // count is how anybody knows the site turned something away at all, and a
+      // silent folder is a folder nobody opens.
+      unread: junk || (input.direction === 'in' && !automated),
+      blocked: junk,
     })
 
     const written = await insertMessage({
@@ -924,9 +938,23 @@ async function fileMessage(
       // An out-of-office or a bounce is the mail system talking, not the person.
       // Marking the conversation unread for it lies about the state of the
       // relationship, which is exactly what E7 is about.
-      markUnread: input.direction === 'in' && !automated,
+      markUnread: junk || (input.direction === 'in' && !automated),
       inboxId: input.inboxId,
+      // Post filed into a watched folder by hand arrives dated behind the
+      // conversation it belongs to, and the list would never move for it. The
+      // backfill is excluded because there every message is behind by
+      // definition - it is history, being read in order.
+      arrivedNow: pass === 'forward',
     })
+
+    // The stamp, and everything the stamp settles: in the bin for everybody,
+    // done, unread. Here rather than only on createThread above because a
+    // blocked sender writing into a conversation that already exists - a reply
+    // on an old thread, a second message before the first tick finished - has
+    // to land the same way as the first one did. Idempotent: the date is only
+    // ever written once, so a nuisance who writes six times is one conversation
+    // stamped with the day they first got through.
+    if (junk) await setThreadBlocked(thread, true)
 
     // Somebody has written on it, so it goes back in Open - whether it was
     // asleep until Thursday or marked done a fortnight ago.
@@ -945,7 +973,12 @@ async function fileMessage(
     // unread flag, drawn once more. Which matters most on the done half: a
     // mailing list nobody has unsubscribed from should not drag a finished
     // conversation back into Open every week.
-    if (!automated) {
+    //
+    // And never for post the site refused. Waking a conversation the collecting
+    // pass has just put in the bin would undo the line above it in the same
+    // function, and the two would then race on every message a blocked sender
+    // sent.
+    if (!automated && !junk) {
       const was = await reopenOnReply(thread)
       if (was) await recordEvent(thread, null, 'woken', { was, direction: input.direction })
     }
@@ -959,7 +992,11 @@ async function fileMessage(
     // is the opposite of helpful. An outbound copy found in Sent is us, and
     // holding our own messages against ourselves would stand down every
     // scheduled message the moment a colleague answered on their phone.
-    if (!automated && input.direction === 'in' && fromAddress) {
+    //
+    // And not for a blocked sender. Standing down a quote because somebody the
+    // site refuses has written in is letting them reach into the business
+    // through a door that is supposed to be shut.
+    if (!automated && !junk && input.direction === 'in' && fromAddress) {
       const held = await holdScheduledDraftsFor(fromAddress, thread)
       if (held.length > 0) {
         await recordEvent(thread, null, 'held', { count: held.length, address: fromAddress })
@@ -977,7 +1014,11 @@ async function fileMessage(
     // Nobody is ever displaced: the check that the conversation is free happens
     // inside the UPDATE. Recorded against nobody in particular, because nobody
     // in particular did it.
-    const ownPost = ownPostAssignee(input.direction, input.inboxId, ctx.ownPostOwners)
+    //
+    // Refused post is nobody's to deal with, so it goes on nobody's desk. It is
+    // already out of every list and in the bin; putting a colleague's name on it
+    // would be the site handing somebody a job it has just decided not to have.
+    const ownPost = junk ? null : ownPostAssignee(input.direction, input.inboxId, ctx.ownPostOwners)
     if (ownPost && await assignThreadIfUnassigned(thread, ownPost)) {
       await recordEvent(thread, null, 'assigned', { to: ownPost, automatic: true })
     }
@@ -1016,7 +1057,10 @@ async function fileMessage(
       threadId: primaryThread,
     })
 
-    for (const messageId of written) await queueMessageWebhooks(messageId)
+    // Nothing is told about post the site refused. A webhook is this hub saying
+    // "something has arrived that you may want to act on", and the site has
+    // just decided the opposite about this one.
+    if (!junk) for (const messageId of written) await queueMessageWebhooks(messageId)
     return { stored: written.length > 0, sentAt }
   }
 
@@ -1043,7 +1087,11 @@ async function fileMessage(
   // Last, and only once the message is safely filed and its location recorded:
   // note down anybody who asked to be told. Queueing only - the sending happens
   // on the tick, so a slow endpoint cannot cost this run its remaining slice.
-  await queueMessageWebhooks(messageId)
+  //
+  // Nobody is told about post the site refused. A webhook says "something has
+  // arrived that you may want to act on", and the site has just decided the
+  // opposite about this one.
+  if (!junk) await queueMessageWebhooks(messageId)
 
   return { stored: true, sentAt }
 }

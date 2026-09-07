@@ -92,6 +92,16 @@ function FilterPanel({ base, params, unreadOnly, assignee, staff }: Props) {
     router.push(inboxHref(base, params, { ...changes, page: null, id: null, person: null }))
   }
 
+  // Choosing whose desk something is on, from a list that may already be the
+  // Unassigned queue. The two are the same question asked twice, so picking a
+  // name here steps back out of the queue rather than ANDing with it - which
+  // would be an empty list and two controls each insisting they were right.
+  // Nobody yet does the same: the tab says it better, and left on top of it the
+  // chip underneath would be a filter that takes nothing off.
+  const assignTo = (id: string | null) => go(
+    params.status === 'unassigned' ? { assignee: id, status: 'open' } : { assignee: id },
+  )
+
   if (names) {
     const needle = find.trim().toLowerCase()
     const shown = needle ? staff.filter((p) => p.name.toLowerCase().includes(needle)) : staff
@@ -122,15 +132,15 @@ function FilterPanel({ base, params, unreadOnly, assignee, staff }: Props) {
             />
           </div>
         )}
-        <Choice chosen={assignee === null} onClick={() => go({ assignee: null })}>Anyone</Choice>
-        <Choice chosen={assignee === 'unassigned'} onClick={() => go({ assignee: 'unassigned' })}>
+        <Choice chosen={assignee === null} onClick={() => assignTo(null)}>Anyone</Choice>
+        <Choice chosen={assignee === 'unassigned'} onClick={() => assignTo('unassigned')}>
           Nobody yet
         </Choice>
         {shown.map((person) => (
           <Choice
             key={person.id}
             chosen={assignee === person.id}
-            onClick={() => go({ assignee: person.id })}
+            onClick={() => assignTo(person.id)}
           >
             {person.name}
           </Choice>

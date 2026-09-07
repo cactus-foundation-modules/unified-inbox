@@ -29,9 +29,14 @@ type Props = {
    *  plain reply would go to. Reply to all is not offered otherwise: it would
    *  do exactly what Reply does. */
   canReplyAll: boolean
+  /** Whether it can be sent on to somebody else. Not the same question as
+   *  Reply: a conversation another module owns is answered back down the
+   *  channel it came from and cannot be forwarded anywhere, and the send route
+   *  refuses one - so the entry that would ask for it is not drawn. */
+  canForward: boolean
 }
 
-export function MessageMenu({ threadId, canReply, canReplyAll }: Props) {
+export function MessageMenu({ threadId, canReply, canReplyAll, canForward }: Props) {
   const router = useRouter()
   const { toggle } = useComposerOpen()
   const [busy, setBusy] = useState(false)
@@ -68,7 +73,7 @@ export function MessageMenu({ threadId, canReply, canReplyAll }: Props) {
         disabled={busy}
       >
         {canReplyAll && <MenuItem onClick={() => toggle('reply-all')}>Reply all</MenuItem>}
-        {canReply && <MenuItem onClick={() => toggle('forward')}>Forward</MenuItem>}
+        {canForward && <MenuItem onClick={() => toggle('forward')}>Forward</MenuItem>}
         {/* Only where there is no arrow beside these dots. On a conversation
             that CAN be answered, the full note box is one press of the arrow
             and one chip away, and a fourth entry here would be a second door

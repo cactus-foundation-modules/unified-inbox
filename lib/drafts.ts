@@ -108,6 +108,14 @@ export function htmlHasWriting(html: string): boolean {
   return draftBodyText({ body: html, bodyFormat: 'html' }).length > 0
 }
 
+/** The two sentences a composer says when a box has simply been left empty.
+ *  Named rather than typed out twice, because a composer has to be able to
+ *  recognise its OWN warning afterwards: the moment the box has something in
+ *  it the sentence has stopped being true, and a warning left standing over a
+ *  box that no longer deserves it is one people learn to read straight past. */
+export const NOTHING_TO_SEND = 'There is nothing to send yet.'
+export const NEEDS_A_SUBJECT = 'Give the message a subject.'
+
 /** The first line or so of what was written, for the list. Nothing is
  *  sanitised here because nothing is rendered as markup - what it is handed is
  *  words by the time it gets here, and it goes into the page as text. */

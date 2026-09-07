@@ -6,6 +6,7 @@ import { normaliseAddress } from './addresses'
 import type { ThreadRef } from './threading'
 import { mergedStatus, mergedUnread, validateMerge } from './thread-merge'
 import type { OutboundCandidate } from './relay-copy'
+import { readableHtml } from './html'
 import { remoteImageUrls } from './remote-images'
 import { DRAFT_MODES, DRAFT_SEND_STATES, isInboxKind, isSignatureKind } from './types'
 import type {
@@ -1221,16 +1222,64 @@ export async function createThread(data: {
   lastMessageAt: Date
   lastDirection: 'in' | 'out' | 'note'
   unread: boolean
+  /** Post the site turned away at the door: born in the bin, and born done so
+   *  it is not sitting in anybody's Open pile behind the junk clause. Left
+   *  UNREAD by the caller, which is what lets the Spam folder say how much has
+   *  arrived. See migration 044. */
+  blocked?: boolean
 }): Promise<string> {
   const rows = await prisma.$queryRaw<{ id: string }[]>`
     INSERT INTO "uin_threads"
       ("inbox_id", "channel", "subject", "subject_normalised", "preview",
-       "last_message_at", "last_direction", "unread", "message_count")
+       "last_message_at", "last_direction", "unread", "message_count",
+       "status", "blocked_at")
     VALUES (${data.inboxId}, 'email', ${data.subject}, ${data.subjectNormalised}, ${data.preview},
-            ${data.lastMessageAt}, ${data.lastDirection}, ${data.unread}, 0)
+            ${data.lastMessageAt}, ${data.lastDirection}, ${data.unread}, 0,
+            ${data.blocked ? 'done' : 'open'}, ${data.blocked ? new Date() : null})
     RETURNING "id"
   `
   return rows[0]!.id
+}
+
+/**
+ * The site's own junk stamp, put on or taken off one conversation.
+ *
+ * ON is the collecting pass, and only ever the collecting pass: a message has
+ * arrived from an address the site refuses, so the conversation goes into the
+ * bin for everybody, marked done and left unread. `blocked_at` is only ever
+ * written once - a nuisance who writes six times has one conversation stamped
+ * with the day they first got through, not one that keeps moving.
+ *
+ * OFF is somebody pressing "Not junk", and it is the only way out. Without it a
+ * refused conversation could be taken out of the presser's own bin and stay in
+ * the site's, which is a conversation that cannot be rescued from a screen that
+ * says it just was. The status goes back to open with it, since the done was
+ * the site's housekeeping rather than anybody's decision that the matter was
+ * finished. The SENDER stays blocked either way: letting one conversation
+ * through is a different decision from opening the front door, and it is a
+ * different button in a different place.
+ */
+export async function setThreadBlocked(threadId: string, blocked: boolean): Promise<void> {
+  if (blocked) {
+    await prisma.$executeRaw`
+      UPDATE "uin_threads"
+         SET "blocked_at" = COALESCE("blocked_at", now()),
+             "status" = 'done',
+             "snooze_until" = NULL,
+             "unread" = true,
+             "updated_at" = now()
+       WHERE "id" = ${threadId}
+    `
+    return
+  }
+  await prisma.$executeRaw`
+    UPDATE "uin_threads"
+       SET "blocked_at" = NULL,
+           "status" = 'open',
+           "snooze_until" = NULL,
+           "updated_at" = now()
+     WHERE "id" = ${threadId} AND "blocked_at" IS NOT NULL
+  `
 }
 
 export type InsertMessageInput = {
@@ -1313,10 +1362,29 @@ export async function touchThread(threadId: string, data: {
   subjectNormalised: string
   markUnread: boolean
   inboxId: string | null
+  /** This message has just reached the site, rather than being history the
+   *  backfill is walking through. Only the forward pass of a sweep sets it, and
+   *  it is what lets a back-dated email say so - see last_arrived_at below. */
+  arrivedNow: boolean
 }): Promise<void> {
   await prisma.$executeRaw`
     UPDATE "uin_threads"
        SET "last_message_at" = GREATEST(COALESCE("last_message_at", ${data.sentAt}), ${data.sentAt}),
+           -- When post arrived that the line above cannot show, because the mail
+           -- is dated behind what this conversation already holds. Filing an
+           -- email into a watched folder by hand does exactly that, and without
+           -- this the conversation does not move an inch (migration 045).
+           --
+           -- Written only in that case, so an ordinary message leaves it null
+           -- and the list orders that conversation on its mail date as it always
+           -- has. Never on the backfill pass, where every message is behind by
+           -- definition and stamping them would float the entire mailbox.
+           --
+           -- Read against the row as it stands before this UPDATE, which is what
+           -- Postgres does with every expression in a SET.
+           "last_arrived_at" = CASE
+             WHEN ${data.arrivedNow} AND "last_message_at" IS NOT NULL AND "last_message_at" > ${data.sentAt}
+             THEN now() ELSE "last_arrived_at" END,
            "last_direction" = CASE WHEN "last_message_at" IS NULL OR "last_message_at" <= ${data.sentAt}
                                    THEN ${data.direction} ELSE "last_direction" END,
            "preview" = CASE WHEN "last_message_at" IS NULL OR "last_message_at" <= ${data.sentAt}
@@ -2201,7 +2269,11 @@ export type ThreadListFilters = {
   perPage: number
 }
 
-export type ThreadStatusFilter = 'open' | 'snoozed' | 'done' | 'all'
+/** The four states a conversation is in, plus the queue: 'unassigned' is the
+ *  open ones nobody has taken, which is a cut across 'open' rather than a fifth
+ *  value the column ever holds. Kept in this slot rather than in `assignee`
+ *  because it is what the tab row asks for - see StatusFilter in lib/list.ts. */
+export type ThreadStatusFilter = 'open' | 'snoozed' | 'done' | 'all' | 'unassigned'
 
 export type ThreadListRow = {
   id: string
@@ -2316,13 +2388,20 @@ function visibilityClause(
  *   for one of them would have the coverer working through post Sam has already
  *   dealt with.
  *
+ * OR NOBODY DID, because the site turned the sender away at the door. That is
+ * the `blocked_at` half, and it is deliberately not a person: a block is one
+ * list for the whole site rather than an opinion, so post refused by it is out
+ * of EVERYBODY'S lists. Nobody pressed anything, so there is no colleague to
+ * attribute it to - and the one who blocked the address six months ago may
+ * since have left. See migration 044.
+ *
  * The inner half only ever runs for a conversation that HAS a junk mark, which
  * on any real site is a tiny fraction of them - the outer NOT EXISTS is an index
  * scan on the (thread_id, user_id) primary key and stops there for everything
  * else. So the cost is bounded by how much junk there is, not by how much post.
  */
 function spamMatch(viewerUserId: string): Prisma.Sql {
-  return Prisma.sql`EXISTS (
+  return Prisma.sql`(t."blocked_at" IS NOT NULL OR EXISTS (
     SELECT 1 FROM "uin_thread_spam" sp
      WHERE sp."thread_id" = t."id"
        AND (
@@ -2340,7 +2419,7 @@ function spamMatch(viewerUserId: string): Prisma.Sql {
                  )
             )
        )
-  )`
+  ))`
 }
 
 /**
@@ -2353,12 +2432,22 @@ function spamMatch(viewerUserId: string): Prisma.Sql {
  * this with spamMatch() would put every colleague's junk into everybody's own
  * spam folder, which is the one place on the screen where a stranger's rubbish
  * has no business appearing.
+ *
+ * WITH ONE EXCEPTION, which is what the `blocked_at` clause is. Post the site
+ * refused at the door belongs to nobody in particular, so there is no one bin
+ * to put it in - it shows in the Spam folder of anybody who can see the
+ * conversation at all, under whichever name they opened the folder on. That is
+ * not a stranger's rubbish appearing in your bin: it is the site's own, and it
+ * is the only place on the screen it appears at all. What somebody may see is
+ * settled the same way it always is, by the visibility clause this sits beside
+ * in one WHERE - so a refused conversation in an address you cannot open is
+ * still not yours to read.
  */
 function spamFolderMatch(ownerUserId: string): Prisma.Sql {
-  return Prisma.sql`EXISTS (
+  return Prisma.sql`(t."blocked_at" IS NOT NULL OR EXISTS (
     SELECT 1 FROM "uin_thread_spam" sp
      WHERE sp."thread_id" = t."id" AND sp."user_id" = ${ownerUserId}
-  )`
+  ))`
 }
 
 function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
@@ -2384,6 +2473,12 @@ function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
     // the same rule the rest of this screen follows for a scope that will not
     // resolve (E17). Falling back there would draw the reader's OWN junk under
     // a heading with a colleague's name on it.
+    //
+    // A bin belonging to nobody stays empty even of the post the site refused,
+    // which is the same rule read once more rather than an exception to it: an
+    // id this reader may not open must yield nothing at all, and ORing the
+    // site-wide stamp in here is how "nothing at all" quietly becomes "nothing
+    // except the interesting part".
     const owner = f.spamOwnerUserId === undefined ? f.viewerUserId : f.spamOwnerUserId
     where.push(owner === null ? Prisma.sql`false` : spamFolderMatch(owner))
   } else {
@@ -2405,7 +2500,16 @@ function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
       ? Prisma.sql`(${here} OR t."assignee_user_id" = ${f.alsoAssignedTo})`
       : here)
   }
-  if (f.status && f.status !== 'all') where.push(Prisma.sql`t."status" = ${f.status}`)
+  if (f.status === 'unassigned') {
+    // The queue on a shared address: open, and on nobody's desk. Both halves
+    // here rather than one of them left to `assignee`, so the tab means one
+    // thing wherever it is asked from - the list, the count beside it and the
+    // paging all come through this function, and a tab whose count was drawn
+    // from a different WHERE than its list is the disagreement worth avoiding.
+    where.push(Prisma.sql`t."status" = 'open' AND t."assignee_user_id" IS NULL`)
+  } else if (f.status && f.status !== 'all') {
+    where.push(Prisma.sql`t."status" = ${f.status}`)
+  }
   if (f.unreadOnly) where.push(Prisma.sql`t."unread" = true`)
   if (f.assignee === 'unassigned') where.push(Prisma.sql`t."assignee_user_id" IS NULL`)
   else if (f.assignee) where.push(Prisma.sql`t."assignee_user_id" = ${f.assignee}`)
@@ -2519,9 +2623,23 @@ export function likeContains(raw: string | null | undefined): string | null {
  * NULLS goes the other way round with the sort, which is not decoration:
  * last_message_at is null on a conversation nothing has arrived in yet, and
  * those belong at the far end from the newest either way round.
+ *
+ * SORTED ON WHEN THE POST ARRIVED, not only on when it was written. The two are
+ * the same thing for ordinary mail and part company the moment somebody files
+ * an email into a watched folder by hand: it is dated when it was written and
+ * reaches us hours later, and ordering on the date alone drops it into the
+ * middle of the list where nobody is looking. See migration 045 - that is a
+ * real conversation on the live site, not a hypothetical.
+ *
+ * last_arrived_at is null on every conversation this has never happened to,
+ * which is nearly all of them, and GREATEST ignores nulls - so for those the
+ * first key IS last_message_at and the order is exactly what it always was. The
+ * second key is what keeps it that way: two conversations that arrived in the
+ * same sweep fall back to the date on the mail, rather than to whichever the
+ * collector happened to reach first.
  */
-const THREAD_LIST_ORDER = Prisma.sql`t."last_message_at" DESC NULLS LAST, t."id" DESC`
-const THREAD_LIST_ORDER_OLDEST = Prisma.sql`t."last_message_at" ASC NULLS FIRST, t."id" ASC`
+const THREAD_LIST_ORDER = Prisma.sql`GREATEST(t."last_message_at", t."last_arrived_at") DESC NULLS LAST, t."last_message_at" DESC NULLS LAST, t."id" DESC`
+const THREAD_LIST_ORDER_OLDEST = Prisma.sql`GREATEST(t."last_message_at", t."last_arrived_at") ASC NULLS FIRST, t."last_message_at" ASC NULLS FIRST, t."id" ASC`
 
 /**
  * The columns and the participant join every list of conversations needs,
@@ -2729,8 +2847,10 @@ export async function statusCounts(f: ThreadListFilters): Promise<Record<string,
   const visible = visibilityClause(f.inboxIds, f.includeUnrouted, f.providerModules ?? [])
   if (!visible) return {}
   const where = [visible, ...filterClauses({ ...f, status: 'all' })]
-  const rows = await prisma.$queryRaw<{ status: string; count: bigint }[]>`
-    SELECT t."status" AS "status", COUNT(*)::bigint AS "count"
+  const rows = await prisma.$queryRaw<{ status: string; count: bigint; nobody: bigint }[]>`
+    SELECT t."status" AS "status",
+           COUNT(*)::bigint AS "count",
+           COUNT(*) FILTER (WHERE t."assignee_user_id" IS NULL)::bigint AS "nobody"
       FROM "uin_threads" t
      WHERE ${Prisma.join(where, ' AND ')}
      GROUP BY t."status"
@@ -2740,6 +2860,11 @@ export async function statusCounts(f: ThreadListFilters): Promise<Record<string,
   for (const r of rows) {
     out[r.status] = Number(r.count)
     all += Number(r.count)
+    // The queue's own number, off the same pass rather than a second query: it
+    // is the open ones with nobody on them, so it comes out of the open row and
+    // is deliberately NOT added into `all` - every one of them is already
+    // counted there once, as an open conversation.
+    if (r.status === 'open') out.unassigned = Number(r.nobody)
   }
   out.all = all
   return out
@@ -2883,7 +3008,7 @@ function mapThreadMessage(r: Record<string, unknown>): ThreadMessageRow {
     subject: (r.subject as string | null) ?? null,
     bodyText: (r.body_text as string | null) ?? null,
     hasHtml: !!html && html.trim().length > 0,
-    remoteImages: remoteImageUrls(html).length,
+    remoteImages: remoteImageUrls(readableHtml(html)).length,
     snippet: (r.snippet as string | null) ?? null,
     sentAt: r.sent_at as Date,
     hasAttachments: !!r.has_attachments,
@@ -2952,7 +3077,7 @@ export async function getMessageHtml(id: string): Promise<{
   const r = rows[0]
   if (!r) return null
   return {
-    html: (r.body_html as string | null) ?? null,
+    html: readableHtml(r.body_html as string | null),
     text: (r.body_text as string | null) ?? null,
     threadId: r.thread_id as string,
     // An outbound message carries the inbox it was sent from; an inbound one
@@ -3555,14 +3680,51 @@ function draftScope(userId: string, inboxIds: string[] | null = null): Prisma.Sq
   return Prisma.sql`(${author} AND d."inbox_id" = ANY(${inboxIds}::text[]))`
 }
 
+/** A message with a time on it that has not been and gone: waiting for its
+ *  moment, or being posted this second. These are the Scheduled folder, and
+ *  they are deliberately NOT in Drafts - a message somebody has already decided
+ *  about is not something they left half-written, and mixing the two made the
+ *  Drafts count read as work outstanding when half of it was work done.
+ *
+ *  Written out as two comparisons rather than `IN`, and its opposite written
+ *  out rather than negated, because `send_state` is NULL on every ordinary
+ *  draft and `NOT (NULL IN (...))` is NULL - which is to say every ordinary
+ *  draft would quietly fall out of the Drafts list. */
+const DRAFT_WAITING = Prisma.sql`(d."send_state" = 'scheduled' OR d."send_state" = 'sending')`
+
+/** And the rest, which is what Drafts is a list of: one nobody has put a time
+ *  on, and one whose time came and whose send was refused. The second belongs
+ *  here rather than under Scheduled - it is not going anywhere on its own any
+ *  more, and it wants somebody to look at it. */
+const DRAFT_NOT_WAITING = Prisma.sql`(d."send_state" IS NULL OR d."send_state" = 'failed')`
+
 export async function listDrafts(
   userId: string,
   inboxIds: string[] | null = null,
 ): Promise<Draft[]> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT d.* FROM "uin_drafts" d
-     WHERE ${draftScope(userId, inboxIds)}
+     WHERE ${draftScope(userId, inboxIds)} AND ${DRAFT_NOT_WAITING}
      ORDER BY d."updated_at" DESC
+     LIMIT 200
+  `
+  return rows.map(mapDraft)
+}
+
+/** The other half of the same table: what is set to go out on its own.
+ *
+ *  Ordered by when it leaves rather than when it was last touched, because that
+ *  is the question this list is asked - what goes next - and a message written
+ *  this morning for next Tuesday would otherwise sit above one leaving in ten
+ *  minutes. */
+export async function listScheduledDrafts(
+  userId: string,
+  inboxIds: string[] | null = null,
+): Promise<Draft[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT d.* FROM "uin_drafts" d
+     WHERE ${draftScope(userId, inboxIds)} AND ${DRAFT_WAITING}
+     ORDER BY d."send_at" ASC
      LIMIT 200
   `
   return rows.map(mapDraft)
@@ -3586,7 +3748,7 @@ export async function countDraftsByInbox(userId: string): Promise<Record<string,
   const rows = await prisma.$queryRaw<{ inbox_id: string; count: bigint }[]>`
     SELECT d."inbox_id" AS "inbox_id", COUNT(*)::bigint AS "count"
       FROM "uin_drafts" d
-     WHERE ${draftScope(userId)} AND d."inbox_id" IS NOT NULL
+     WHERE ${draftScope(userId)} AND ${DRAFT_NOT_WAITING} AND d."inbox_id" IS NOT NULL
      GROUP BY d."inbox_id"
   `
   const counts: Record<string, number> = {}
@@ -3601,7 +3763,22 @@ export async function countDrafts(
 ): Promise<number> {
   const rows = await prisma.$queryRaw<{ count: bigint }[]>`
     SELECT COUNT(*)::bigint AS "count" FROM "uin_drafts" d
-     WHERE ${draftScope(userId, inboxIds)}
+     WHERE ${draftScope(userId, inboxIds)} AND ${DRAFT_NOT_WAITING}
+  `
+  return Number(rows[0]?.count ?? 0)
+}
+
+/** How many are set to go out on their own, for the number on the Scheduled
+ *  tab - and for whether that tab is offered at all. Counted on every list this
+ *  hub draws, so it is one COUNT over the partial index the queue already
+ *  keeps. */
+export async function countScheduledDrafts(
+  userId: string,
+  inboxIds: string[] | null = null,
+): Promise<number> {
+  const rows = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(*)::bigint AS "count" FROM "uin_drafts" d
+     WHERE ${draftScope(userId, inboxIds)} AND ${DRAFT_WAITING}
   `
   return Number(rows[0]?.count ?? 0)
 }
@@ -3676,8 +3853,42 @@ function sentWhere(
     ? outbound
     : Prisma.sql`(${outbound} OR (m."direction" = 'in' AND lower(m."from_address") IN (
         SELECT lower(i."address") FROM "uin_inboxes" i WHERE i."id" IN (${Prisma.join(inboxIds)})
-      )))`
+      ) AND ${notAlreadyListed(inboxIds)}))`
   return ownUserId ? Prisma.sql`(${anybody} AND ${writtenBy(ownUserId)})` : anybody
+}
+
+/**
+ * Keeps the colleague-post clause above from listing a message TWICE.
+ *
+ * Mail between two of our own addresses is filed as two conversations - one for
+ * the person who sent it and one for the person who got it, each marked done and
+ * answered on its own (see internalSides in lib/addresses.ts). That is right for
+ * the inbox and wrong for this list: a message sent once is one thing sent, and
+ * the sender was seeing the row the send path wrote AND the copy the mail server
+ * handed back, side by side, a second apart, saying the same words to the same
+ * person. Ten of the sixty rows in one Sent folder here were the second half of
+ * a pair.
+ *
+ * The two are tied together by the id the relay stamped on the way out: the
+ * delivered copy's Message-ID is the outbound row's `provider_message_id` (a
+ * service that leaves ours alone matches on the header instead). So an inbound
+ * copy is dropped when the outbound row it is a copy OF is already in this list.
+ *
+ * Only when that row is one this reader can actually see, which is what the
+ * inbox test is for - it is the sending address, and `insert_outbound` always
+ * records it. A message that only ever existed as the delivered copy - written
+ * on a phone, or in Outlook, where nothing here wrote a row at all - has no
+ * twin, matches nothing, and stays. That is the whole point of the clause above
+ * and it must not be undone by the one below.
+ */
+function notAlreadyListed(inboxIds: string[]): Prisma.Sql {
+  return Prisma.sql`NOT EXISTS (
+    SELECT 1 FROM "uin_messages" o
+     WHERE o."direction" = 'out'
+       AND o."inbox_id" IN (${Prisma.join(inboxIds)})
+       AND (o."provider_message_id" = m."message_id_header"
+            OR o."message_id_header" = m."message_id_header")
+  )`
 }
 
 /**
@@ -3992,6 +4203,47 @@ export async function discardDraftAfterSend(
 // 'scheduled'. SKIP LOCKED means the loser walks past the row rather than
 // waiting behind it holding a lock for the length of a mail send.
 // ---------------------------------------------------------------------------
+
+/**
+ * Takes the timer off a message somebody has decided to send by hand after all.
+ *
+ * The one thing standing between "Send now" on a message already waiting for
+ * its own moment and the SAME message going out twice. The queue claims a row
+ * by moving it out of 'scheduled' and only posts what it claimed, so clearing
+ * the state here - in one statement, refusing to touch a row a run already has
+ * - means exactly one of the two sends it. The composer's idempotency key is no
+ * help: it is that composer's own, and the queue's is derived from the draft's
+ * id, so two keys would happily post two messages.
+ *
+ * 'in-flight' is the one answer worth refusing on. A draft that is not there at
+ * all answers 'ready', because that is what pressing Send twice looks like and
+ * the send itself already copes with it.
+ */
+export async function standDownScheduledDraft(
+  id: string,
+  userId: string,
+): Promise<'ready' | 'in-flight'> {
+  const cleared = await prisma.$queryRaw<{ id: string }[]>`
+    UPDATE "uin_drafts" AS d
+       SET "send_at"    = NULL,
+           "send_state" = NULL,
+           "send_error" = NULL,
+           "claimed_at" = NULL
+     WHERE d."id" = ${id} AND ${draftScope(userId)}
+       AND d."send_state" IS DISTINCT FROM 'sending'
+    RETURNING d."id" AS "id"
+  `
+  if (cleared.length > 0) return 'ready'
+  // Nothing moved, which is either a draft that is not this person's to send -
+  // and the send route's own checks answer that - or a run holding it right
+  // now, which is the case somebody has to be told about.
+  const found = await prisma.$queryRaw<{ send_state: string | null }[]>`
+    SELECT d."send_state" AS "send_state" FROM "uin_drafts" d
+     WHERE d."id" = ${id} AND ${draftScope(userId)}
+     LIMIT 1
+  `
+  return found[0]?.send_state === 'sending' ? 'in-flight' : 'ready'
+}
 
 /** Takes the messages whose time has come, marking them as being sent in the
  *  same statement that finds them. Whatever comes back is this run's and
@@ -4985,6 +5237,42 @@ export async function linksForPerson(personId: string): Promise<RecordLink[]> {
      ORDER BY "linked_by" DESC, "created_at" ASC
   `
   return rows.map(mapLink)
+}
+
+/**
+ * Every email address that has appeared on a conversation - who wrote, who it
+ * was written to, and who was copied in.
+ *
+ * Read off the messages rather than off the person the conversation is matched
+ * to, because they are not the same list and the difference is the whole point:
+ * a conversation is matched to ONE person, and the supplier who answered from
+ * the shared sales@ address, the colleague who was copied in and the customer
+ * who started it are all on it. What comes back is exactly as written; deciding
+ * which of them are ours rather than theirs belongs to the gate in lib/people.ts
+ * and is done by the caller.
+ *
+ * Capped, because a long forwarded chain can carry a hundred addresses and the
+ * only use for this is ranking a short list. Newest first, so the cap keeps the
+ * people still talking rather than the ones who dropped out in March.
+ */
+export async function addressesOnThread(threadId: string, limit = 200): Promise<string[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "from_address", "to_addresses", "cc_addresses"
+      FROM "uin_messages"
+     WHERE "thread_id" = ${threadId}
+     ORDER BY COALESCE("sent_at", "created_at") DESC
+     LIMIT ${limit}
+  `
+  const out: string[] = []
+  for (const row of rows) {
+    const from = row.from_address as string | null
+    if (from) out.push(from)
+    for (const key of ['to_addresses', 'cc_addresses'] as const) {
+      const list = row[key] as string[] | null
+      if (Array.isArray(list)) out.push(...list.filter((a): a is string => typeof a === 'string'))
+    }
+  }
+  return [...new Set(out)]
 }
 
 export async function getLink(id: string): Promise<RecordLink | null> {

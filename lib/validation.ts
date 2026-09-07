@@ -97,7 +97,13 @@ export const SendBody = z.object({
         contentType: z.string().max(200).nullable().default(null),
       }),
     )
-    .max(20)
+    // A count rather than a weight, and the weight is the real rule: the send
+    // route adds the files up against what a mail server will carry (see
+    // checkAttachmentBudget) and refuses in English. This is only here so an
+    // unbounded array cannot ask the site to fetch ten thousand objects out of
+    // storage on one request, which is why it sits so far above anything a
+    // person writing an email will reach.
+    .max(100)
     .optional(),
   /** The catalogue items printed under the writing, in the order they were
    *  picked. Capped at the same twenty a draft may hold. */
@@ -151,7 +157,9 @@ export const DraftBody = z.object({
   /** Which of those two. Left out is 'text', which is what every caller written
    *  before the box could hold markup meant. */
   bodyFormat: z.enum(['text', 'html']).optional(),
-  attachments: z.array(AttachmentRef).max(20).optional(),
+  /** The same hundred the send route allows, so a draft can never hold more
+   *  than the message it becomes. */
+  attachments: z.array(AttachmentRef).max(100).optional(),
   products: z.array(ProductRefBody).max(20).optional(),
   /** When it should go out on its own, as the wall clock somebody typed:
    *  "2026-09-04T09:00", with no zone on it. It is turned into an instant on
@@ -222,6 +230,14 @@ export const MentionPatchBody = z.object({
 export const NoteBody = z.object({
   text: z.string().min(1).max(20_000),
   mentions: z.array(z.string().min(1)).max(20).optional(),
+  /** The catalogue items quoted in the note, in the order they were picked.
+   *
+   *  A note goes to nobody, which is exactly why the catalogue belongs in one:
+   *  the shortest way to ask a colleague about a chair is to put the chair in
+   *  front of them. Same references and the same cap as a message - the note is
+   *  built from what the shop says when it is saved, so nothing in a request can
+   *  put a name or a price on the site's own screen. */
+  products: z.array(ProductRefBody).max(20).optional(),
 })
 
 // ---------------------------------------------------------------------------

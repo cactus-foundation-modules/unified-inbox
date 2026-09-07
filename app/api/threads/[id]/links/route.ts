@@ -6,7 +6,7 @@ import { errorResponse } from '@/lib/utils'
 import { canOpenThread } from '@/modules/unified-inbox/lib/access'
 import { getThreadDetail, recordEvent, recordLink, threadHasLink } from '@/modules/unified-inbox/lib/db'
 import { confirmReference, suggestRecords } from '@/modules/unified-inbox/lib/adapters'
-import { buildContextQuery } from '@/modules/unified-inbox/lib/identity'
+import { buildThreadContextQuery } from '@/modules/unified-inbox/lib/identity'
 import type { LinkKind } from '@/modules/unified-inbox/lib/linking'
 
 // Adding a record to a conversation as context, by hand.
@@ -88,7 +88,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   }
   const term = (request.nextUrl.searchParams.get('q') ?? '').slice(0, 60)
 
-  const query = thread.personId ? await buildContextQuery(thread.personId) : null
+  // Ranked by whoever is ON the conversation, not only by the one person it was
+  // matched to: a supplier answering from a shared address, or a thread nobody
+  // was ever matched to, still has an address worth ranking by. See
+  // buildThreadContextQuery.
+  const query = await buildThreadContextQuery(id, thread.personId)
   const records = await suggestRecords(user, kind, term, query)
 
   return NextResponse.json(

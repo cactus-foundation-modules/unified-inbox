@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { BellIcon, BellOffIcon } from './icons'
 import {
@@ -11,8 +12,14 @@ import {
   type ArrivalsReply,
 } from '@/modules/unified-inbox/lib/notify'
 
-// The bell at the foot of the rail, and the offer that appears under it the
-// first time somebody opens the hub.
+// The bell at the foot of the rail, and the offer that appears the first time
+// somebody opens the hub.
+//
+// WHERE THE OFFER APPEARS. In the middle of the window, in the same dialog
+// shell as everything else in here. It used to hang off the bell, which put the
+// one question the hub ever asks unprompted into the bottom left corner of the
+// screen behind the rail's own scrolling - the least looked-at spot there is,
+// and close enough to a cookie strip to be dismissed as one.
 //
 // WHY IT IS OFFERED RATHER THAN SIMPLY ASKED FOR. Firing the browser's own
 // permission box at somebody the moment a page loads is the single most
@@ -237,9 +244,25 @@ export function NewMailNotifier({ userId, scopeName, threadHref, listHref, onAva
     setBoot({ ...boot, enabled: false, offering: false })
   }, [boot, userId])
 
+  const offering = boot?.offering ?? false
+
+  // Escape, and the dimmed background, answer the same way the No thanks button
+  // does: a no that is remembered. Leaving it unanswered would only mean asking
+  // the same person the same question on every visit, which is the nagging this
+  // whole component exists to avoid - and the bell is still there for the day
+  // they change their mind.
+  useEffect(() => {
+    if (!offering) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); turnOff() }
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [offering, turnOff])
+
   if (!boot || boot.permission === 'unsupported') return null
 
-  const { enabled, offering } = boot
+  const { enabled } = boot
   const blocked = boot.permission === 'denied'
   const label = blocked
     ? 'Your browser is blocking notifications from this site'
@@ -261,22 +284,51 @@ export function NewMailNotifier({ userId, scopeName, threadHref, listHref, onAva
         {enabled ? BellIcon : BellOffIcon}
       </button>
 
-      {offering && (
-        <div className="uin-notify-offer" role="dialog" aria-label="Notifications">
-          <p className="uin-notify-offer-text">
-            Want a nudge when something new lands
-            {scopeName ? <> in <strong>{scopeName}</strong></> : ' in your inbox'}? Your
-            browser will ask you to allow it.
-          </p>
-          <div className="uin-notify-offer-buttons">
-            <button type="button" className="btn btn-primary btn-sm" onClick={() => void turnOn()}>
-              Yes, nudge me
-            </button>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={turnOff}>
-              No thanks
-            </button>
+      {/* Into the page itself rather than into the rail, so the middle of the
+          window means the middle of the window: the rail is a scrolling column
+          in a grid, and a dialog left inside it would be centred on the column.
+          There is no page on the server, and this is never open on a first
+          render, so the two sides agree. */}
+      {offering && typeof document !== 'undefined' && createPortal(
+        <div
+          className="uin-modal"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) turnOff() }}
+        >
+          <div
+            className="uin-modal-card uin-modal-card-notify"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="uin-notify-offer-title"
+          >
+            <div className="uin-modal-head">
+              <h2 className="uin-modal-title" id="uin-notify-offer-title">Notifications</h2>
+            </div>
+            <div className="uin-modal-body">
+              <p className="uin-confirm-body">
+                Want a nudge when something new lands
+                {scopeName ? <> in <strong>{scopeName}</strong></> : ' in your inbox'}? Your
+                browser will ask you to allow it.
+              </p>
+            </div>
+            <div className="uin-modal-foot">
+              <button type="button" className="btn btn-secondary" onClick={turnOff}>
+                No thanks
+              </button>
+              {/* The one thing on the screen worth pressing, so it is where the
+                  keyboard lands. Also what Safari hangs its own box on: the
+                  browser will only ask on the back of a press. */}
+              <button
+                type="button"
+                className="btn btn-primary"
+                autoFocus
+                onClick={() => void turnOn()}
+              >
+                Yes, nudge me
+              </button>
+            </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </span>
   )

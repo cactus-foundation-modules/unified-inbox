@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { avatarHref, inboxHref, initialsFor, moveInOrder, sortByStoredOrder, splitInboxes } from '@/modules/unified-inbox/lib/list'
 import {
-  AssignedIcon, AtIcon, ChevronRightIcon, FileIcon, FolderIcon, InboxIcon, MegaphoneIcon,
+  AlarmIcon, AssignedIcon, AtIcon, ChevronRightIcon, FileIcon, FolderIcon, InboxIcon, MegaphoneIcon,
   PeopleIcon, SendIcon, SpamIcon,
 } from './icons'
 import { Avatar } from './Avatar'
@@ -112,7 +112,7 @@ type Props = {
   channels: TabChannel[]
   /** Every unread conversation this person can see, for the All entry. */
   allCount: number
-  /** Which entry is on: an inbox id, `m:<module>`, 'none', 'drafts', 'sent',
+  /** Which entry is on: an inbox id, `m:<module>`, 'none', 'drafts', 'scheduled', 'sent',
    *  'contacts', 'campaigns', 'mentions', one of `sent:<inbox id>` /
    *  `drafts:<inbox id>` / `mentions:<inbox id>` for a folder under a
    *  colleague's name, or null for All. */
@@ -149,6 +149,13 @@ type Props = {
    *  same rule as the tab above. Author-scoped in the query behind it, so a
    *  number here is always this reader's own writing. */
   draftCounts: Record<string, number>
+  /** Whether Scheduled is worth offering, on the same terms as Drafts above:
+   *  only once there is something waiting in it, and kept while the reader is
+   *  standing in it so sending the last one does not take the list out from
+   *  under them. */
+  showScheduled: boolean
+  /** How many are waiting for a time to come round. */
+  scheduledCount: number
   /** How much is in this person's own spam folder. Always offered, unlike
    *  Drafts: the folder is where junk goes the moment anybody presses the
    *  button, so it has to be somewhere they can already see - a folder that
@@ -481,7 +488,8 @@ function useRailDrag(enabled: boolean, move: (fromId: string, toId: string) => v
 
 export function NavRail({
   base, params, inboxes, channels, allCount, current, me, showAvatars, askedCount, railOrder,
-  showUnrouted, unroutedCount, showDrafts, draftCount, draftCounts, spamCount, contactCount, showCampaigns, composeHref,
+  showUnrouted, unroutedCount, showDrafts, draftCount, draftCounts, showScheduled, scheduledCount,
+  spamCount, contactCount, showCampaigns, composeHref,
   composeEntries,
   defaultInboxId, canReorder, canCheckNow, autoCheckSeconds, lastCheckedAt, timezone,
 }: Props) {
@@ -765,6 +773,20 @@ export function NavRail({
       title: 'Messages you have started and not sent',
       count: <Count value={draftCount} word="saved" quiet />,
     }] : []),
+    // Beside Drafts, because it is the other half of the same pile - written
+    // and not gone yet - and because somebody who has just set one going looks
+    // for it next to the place unfinished writing lives. It is not IN Drafts:
+    // a message with a time on it has been decided about, and a Drafts count
+    // that included them read as a list of things still to do.
+    ...(showScheduled ? [{
+      key: 'scheduled',
+      href: link('scheduled'),
+      active: current === 'scheduled',
+      icon: AlarmIcon,
+      name: 'Scheduled',
+      title: 'Messages set to go out on their own, and not gone yet',
+      count: <Count value={scheduledCount} word="waiting" quiet />,
+    }] : []),
     {
       // No count beside it, unlike the addresses: the counts are of
       // conversations nobody has read yet, and nothing you sent yourself is
@@ -791,16 +813,18 @@ export function NavRail({
       // screen - which is worth saying out loud, because "I marked it as spam"
       // otherwise sounds like something that happened to the whole team.
       //
-      // The count is quiet, like the two above it rather than like an address:
-      // an address's number means "there is something new to read", and this
-      // one means "there is something in the bin".
+      // The count is UNREAD junk, not everything in the bin. A total would sit
+      // there for good - nobody empties a spam folder - and a number that never
+      // changes is a number nobody reads. Still drawn quiet rather than like an
+      // address's: something new in the bin is worth noticing, and it is not
+      // worth the same amount as something new in the post.
       key: 'spam',
       href: link('spam'),
       active: current === 'spam',
       icon: SpamIcon,
       name: 'Spam',
       title: 'What you have marked as junk. Yours alone - nobody else sees this list.',
-      count: <Count value={spamCount} word="marked as junk" quiet />,
+      count: <Count value={spamCount} word="unread, marked as junk" quiet />,
     },
   ]
 

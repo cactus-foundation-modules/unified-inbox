@@ -154,11 +154,26 @@ export function ThreadListView({
     setSelected([])
   }, [])
 
-  /** One row on or off, and the point any later run is measured from. */
+  /** One row on or off, and the point any later run is measured from.
+   *
+   *  The first row picked while a conversation is open beside the list picks
+   *  that conversation too. A mail program counts the message in the reading
+   *  pane as part of the selection, this list already measures a shift-run from
+   *  it, and it is drawn on the same tint a picked row wears - so somebody
+   *  reading one conversation and ctrl-clicking a second to merge the two has
+   *  every reason to believe they have picked two. They had picked one, and the
+   *  Merge button, which wants two, never appeared. */
   const toggle = useCallback((id: string, index: number) => {
     anchorRef.current = index
-    setSelected((current) => current.includes(id) ? current.filter((x) => x !== id) : [...current, id])
-  }, [])
+    setSelected((current) => {
+      if (current.includes(id)) return current.filter((x) => x !== id)
+      // Off what is on the screen, not off the whole list: a tick left behind on
+      // a page nobody is looking at is not a selection this row is joining.
+      const nothingPicked = !current.some((x) => onScreen.has(x))
+      const alsoOpen = nothingPicked && openThreadId && openThreadId !== id && onScreen.has(openThreadId)
+      return alsoOpen ? [...current, openThreadId, id] : [...current, id]
+    })
+  }, [onScreen, openThreadId])
 
   /** Everything from the last row picked to this one, added to whatever was
    *  already picked. Added rather than replacing: picking three at the top,

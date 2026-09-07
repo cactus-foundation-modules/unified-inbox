@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import type { AttachmentRow, ThreadDetail, ThreadEventRow, ThreadMessageRow } from '@/modules/unified-inbox/lib/db'
 import type { DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
 import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
+import type { ReplyStyle } from '@/modules/unified-inbox/lib/channel-reply'
 import { avatarHref, channelLabel, formatFull, formatWhen, inboxHref, initialsFor, splitQuotedText } from '@/modules/unified-inbox/lib/list'
 import { draftHref } from '@/modules/unified-inbox/lib/drafts'
 import { describeSendAt } from '@/modules/unified-inbox/lib/scheduled'
@@ -61,6 +62,13 @@ type Props = {
   staffById: Record<string, string>
   canReply: boolean
   cannotReplyReason: string | null
+  /** How this conversation is answered: whether somebody types who it goes to,
+   *  and what a reply on it can carry. Worked out on the server from the
+   *  channel that owns it - see lib/channel-reply.ts. */
+  style: ReplyStyle
+  /** Who the reply goes to, in words, where the conversation decides that
+   *  itself rather than asking. Null on email. */
+  destinationLine: string | null
   replyTo: string[]
   replyAllTo: string[]
   /** What the subject line would say if nobody opened it in the reply box,
@@ -610,7 +618,8 @@ function productsTravel(channel: string): boolean {
 
 export function ThreadPane({
   base, params, thread, inboxName, messages, events, staff, taggable, staffById,
-  canReply, cannotReplyReason, replyTo, replyAllTo, replySubject, forwardSubject, draft,
+  canReply, cannotReplyReason, style, destinationLine,
+  replyTo, replyAllTo, replySubject, forwardSubject, draft,
   canAddProducts, draftProducts, newestFirst,
   canDeleteMessages, blockState, spamState, now, timezone, heldDrafts, showAvatars,
   context, asked, merges, otherInboxNames, scrollToMessageId,
@@ -669,6 +678,7 @@ export function ThreadPane({
             senderAddress={spamState.senderAddress}
             senderBlocked={spamState.senderBlocked}
             canBlock={spamState.canBlock}
+            closeHref={inboxHref(base, params, { id: null })}
           />
           <Link className="uin-thread-close" href={inboxHref(base, params, { id: null })}>
             <span className="uin-back-phone" aria-hidden="true">{BackIcon} Back to the list</span>
@@ -790,7 +800,11 @@ export function ThreadPane({
             replyTo={replyTo}
             replyAllTo={replyAllTo}
             canReply={canReply}
-            canForward={canReply}
+            /* Forwarding is an email's trick. The send route refuses it on a
+               conversation another module owns, so it is not offered on one. */
+            canForward={canReply && style.forward}
+            style={style}
+            destinationLine={destinationLine}
             staff={taggable}
             cannotReplyReason={cannotReplyReason}
             replySubject={replySubject}
@@ -827,6 +841,7 @@ export function ThreadPane({
                     threadId={thread.id}
                     canReply={canReply}
                     canReplyAll={canReply && replyAllTo.length > replyTo.length}
+                    canForward={canReply && style.forward}
                   />
                 )}
               />
@@ -841,7 +856,11 @@ export function ThreadPane({
             replyTo={replyTo}
             replyAllTo={replyAllTo}
             canReply={canReply}
-            canForward={canReply}
+            /* Forwarding is an email's trick. The send route refuses it on a
+               conversation another module owns, so it is not offered on one. */
+            canForward={canReply && style.forward}
+            style={style}
+            destinationLine={destinationLine}
             staff={taggable}
             cannotReplyReason={cannotReplyReason}
             replySubject={replySubject}

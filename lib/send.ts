@@ -2,6 +2,7 @@ import { nanoid } from 'nanoid'
 import { getActiveMediaProvider, isMediaProviderConfigured } from '@/lib/config/env'
 import { downloadMedia } from '@/lib/media/upload'
 import {
+  assignThreadIfUnassigned,
   createOutboundThread,
   defaultInboxIdFor,
   getInbox,
@@ -13,6 +14,7 @@ import {
   listInboxes,
   newestMessageOnThread,
   recordAppendOutcome,
+  recordEvent,
   recordLink,
   reopenForRetry,
   settleDelivery,
@@ -47,6 +49,7 @@ import { normaliseSubject, buildSnippet, cleanMessageId } from './threading'
 import { htmlToText } from './html'
 import { buildRawMessage } from './mime'
 import { appendToSent } from './append'
+import { ownPostOwnerOf } from './own-post'
 import { chooseSignatureSource, renderInboxSignature } from './signature'
 import { deliver, replyToWorthSending, sendingIdentity, transportForInbox, type SendableMessage } from './transport'
 
@@ -393,6 +396,26 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
       confidence: 100,
       linkedBy: 'user',
     })
+  }
+
+  // Post at somebody's own address is theirs whichever way it is travelling.
+  //
+  // The arriving half of this lives in lib/sync.ts; this is the other end, and
+  // it exists because writing to a supplier from your own address and then
+  // finding the conversation filed as nobody's work is the same complaint seen
+  // from the other side. A copy of this message comes back out of the Sent
+  // folder later and is turned away as one we already hold, so if it is not
+  // done here it is not done at all.
+  //
+  // Only ever fills an empty desk - a reply typed on a conversation somebody
+  // else is already dealing with leaves it with them - and only ever on an
+  // address that belongs to one person. Sending from sales@ does not quietly
+  // make an enquiry yours. See lib/own-post.ts.
+  if ((await getSettings()).autoAssignOwnPost) {
+    const owner = await ownPostOwnerOf(inbox)
+    if (owner && await assignThreadIfUnassigned(threadId, owner)) {
+      await recordEvent(threadId, null, 'assigned', { to: owner, automatic: true })
+    }
   }
 
   const sendable: SendableMessage = {

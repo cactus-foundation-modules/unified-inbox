@@ -11,6 +11,7 @@ import {
   attachmentsForThread,
   countDrafts,
   countDraftsByInbox,
+  countScheduledDrafts,
   categoriesForPeople,
   categoriesForPerson,
   countThreadsForPerson,
@@ -31,6 +32,7 @@ import {
   ensureCampaignTickToken,
   listConnections,
   listDrafts,
+  listScheduledDrafts,
   listIdentities,
   listCategories,
   listInboxes,
@@ -59,6 +61,7 @@ import {
   wakeDueThreads,
   wakeDueMentions,
   type AttachmentRow,
+  type MentionStatusFilter,
 } from '@/modules/unified-inbox/lib/db'
 import { isSmsAvailable } from '@/lib/sms/send'
 import { callerNumbers, firstDialler } from '@/lib/dialler/registry'
@@ -81,7 +84,8 @@ import { OrganisationCard, EMPTY_ORGANISATION } from './inbox/OrganisationCard'
 import { ContactImport } from './inbox/ContactImport'
 import { joinCategories, splitName } from '@/modules/unified-inbox/lib/contacts'
 import { forwardSubject, replyRecipients, replySubject } from '@/modules/unified-inbox/lib/compose'
-import { chooseSendingInbox, effectiveInboxParam, formatWhen, inboxHref, isSearching, NEW_CONTACT, parseInboxParams, PER_PAGE, sortByChannelOrder } from '@/modules/unified-inbox/lib/list'
+import { channelLabel, chooseSendingInbox, effectiveInboxParam, formatWhen, inboxHref, isSearching, NEW_CONTACT, parseInboxParams, PER_PAGE, sortByChannelOrder } from '@/modules/unified-inbox/lib/list'
+import { replyDestination, replyStyleFor } from '@/modules/unified-inbox/lib/channel-reply'
 import { pushProviderRead } from '@/modules/unified-inbox/lib/provider-read'
 import { providerForKey, visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
 import { InboxStyles } from './inbox/styles'
@@ -234,6 +238,26 @@ export async function UnifiedInboxPanel({
   const wantedInbox = effectiveInboxParam(searchParams.inbox, pinnedInboxId)
   const chosen = wantedInbox ? { ...searchParams, inbox: wantedInbox } : searchParams
   const params = parseInboxParams(chosen)
+
+  // Whether the queue - the open conversations nobody has picked up - is a
+  // question worth asking of this list at all.
+  //
+  // Only on a shared address somebody is actually standing in. Not on an
+  // individual one, where every conversation is on the desk of whoever owns it
+  // by definition; not on All or a channel, where "has anybody taken this"
+  // would span half a dozen addresses with no one team behind them; and not on
+  // the mail that landed nowhere, which nobody can be handed in the first
+  // place. Read off the inboxes this reader may open rather than off the id in
+  // the address, so an id they are not on cannot conjure the tab.
+  const sharedInbox = !!params.inboxId
+    && inboxes.some((i) => i.id === params.inboxId && i.kind === 'shared')
+  // And what the list is therefore narrowed to. A hand-typed ?status=unassigned
+  // on a list with no queue tab over it would be a filter nobody could see and
+  // nobody could take off, which is the one thing every cut on this screen is
+  // built to avoid - so it falls back to Open, exactly as an unknown status
+  // already does (see parseInboxParams).
+  const status = params.status === 'unassigned' && !sharedInbox ? 'open' : params.status
+
   // The tab has to survive every link on this screen, or following one lands on
   // whichever tab the host happens to render first.
   const carried: Record<string, string> = { tab: 'unified-inbox' }
@@ -255,6 +279,10 @@ export async function UnifiedInboxPanel({
     const value = chosen[key]
     if (value) carried[key] = value
   }
+  // Except a queue asked for where there is no queue: settled above, so it is
+  // settled here too rather than riding along on every link on the screen as a
+  // word the panel has already decided to ignore.
+  if (carried.status === 'unassigned' && !sharedInbox) delete carried.status
 
   const staffRows = await prisma.user.findMany({
     where: { suspendedAt: null },
@@ -318,11 +346,17 @@ export async function UnifiedInboxPanel({
   // lib/spam.ts), so unlike every other count on this rail there is no version
   // of it that belongs to an address or to the team.
   //
-  // Counted whether or not it has been read, unlike the addresses above. The
-  // numbers beside those answer "is there anything new"; this one answers "how
-  // much is in there", which is the only question anybody asks of a spam
-  // folder - and marking junk as read before throwing it away is not a thing
-  // anybody does. Hence status 'all' rather than 'open'.
+  // UNREAD junk only, like every other number on this rail. It counted the
+  // whole folder once, on the reasoning that "how much is in there" is the
+  // question a spam folder answers - but a bin nobody empties fills up, and a
+  // permanent 47 beside a folder is a number that has stopped meaning anything.
+  // A number that appears when something new has been thrown away and goes back
+  // to nothing when it has been looked at is one worth reading.
+  //
+  // Status 'all' still: junk that was already marked done is still junk that
+  // arrived, and a folder ignoring its own contents because of a tab that is no
+  // longer drawn above it would be a folder saying nothing while holding
+  // something.
   //
   // Through countThreads rather than a tally of its own, so it carries the same
   // visibility clause the folder's own list carries: what this reader may open,
@@ -340,6 +374,7 @@ export async function UnifiedInboxPanel({
     includeUnrouted: canManage,
     providerModules: channelModules,
     status: 'all',
+    unreadOnly: true,
     page: 1,
     perPage: PER_PAGE,
   })
@@ -428,12 +463,22 @@ export async function UnifiedInboxPanel({
   // one grouped query: the folder under somebody's name is only offered where
   // this reader has left something on that address, so the rail cannot be drawn
   // without them.
-  const [draftCount, draftCounts] = await Promise.all([
+  const [draftCount, draftCounts, scheduledCount] = await Promise.all([
     countDrafts(user.id),
     countDraftsByInbox(user.id),
+    countScheduledDrafts(user.id),
   ])
   const drafts = params.draftsOnly
     ? await listDrafts(user.id, folderAsked ? folderIds : null)
+    : []
+  // The other half of the same table: what has a time on it and has not gone
+  // yet. Its own folder rather than a tag in the list above, because the two
+  // answer different questions - what have I not finished, and what is going
+  // out without me. Fetched only when that is the list being looked at; the
+  // number beside it is wanted on every screen, which is why the count above
+  // is not conditional.
+  const scheduled = params.scheduledOnly
+    ? await listScheduledDrafts(user.id, folderAsked ? folderIds : null)
     : []
 
   // What has been sent. Two different lists behind one word, and which one this
@@ -464,16 +509,21 @@ export async function UnifiedInboxPanel({
   // other list on this screen (E17) - this table is the one place that knows a
   // colleague was let into a conversation their inbox guest list does not
   // cover, and a row of it belongs to exactly one person.
+  // The queue is a question about a shared ADDRESS, and an ask belongs to one
+  // named person by definition - so the tab is never drawn over this list, and
+  // a hand-typed ?status=unassigned lands on Open rather than on a filter this
+  // table cannot answer.
+  const askStatus: MentionStatusFilter = status === 'unassigned' ? 'open' : status
   const [asks, askTotal, askCounts] = params.mentionsOnly && folderOwnerId
     ? await Promise.all([
         listMentions({
           userId: folderOwnerId,
-          status: params.status,
+          status: askStatus,
           page: params.page,
           perPage: PER_PAGE,
           inboxId: folderInbox?.id ?? null,
         }),
-        countMentions(folderOwnerId, params.status, folderInbox?.id ?? null),
+        countMentions(folderOwnerId, askStatus, folderInbox?.id ?? null),
         mentionStatusCounts(folderOwnerId, folderInbox?.id ?? null),
       ])
     : [[] as Awaited<ReturnType<typeof listMentions>>, 0, {} as Record<string, number>]
@@ -501,7 +551,12 @@ export async function UnifiedInboxPanel({
     alsoAssignedTo: pinnedInboxId && params.inboxId === pinnedInboxId ? user.id : null,
     providerModule: params.providerModule,
     unroutedOnly: params.unroutedOnly,
-    status: params.status,
+    // Everything in the bin, whatever state it was in when it went there. The
+    // Spam folder draws no status tabs (see below), and a folder filtered by a
+    // choice it does not offer is a folder that hides things for no reason
+    // anybody can see: junk marked done before it was junked would simply not
+    // be there, under a default nobody picked.
+    status: params.spamOnly ? 'all' : status,
     unreadOnly: params.unreadOnly,
     assignee: params.assignee,
     search: params.search,
@@ -526,11 +581,21 @@ export async function UnifiedInboxPanel({
   const connections = await listConnections()
   // The status tabs count what is behind them given everything else already
   // chosen, so they come from the same filters with the status left out.
-  const listing = params.draftsOnly || params.sentOnly || params.contactsOnly || params.campaignsOnly
-    || params.mentionsOnly
+  const listing = params.draftsOnly || params.scheduledOnly || params.sentOnly || params.contactsOnly
+    || params.campaignsOnly || params.mentionsOnly
+  // Open, Snoozed, Done and All are questions about work in hand. Nothing in
+  // the bin is work in hand: junk is not answered, not set aside until Monday
+  // and not finished, so the row of tabs above it offered four ways to look at
+  // one pile. Gone there, and the query that fills them is not run either.
+  const showStatusTabs = !listing && !params.spamOnly
+  const showUnassigned = showStatusTabs && sharedInbox
   const [rows, total, statuses] = listing
     ? [[] as Awaited<ReturnType<typeof listThreads>>, 0, {} as Record<string, number>]
-    : await Promise.all([listThreads(filters), countThreads(filters), statusCounts(filters)])
+    : await Promise.all([
+        listThreads(filters),
+        countThreads(filters),
+        showStatusTabs ? statusCounts(filters) : Promise.resolve({} as Record<string, number>),
+      ])
   // "Nothing has been collected yet" is a story about collecting mail, so it is
   // only told where collecting mail is what fills the list. A site whose
   // channels are a live chat and an enquiry form has no mail connection to have
@@ -996,6 +1061,31 @@ export async function UnifiedInboxPanel({
         senderAddress ? isSenderBlocked(senderAddress) : Promise.resolve(false),
       ])
 
+      // HOW this one is answered, as against whether it may be. An email is
+      // addressed by typing an address and may carry markup and files; a
+      // conversation another module owns is handed to that module as one
+      // string and goes back where it came from, so there is nothing to
+      // address and nothing to attach. Drawing the email box on one of those
+      // is what stopped every WhatsApp message being answered at all: the To
+      // line came back empty, because a WhatsApp conversation has a number on
+      // it and no address anywhere, and an empty To line disables Send.
+      const style = replyStyleFor(thread, channel?.textStyles)
+      const destinationLine = style.addressed
+        ? null
+        : replyDestination({
+          // The channel's own word for itself where we have it, falling back to
+          // the name this module keeps for the channel the conversation is
+          // filed under - a channel whose module has gone still says what it
+          // was.
+          channelLabel: channel?.label ?? channelLabel(thread.channel),
+          // What the far end is keyed on. `external_id` is the conversation's
+          // identity to the module that owns it, which for the telephony
+          // channels is the other person's number - the same thing a reply is
+          // actually sent to.
+          party: lastInbound?.fromPhone ?? lastInbound?.fromAddress ?? thread.externalId,
+          name: lastInbound?.fromName ?? null,
+        })
+
       const cannotReplyReason = canReply
         ? null
         // A DISCUSSION SAYS NOTHING. The sentence that used to sit here
@@ -1095,6 +1185,8 @@ export async function UnifiedInboxPanel({
           staffById={staffById}
           canReply={canReply}
           cannotReplyReason={cannotReplyReason}
+          style={style}
+          destinationLine={destinationLine}
           replyTo={[...reply.to, ...reply.cc]}
           replyAllTo={[...replyAll.to, ...replyAll.cc]}
           replySubject={replySubjectLine}
@@ -1289,6 +1381,8 @@ export async function UnifiedInboxPanel({
     ? `${folderTab}:${params.folderInboxId}`
     : params.draftsOnly
     ? 'drafts'
+    : params.scheduledOnly
+    ? 'scheduled'
     : params.sentOnly
       ? 'sent'
       : params.contactsOnly
@@ -1325,6 +1419,10 @@ export async function UnifiedInboxPanel({
     // the folder under a colleague's name is narrowed to that address and
     // nothing else on the screen says so.
     ? (folderInbox ? `Drafts \u00b7 ${folderInbox.address}` : 'Drafts')
+    // Nobody's name in front of this one either: a message set to go out
+    // belongs to whoever wrote it, wherever it leaves from.
+    : params.scheduledOnly
+    ? 'Scheduled'
     : params.sentOnly
       ? `${folderPrefix}Sent`
       : params.contactsOnly
@@ -1345,6 +1443,8 @@ export async function UnifiedInboxPanel({
               : 'All conversations'
   const headTotal = params.draftsOnly
     ? plural(drafts.length, 'draft', 'drafts')
+    : params.scheduledOnly
+    ? plural(scheduled.length, 'message', 'messages')
     : params.sentOnly
       ? plural(sentTotal, 'message', 'messages')
       : params.contactsOnly
@@ -1398,6 +1498,11 @@ export async function UnifiedInboxPanel({
          same terms as the tab above: only where there is something in it. This
          reader's own writing on that address, never the colleague's. */
       draftCounts={draftCounts}
+      /* On the same terms as Drafts: away until there is something in it, and
+         kept while somebody is standing in it, so the last message going out
+         does not pull the list out from under whoever is reading it. */
+      showScheduled={scheduledCount > 0 || currentTab === 'scheduled'}
+      scheduledCount={scheduledCount}
       spamCount={spamCount}
       contactCount={contactCount}
       showCampaigns={canCampaign}
@@ -1508,7 +1613,7 @@ export async function UnifiedInboxPanel({
       openThreadId={params.threadId}
       staffById={staffById}
       inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
-      status={params.status}
+      status={askStatus}
       /* Whose list it is. Null on this reader's own, which says "you"; a
          colleague's name on theirs, where the controls also come off - where
          somebody else's job stands is between them and whoever asked, and a
@@ -1518,11 +1623,12 @@ export async function UnifiedInboxPanel({
       now={new Date()}
       timezone={timezone}
     />
-  ) : params.draftsOnly ? (
+  ) : params.draftsOnly || params.scheduledOnly ? (
     <DraftListView
       base={base}
       params={carried}
-      drafts={drafts}
+      drafts={params.scheduledOnly ? scheduled : drafts}
+      scheduled={params.scheduledOnly}
       inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
       openThreadId={params.threadId}
       openDraftId={params.draftId}
@@ -1637,11 +1743,13 @@ export async function UnifiedInboxPanel({
                 cut and the tab row below has come off with them: without this
                 the column of results would be the one list on the hub with
                 nothing at all saying what it is or how much of it there is. */}
-            {/* And a colleague's Spam folder, for the reason directly above:
-                the tabs say where a conversation stands and nothing else on the
-                screen says whose bin you are looking into. Your own needs no
-                title - the rail highlight is unambiguous. */}
-            {(listing || params.searchPage || (params.spamOnly && !!folderOwnerName))
+            {/* And every Spam folder, colleague's or your own. A colleague's
+                needs the name - nothing else on the screen says whose bin you
+                are looking into. Your own needs the line because the tab row
+                that used to carry the total is no longer drawn there, and a
+                folder that cannot say how much is in it is a folder people
+                count by hand. */}
+            {(listing || params.searchPage || params.spamOnly)
               && !params.contactsOnly && (!params.mentionsOnly || !!folderOwnerName) && (
               <div className="uin-col-title">
                 <h2>{viewTitle}</h2>
@@ -1674,9 +1782,8 @@ export async function UnifiedInboxPanel({
               <StatusTabs
                 base={base}
                 params={carried}
-                status={params.status}
+                status={askStatus}
                 counts={askCounts}
-                total={headTotal}
                 unit="asked about"
                 ariaLabel={folderOwnerName
                   ? `Where an ask stands with ${folderOwnerName}`
@@ -1703,14 +1810,23 @@ export async function UnifiedInboxPanel({
                   /* Their own address, where "who is this on" has one answer
                      all the way down and the menu is a switch instead. */
                   ownInbox={!!pinnedInboxId && params.inboxId === pinnedInboxId}
+                  /* The Spam folder, and only for somebody who may read the
+                     site's settings - which is the grant the list itself takes,
+                     because who is blocked is a fact about how the site is set
+                     up and it names colleagues. Letting one back in is the
+                     other grant, the same one shutting the door takes, so the
+                     two are asked separately. */
+                  blockedAddresses={params.spamOnly && canManage ? { canUnblock: canSendOut } : null}
                 />
-                <StatusTabs
-                  base={base}
-                  params={carried}
-                  status={params.status}
-                  counts={statuses}
-                  total={headTotal}
-                />
+                {showStatusTabs && (
+                  <StatusTabs
+                    base={base}
+                    params={carried}
+                    status={status}
+                    counts={statuses}
+                    showUnassigned={showUnassigned}
+                  />
+                )}
               </>
             )}
           </div>

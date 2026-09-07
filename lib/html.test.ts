@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { blockRemoteImages, htmlToText, prepareInboundHtml, REMOTE_SRC_ATTR } from './html'
+import { blockRemoteImages, htmlToText, prepareInboundHtml, readableHtml, REMOTE_SRC_ATTR } from './html'
 
 describe('prepareInboundHtml', () => {
   it('drops anything executable a sender put in the message', () => {
@@ -59,5 +59,37 @@ describe('htmlToText', () => {
 
   it('unescapes the entities a mail client leaves behind', () => {
     expect(htmlToText('<p>Tea &amp; biscuits</p>')).toBe('Tea & biscuits')
+  })
+})
+
+describe('readableHtml', () => {
+  // The defect this exists for: a message WE sent is stored with its remote
+  // addresses intact, and the frame it is read in allows pictures from this
+  // origin and nowhere else. Every product photo on our own media host came out
+  // as an empty box until the read path parked them too.
+  it('parks a picture the write path never parked, so our own post can be read', () => {
+    const stored = '<img src="https://media.example/shop/chair.webp" width="64" height="64" />'
+    const readable = readableHtml(stored)!
+    // Not merely "the address moved": the tag must be left with no src at all,
+    // which is the whole of what stops the frame fetching it.
+    expect(readable).not.toMatch(/\ssrc=/)
+    expect(readable).toContain(`${REMOTE_SRC_ATTR}="https://media.example/shop/chair.webp"`)
+    expect(readable).toContain('width="64"')
+  })
+
+  it('leaves an already parked picture exactly as it is', () => {
+    const stored = prepareInboundHtml('<img src="https://tracker.example/pixel.gif">')!
+    expect(readableHtml(stored)).toBe(stored)
+  })
+
+  it('does not touch an attachment embedded in the message itself', () => {
+    const stored = '<img src="cid:logo@1">'
+    expect(readableHtml(stored)).toBe(stored)
+  })
+
+  it('keeps nothing and something apart', () => {
+    expect(readableHtml(null)).toBeNull()
+    expect(readableHtml(undefined)).toBeNull()
+    expect(readableHtml('')).toBe('')
   })
 })

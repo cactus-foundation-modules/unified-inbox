@@ -6,11 +6,14 @@ import {
   setThreadRead,
   threadHasLink,
 } from './db'
+import { htmlHasWriting } from './drafts'
 import { htmlToText } from './html'
+import { applyTextStyles } from './text-styles'
 import { resolveProducts } from './products'
 import { renderProductText } from './products/render'
 import { flattenWithProducts, refKey, slotRefs } from './products/slots'
 import type { ProductRef } from './products/types'
+import type { ConversationTextStyles } from '@/lib/conversations/types'
 import { pushProviderRead } from './provider-read'
 import { providerForKey } from './provider-registry'
 import { buildSnippet } from './threading'
@@ -33,6 +36,15 @@ import { buildSnippet } from './threading'
 // consolation prize: it is exactly what renderProductText already writes for the
 // text half of every email this module sends, so a chair quoted in an enquiry
 // and the same chair quoted in a reply say the same thing.
+//
+// WORDS ARE NOT THE SAME AS UNFORMATTED, though, and they used to be treated as
+// if they were. WhatsApp has emphasis; it simply writes it with a marker on each
+// side rather than with a tag, and a reply typed in bold was arriving with the
+// bold quietly gone. So a channel declares its own markers through
+// `capabilities.textStyles` and the markup is rewritten into them on the way
+// out - see lib/text-styles.ts, which is handed the markers as data and knows
+// no channel by name. A channel that declares nothing is flattened exactly as
+// it always was.
 
 export type ProviderSendResult =
   | { ok: true; messageId: string | null }
@@ -52,8 +64,15 @@ export type ProviderSendResult =
 export async function replyWords(
   bodyHtml: string,
   refs: readonly ProductRef[] = [],
+  /** What this channel writes emphasis as, straight off its own capabilities.
+   *  Absent for a channel that takes plain words. */
+  styles?: ConversationTextStyles | null,
 ): Promise<string> {
-  if (refs.length === 0) return htmlToText(bodyHtml)
+  /** The markers first, then the tags away: the emphasis lives in the tags, so
+   *  once htmlToText has been over it there is nothing left to mark. */
+  const flatten = (html: string) => htmlToText(applyTextStyles(html, styles))
+
+  if (refs.length === 0) return flatten(bodyHtml)
 
   const resolved = await resolveProducts(refs)
   const byKey = new Map(resolved.map((one) => [refKey(one.choice), one.choice]))
@@ -65,7 +84,7 @@ export async function replyWords(
       const choice = byKey.get(refKey(ref))
       return choice ? renderProductText([choice]) : null
     },
-    htmlToText,
+    flatten,
   )
 
   const trailing = resolved
@@ -77,16 +96,32 @@ export async function replyWords(
 
 export async function sendProviderReply(input: {
   threadId: string
-  text: string
+  /** What to send, either as it was typed or as it already stood.
+   *
+   *  `html` is the writing box's own markup, and is the shape a reply arrives
+   *  in. It is rendered HERE rather than by the caller, because rendering it
+   *  needs the channel's markers and this is the function that resolves the
+   *  channel - a caller that did it would have to resolve the provider a second
+   *  time to find out what to render it into.
+   *
+   *  `text` is for a draft written before the box could hold markup, which is
+   *  words already and has nothing to render. */
+  body: { html: string } | { text: string }
   authorUserId: string
   authorName: string | null
   /** What was quoted, so the conversation ends up carrying it - the same row a
-   *  purchase order or an order sits on. Already in `text`; this is only about
-   *  what the thread is ABOUT. */
+   *  purchase order or an order sits on. Already in the words; this is only
+   *  about what the thread is ABOUT. */
   products?: readonly ProductRef[]
 }): Promise<ProviderSendResult> {
-  const body = input.text.trim()
-  if (!body) return { ok: false, reason: 'There is nothing to send.' }
+  // Nothing written, refused before anything is looked up. Checked twice over:
+  // here on what was typed, so an empty box costs no queries, and again on the
+  // rendered words below, because rendering is where a body that was nothing
+  // but a catalogue slot for a product since withdrawn comes out empty.
+  const written = 'html' in input.body
+    ? htmlHasWriting(input.body.html)
+    : input.body.text.trim().length > 0
+  if (!written) return { ok: false, reason: 'There is nothing to send.' }
 
   const thread = await getThreadDetail(input.threadId)
   if (!thread) return { ok: false, reason: 'That conversation is not here any more.' }
@@ -104,6 +139,19 @@ export async function sendProviderReply(input: {
   if (!resolved.provider.capabilities?.reply || typeof resolved.provider.send !== 'function') {
     return { ok: false, reason: `${resolved.provider.label} conversations cannot be answered from here.` }
   }
+
+  // Emphasis written the way this channel writes it, and the catalogue put
+  // where it was put. Both need the channel, which is why the words are made
+  // here and not at the two call sites.
+  const body = ('html' in input.body
+    ? await replyWords(
+      input.body.html,
+      input.products ?? [],
+      resolved.provider.capabilities?.textStyles ?? null,
+    )
+    : input.body.text
+  ).trim()
+  if (!body) return { ok: false, reason: 'There is nothing to send.' }
 
   try {
     await resolved.provider.send(thread.externalId, {

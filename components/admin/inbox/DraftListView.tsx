@@ -11,7 +11,11 @@ import {
 import { scheduleLabel } from '@/modules/unified-inbox/lib/scheduled'
 import { PaperclipIcon, PenIcon } from './icons'
 
-// The Drafts list: what you have started and not sent.
+// The Drafts list: what you have started and not sent - and, with `scheduled`
+// on, the Scheduled list, which is the same rows drawn the same way, filtered
+// the other side of the line. One component for both because a scheduled
+// message IS a draft with a departure time (see migrations/021), and two lists
+// that differ by one sentence are one list that gets fixed twice.
 //
 // Yours only. A draft belongs to whoever wrote it (see lib/drafts.ts), so there
 // is no row here to put somebody else's name on, and no need for one.
@@ -29,6 +33,11 @@ type Props = {
   base: string
   params: Record<string, string>
   drafts: Draft[]
+  /** Whether this is the Scheduled folder rather than Drafts. The rows are the
+   *  same rows drawn the same way - a scheduled message IS a draft with a
+   *  departure time - so the flag decides only what an empty one says, which is
+   *  the one sentence the two folders cannot share. */
+  scheduled?: boolean
   /** What each address is called, for the tag on a row. Ids mean nothing to
    *  anybody reading a list. */
   inboxNames: Record<string, string>
@@ -39,10 +48,16 @@ type Props = {
 }
 
 export function DraftListView({
-  base, params, drafts, inboxNames, openThreadId, openDraftId, now, timezone,
+  base, params, drafts, scheduled, inboxNames, openThreadId, openDraftId, now, timezone,
 }: Props) {
   if (drafts.length === 0) {
-    return (
+    return scheduled ? (
+      <div className="uin-empty">
+        <strong>Nothing waiting to go out</strong>
+        Anything you set to send later waits here until its time comes. You can still change it,
+        move it, or send it on the spot.
+      </div>
+    ) : (
       <div className="uin-empty">
         <strong>Nothing put down half-written</strong>
         Anything you start and save rather than send waits here until you come back to it.
@@ -54,10 +69,11 @@ export function DraftListView({
     <ul className="uin-list">
       {drafts.map((draft) => {
         const who = draftRecipientLabel(draft)
-        // A message with a time on it is still a draft, and still in this list -
-        // the tag is the whole of the difference. Keeping it here rather than
-        // on a tab of its own means somebody looking for what they have not
-        // sent yet finds all of it in one place.
+        // When it goes out, or what went wrong when it tried. Drawn in both
+        // folders: under Scheduled it is the whole point of the row, and under
+        // Drafts it is what a message whose send was refused has to say for
+        // itself - that one is no longer going anywhere on its own, so it is
+        // here rather than next door.
         const going = scheduleLabel(draft, now, timezone)
         // "No recipient yet" and "A reply" are sentences standing in for an
         // address nobody has typed yet. Initials taken off the first of them put

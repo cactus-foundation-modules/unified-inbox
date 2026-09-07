@@ -215,7 +215,7 @@ export function CollectingPanel({ settings, inboxes, retention, blockedSenders, 
           label="Put a colleague’s own post straight on their desk"
           checked={draft.autoAssignOwnPost}
           onChange={(autoAssignOwnPost) => setDraft({ ...draft, autoAssignOwnPost })}
-          hint="Only for addresses that belong to one person. Anything arriving at one of those is handed to whoever it belongs to, so it stops showing up as work nobody has picked up - when nobody else could pick it up anyway. Shared addresses like sales@ are left alone, and a conversation somebody has already been given is never taken off them."
+          hint="Only for addresses that belong to one person. Anything arriving at one of those is handed to whoever it belongs to, and so is anything they write from it, so it stops showing up as work nobody has picked up - when nobody else could pick it up anyway. Shared addresses like sales@ are left alone, and a conversation somebody has already been given is never taken off them."
         />
       </FieldGroup>
 

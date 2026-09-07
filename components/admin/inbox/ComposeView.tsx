@@ -12,6 +12,8 @@ import {
   htmlHasWriting,
   isWorthSaving,
   splitAddresses,
+  NEEDS_A_SUBJECT,
+  NOTHING_TO_SEND,
   type DraftForComposer,
 } from '@/modules/unified-inbox/lib/drafts'
 import { plainTextToHtml, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
@@ -314,6 +316,14 @@ export function ComposeView({
       card.current?.querySelector<HTMLElement>(`#${nextId}`)?.focus()
     }, [])
 
+  /** Takes down a complaint about an empty box now that the box has been
+   *  filled in. Only that one sentence: a send that actually failed, or a
+   *  different box still left blank, has nothing to do with what was just
+   *  typed and must stay on screen. */
+  const clearOnceAnswered = useCallback((answered: string) => {
+    setError((shown) => (shown === answered ? '' : shown))
+  }, [])
+
   /** Sends it. `snoozeUntil` sends it and then puts the conversation it just
    *  started to sleep - which only makes sense once there IS one, which is why
    *  this is where it happens rather than in a second press afterwards. */
@@ -328,11 +338,11 @@ export function ComposeView({
       return
     }
     if (!subject.trim()) {
-      setError('Give the message a subject.')
+      setError(NEEDS_A_SUBJECT)
       return
     }
     if (!htmlHasWriting(text)) {
-      setError('There is nothing to send yet.')
+      setError(NOTHING_TO_SEND)
       return
     }
     if (inFlight.current) return
@@ -555,7 +565,12 @@ export function ComposeView({
             id="uin-new-text"
             handleRef={editor}
             value={text}
-            onChange={(html) => { setText(html); setDirty(true); setNote('') }}
+            onChange={(html) => {
+              setText(html)
+              setDirty(true)
+              setNote('')
+              if (htmlHasWriting(html)) clearOnceAnswered(NOTHING_TO_SEND)
+            }}
             placeholder="Write your message"
             label="Your message"
           >
@@ -679,7 +694,11 @@ export function ComposeView({
                     id="uin-new-subject"
                     type="text"
                     value={subject}
-                    onChange={(e) => { setSubject(e.target.value); setDirty(true) }}
+                    onChange={(e) => {
+                      setSubject(e.target.value)
+                      setDirty(true)
+                      if (e.target.value.trim()) clearOnceAnswered(NEEDS_A_SUBJECT)
+                    }}
                     onKeyDown={onLineKeyDown('uin-new-text')}
                     placeholder="What it is about"
                     autoComplete="off"
@@ -708,9 +727,15 @@ export function ComposeView({
               timezone={timezone}
             />
 
-            {pendingSendAt && !waiting && (
+            {/* Drawn on a message already waiting for a time as well as on one
+                being given its first: picking a new time off the clock has to
+                show. It used to be hidden the moment a message was scheduled,
+                along with both buttons that commit it, so choosing a better
+                time silently threw the choice away. */}
+            {pendingSendAt && (
               <PendingSend
                 at={pendingSendAt}
+                replacing={waiting}
                 onClear={() => setPendingSendAt(null)}
                 timezone={timezone}
                 busy={busy}
@@ -719,6 +744,23 @@ export function ComposeView({
 
             {error && <div className="alert alert-danger" role="alert">{error}</div>}
             {note && !error && <div className="alert alert-success" role="status">{note}</div>}
+
+            {/* What is going with the message, on a line of its own above the
+                strip. It used to sit in among the buttons, where three files
+                pushed Send onto a second row and a long filename decided where
+                everything else went. */}
+            {attachments.length > 0 && (
+              <div className="uin-composer-row uin-attachment-row">
+                <AttachmentChips
+                  attachments={attachments}
+                  disabled={busy}
+                  onRemove={(key) => {
+                    setAttachments((prev) => prev.filter((p) => p.key !== key))
+                    setDirty(true)
+                  }}
+                />
+              </div>
+            )}
 
             {/* The same strip the reply box has, for the same reason: what you
                 do TO the message is on the left - the files, the catalogue, when
@@ -754,14 +796,6 @@ export function ComposeView({
               )}
               <RichTextTools />
 
-              <AttachmentChips
-                attachments={attachments}
-                disabled={busy}
-                onRemove={(key) => {
-                  setAttachments((prev) => prev.filter((p) => p.key !== key))
-                  setDirty(true)
-                }}
-              />
               <span className="uin-composer-gap" />
 
               {/* A message with a time on it has already been decided about, so
@@ -817,73 +851,93 @@ export function ComposeView({
                     sets it. It rides on the draft instead and is applied to the
                     conversation this message creates, at the moment it is
                     created. See lib/follow-up.ts. */}
-                {!waiting && (
-                  <Dropdown
-                    className="btn btn-secondary btn-sm"
-                    label={pendingSendAt ? 'Send later & snooze' : 'Send & snooze'}
-                    align="end"
-                    width={280}
-                    panelClassName="uin-menu-snooze"
+                <Dropdown
+                  className="btn btn-secondary btn-sm"
+                  label={pendingSendAt ? 'Send later & snooze' : 'Send & snooze'}
+                  align="end"
+                  width={280}
+                  panelClassName="uin-menu-snooze"
+                  disabled={busy}
+                >
+                  <SnoozePanel
+                    timezone={timezone}
+                    busy={busy}
+                    title={pendingSendAt ? 'Set it going, then sleep until' : 'Send it, then sleep until'}
+                    onSnooze={(until) => {
+                      // With a time on it nothing is sent now: the departure
+                      // is saved, and the sleep is saved alongside it for the
+                      // queue to apply once the message has actually gone.
+                      if (pendingSendAt) {
+                        void save(toWallClock(pendingSendAt, timezone), pendingFollowUp, until)
+                        return
+                      }
+                      void submit(until)
+                    }}
+                  />
+                </Dropdown>
+
+                {/* A message already waiting for its time, that has been edited
+                    since. Its own button, because the two beside it commit a
+                    decision - send it, send it then - and this one commits
+                    nothing but the writing: the time it already has is left
+                    exactly where it is. Without it there was no way to correct a
+                    scheduled message and keep its time. */}
+                {waiting && !pendingSendAt && hasUnsaved && (
+                  <button
+                    type="button"
+                    className="uin-chip"
                     disabled={busy}
+                    onClick={() => { void save() }}
                   >
-                    <SnoozePanel
-                      timezone={timezone}
-                      busy={busy}
-                      title={pendingSendAt ? 'Set it going, then sleep until' : 'Send it, then sleep until'}
-                      onSnooze={(until) => {
-                        // With a time on it nothing is sent now: the departure
-                        // is saved, and the sleep is saved alongside it for the
-                        // queue to apply once the message has actually gone.
-                        if (pendingSendAt) {
-                          void save(toWallClock(pendingSendAt, timezone), pendingFollowUp, until)
-                          return
-                        }
-                        void submit(until)
-                      }}
-                    />
-                  </Dropdown>
+                    {busyWith === 'save' ? 'Saving...' : 'Save changes'}
+                  </button>
                 )}
 
                 {/* One button, whichever was decided. A time picked off the clock
                     changes what this one says and what it does rather than adding
-                    a second button beside it saying almost the same thing. */}
-                {!waiting && (
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    onClick={() => {
-                      if (pendingSendAt) {
-                        void save(toWallClock(pendingSendAt, timezone), pendingFollowUp)
-                        return
-                      }
-                      void submit()
-                    }}
-                    disabled={busy}
-                  >
-                    {busyWith === 'send' || (busyWith === 'save' && pendingSendAt)
-                      ? 'Sending...'
-                      : pendingSendAt ? 'Send later' : 'Send now'}
-                  </button>
-                )}
+                    a second button beside it saying almost the same thing - and
+                    on a message already set to go it is how you send it by hand
+                    after all, which used to be no answer at all: the button was
+                    taken off the strip the moment a time was on the row. */}
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => {
+                    if (pendingSendAt) {
+                      void save(toWallClock(pendingSendAt, timezone), pendingFollowUp)
+                      return
+                    }
+                    void submit()
+                  }}
+                  disabled={busy}
+                >
+                  {busyWith === 'send' || (busyWith === 'save' && pendingSendAt)
+                    ? 'Sending...'
+                    : pendingSendAt ? 'Send later' : 'Send now'}
+                </button>
               </span>
             </div>
 
+            {/* Left open after a pick, like the catalogue below it: attaching
+                six files is one errand, and a dialog that shut itself after the
+                first would be five more trips into it. */}
             {picking && (
               <AttachmentPicker
+                drop={drop}
+                attached={attachments}
                 onClose={() => setPicking(false)}
                 onPick={(item) => {
                   setAttachments((prev) =>
                     prev.some((a) => a.key === item.key) ? prev : [...prev, item],
                   )
                   setDirty(true)
-                  setPicking(false)
                 }}
               />
             )}
 
-            {/* Left open after a pick, unlike the file list. Quoting somebody
-                three chairs is one errand, and shutting the catalogue between
-                each of them is three trips back into it. */}
+            {/* Left open after a pick as well. Quoting somebody three chairs is
+                one errand, and shutting the catalogue between each of them is
+                three trips back into it. */}
             {pickingProduct && (
               <ProductPicker
                 chosen={products}
@@ -910,9 +964,15 @@ export function ComposeView({
           without ever using the word. */}
       <ConfirmDialog
         open={asking === 'leave'}
-        title="Keep this as a draft?"
-        body="Nothing here has been sent. It can wait under Drafts until you come back to it."
-        confirmLabel="Save it as a draft"
+        /* A message already set to go out is not being kept as a draft - it is
+           going out whatever this dialog decides - so it is asked about in its
+           own words. Saying "keep this as a draft" over the top of a message
+           leaving on Monday describes the wrong thing entirely. */
+        title={waiting ? 'Keep the changes?' : 'Keep this as a draft?'}
+        body={waiting
+          ? 'This one is still set to go out on its own. Saving keeps what you have changed and leaves the time exactly where it is.'
+          : 'Nothing here has been sent. It can wait under Drafts until you come back to it.'}
+        confirmLabel={waiting ? 'Save the changes' : 'Save it as a draft'}
         cancelLabel="Keep writing"
         busy={busy}
         other={{

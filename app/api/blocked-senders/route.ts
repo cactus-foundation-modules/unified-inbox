@@ -1,7 +1,8 @@
 // The site's front door.
 //
 //   GET  /api/m/unified-inbox/blocked-senders  - who is refused, for the
-//        settings screen, which is the only place one can be let back in.
+//        settings screen and for the Spam folder's own list, which are the two
+//        places one can be let back in.
 //   POST /api/m/unified-inbox/blocked-senders  - shut it, or open it again.
 //
 // SITE-WIDE, ON PURPOSE. A block covers every inbox the site has: the shared
@@ -18,13 +19,15 @@
 //
 // Reading the list is the other way round: it is a fact about how the site is
 // configured, it names colleagues, and it belongs with the rest of the settings.
-// So it takes `manage`.
+// So it takes `manage` - which is also why the button in the Spam folder that
+// opens the same list is only drawn for somebody who has it.
 //
 // NOTHING IS DELETED BY EITHER VERB. Blocking somebody does not touch the
 // conversations they have already had here - often that history is the whole
-// reason somebody wants them stopped. Unblocking them does not go back for the
-// mail that was not collected while the door was shut; it stayed on the mail
-// server the entire time, which is where the account's owner can still find it.
+// reason somebody wants them stopped. What they send while the door is shut is
+// collected and dropped straight into the Spam folder, marked done and left
+// unread (see migration 044), so unblocking them has nothing to go back for -
+// it is all still there, in the bin, one press from being taken out again.
 import { NextRequest, NextResponse } from 'next/server'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'

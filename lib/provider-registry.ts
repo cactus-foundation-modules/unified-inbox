@@ -3,7 +3,11 @@ import { hasPermission } from '@/lib/permissions/check'
 import { INSTALLED_MODULE_WHERE } from '@/lib/modules/live-status'
 import { moduleExtensionPointComponents } from '@/lib/modules/extension-points'
 import { CONVERSATION_PROVIDER_POINT } from '@/lib/conversations/providers'
-import type { ConversationProvider, ResolvedConversationProvider } from '@/lib/conversations/types'
+import type {
+  ConversationProvider,
+  ConversationTextStyles,
+  ResolvedConversationProvider,
+} from '@/lib/conversations/types'
 import type { SessionUser } from '@/lib/auth/session'
 
 // Which channels this site has, besides email.
@@ -147,6 +151,12 @@ export type ProviderChannel = {
   /** Whether the other party can be refused from here on. Telephony's sense of
    *  the word: what already happened stays, this is about what happens next. */
   canBlock: boolean
+  /** Which inline styles this channel carries, and what it writes each of them
+   *  as. Null for a channel that takes plain words. Two things read it: the
+   *  buttons offered above the writing box, and the markers the reply is
+   *  wrapped in on the way out - and they must be the same list, or a button
+   *  is offered whose work is thrown away. */
+  textStyles: ConversationTextStyles | null
 }
 
 /**
@@ -182,6 +192,7 @@ export async function visibleProviderChannels(user: SessionUser): Promise<Provid
       canReply: provider.capabilities?.reply === true && typeof provider.send === 'function',
       canDelete: provider.capabilities?.delete === true && typeof provider.deleteMessage === 'function',
       canBlock: provider.capabilities?.block === true && typeof provider.blockParticipant === 'function',
+      textStyles: provider.capabilities?.textStyles ?? null,
     })
   }
   return channels

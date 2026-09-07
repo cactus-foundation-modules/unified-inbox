@@ -354,8 +354,32 @@ export function RichTextBox() {
  * press picks one, and picking one puts them away again - which is what a
  * colour menu does everywhere else.
  */
-export function RichTextTools() {
+/** One of the inline styles a channel may declare. Same names as core's
+ *  `ConversationTextStyles`, because that is where the list comes from. */
+export type TextStyleName = 'bold' | 'italic' | 'strikethrough' | 'monospace'
+
+type ToolsProps = {
+  /** Which styles to offer, when the message is going somewhere that carries
+   *  only some of them. Absent means an email, which carries the lot: the six
+   *  buttons the strip has always had.
+   *
+   *  A channel that takes plain words never gets here at all - the composer
+   *  leaves the whole strip out - so an empty list is not the same thing as an
+   *  absent one, and is a channel whose declared styles are all ones no button
+   *  here can produce. */
+  styles?: readonly TextStyleName[]
+}
+
+export function RichTextTools({ styles }: ToolsProps = {}) {
   const { id, exec, rememberSelection, restoreSelection } = useRichText()
+  /** The whole strip, or the handful a channel asked for. Computed rather than
+   *  branched at every button so the two paths cannot drift apart. */
+  const offers = (name: TextStyleName) => !styles || styles.includes(name)
+  /** Colour, links and lists are email's alone: WhatsApp has no colour and no
+   *  link with words of its own, and a bullet list is only ever a line that
+   *  starts with a dash. Offering them over a channel would be offering
+   *  buttons whose work is thrown away between here and the customer. */
+  const emailOnly = !styles
   const [linking, setLinking] = useState(false)
   const [url, setUrl] = useState('')
   const [urlProblem, setUrlProblem] = useState('')
@@ -388,30 +412,53 @@ export function RichTextTools() {
   return (
     <>
       <span className="uin-richtext-bar" role="toolbar" aria-label="Formatting" aria-controls={id}>
-        <button
-          type="button"
-          className="uin-icon-btn uin-rt-btn"
-          title="Bold"
-          aria-label="Bold"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => exec('bold')}
-        >
-          <strong aria-hidden="true">B</strong>
-        </button>
-        <button
-          type="button"
-          className="uin-icon-btn uin-rt-btn"
-          title="Italic"
-          aria-label="Italic"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => exec('italic')}
-        >
-          <em aria-hidden="true">I</em>
-        </button>
+        {offers('bold') && (
+          <button
+            type="button"
+            className="uin-icon-btn uin-rt-btn"
+            title="Bold"
+            aria-label="Bold"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => exec('bold')}
+          >
+            <strong aria-hidden="true">B</strong>
+          </button>
+        )}
+        {offers('italic') && (
+          <button
+            type="button"
+            className="uin-icon-btn uin-rt-btn"
+            title="Italic"
+            aria-label="Italic"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => exec('italic')}
+          >
+            <em aria-hidden="true">I</em>
+          </button>
+        )}
+        {/* On an email, and on a channel that declares it - WhatsApp writes it
+            as ~like this~. `<strike>` is what a contentEditable box produces
+            for this, which is why it had to be added to core's email
+            allow-list beside `<b>` and `<i>`; without that a struck-out line
+            was un-struck the first time the draft was saved. */}
+        {offers('strikethrough') && (
+          <button
+            type="button"
+            className="uin-icon-btn uin-rt-btn"
+            title="Strikethrough"
+            aria-label="Strikethrough"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => exec('strikeThrough')}
+          >
+            <s aria-hidden="true">S</s>
+          </button>
+        )}
 
         {/* The palette on its own, with no frame round it: it is one more icon
             on a strip of icons, and a box drawn round one of them says it is a
             different kind of thing when it is not. */}
+        {emailOnly && (
+        <>
         <button
           type="button"
           className="uin-icon-btn uin-rt-btn"
@@ -473,6 +520,8 @@ export function RichTextTools() {
         >
           {NumberedListIcon}
         </button>
+        </>
+        )}
       </span>
 
       {/* Its own line under the strip, because an address box is wider than

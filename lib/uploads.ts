@@ -35,10 +35,20 @@ import { MAX_UPLOAD_BYTES } from '@/lib/media/limits'
  */
 export const MAX_DROPPED_BYTES = MAX_UPLOAD_BYTES
 
-/** How many files one drop may carry. The composer's own ceiling is twenty
- *  attachments (see validation.ts), and a folder emptied onto the box by
- *  accident should be refused as a whole rather than half-uploaded. */
-export const MAX_DROPPED_FILES = 20
+/**
+ * How many files may be handed over in one go - one drop, or one trip through
+ * the Choose files box.
+ *
+ * Deliberately high rather than tight. What actually decides whether a message
+ * can go is its WEIGHT, not the number of things on it: checkAttachmentBudget
+ * in compose.ts adds the lot up before a connection is opened and refuses in
+ * English when it comes to more than a mail server will carry. A count is a
+ * poor stand-in for that - twenty photographs from a phone are already too
+ * much, and a hundred delivery notes are not - so the count is here only to
+ * stop a folder emptied onto the box by accident from becoming a thousand
+ * requests, and it is set where nobody working normally will ever meet it.
+ */
+export const MAX_DROPPED_FILES = 100
 
 /**
  * What must not be uploaded, by the extension it ends in.

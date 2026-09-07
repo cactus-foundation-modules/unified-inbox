@@ -61,7 +61,7 @@ export function ScheduleNotice({
         <div className="alert alert-info" role="status">
           {sendState === 'sending'
             ? 'This one is going out now.'
-            : `This is set to go out ${describeSendAt(sendAt, new Date(), timezone)}. It leaves on its own - you do not have to be here.`}
+            : `This is set to go out ${describeSendAt(sendAt, new Date(), timezone)}. It leaves on its own - you do not have to be here. Change the writing and save it, move it to another time, or send it now, any time before it goes.`}
           {sendState === 'scheduled' && followUpMinutes && sendAt ? (
             <> If nobody has replied by{' '}
               {describeSendAt(

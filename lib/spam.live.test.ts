@@ -49,6 +49,13 @@ import {
 //      defect a spam folder must not have.
 //   6. The block list round-trips: written normalised, read back as a set,
 //      asked one at a time, and removed.
+//   7. POST FROM A BLOCKED SENDER IS IN THE BIN FOR EVERYBODY. The stamp is a
+//      column on the conversation rather than a row per person (migration 044),
+//      so both junk clauses had to learn to read a second thing, and the one
+//      that hides has to agree with the one that lists. It is out of every
+//      list, in every real bin, done, unread - and pressing "Not junk" takes
+//      the stamp off again, which is the only way out of the folder and
+//      therefore the one that must not be broken.
 //
 // A real throwaway database on the Postgres VPS, built from the core schema and
 // this module's own migrations. Named `cactus_rt_*` and dropped afterwards; the
@@ -151,6 +158,17 @@ describe.runIf(shouldRun)('junk and blocked senders, against a real database', (
       lastDirection: 'in',
       unread: true,
     })
+
+  /** Where a conversation stands and whether anybody has read it - asked of the
+   *  database rather than of the code that wrote it, since "done but unread" is
+   *  the whole of what the stamp is supposed to leave behind. */
+  const stateOf = async (id: string): Promise<{ status: string; unread: boolean; blocked: boolean }> => {
+    const rows = await db.$queryRawUnsafe<{ status: string; unread: boolean; blocked_at: Date | null }[]>(
+      `SELECT "status", "unread", "blocked_at" FROM "uin_threads" WHERE "id" = $1`, id,
+    )
+    const row = rows[0]!
+    return { status: row.status, unread: row.unread, blocked: row.blocked_at !== null }
+  }
 
   beforeAll(async () => {
     if (!process.env.OVH_SERVER || !process.env.OVH_USER || !process.env.OVH_PASSWORD) {
@@ -364,6 +382,107 @@ describe.runIf(shouldRun)('junk and blocked senders, against a real database', (
     await blocked.unblockSender('Spam@Example.com')
     expect(await blocked.isSenderBlocked('spam@example.com')).toBe(false)
     expect(await blocked.listBlockedSenders()).toEqual([])
+  })
+
+  it('puts post from a blocked sender in the bin for everybody, done and unread', async () => {
+    // Nobody pressed anything. The collecting pass stamps the conversation
+    // because the address is on the site's list, and a block is a fact about
+    // the site rather than one person's view of one conversation - so it has to
+    // be out of EVERY list rather than out of whichever colleague's the pass
+    // happened to guess at. There is nobody to guess at either: the person who
+    // blocked the address may have left months ago.
+    const id = await threadIn(team, 'Cheap desks 10')
+    await lib.setThreadBlocked(id, true)
+
+    expect(await stateOf(id)).toEqual({ status: 'done', unread: true, blocked: true })
+
+    // Out of both readers' ordinary lists, neither of whom has an opinion.
+    expect(await listFor(emma)).not.toContain(id)
+    expect(await listFor(marcus)).not.toContain(id)
+    // And in both of their bins, which is where the two clauses part company
+    // with everything else in this file: a per-person mark shows in one bin,
+    // this shows in every real one.
+    expect(await binOf(emma, emma)).toContain(id)
+    expect(await binOf(marcus, marcus)).toContain(id)
+    // The header offers "Not junk" rather than "Junk", for anybody. Without
+    // this the one conversation nobody put in the folder would be the one
+    // nobody could take out of it.
+    expect(await spam.threadIsSpamFor(id, emma)).toBe(true)
+    expect(await spam.threadIsSpamFor(id, marcus)).toBe(true)
+  })
+
+  it('leaves a bin belonging to nobody empty, even of blocked post', async () => {
+    // Claim 4 read once more against the new clause. A folder scoped to a
+    // shared address, or to an id this reader may not open, resolves to null
+    // and must yield nothing AT ALL - "nothing except the interesting part" is
+    // exactly how a scope that will not resolve starts leaking.
+    const id = await threadIn(team, 'Cheap desks 11')
+    await lib.setThreadBlocked(id, true)
+    expect(await binOf(emma, null)).not.toContain(id)
+  })
+
+  it('stamps a conversation once, however many times they write', async () => {
+    // A nuisance who writes six times is one conversation carrying the day they
+    // first got through, not one whose date creeps forward every tick.
+    const id = await threadIn(team, 'Cheap desks 12')
+    await lib.setThreadBlocked(id, true)
+    const [first] = await db.$queryRawUnsafe<{ blocked_at: Date }[]>(
+      `SELECT "blocked_at" FROM "uin_threads" WHERE "id" = $1`, id,
+    )
+    await lib.setThreadBlocked(id, true)
+    const [second] = await db.$queryRawUnsafe<{ blocked_at: Date }[]>(
+      `SELECT "blocked_at" FROM "uin_threads" WHERE "id" = $1`, id,
+    )
+    expect(second!.blocked_at.getTime()).toBe(first!.blocked_at.getTime())
+  })
+
+  it('lets “Not junk” rescue one, and leaves the sender blocked', async () => {
+    // The only way out of the folder, so it is the one that must not break. It
+    // comes back OPEN rather than done, because the done was the site's
+    // housekeeping and not anybody's decision that the matter was finished.
+    const id = await threadIn(team, 'Cheap desks 13')
+    await blocked.blockSender('nuisance@example.com', emma)
+    await lib.setThreadBlocked(id, true)
+    expect(await listFor(marcus)).not.toContain(id)
+
+    await lib.setThreadBlocked(id, false)
+
+    expect(await stateOf(id)).toEqual({ status: 'open', unread: true, blocked: false })
+    expect(await listFor(emma)).toContain(id)
+    expect(await listFor(marcus)).toContain(id)
+    expect(await binOf(emma, emma)).not.toContain(id)
+    // Letting one conversation through is not opening the front door.
+    expect(await blocked.isSenderBlocked('nuisance@example.com')).toBe(true)
+    await blocked.unblockSender('nuisance@example.com')
+  })
+
+  it('counts blocked post the same way it lists it', async () => {
+    // The tallies carry their own copy of the junk clause, and a number that
+    // disagrees with the list behind it is the defect a spam folder must not
+    // have - the one that has somebody hunting for a message that is not there.
+    const id = await threadIn(team, 'Cheap desks 14')
+    const before = await lib.countThreads({
+      viewerUserId: marcus, inboxIds: [team, samBox], includeUnrouted: false, status: 'all',
+      page: 1, perPage: 50,
+    })
+    await lib.setThreadBlocked(id, true)
+    const after = await lib.countThreads({
+      viewerUserId: marcus, inboxIds: [team, samBox], includeUnrouted: false, status: 'all',
+      page: 1, perPage: 50,
+    })
+    expect(after).toBe(before - 1)
+
+    const bin = await lib.countThreads({
+      viewerUserId: marcus,
+      spamOnly: true,
+      spamOwnerUserId: marcus,
+      inboxIds: [team, samBox],
+      includeUnrouted: false,
+      status: 'all',
+      page: 1,
+      perPage: 50,
+    })
+    expect(bin).toBe((await binOf(marcus, marcus)).length)
   })
 
   it('takes a colleague’s junk marks with them when their account goes', async () => {

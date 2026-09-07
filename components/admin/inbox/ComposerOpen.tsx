@@ -5,6 +5,7 @@ import { Composer } from './Composer'
 import { useComposerOpen } from './composer-open'
 import { alignToTop } from './pane-scroll'
 import type { DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
+import type { ReplyStyle } from '@/modules/unified-inbox/lib/channel-reply'
 import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 
 // Where the writing box appears, once somebody has asked for one. Whether it is
@@ -20,6 +21,10 @@ type SlotProps = {
   replyAllTo: string[]
   canReply: boolean
   canForward: boolean
+  /** How this conversation is answered - see lib/channel-reply.ts. */
+  style: ReplyStyle
+  /** Who the reply goes to, in words, where the conversation decides it. */
+  destinationLine: string | null
   staff: Array<{ id: string; name: string }>
   cannotReplyReason: string | null
   /** What the subject would say if nobody opened the Subject line, worked out

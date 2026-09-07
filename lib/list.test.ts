@@ -43,6 +43,10 @@ describe('parseInboxParams', () => {
     expect(parseInboxParams({ status: 'done' }).status).toBe('done')
   })
 
+  it('reads the shared address\u2019s queue, which rides in the same slot', () => {
+    expect(parseInboxParams({ status: 'unassigned' }).status).toBe('unassigned')
+  })
+
   it('reads the chosen tab: an id, everything, or the ones that matched nothing', () => {
     expect(parseInboxParams({ inbox: 'abc' })).toMatchObject({ inboxId: 'abc', unroutedOnly: false })
     expect(parseInboxParams({ inbox: 'all' })).toMatchObject({ inboxId: null, unroutedOnly: false })
@@ -71,6 +75,26 @@ describe('parseInboxParams', () => {
     // of those is the tab.
     expect(parseInboxParams({ inbox: 'abc' }).draftsOnly).toBe(false)
     expect(parseInboxParams({}).draftsOnly).toBe(false)
+  })
+
+  it('reads the Scheduled tab, which is its own list rather than an inbox', () => {
+    expect(parseInboxParams({ inbox: 'scheduled' })).toMatchObject({
+      inboxId: null,
+      scheduledOnly: true,
+      draftsOnly: false,
+      sentOnly: false,
+      unroutedOnly: false,
+      providerModule: null,
+    })
+    // A message with a time on it is not in Drafts, and an address genuinely
+    // called "scheduled" would be an id rather than the folder.
+    expect(parseInboxParams({ inbox: 'drafts' }).scheduledOnly).toBe(false)
+    expect(parseInboxParams({ inbox: 'abc' }).scheduledOnly).toBe(false)
+    expect(parseInboxParams({}).scheduledOnly).toBe(false)
+    // No scoped form: one folder, whichever address the message leaves from.
+    expect(parseInboxParams({ inbox: 'scheduled:in1' })).toMatchObject({
+      scheduledOnly: false, inboxId: 'scheduled:in1', folderInboxId: null,
+    })
   })
 
   it('reads the Sent tab, which is not an inbox id either', () => {
@@ -555,6 +579,15 @@ describe('the search dialog', () => {
       status: 'done',
       unreadOnly: true,
     })
+  })
+
+  it('does not carry the queue into the search dialog, which cannot ask for it', () => {
+    // "Nobody has picked this up" is a question about the address somebody is
+    // standing in; a search looks across every address they can read. The
+    // dialog offers the four real statuses, and a list narrowed to the queue
+    // opens it on Any status rather than on a value with no option to show it.
+    expect(searchRequestFrom({ inbox: 'inbox-1', q: 'invoice', status: 'unassigned' }).status)
+      .toBe('all')
   })
 
   it('opens pointed at everything when the list underneath is not a search', () => {

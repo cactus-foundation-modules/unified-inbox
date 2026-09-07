@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db/prisma'
 import {
   addIdentity,
+  addressesOnThread,
   counterpartyMessage,
   providerCounterparty,
   providerThreadsNeedingPeople,
@@ -440,6 +441,64 @@ export async function buildContextQuery(personId: string): Promise<ContextQuery 
   const organisation = person.organisationId ? await getOrganisation(person.organisationId) : null
 
   return { emails, phones, domains, organisationName: organisation?.name ?? null }
+}
+
+/**
+ * The same question asked about a CONVERSATION rather than about one person.
+ *
+ * A conversation is matched to one person, and that is the right answer for the
+ * panel beside it - whose orders, whose quotes. It is the wrong answer for
+ * ranking a list of records to attach, because the people on a conversation are
+ * whoever is on it: the customer who started it, the supplier who answered from
+ * a shared address, the colleague copied in halfway down. Somebody attaching the
+ * purchase order this email is about wants the orders raised with THAT supplier
+ * at the top, and the supplier is on the message rather than in the person
+ * record - a conversation the resolver never matched to anybody has no person at
+ * all and used to rank by nothing.
+ *
+ * So: every address the conversation carries, minus our own inboxes, our own
+ * staff and our own domains (the same gate mail goes through - see
+ * shouldBecomePerson), plus whatever the matched person adds on top of that. The
+ * domains fall out of the addresses, which is what lets purchasing rank by the
+ * supplier's domain when nobody on the thread is the exact address a purchase
+ * order was sent to.
+ *
+ * Null means there is genuinely nobody to rank by - a discussion between
+ * colleagues, where every address on it is one of ours. That is not an error and
+ * not an empty list of records: the picker still browses, newest first.
+ */
+export async function buildThreadContextQuery(
+  threadId: string,
+  personId: string | null,
+): Promise<ContextQuery | null> {
+  const [ofPerson, addresses, context] = await Promise.all([
+    personId ? buildContextQuery(personId) : Promise.resolve(null),
+    addressesOnThread(threadId),
+    buildResolutionContext(),
+  ])
+
+  const theirs = addresses
+    .filter((address) => shouldBecomePerson(address, context.gate))
+    .map((address) => identityKey(address))
+    .filter((key): key is string => !!key)
+
+  const emails = [...new Set([...(ofPerson?.emails ?? []), ...theirs])]
+  const domains = [...new Set([
+    ...(ofPerson?.domains ?? []),
+    ...emails
+      .map((email) => domainOf(email))
+      .filter((domain): domain is string => (
+        !!domain && !isPersonalDomain(domain, context.settings.personalDomains)
+      )),
+  ])]
+
+  const phones = ofPerson?.phones ?? []
+  const organisationName = ofPerson?.organisationName ?? null
+  if (emails.length === 0 && domains.length === 0 && phones.length === 0 && !organisationName) {
+    return null
+  }
+
+  return { emails, phones, domains, organisationName }
 }
 
 /** The addresses core's outbound ledger should be searched for. Same list the

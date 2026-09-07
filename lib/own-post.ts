@@ -10,13 +10,16 @@ import type { Inbox } from './types'
 // picked up, it is one person's post pretending to be a pile. This hands it to
 // them as it arrives.
 //
-// The rule in one line: INBOUND post, at an INDIVIDUAL address, whose owner can
-// still log in, on a conversation NOBODY has yet.
+// The rule in one line: post at an INDIVIDUAL address, whose owner can still
+// log in, on a conversation NOBODY has yet.
 //
-// Each of those four does a job:
+// It runs at both ends. Mail ARRIVING at somebody's own address is theirs (see
+// lib/sync.ts), and so is a conversation STARTED from it (see lib/send.ts) -
+// writing to a supplier from your own address and then finding the reply filed
+// as nobody's work is the same complaint from the other side.
 //
-//   inbound     - a copy of the owner's own reply coming back out of Sent is
-//                 not somebody getting post.
+// Each of the three checks does a job:
+//
 //   individual  - sales@ is the team's. Handing every enquiry to whoever is
 //                 named on a shared address is the opposite of a shared inbox.
 //   can log in  - post assigned to a suspended account is post filed out of
@@ -75,13 +78,27 @@ export async function ownPostOwners(inboxes: readonly OwnedInbox[]): Promise<Map
 }
 
 /**
- * Whose post this message is, or null when it is nobody's in particular.
+ * The colleague ONE address belongs to, or null when it is nobody's.
+ *
+ * The same question the map above answers about a whole site, asked about a
+ * single address - which is the shape the send path wants, where there is one
+ * inbox and it is already in hand.
+ */
+export async function ownPostOwnerOf(inbox: OwnedInbox): Promise<string | null> {
+  const owners = await ownPostOwners([inbox])
+  return owners.get(inbox.id) ?? null
+}
+
+/**
+ * Whose post an ARRIVING message is, or null when it is nobody's in particular.
  *
  * Deliberately says nothing about whether the conversation is already spoken
  * for: that question is asked and answered in one UPDATE at the database, which
  * is the only place two collection ticks arriving at once can be told apart.
  */
 export function ownPostAssignee(
+  /** Out is the copy of somebody's own reply coming back out of Sent, which is
+   *  not somebody getting post - the send path had that conversation first. */
   direction: 'in' | 'out',
   inboxId: string | null,
   owners: ReadonlyMap<string, string>,

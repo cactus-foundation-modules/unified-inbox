@@ -48,13 +48,27 @@ export const MoreIcon = <svg {...ICON}><circle cx="12" cy="5.5" r="1.4" fill="cu
 export const AlarmIcon = <svg {...ICON}><circle cx="12" cy="13" r="7" /><path d="M12 9.5V13l2.5 1.5" /><path d="m4 6 3-2.5" /><path d="m20 6-3-2.5" /></svg>
 export const ChevronRightIcon = <svg {...ICON}><path d="m9.5 6 6 6-6 6" /></svg>
 export const ChevronLeftIcon = <svg {...ICON}><path d="m14.5 6-6 6 6 6" /></svg>
-/** Junk. A waste basket, which is what every mail program in the world draws
- *  for this and therefore the one drawing nobody has to learn. Deliberately NOT
- *  the octagonal "no entry" sign: that is what blocking somebody means, and
- *  these are two different presses with two different consequences. */
-export const SpamIcon = <svg {...ICON}><path d="M4 7h16" /><path d="M9.5 7V4.5h5V7" /><path d="M6.5 7l1 12.5h9L17.5 7" /><path d="M10 10.5v6" /><path d="M14 10.5v6" /></svg>
-/** Turning somebody away at the door - the block, as opposed to the basket. */
+/** Junk. A "no entry" sign: a ring with a bar through it. It was a waste
+ *  basket, on the reasoning that every mail program draws one - but a basket in
+ *  a row of controls is read as Delete by everybody who has ever used a
+ *  computer, and a control nobody dares press is the same as no control at all.
+ *  The sign says refused rather than destroyed, which is what the press does.
+ *
+ *  It is therefore close to BlockIcon below, and the two must never appear
+ *  beside one another without words: give the block its own drawing first if
+ *  that day comes. */
+export const SpamIcon = <svg {...ICON}><circle cx="12" cy="12" r="8" /><path d="m6.7 17.3 10.6-10.6" /></svg>
+/** Turning somebody away at the door - the block, as opposed to the junk sign
+ *  above. Not currently drawn anywhere; see the warning on SpamIcon before
+ *  putting it on a screen that also carries one. */
 export const BlockIcon = <svg {...ICON}><circle cx="12" cy="12" r="8" /><path d="m6.5 6.5 11 11" /></svg>
+/** The list of addresses the site turns away. An @ with a bar through it: the
+ *  @ says these are addresses rather than conversations, and the bar says what
+ *  is being done to them. Deliberately NOT the sign above or BlockIcon below -
+ *  the Spam folder draws the junk sign on every conversation in it, and a
+ *  second ring-with-a-line in the toolbar over that list is two different
+ *  buttons wearing one drawing. */
+export const BlockedAddressesIcon = <svg {...ICON}><circle cx="12" cy="12" r="3.2" /><path d="M15.2 8.8v4.6a2.5 2.5 0 0 0 4.9 0V12a8.1 8.1 0 1 0-3.2 6.5" /><path d="m5 19 14-14" /></svg>
 export const AtIcon = <svg {...ICON}><circle cx="12" cy="12" r="3.4" /><path d="M15.4 8.6v4.7a2.6 2.6 0 0 0 5.1 0V12a8.5 8.5 0 1 0-3.3 6.7" /></svg>
 /** Take the box out of the page and put it in front of everything, and put it
  *  back again. The same diagonal, pointing the other way. */

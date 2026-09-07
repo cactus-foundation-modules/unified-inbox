@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { AdminTooltip } from '@/components/admin/Tooltip'
 import { ConfirmDialog } from './ConfirmDialog'
 import { SpamIcon } from './icons'
 
@@ -35,13 +36,23 @@ import { SpamIcon } from './icons'
 // not a block. Cancel is the ordinary answer and leaves the front door where it
 // was.
 //
+// Turned away means their post lands in the Spam folder rather than in an
+// inbox, marked done and left unread. It is not destroyed and it is not left on
+// the mail server for somebody to go and look for: "did they ever actually
+// write?" is a question this site can now answer. See migration 044.
+//
 // The order matters. The move happens FIRST and does not wait for an answer, so
 // somebody who reads the question, decides they cannot be bothered and presses
 // Escape has still done the thing they pressed the button for. A dialog that
 // gated both decisions on one Yes would mean cancelling put the junk back.
 //
-// It is drawn as a basket rather than a "no entry" sign on purpose: the basket
-// is the press, and the sign is the question it asks afterwards.
+// It is drawn as a "no entry" sign rather than as a waste basket. A basket is
+// what mail programs draw for junk, but it is also what everything else in the
+// world draws for Delete, and a control that looks like it destroys the message
+// is a control people leave alone - which is how a junk button ends up
+// unfindable in plain sight. The sign says refused, not destroyed, and refused
+// is what the press means: nothing is deleted, and pressing it again brings the
+// conversation back.
 // ---------------------------------------------------------------------------
 
 type Props = {
@@ -68,13 +79,20 @@ type Props = {
    *  to their own screen; blocking a sender changes what happens to everybody,
    *  so it takes the same grant as answering one. */
   canBlock: boolean
+  /** Where the list is without this conversation open on it - the same address
+   *  the close cross points at. Junking something takes it out of every list
+   *  the reader could have been standing in, so the conversation under their
+   *  eyes is one that is no longer anywhere: the pane goes back to "Nothing
+   *  open" rather than holding a thread the list beside it has dropped. */
+  closeHref: string
   /** Greyed out while a sibling control in the same row is saving, so the row
    *  behaves as one thing. */
   disabled?: boolean
 }
 
 export function SpamButton({
-  threadId, spam, ownerName, senderAddress, senderBlocked, canBlock, disabled = false,
+  threadId, spam, ownerName, senderAddress, senderBlocked, canBlock, closeHref,
+  disabled = false,
 }: Props) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
@@ -132,44 +150,55 @@ export function SpamButton({
     } finally {
       setBusy(false)
       setAsking(false)
-      router.refresh()
+      router.push(closeHref)
     }
-  }, [router, senderAddress])
+  }, [closeHref, router, senderAddress])
 
   const mark = useCallback(async () => {
     if (!(await setSpam(true))) return
     // The move is done. Ask about the door only where there is a door to ask
-    // about - and hold the refresh until the question is answered, since a
-    // refresh mid-dialog would redraw the pane the dialog is anchored to.
+    // about - and hold the leaving until the question is answered, since going
+    // back to the list mid-dialog would take the dialog with it.
     if (worthAsking) setAsking(true)
-    else router.refresh()
-  }, [router, setSpam, worthAsking])
+    else router.push(closeHref)
+  }, [closeHref, router, setSpam, worthAsking])
 
+  // Out of the bin is the same kind of move as into it: the conversation leaves
+  // the folder it is being read in, so the reader goes back to the list rather
+  // than sitting in front of something that is no longer on it.
   const unmark = useCallback(async () => {
-    if (await setSpam(false)) router.refresh()
-  }, [router, setSpam])
+    if (await setSpam(false)) router.push(closeHref)
+  }, [closeHref, router, setSpam])
 
   // Taking something back out gives nothing away and undoes itself, so it just
   // happens. Putting it in is the press that asks the second question.
+  // The word, for the tooltip and for nothing else - the button is a sign with
+  // no writing on it, and a sign nobody can read is a sign nobody presses.
+  const word = spam
+    ? (ownerName ? `Not junk - take it out of ${ownerName}'s spam` : 'Not junk')
+    : (ownerName ? `Junk - goes to ${ownerName}'s spam` : 'Junk')
+
   return (
     <>
-      <button
-        type="button"
-        className="uin-icon-btn uin-icon-btn-framed"
-        disabled={busy || disabled}
-        aria-pressed={spam}
-        title={spam
-          ? (ownerName ? `Not junk - take it out of ${ownerName}'s spam` : 'Not junk')
-          : (ownerName ? `Junk - goes to ${ownerName}'s spam` : 'Junk')}
-        onClick={() => void (spam ? unmark() : mark())}
-      >
-        {SpamIcon}
-        <span className="sr-only">
-          {spam
-            ? `Take this out of ${ownerName ? `${ownerName}'s` : 'your'} spam folder`
-            : `Move this to ${ownerName ? `${ownerName}'s` : 'your'} spam folder`}
-        </span>
-      </button>
+      {/* The admin's own tooltip rather than `title=`: the native one waits a
+          second before it says anything, never appears for a keyboard, and this
+          is the one control in the row with no word on its face. */}
+      <AdminTooltip body={word}>
+        <button
+          type="button"
+          className="uin-icon-btn uin-icon-btn-framed"
+          disabled={busy || disabled}
+          aria-pressed={spam}
+          onClick={() => void (spam ? unmark() : mark())}
+        >
+          {SpamIcon}
+          <span className="sr-only">
+            {spam
+              ? `Take this out of ${ownerName ? `${ownerName}'s` : 'your'} spam folder`
+              : `Move this to ${ownerName ? `${ownerName}'s` : 'your'} spam folder`}
+          </span>
+        </button>
+      </AdminTooltip>
 
       <ConfirmDialog
         open={asking}
@@ -181,9 +210,10 @@ export function SpamButton({
             : <>It is in your spam folder now, and nobody else&rsquo;s view of it has changed.</>}
           {' '}
           Would you also like to turn <strong>{senderAddress}</strong> away in future? Nothing
-          further from them would be collected into any inbox on this site - shared or personal -
-          and nothing already here would be touched. You can let them back in from the inbox
-          settings.
+          further from them would reach an inbox on this site - shared or personal. It would be
+          dropped straight in here instead, marked as dealt with and left unread, so you can
+          still see what they sent. Nothing already here would be touched, and you can let them
+          back in from the Spam folder or from the inbox settings.
         </>}
         confirmLabel="Block them"
         cancelLabel="No, just move it"
@@ -192,8 +222,8 @@ export function SpamButton({
         onCancel={() => {
           if (busy) return
           setAsking(false)
-          // Still refreshed: the move happened whichever way this was answered.
-          router.refresh()
+          // Still leaves: the move happened whichever way this was answered.
+          router.push(closeHref)
         }}
         onConfirm={() => void block()}
       />

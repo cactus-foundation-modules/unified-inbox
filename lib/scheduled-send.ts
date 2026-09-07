@@ -12,7 +12,7 @@ import { draftBodyText } from './drafts'
 import { applyFollowUpAfterSend } from './follow-up'
 import { plainTextToHtml, STALE_CLAIM_MS } from './scheduled'
 import { sendMessage } from './send'
-import { replyWords, sendProviderReply } from './provider-send'
+import { sendProviderReply } from './provider-send'
 import type { Draft } from './types'
 
 // ---------------------------------------------------------------------------
@@ -145,14 +145,13 @@ async function sendOneScheduled(
     }
     const result = await sendProviderReply({
       threadId: thread.id,
-      // These channels carry words, not markup - a chat window and a text
-      // message have nowhere to put a typeface, and sending one the tags would
-      // put "<strong>" in front of a customer. A body written in the box is
-      // markup with the catalogue slotted into it, so it is flattened WITH the
-      // products; one written before the box could hold any is words already.
-      text: draft.bodyFormat === 'html'
-        ? await replyWords(draft.body, draft.products)
-        : draftBodyText(draft),
+      // A body written in the box is markup with the catalogue slotted into it,
+      // and what survives of the markup is the channel's own answer - so it
+      // goes over as it stands and is rendered there. One written before the
+      // box could hold any is words already and has nothing to render.
+      body: draft.bodyFormat === 'html'
+        ? { html: draft.body }
+        : { text: draftBodyText(draft) },
       authorUserId: draft.authorUserId,
       authorName: null,
       products: draft.products,

@@ -22,6 +22,14 @@ import { prisma } from '@/lib/db/prisma'
 // module already goes through. Adding it in each of them separately is how one
 // of them ends up disagreeing with the others, which on a spam folder means
 // junk that is out of the list and still in the count.
+//
+// THE ONE THING IN THE FOLDER THAT IS NOT AN OPINION is post from a sender the
+// site has blocked. Nobody pressed anything for those: they are collected,
+// stamped by the collecting pass and put in the bin for everybody, because a
+// block is one list for the whole site rather than one person's view of one
+// conversation. That stamp is a column on the conversation and not a row here -
+// see setThreadBlocked in lib/db.ts and migration 044 - and the two clauses
+// above read the pair of them together.
 // ---------------------------------------------------------------------------
 
 /**
@@ -89,11 +97,24 @@ export async function unmarkThreadSpam(threadId: string, userId: string): Promis
  *  so the button in the header offers the right one of the two rather than
  *  making somebody press it to find out - and asked about the OWNER rather than
  *  the reader, so that somebody covering Sam's post sees "Not junk" on a
- *  conversation Sam has already binned and can put it back. */
+ *  conversation Sam has already binned and can put it back.
+ *
+ *  The site's own stamp counts as well, and it has to. Post from a blocked
+ *  sender is in the bin without anybody having pressed anything, so there is no
+ *  row here to find - and a header offering "Junk" on a conversation the reader
+ *  is looking at INSIDE the spam folder is a button that cannot get it out
+ *  again. See setThreadBlocked in lib/db.ts for the other half. */
 export async function threadIsSpamFor(threadId: string, userId: string): Promise<boolean> {
   const rows = await prisma.$queryRaw<{ one: number }[]>`
-    SELECT 1 AS "one" FROM "uin_thread_spam"
-     WHERE "thread_id" = ${threadId} AND "user_id" = ${userId}
+    SELECT 1 AS "one" FROM "uin_threads" t
+     WHERE t."id" = ${threadId}
+       AND (
+         t."blocked_at" IS NOT NULL
+         OR EXISTS (
+              SELECT 1 FROM "uin_thread_spam" sp
+               WHERE sp."thread_id" = t."id" AND sp."user_id" = ${userId}
+            )
+       )
      LIMIT 1
   `
   return rows.length > 0

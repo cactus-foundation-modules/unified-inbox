@@ -23,9 +23,8 @@
 --                       takes it off YOUR lists and leaves everybody else's
 --                       exactly as they were.
 --
---   "Never let this     is a decision about the site. Somebody blocked is
---    sender in again"   blocked at the door, before anything is filed, so they
---                       reach no inbox at all - not the shared ones, not the
+--   "Never let this     is a decision about the site. Somebody blocked reaches
+--    sender in again"   no inbox at all - not the shared ones, not the
 --                       individual ones, not the one address nobody has opened
 --                       since March. One list for the whole site, because a
 --                       block that only covered the address you happened to be
@@ -36,11 +35,16 @@
 -- is the ordinary answer and leaves the site's front door where it was.
 --
 -- NEITHER OF THEM DELETES ANYTHING. A conversation marked as junk keeps every
--- message in it and can be taken back out again. Mail from a blocked sender is
--- simply not collected - it stays on the mail server, where the account's owner
--- can still see it in whatever their mail app calls its own junk folder. This
--- module has never written to anybody's mailbox except to file a copy of a
--- reply in Sent, and blocking somebody does not change that.
+-- message in it and can be taken back out again.
+--
+-- NOTE, LATER: this file originally said mail from a blocked sender was not
+-- collected at all and stayed on the mail server. That is no longer true -
+-- migration 044 collects it and files it straight into the Spam folder instead,
+-- marked done and left unread, so that "did they ever actually write?" has an
+-- answer on this site rather than in somebody's mail app. The sentence is left
+-- here rather than quietly rewritten because a migration file is a record of
+-- what was done at the time. Still nothing is deleted, and this module still
+-- never writes to anybody's mailbox except to file a copy of a reply in Sent.
 -- ---------------------------------------------------------------------------
 
 -- ---------------------------------------------------------------------------

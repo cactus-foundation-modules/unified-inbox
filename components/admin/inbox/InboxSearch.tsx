@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import {
   buildSearchHref,
@@ -148,7 +149,17 @@ export function InboxSearch({ base, params, inboxes, channels, showUnrouted }: P
         {SearchIcon}
       </button>
 
-      {open && (
+      {/* DRAWN INTO THE PAGE ITSELF, NOT WHERE THE BUTTON IS, AND THAT IS NOT
+          decoration. The magnifier lives in the head of the rail, which is
+          position: sticky so it stays put while the addresses scroll under it -
+          and a sticky box makes a stacking context, which a fixed dialog inside
+          it cannot get out of however high its z-index is. Left where it was,
+          this went UNDER the pinned head of the conversation and the note bar,
+          which is to say behind the middle and right columns. The composers,
+          the confirmations and the undo toast are all drawn out here for the
+          same reason. There is no page on the server, and this is never open on
+          a first render, so the two sides agree. */}
+      {open && typeof document !== 'undefined' && createPortal(
         <div
           className="uin-modal"
           onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false) }}
@@ -218,7 +229,8 @@ export function InboxSearch({ base, params, inboxes, channels, showUnrouted }: P
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   )

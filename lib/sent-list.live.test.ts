@@ -204,6 +204,69 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
       autoKind: null,
     })
 
+    // The same message twice, which is how mail between two of our own addresses
+    // is filed: the row the send path wrote on the sender's thread, and the copy
+    // the mail server handed back, filed on the person it was addressed to. The
+    // relay stamped its own id on the way out, so the delivered copy's
+    // Message-ID is the outbound row's provider_message_id - which is the only
+    // thing tying the two together.
+    const pairThread = await lib.createThread({
+      inboxId: chrisInbox,
+      subject: 'Said once',
+      subjectNormalised: 'said once',
+      preview: 'only one of these is a thing I sent',
+      lastMessageAt: new Date('2026-09-04T09:00:00Z'),
+      lastDirection: 'out',
+      unread: false,
+    })
+    await db.$executeRawUnsafe(
+      `INSERT INTO "uin_messages"
+         ("thread_id", "inbox_id", "direction", "channel", "message_id_header",
+          "provider_message_id", "from_address", "to_addresses", "subject", "snippet",
+          "sent_at", "author_user_id")
+       VALUES ($1, $2, 'out', 'email', 'uin.said-once@deskwell.co.uk',
+               'relay-said-once@smtp-relay.sendinblue.com', 'chris@deskwell.co.uk',
+               ARRAY['emma@deskwell.co.uk']::text[], 'Said once', 'only one of these',
+               TIMESTAMP '2026-09-04 09:00:00', $3)`,
+      pairThread,
+      chrisInbox,
+      chris,
+    )
+    const deliveredThread = await lib.createThread({
+      inboxId: emmaInbox,
+      subject: 'Said once',
+      subjectNormalised: 'said once',
+      preview: 'only one of these is a thing I sent',
+      lastMessageAt: new Date('2026-09-04T09:00:00Z'),
+      lastDirection: 'in',
+      unread: true,
+    })
+    await lib.insertMessage({
+      threadId: deliveredThread,
+      connectionId,
+      direction: 'in',
+      messageIdHeader: 'relay-said-once@smtp-relay.sendinblue.com',
+      inReplyTo: null,
+      references: [],
+      fromName: 'Chris',
+      fromAddress: 'chris@deskwell.co.uk',
+      replyTo: null,
+      toAddresses: ['emma@deskwell.co.uk'],
+      ccAddresses: [],
+      subject: 'Said once',
+      bodyText: 'only one of these is a thing I sent',
+      bodyHtml: null,
+      snippet: 'only one of these is a thing I sent',
+      sentAt: new Date('2026-09-04T09:00:00Z'),
+      hasAttachments: false,
+      sizeBytes: 100,
+      imapFolder: 'Deskwell/Emma Scott',
+      imapUid: 3,
+      threadMatch: 'new',
+      routedOn: 'to',
+      autoKind: null,
+    })
+
     // An ordinary customer conversation on Emma's inbox, so the customer's own
     // message can be proved NOT to reach anybody's Sent list.
     const customerThread = await lib.createThread({
@@ -315,14 +378,36 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
     // Chris may read his own address and nothing else. The message he wrote is
     // sitting inbound on Emma's thread, and it is still his to see.
     const rows = await lib.listSentMessages([chrisInbox], false, [], 1, 25)
-    expect(rows.map((r) => r.subject)).toEqual(['test'])
-    expect(rows[0]?.toAddresses).toEqual(['emma@deskwell.co.uk'])
-    expect(await lib.countSentMessages([chrisInbox], false, [])).toBe(1)
+    expect(rows.map((r) => r.subject)).toEqual(['Said once', 'test'])
+    expect(rows.find((r) => r.subject === 'test')?.toAddresses).toEqual(['emma@deskwell.co.uk'])
+    expect(await lib.countSentMessages([chrisInbox], false, [])).toBe(2)
   })
 
   it('labels it with the address it went out as, not the inbox it landed in', async () => {
     const rows = await lib.listSentMessages([chrisInbox], false, [], 1, 25)
-    expect(rows[0]?.inboxId).toBe(chrisInbox)
+    expect(rows.find((r) => r.subject === 'test')?.inboxId).toBe(chrisInbox)
+  })
+
+  it('lists a message sent to a colleague ONCE, not as both copies of it', async () => {
+    // The row the send path wrote and the copy the mail server handed back are
+    // one message said one time. Without this the sender saw the pair, a second
+    // apart, saying the same words to the same person.
+    const rows = await lib.listSentMessages([chrisInbox, emmaInbox], false, [], 1, 25)
+    expect(rows.filter((r) => r.subject === 'Said once')).toHaveLength(1)
+    // And it is the SENDER's own copy that survives - the one the send path
+    // wrote, which is the only one carrying an author - so opening it lands on
+    // their conversation rather than on the one it was delivered into.
+    const kept = rows.find((r) => r.subject === 'Said once')
+    expect(kept?.authorUserId).toBe(chris)
+    expect(kept?.inboxId).toBe(chrisInbox)
+  })
+
+  it('keeps a message that was ONLY ever the delivered copy', async () => {
+    // Nothing here wrote a row for it - it was written on a phone, or in
+    // Outlook - so there is no twin to fold it into, and dropping it would lose
+    // the sender their own message. This is the case the clause above exists for.
+    const rows = await lib.listSentMessages([chrisInbox], false, [], 1, 25)
+    expect(rows.map((r) => r.subject)).toContain('test')
   })
 
   it('still lists ordinary outbound mail, and only that, for the sender of it', async () => {
@@ -337,9 +422,9 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
   it('shows both to somebody who may read both addresses', async () => {
     const rows = await lib.listSentMessages([chrisInbox, emmaInbox], false, [], 1, 25)
     // Newest first, so the colleague message of 2 September comes before the
-    // customer reply of the 1st.
-    expect(rows.map((r) => r.subject)).toEqual(['test', 'Re: A quote please'])
-    expect(await lib.countSentMessages([chrisInbox, emmaInbox], false, [])).toBe(2)
+    // customer reply of the 1st, and the pair of the 4th before either.
+    expect(rows.map((r) => r.subject)).toEqual(['Said once', 'test', 'Re: A quote please'])
+    expect(await lib.countSentMessages([chrisInbox, emmaInbox], false, [])).toBe(3)
   })
 
   it('lists nothing at all for somebody with no addresses', async () => {
@@ -367,18 +452,17 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
       // The colleague message he wrote, and his own reply from the shared
       // address. Not Emma's reply to the customer, which is hers, and not the
       // order confirmation, which nobody typed.
-      expect(rows.map((r) => r.subject)).toEqual(['Re: Ten chairs', 'test'])
+      expect(rows.map((r) => r.subject)).toEqual(['Said once', 'Re: Ten chairs', 'test'])
       expect(await lib.countSentMessages(
         [chrisInbox, emmaInbox, salesInbox], false, [], chris,
-      )).toBe(2)
+      )).toBe(3)
     })
 
     it('keeps what somebody sent from a SHARED address', async () => {
       // The half no address could answer: sales@ is nobody's, so the only thing
       // that makes this reply Chris's is that the row says he wrote it.
       const rows = await chrisSees()
-      expect(rows[0]?.subject).toBe('Re: Ten chairs')
-      expect(rows[0]?.inboxId).toBe(salesInbox)
+      expect(rows.find((r) => r.subject === 'Re: Ten chairs')?.inboxId).toBe(salesInbox)
     })
 
     it('keeps mail collected off the server that left their own address', async () => {
@@ -480,6 +564,124 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
       const mine = (await lib.listDrafts(chris)).find((d) => d.inboxId === chrisInbox)!
       expect((await lib.getDraft(mine.id, chris))?.subject).toBe('Half-written, from Chris')
       expect(await lib.getDraft(mine.id, emma)).toBeNull()
+    })
+  })
+
+  // The Scheduled folder: the same table, split the other side of a line that
+  // only SQL draws. Every case here is a query nothing else in the suite runs,
+  // and the split is the sort that a typecheck cannot see - `send_state` is
+  // NULL on every ordinary draft, and one careless NOT ... IN would empty the
+  // Drafts folder on every site in the world while staying perfectly green.
+  describe('the scheduled folder', () => {
+    /** Somebody's message with a time on it. Written through saveDraft, which is
+     *  the only thing that ever writes one. */
+    const schedule = async (
+      author: string,
+      inboxId: string | null,
+      subject: string,
+      sendAt: Date,
+    ): Promise<string> => {
+      const draft = await lib.saveDraft({
+        authorUserId: author,
+        inboxId,
+        threadId: null,
+        mode: 'new',
+        to: ['someone@example.com'],
+        cc: [],
+        subject,
+        body: 'written now, going later',
+        attachments: [],
+        sendAt,
+      })
+      return draft.id
+    }
+
+    let mondayId = ''
+    let fridayId = ''
+
+    beforeAll(async () => {
+      fridayId = await schedule(chris, chrisInbox, 'Going out Friday', new Date('2026-10-02T08:00:00Z'))
+      mondayId = await schedule(chris, chrisInbox, 'Going out Monday', new Date('2026-09-28T08:00:00Z'))
+      await schedule(emma, emmaInbox, 'Emma\u2019s Monday', new Date('2026-09-28T09:00:00Z'))
+    })
+
+    it('takes a message with a time on it out of Drafts altogether', async () => {
+      // The three half-written ones are still there and the scheduled ones are
+      // not, which is the whole of the change: a Drafts count that included
+      // them read as work outstanding when it was work already decided.
+      const rows = await lib.listDrafts(chris)
+      expect(rows.map((r) => r.subject).sort()).toEqual([
+        'Half-written, filed nowhere',
+        'Half-written, from Chris',
+      ])
+      expect(await lib.countDrafts(chris)).toBe(2)
+      expect(await lib.countDraftsByInbox(chris)).toEqual({ [chrisInbox]: 1 })
+    })
+
+    it('lists them soonest first, this person\u2019s own and nobody else\u2019s', async () => {
+      const rows = await lib.listScheduledDrafts(chris)
+      // By when they leave rather than when they were last touched: Friday's
+      // was written first and goes second.
+      expect(rows.map((r) => r.subject)).toEqual(['Going out Monday', 'Going out Friday'])
+      expect(await lib.countScheduledDrafts(chris)).toBe(2)
+      expect((await lib.listScheduledDrafts(emma)).map((r) => r.subject)).toEqual(['Emma\u2019s Monday'])
+      expect(await lib.countScheduledDrafts(emma)).toBe(1)
+      expect(await lib.countScheduledDrafts('user-nobody')).toBe(0)
+    })
+
+    it('narrows to one address the same way the drafts folder does', async () => {
+      expect(await lib.countScheduledDrafts(chris, [chrisInbox])).toBe(2)
+      // Emma's is on emma@, which Chris may read, and it stays hers.
+      expect(await lib.listScheduledDrafts(chris, [emmaInbox])).toEqual([])
+      expect(await lib.listScheduledDrafts(chris, [])).toEqual([])
+    })
+
+    it('puts one whose send was refused back under Drafts, not here', async () => {
+      // It is not going anywhere on its own any more, and it wants somebody to
+      // look at it - so it belongs in the list people open, with its reason on
+      // it, rather than in a folder of things that are still going to happen.
+      await db.$executeRawUnsafe(
+        `UPDATE "uin_drafts" SET "send_state" = 'failed', "send_error" = 'the server said no' WHERE "id" = $1`,
+        fridayId,
+      )
+      expect((await lib.listDrafts(chris)).map((r) => r.subject)).toContain('Going out Friday')
+      expect(await lib.countDrafts(chris)).toBe(3)
+      expect((await lib.listScheduledDrafts(chris)).map((r) => r.subject)).toEqual(['Going out Monday'])
+      // And back where it was, so the cases below start from a known shape.
+      await db.$executeRawUnsafe(
+        `UPDATE "uin_drafts" SET "send_state" = 'scheduled', "send_error" = NULL WHERE "id" = $1`,
+        fridayId,
+      )
+    })
+
+    it('takes the timer off for a send by hand, and puts the row back in Drafts', async () => {
+      expect(await lib.standDownScheduledDraft(mondayId, chris)).toBe('ready')
+      const back = await lib.getDraft(mondayId, chris)
+      expect(back?.sendAt).toBeNull()
+      expect(back?.sendState).toBeNull()
+      expect((await lib.listDrafts(chris)).map((r) => r.subject)).toContain('Going out Monday')
+      expect((await lib.listScheduledDrafts(chris)).map((r) => r.subject)).toEqual(['Going out Friday'])
+    })
+
+    it('refuses to stand down one a run is posting this second', async () => {
+      // The one case that matters: the queue has claimed it and is talking to a
+      // mail server. Clearing the state here would let Send now post the same
+      // message a second time, under a different idempotency key.
+      await db.$executeRawUnsafe(
+        `UPDATE "uin_drafts" SET "send_state" = 'sending', "claimed_at" = now() WHERE "id" = $1`,
+        fridayId,
+      )
+      expect(await lib.standDownScheduledDraft(fridayId, chris)).toBe('in-flight')
+      // And it is left exactly as the run left it.
+      expect((await lib.getDraft(fridayId, chris))?.sendState).toBe('sending')
+    })
+
+    it('leaves a colleague\u2019s scheduled message alone', async () => {
+      const hers = (await lib.listScheduledDrafts(emma))[0]!
+      expect(await lib.standDownScheduledDraft(hers.id, chris)).toBe('ready')
+      // "ready" because there is nothing of Chris's by that id to stand down -
+      // and the row itself is untouched, which is the half worth proving.
+      expect((await lib.getDraft(hers.id, emma))?.sendState).toBe('scheduled')
     })
   })
 })

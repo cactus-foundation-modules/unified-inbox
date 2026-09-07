@@ -158,7 +158,7 @@ describe('what the conversation is left carrying', () => {
     resolveProducts.mockResolvedValue([chair()])
     await sendProviderReply({
       threadId: 't1',
-      text: 'Ergo Task Chair - £249.00 + VAT',
+      body: { text: 'Ergo Task Chair - £249.00 + VAT' },
       authorUserId: 'u1',
       authorName: 'Marcus',
       products: [{ moduleName: 'shop', kind: 'product', id: 'p1' }],
@@ -176,7 +176,7 @@ describe('what the conversation is left carrying', () => {
     threadHasLink.mockResolvedValue(true)
     await sendProviderReply({
       threadId: 't1',
-      text: 'Same again',
+      body: { text: 'Same again' },
       authorUserId: 'u1',
       authorName: 'Marcus',
       products: [{ moduleName: 'shop', kind: 'product', id: 'p1' }],
@@ -185,11 +185,82 @@ describe('what the conversation is left carrying', () => {
   })
 })
 
+describe('the emphasis a channel carries', () => {
+  /** A channel that says how it writes emphasis, the way WhatsApp does. */
+  function marking(styles: Record<string, string>) {
+    return providerWith(send, {
+      capabilities: { reply: true, markRead: false, byIdentity: true, textStyles: styles },
+    })
+  }
+
+  // THE DEFECT THIS PINS. A reply typed in bold used to arrive with the bold
+  // gone: the markup was flattened away and the channel was sent the bare
+  // words, even on a channel that has emphasis of its own.
+  it('writes bold the way the channel says it writes bold', async () => {
+    providerForKey.mockResolvedValue(marking({ bold: '*', italic: '_' }))
+    await sendProviderReply({
+      threadId: 't1',
+      body: { html: '<p>That is <strong>in stock</strong> today.</p>' },
+      authorUserId: 'u1',
+      authorName: 'Marcus',
+    })
+    expect(send).toHaveBeenCalledWith('7', {
+      text: 'That is *in stock* today.',
+      authorUserId: 'u1',
+    })
+  })
+
+  it('takes a second channel’s markers without being taught them', async () => {
+    providerForKey.mockResolvedValue(marking({ bold: '**' }))
+    await sendProviderReply({
+      threadId: 't1',
+      body: { html: '<p><b>Yes</b></p>' },
+      authorUserId: 'u1',
+      authorName: null,
+    })
+    expect(send).toHaveBeenCalledWith('7', { text: '**Yes**', authorUserId: 'u1' })
+  })
+
+  it('drops what the channel did not claim', async () => {
+    providerForKey.mockResolvedValue(marking({ bold: '*' }))
+    await sendProviderReply({
+      threadId: 't1',
+      body: { html: '<p><b>Yes</b> and <em>soon</em></p>' },
+      authorUserId: 'u1',
+      authorName: null,
+    })
+    expect(send).toHaveBeenCalledWith('7', { text: '*Yes* and soon', authorUserId: 'u1' })
+  })
+
+  it('flattens as it always did on a channel that claims none', async () => {
+    await sendProviderReply({
+      threadId: 't1',
+      body: { html: '<p><b>Yes</b>, we do.</p>' },
+      authorUserId: 'u1',
+      authorName: null,
+    })
+    expect(send).toHaveBeenCalledWith('7', { text: 'Yes , we do.', authorUserId: 'u1' })
+  })
+
+  it('records against the conversation exactly what was sent', async () => {
+    providerForKey.mockResolvedValue(marking({ bold: '*' }))
+    await sendProviderReply({
+      threadId: 't1',
+      body: { html: '<p><b>Yes</b></p>' },
+      authorUserId: 'u1',
+      authorName: null,
+    })
+    expect(insertProviderMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ bodyText: '*Yes*' }),
+    )
+  })
+})
+
 describe('sendProviderReply', () => {
   it('hands the reply to the module that owns the conversation', async () => {
     const result = await sendProviderReply({
       threadId: 't1',
-      text: '  They are, yes.  ',
+      body: { text: '  They are, yes.  ' },
       authorUserId: 'u1',
       authorName: 'Marcus',
     })
@@ -202,7 +273,7 @@ describe('sendProviderReply', () => {
     send.mockRejectedValue(new Error('Chatwoot 502'))
     const result = await sendProviderReply({
       threadId: 't1',
-      text: 'hello',
+      body: { text: 'hello' },
       authorUserId: 'u1',
       authorName: 'Marcus',
     })
@@ -211,12 +282,12 @@ describe('sendProviderReply', () => {
   })
 
   it('marks the conversation read, because answering something says you read it', async () => {
-    await sendProviderReply({ threadId: 't1', text: 'hi', authorUserId: 'u1', authorName: null })
+    await sendProviderReply({ threadId: 't1', body: { text: 'hi' }, authorUserId: 'u1', authorName: null })
     expect(setThreadRead).toHaveBeenCalledWith('t1', false)
   })
 
   it('stamps its own row so the far end’s copy can be told apart later', async () => {
-    await sendProviderReply({ threadId: 't1', text: 'hi', authorUserId: 'u1', authorName: 'Marcus' })
+    await sendProviderReply({ threadId: 't1', body: { text: 'hi' }, authorUserId: 'u1', authorName: 'Marcus' })
     const written = insertProviderMessage.mock.calls[0]![0]
     expect(written.providerMessageId.startsWith('uin-out:')).toBe(true)
     expect(written).toMatchObject({ direction: 'out', channel: 'chat', fromName: 'Marcus' })
@@ -228,7 +299,7 @@ describe('sendProviderReply', () => {
     )
     const result = await sendProviderReply({
       threadId: 't1',
-      text: 'hi',
+      body: { text: 'hi' },
       authorUserId: 'u1',
       authorName: null,
     })
@@ -242,7 +313,7 @@ describe('sendProviderReply', () => {
     providerForKey.mockResolvedValue(null)
     const result = await sendProviderReply({
       threadId: 't1',
-      text: 'hi',
+      body: { text: 'hi' },
       authorUserId: 'u1',
       authorName: null,
     })
@@ -255,7 +326,7 @@ describe('sendProviderReply', () => {
     )
     const result = await sendProviderReply({
       threadId: 't1',
-      text: 'hi',
+      body: { text: 'hi' },
       authorUserId: 'u1',
       authorName: null,
     })
@@ -266,7 +337,7 @@ describe('sendProviderReply', () => {
     getThreadDetail.mockResolvedValue({ ...thread, providerModule: null, externalId: null })
     const result = await sendProviderReply({
       threadId: 't1',
-      text: 'hi',
+      body: { text: 'hi' },
       authorUserId: 'u1',
       authorName: null,
     })
@@ -276,7 +347,7 @@ describe('sendProviderReply', () => {
   it('refuses an empty message before it troubles anybody', async () => {
     const result = await sendProviderReply({
       threadId: 't1',
-      text: '   ',
+      body: { text: '   ' },
       authorUserId: 'u1',
       authorName: null,
     })

@@ -82,6 +82,23 @@ const MENU_WIDTH = 300
 const MENU_HEIGHT = 260
 const GAP = 6
 
+/**
+ * Whether a press landed inside a dialog this menu put up.
+ *
+ * The question asked before a piece of context comes off renders into the end of
+ * the page rather than into the menu, which is what stops it being clipped by a
+ * pane that scrolls its own contents - and which also puts it OUTSIDE both
+ * elements the check above looks in. So pressing "Take it off" read as a press
+ * somewhere else, the menu closed on pointerdown, the dialog went with it, and
+ * the click never reached the button that was under the cursor a moment before.
+ * Nothing happened, and nothing said why.
+ *
+ * `.uin-modal` is the class ConfirmDialog gives its backdrop; see that file.
+ */
+function inOwnDialog(target: Node | null): boolean {
+  return target instanceof Element && !!target.closest('.uin-modal')
+}
+
 export function ContextRecords({
   threadId, adminPath, sourceLabel, hints, links, publicUrls, canEdit, kinds, defaultKind,
   compact = false,
@@ -123,6 +140,7 @@ export function ContextRecords({
     // closes this before the page moves.
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node
+      if (inOwnDialog(target)) return
       if (!wrap.current?.contains(target) && !menu.current?.contains(target)) setOpen(false)
     }
     const onKeyDown = (event: KeyboardEvent) => {
@@ -137,6 +155,7 @@ export function ContextRecords({
     // the thing they came to read is a menu nobody can use.
     const dismiss = (event: Event) => {
       if (menu.current?.contains(event.target as Node)) return
+      if (inOwnDialog(event.target as Node)) return
       setOpen(false)
     }
     document.addEventListener('pointerdown', onPointerDown)

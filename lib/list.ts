@@ -14,7 +14,22 @@ import { calendarDateIn, formatInSiteTimezone, wallClockDaysAhead } from '@/lib/
 
 export const PER_PAGE = 25
 
-export type StatusFilter = 'open' | 'snoozed' | 'done' | 'all'
+/** The four states a conversation is genuinely in, which is what a search can
+ *  be pointed at and what the column actually holds. */
+export type SearchStatus = 'open' | 'snoozed' | 'done' | 'all'
+
+/** The four above, plus the one the tab row adds on a shared address: the open
+ *  conversations nobody has picked up yet.
+ *
+ *  A cut across `open` rather than a fifth state in the table, which is exactly
+ *  what it is - a shared address is a queue, and "has anybody taken this?" is
+ *  the first question asked of a queue every morning. It rides in the same
+ *  `status` slot because it is the same choice, what the list is a list of, and
+ *  two params that cannot both be true have no business being two params. It is
+ *  deliberately NOT the `assignee=unassigned` filter wearing a tab: that one
+ *  answers the same question of any status, and the pair of them contradicting
+ *  each other is settled where each is set rather than left to the reader. */
+export type StatusFilter = SearchStatus | 'unassigned'
 
 export type InboxParams = {
   /** The inbox chosen in the tabs, or null for everything this person may see. */
@@ -31,6 +46,13 @@ export type InboxParams = {
    *  across every address they can write from. It takes the same slot as an
    *  inbox because it is the same choice - what the list is a list of. */
   draftsOnly: boolean
+  /** The "Scheduled" tab: this person's own messages with a departure time on
+   *  them, waiting for it. The same rows as Drafts, in the same table, split
+   *  off it because they answer a different question - "what is going out
+   *  without me" rather than "what have I not finished" - and a list holding
+   *  both made the Drafts count read as work outstanding when half of it was
+   *  work already decided. Same slot as an inbox, same reason as the rest. */
+  scheduledOnly: boolean
   /** The "Sent" tab: everything that has left, across every address this person
    *  may read. Takes the same slot for the same reason. */
   sentOnly: boolean
@@ -147,7 +169,13 @@ export function parseComposeKind(raw: string | undefined): ComposeKind | null {
   return COMPOSE_KINDS.includes(raw as ComposeKind) ? (raw as ComposeKind) : null
 }
 
-const STATUSES: StatusFilter[] = ['open', 'snoozed', 'done', 'all']
+/** What a search may be narrowed to. The queue is not one of them: "nobody has
+ *  picked this up" is a question about the address somebody is standing in, and
+ *  a search looks across every address they can read. */
+const STATUSES: SearchStatus[] = ['open', 'snoozed', 'done', 'all']
+
+/** And what the tab row may be on, which is the four plus the queue. */
+const TAB_STATUSES: StatusFilter[] = [...STATUSES, 'unassigned']
 
 /** What "start a new one" is written as in the address. A word rather than a
  *  blank, so a link that dropped its value cannot be mistaken for it. */
@@ -226,12 +254,18 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
       !isChannel && !scoped.folder
         && inbox && inbox !== 'all' && inbox !== 'none' && inbox !== 'drafts'
         && inbox !== 'sent' && inbox !== 'contacts' && inbox !== 'campaigns'
-        && inbox !== 'mentions' && inbox !== 'spam'
+        && inbox !== 'mentions' && inbox !== 'spam' && inbox !== 'scheduled'
         ? inbox
         : null,
     providerModule: channel.length > 0 ? channel : null,
     unroutedOnly: inbox === 'none',
     draftsOnly: inbox === 'drafts' || scoped.folder === 'drafts',
+    // No scoped form: there is one Scheduled folder, holding whatever this
+    // person has set going, whichever address it leaves from. The rail offers
+    // no version of it under a colleague's name for the same reason the Drafts
+    // folder there is really the reader's own - the row belongs to whoever
+    // wrote it.
+    scheduledOnly: inbox === 'scheduled',
     sentOnly: inbox === 'sent' || scoped.folder === 'sent',
     contactsOnly: inbox === 'contacts',
     campaignsOnly: inbox === 'campaigns',
@@ -244,7 +278,7 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
     categoryId: sp.cat ? sp.cat : null,
     importing: sp.import === '1',
     editingContact: sp.edit === '1',
-    status: rawStatus && STATUSES.includes(rawStatus) ? rawStatus : 'open',
+    status: rawStatus && TAB_STATUSES.includes(rawStatus) ? rawStatus : 'open',
     unreadOnly: sp.unread === '1',
     oldestFirst: sp.sort === 'oldest',
     assignee: sp.assignee ? sp.assignee : null,
@@ -302,7 +336,7 @@ export type SearchRequest = {
   unreadOnly: boolean
   /** One of the four statuses. 'all' by default: something answered and filed
    *  three weeks ago is exactly what people come to a search box for. */
-  status: StatusFilter
+  status: SearchStatus
   after: string
   before: string
 }
@@ -410,7 +444,7 @@ export function leaveSearchHref(base: string, current: Record<string, string>): 
 export function searchRequestFrom(current: Record<string, string>): SearchRequest {
   const inbox = current.inbox ?? ''
   const contacts = inbox === 'contacts'
-  const status = current.status as StatusFilter | undefined
+  const status = current.status as SearchStatus | undefined
   // Whether the list underneath is already the answer to a search. It settles
   // where the dialog opens pointed: everywhere, when somebody is simply reading
   // an inbox and has come here BECAUSE they cannot find something - and at
@@ -446,7 +480,7 @@ export function searchRequestFrom(current: Record<string, string>): SearchReques
  *  for the same reason Drafts does: it is a list of jobs colleagues have asked
  *  about, the words never reach it, and a search pointed there would have been
  *  a search pointed at nothing while saying otherwise. */
-const NOT_A_SCOPE = ['drafts', 'sent', 'contacts', 'campaigns', 'mentions']
+const NOT_A_SCOPE = ['drafts', 'scheduled', 'sent', 'contacts', 'campaigns', 'mentions']
 
 function searchableScope(inbox: string): string {
   if (!inbox || NOT_A_SCOPE.includes(inbox)) return 'all'

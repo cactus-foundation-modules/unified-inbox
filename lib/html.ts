@@ -80,3 +80,32 @@ export function htmlToText(html: string): string {
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
+
+/**
+ * A stored message, made ready to READ - which is not the same as ready to
+ * store, and the difference is where the pictures in our own post went.
+ *
+ * prepareInboundHtml above runs on the sync path only, so a message that
+ * ARRIVED has its remote pictures parked and a message WE SENT does not: the
+ * sent copy is recorded as it went out, remote addresses and all, and it has to
+ * be - it is what lib/compose.ts quotes under a reply, and a quote with every
+ * src stripped out of it is a reply full of holes.
+ *
+ * The reading frame, though, serves the message under a policy that allows
+ * pictures from this origin and nowhere else (see the body route). Deskwell's
+ * own pictures live on a media host of their own, so every product photo and
+ * the signature logo in anything we had sent was refused by the policy and drew
+ * an empty box. Nothing was wrong with the markup and nothing was wrong with the
+ * picture; the two halves simply disagreed about who was allowed to fetch it.
+ *
+ * So the read path parks whatever the write path did not, and then the frame's
+ * one route back - the picture proxy - is the route for every picture in every
+ * message, ours included. Idempotent by construction: a tag that has already
+ * been parked has no src left to park.
+ */
+export function readableHtml(html: string | null | undefined): string | null {
+  // '' stays '' rather than becoming null: the caller can still tell "there was
+  // no HTML part" from "the HTML part sanitised away to nothing".
+  if (!html) return html ?? null
+  return blockRemoteImages(html)
+}

@@ -19,6 +19,11 @@ const db = vi.hoisted(() => ({
   insertOutboundAttachment: vi.fn(),
   settleDelivery: vi.fn(),
   recordAppendOutcome: vi.fn(),
+  recordEvent: vi.fn(),
+  // Nothing is on anybody's desk unless a test says the address belongs to
+  // somebody; this answers "it took", and the tests below check whether it was
+  // reached at all.
+  assignThreadIfUnassigned: vi.fn(async (): Promise<boolean> => true),
   recordLink: vi.fn(),
   reopenForRetry: vi.fn(),
   getMessage: vi.fn(),
@@ -40,6 +45,12 @@ const transport = vi.hoisted(() => ({
   })),
 }))
 
+// Whose address it is. Its own module rather than part of the db mock, because
+// it reads the staff list as well as the inbox - see lib/own-post.ts.
+const ownPost = vi.hoisted(() => ({
+  ownPostOwnerOf: vi.fn(async (): Promise<string | null> => null),
+}))
+
 const append = vi.hoisted(() => ({ appendToSent: vi.fn() }))
 const mime = vi.hoisted(() => ({ buildRawMessage: vi.fn() }))
 const media = vi.hoisted(() => ({
@@ -53,6 +64,7 @@ vi.mock('./transport', async () => {
   const real = await vi.importActual<typeof import('./transport')>('./transport')
   return { ...real, ...transport }
 })
+vi.mock('./own-post', () => ownPost)
 vi.mock('./append', () => append)
 vi.mock('./mime', () => mime)
 vi.mock('./attachments', () => ({ loadAttachmentBytes: vi.fn() }))
@@ -122,7 +134,13 @@ beforeEach(() => {
   vi.clearAllMocks()
   // Delivery receipts off, which is how every site starts and what every test
   // below assumes unless it says otherwise.
-  db.getSettings.mockResolvedValue({ trackOpens: false, requestReadReceipts: false })
+  // Delivery receipts off; handing a colleague their own post on. Both are what
+  // a fresh install gets.
+  db.getSettings.mockResolvedValue({
+    trackOpens: false, requestReadReceipts: false, autoAssignOwnPost: true,
+  })
+  // And the address being sent from belongs to nobody in particular.
+  ownPost.ownPostOwnerOf.mockResolvedValue(null)
   // Nobody has an address of their own unless the test in question says so.
   db.defaultInboxIdFor.mockResolvedValue(null)
   db.inboxIsSomebodysOwn.mockResolvedValue(false)
@@ -312,7 +330,7 @@ describe('sendMessage - headers (E11, and what S5/S7 depend on)', () => {
   })
 
   it('carries the tracking tag and the receipt request when the site asks for them', async () => {
-    db.getSettings.mockResolvedValue({ trackOpens: true, requestReadReceipts: true })
+    db.getSettings.mockResolvedValue({ trackOpens: true, requestReadReceipts: true, autoAssignOwnPost: true })
     await sendMessage(baseRequest())
 
     const row = db.insertOutboundMessage.mock.results[0]!.value as Promise<{ row: { id: string } }>
@@ -326,7 +344,7 @@ describe('sendMessage - headers (E11, and what S5/S7 depend on)', () => {
   })
 
   it('leaves the tracking tag off an inbox sending through its own mail server', async () => {
-    db.getSettings.mockResolvedValue({ trackOpens: true, requestReadReceipts: true })
+    db.getSettings.mockResolvedValue({ trackOpens: true, requestReadReceipts: true, autoAssignOwnPost: true })
     db.getInbox.mockResolvedValue({ ...INBOX, sendTransport: 'smtp', smtpHost: 'mail.example.com' })
     await sendMessage(baseRequest())
 
@@ -622,6 +640,85 @@ describe('sendMessage - attachments are never silently dropped (5.2)', () => {
     if (result.ok) throw new Error('expected a refusal')
     expect(result.reason).toContain('invoice.pdf')
     expect(transport.deliver).not.toHaveBeenCalled()
+  })
+})
+
+describe('sendMessage - a conversation started from your own address', () => {
+  // The arriving half of this is lib/sync.ts. This is the other end: writing to
+  // a supplier from your own address and then finding the conversation filed as
+  // nobody's work is the same complaint seen from the other side - and the copy
+  // that comes back out of Sent is turned away as one we already hold, so if it
+  // is not done here it is not done at all.
+
+  it('puts a conversation started from somebody’s own address on their desk', async () => {
+    db.createOutboundThread.mockResolvedValue('thread-new')
+    ownPost.ownPostOwnerOf.mockResolvedValue('user-emma')
+
+    const result = await sendMessage({
+      inboxId: 'inbox-1',
+      mode: 'new',
+      to: ['supplier@example.com'],
+      subject: 'The blue chairs',
+      bodyHtml: '<p>Twelve please.</p>',
+      idempotencyKey: 'press-own-1',
+      authorUserId: 'user-emma',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(db.assignThreadIfUnassigned).toHaveBeenCalledWith('thread-new', 'user-emma')
+    expect(db.recordEvent).toHaveBeenCalledWith(
+      'thread-new', null, 'assigned', { to: 'user-emma', automatic: true },
+    )
+  })
+
+  it('leaves a shared address alone - sending from sales@ does not make it yours', async () => {
+    db.createOutboundThread.mockResolvedValue('thread-new')
+
+    await sendMessage({
+      inboxId: 'inbox-1',
+      mode: 'new',
+      to: ['supplier@example.com'],
+      subject: 'The blue chairs',
+      bodyHtml: '<p>Twelve please.</p>',
+      idempotencyKey: 'press-shared-1',
+      authorUserId: 'user-emma',
+    })
+
+    expect(db.assignThreadIfUnassigned).not.toHaveBeenCalled()
+  })
+
+  it('does nothing at all when the site has switched it off', async () => {
+    db.createOutboundThread.mockResolvedValue('thread-new')
+    ownPost.ownPostOwnerOf.mockResolvedValue('user-emma')
+    db.getSettings.mockResolvedValue({
+      trackOpens: false, requestReadReceipts: false, autoAssignOwnPost: false,
+    })
+
+    await sendMessage({
+      inboxId: 'inbox-1',
+      mode: 'new',
+      to: ['supplier@example.com'],
+      subject: 'The blue chairs',
+      bodyHtml: '<p>Twelve please.</p>',
+      idempotencyKey: 'press-off-1',
+      authorUserId: 'user-emma',
+    })
+
+    expect(db.assignThreadIfUnassigned).not.toHaveBeenCalled()
+  })
+
+  it('never takes a conversation off the colleague already dealing with it', async () => {
+    // A reply typed on a conversation somebody else has. The guard is a WHERE
+    // clause at the database (see assignThreadIfUnassigned); this is the half
+    // of it the send path is responsible for - it asks, and it does not write a
+    // timeline entry for an answer of no.
+    ownPost.ownPostOwnerOf.mockResolvedValue('user-emma')
+    db.assignThreadIfUnassigned.mockResolvedValue(false)
+
+    await sendMessage(baseRequest())
+
+    expect(db.assignThreadIfUnassigned).toHaveBeenCalledWith('thread-1', 'user-emma')
+    expect(db.recordEvent).not.toHaveBeenCalled()
   })
 })
 

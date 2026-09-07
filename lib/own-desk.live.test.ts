@@ -27,7 +27,7 @@ import {
 // connects. A query Postgres will not parse is green everywhere until a
 // customer opens the screen.
 //
-// Four claims, and every one of them is about the DATABASE:
+// Five claims, and every one of them is about the DATABASE:
 //
 //   1. `assignThreadIfUnassigned` fills an empty desk and REFUSES an occupied
 //      one, in one statement. Two collection ticks land on one conversation at
@@ -43,7 +43,11 @@ import {
 //      not the rows already under their own address. A number beside an address
 //      that disagrees with the list under it sends somebody hunting for a
 //      message that was never missing.
-//   4. `railOrderFor` / `setRailOrder` round-trip, including the `::text[]`
+//   4. The Unassigned queue on a shared address means open AND on nobody's
+//      desk, in one clause, and the number on the tab agrees with the list
+//      under it. A count drawn from a different WHERE than its list is a tab
+//      that says three and shows one.
+//   5. `railOrderFor` / `setRailOrder` round-trip, including the `::text[]`
 //      cast and the ON CONFLICT - saved twice is one row, not two.
 //
 // A real throwaway database on the Postgres VPS, built from the core schema and
@@ -275,6 +279,58 @@ describe.runIf(shouldRun)('one person’s own desk, against a real database', ()
       perPage: 25,
     }))[0]!.id, false)
     expect(await count()).toBe(0)
+  })
+
+  it('offers the queue on a shared address: open, and on nobody’s desk', async () => {
+    // The Unassigned tab is not the assignee filter wearing a hat - it is its
+    // own value in the status slot, and both halves of what it means live in
+    // one WHERE clause that nothing else in this repository executes. The tab,
+    // the number on it and the paging under it all come through here, so a
+    // clause Postgres will not parse takes the whole column down rather than
+    // only the tab.
+    const waiting = await thread(accounts, 'Nobody has taken this')
+    const taken = await thread(accounts, 'Marcus has this one')
+    const settled = await thread(accounts, 'Finished and on nobody’s desk')
+    await lib.assignThread(taken, marcus)
+    await lib.setThreadStatus(settled, 'done', null)
+    expect(waiting).toBeTruthy()
+
+    // Open and unassigned, and neither of the other two.
+    expect(await listFor({ inboxId: accounts, status: 'unassigned' }))
+      .toEqual(['Nobody has taken this'])
+
+    // The count beside the tab says the same thing as the list under it, which
+    // is the disagreement worth executing rather than reading. `all` is every
+    // status once: the queue is a cut across the open ones, so counting it in
+    // would count each of them twice.
+    const counts = await lib.statusCounts({
+      viewerUserId: emma,
+      inboxIds: visible(),
+      includeUnrouted: false,
+      inboxId: accounts,
+      status: 'all',
+      page: 1,
+      perPage: 25,
+    })
+    const open = counts.open ?? 0
+    expect(counts.unassigned).toBe(1)
+    expect(counts.all).toBe(open + (counts.done ?? 0) + (counts.snoozed ?? 0))
+
+    // And it pages and counts through the same clause the list came out of.
+    expect(await lib.countThreads({
+      viewerUserId: emma,
+      inboxIds: visible(),
+      includeUnrouted: false,
+      inboxId: accounts,
+      status: 'unassigned',
+      page: 1,
+      perPage: 25,
+    })).toBe(1)
+
+    // Put it on somebody and it leaves the queue, which is the whole point of
+    // the tab: it empties as the morning is worked through.
+    await lib.assignThread(waiting, emma)
+    expect(await listFor({ inboxId: accounts, status: 'unassigned' })).toEqual([])
   })
 
   it('keeps the top of the rail in her own order, and saving twice is one row', async () => {

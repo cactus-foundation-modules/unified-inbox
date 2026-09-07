@@ -755,47 +755,20 @@ const CSS = `
    which leaves a bordered strip holding nothing, and a border round nothing
    reads as a broken screen rather than as an absence. */
 .uin-rail-foot[data-bare="1"] { display: none; }
-/* The bell hangs the offer off itself, so the offer is placed against the
-   button somebody is about to press rather than against the whole rail. */
-.uin-notify { position: relative; display: inline-flex; flex: none; }
+.uin-notify { display: inline-flex; flex: none; }
 /* On, in the same muted family as the refresh beside it, and full strength
    rather than a second colour: the struck-through bell already says which way
    the switch is, and a coloured icon in a rail of grey ones reads as a warning
    about something. */
 .uin-notify-toggle[aria-pressed="true"] { color: var(--color-text); }
-.uin-notify-offer {
-  position: absolute;
-  bottom: calc(100% + 0.4rem);
-  right: 0;
-  z-index: 3;
-  width: 15rem;
-  max-width: min(15rem, 70vw);
-  padding: 0.6rem 0.7rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius, 0.375rem);
-  /* The rail's ground is --color-bg, so this is --color-surface: the one
-     pairing that reads as two grounds in BOTH themes. See the note at the top
-     of this file before reaching for anything else. */
-  background: var(--color-surface);
-  box-shadow: var(--shadow-xl);
-}
-.uin-notify-offer-text {
-  margin: 0 0 0.55rem;
-  font-size: 0.8125rem;
-  line-height: 1.45;
-  color: var(--color-text);
-}
-.uin-notify-offer-buttons { display: flex; gap: 0.4rem; flex-wrap: wrap; }
-/* Lying down, the foot is the last thing along a strip at the TOP of the box,
-   so an offer hung above it would go off the top of the screen. It drops
-   underneath instead, and hugs the right so it does not run off the end of a
-   strip that is already scrolling sideways. */
-@media (max-width: 1199px) {
-  .uin-notify-offer {
-    bottom: auto;
-    top: calc(100% + 0.4rem);
-  }
-}
+/* The offer is a dialog in the middle of the window, not a bubble hung off the
+   bell. It used to be the bubble, and the bell is at the FOOT of the rail, so
+   the one question the hub ever asks unprompted arrived tucked into the bottom
+   left corner - the least looked-at spot on the screen, and easily read as a
+   cookie strip rather than as a question. It borrows the same shell as every
+   other dialog in here (.uin-modal), so it is centred, dimmed behind, and
+   sized like the rest. */
+.uin-modal-card-notify { width: min(26rem, 100%); }
 /* Whatever the check came back with, and whatever a refused rearrangement had
    to say. The first sits inside the stuck box below the rail's own padding, the
    second under the rail entirely - hence the padding here and none in there. */
@@ -933,16 +906,6 @@ const CSS = `
   color: var(--color-text-muted);
 }
 .uin-tab[aria-current="true"] .uin-tab-count { color: var(--color-text-secondary); }
-/* How much is in the list altogether, at the far end. It is an answer to the
-   row rather than one more thing to press, so it is the quietest thing in it. */
-.uin-tabs-total {
-  margin-left: auto;
-  flex: none;
-  padding-left: 0.5rem;
-  font-size: 0.6875rem;
-  color: var(--color-text-muted);
-  white-space: nowrap;
-}
 
 /* ---- the search box and the narrower cuts ------------------------------- */
 .uin-search-row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; min-width: 0; }
@@ -1934,6 +1897,53 @@ const CSS = `
 .uin-drop-errors { list-style: none; margin: 0 0 0.5rem; padding: 0; display: grid; gap: 0.25rem; }
 .uin-recipients { font-size: 0.75rem; color: var(--color-text-secondary); }
 
+/* ---- the dialog that puts files on a message ---------------------------- */
+/* Narrower than the catalogue picker: one search box over one big box, and a
+   wide card would leave the drop target as a letterbox. */
+.uin-modal-card-attach { width: min(36rem, 100%); }
+/* The search box is the first thing in the card's own body, so it has neither a
+   rule above it nor a tint of its own - the same treatment the catalogue
+   picker's search gets, for the same reason. */
+.uin-attach-find { border-top: 0; padding: 0; background: none; }
+.uin-attach-find input { flex: 1 1 auto; min-width: 0; }
+/* The results stand where the big box was, so they are given its height rather
+   than the short list the old inline panel could afford. */
+.uin-attach-results { max-height: 22rem; }
+/* Where files are dropped, and the whole reason this is a dialog: a target big
+   enough to aim at with a file in your hand. Dashed rather than solid, because
+   a dashed rectangle is what every program on the machine uses to mean "put it
+   here" and this one should not need reading. */
+.uin-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 13rem;
+  padding: 1.5rem 1rem;
+  text-align: center;
+  border: 2px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg, 0.75rem);
+  background: var(--color-bg-subtle);
+}
+.uin-dropzone-icon { display: inline-flex; color: var(--color-text-secondary); }
+.uin-dropzone-title { margin: 0; font-size: 0.9375rem; font-weight: 650; color: var(--color-text); }
+.uin-dropzone-sub { margin: 0 0 0.4rem; font-size: 0.8125rem; color: var(--color-text-secondary); }
+.uin-dropzone-note {
+  margin: 0.4rem 0 0;
+  max-width: 26rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+/* The count sits at the left-hand end of a strip that otherwise pushes
+   everything right, so it reads as a note rather than as another answer. */
+.uin-modal-foot-note { margin-right: auto; }
+/* What is going with the message, on a line of its own above the strip of
+   buttons rather than in among them. Tighter than a strip of controls: these
+   are chips, and they bring their own height. */
+.uin-attachment-row { padding-block: 0.4rem; }
+
 /* ---- writing a new message, over the top -------------------------------- */
 /* A new message is started while looking at the list, so it opens over the list
    rather than taking its place: nothing is lost from behind it, and closing it
@@ -2028,6 +2038,41 @@ const CSS = `
    screenful, so the card is as tall as what is in it instead of reserving half
    the window for a box nobody is going to fill. */
 .uin-modal-card-short { width: min(32rem, 100%); }
+
+/* ---- who the site turns away -------------------------------------------- */
+/* One address a line, with what is known about the block under it and the way
+   out of it on the right. A plain list rather than the settings page's cards:
+   this is read standing in a folder rather than sat on a settings screen, and
+   the errand is nearly always "is this one address on here or not". */
+.uin-blocked-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.uin-blocked-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 0.375rem);
+  background: var(--color-surface-raised);
+}
+/* min-width: 0 so the ellipsis below has something to be measured against - a
+   flex item defaults to the width of its contents, and an address that cannot
+   shrink pushes the button off the end of the card instead. */
+.uin-blocked-main { flex: 1 1 auto; min-width: 0; display: grid; gap: 0.1rem; }
+.uin-blocked-address {
+  font-size: 0.8125rem;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.uin-blocked-sub { font-size: 0.75rem; color: var(--color-text-muted); }
 
 /* ---- asking twice ------------------------------------------------------- */
 /* One question, two answers, and no more room than that needs. The answers sit
@@ -2392,7 +2437,13 @@ const CSS = `
   column-gap: 0.4rem;
   row-gap: 0.2rem;
 }
-.uin-ctx-row--x > .uin-ctx-main { flex: 1 1 auto; }
+/* Basis 0, not auto. Flex decides what wraps onto the next line from an
+   item's max-content width, and min-width: 0 does not come into that sum - so a
+   record whose name is longer than the menu is wide pushed the NAME onto the
+   line below, leaving the cross sitting on its own above it instead of beside
+   it. With no basis to overflow there is nothing to wrap, and the name shrinks
+   and wraps inside its own box where the cross stays to the left of it. */
+.uin-ctx-row--x > .uin-ctx-main { flex: 1 1 0; }
 .uin-ctx-x {
   flex: 0 0 auto;
   display: inline-flex;

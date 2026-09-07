@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { AdminTooltip } from '@/components/admin/Tooltip'
 import { Dropdown, MenuItem } from './Dropdown'
 import { SnoozePanel } from './SnoozePanel'
 import { SpamButton } from './SpamButton'
@@ -48,6 +49,10 @@ type Props = {
   senderBlocked: boolean
   /** Whether this reader may do the refusing. */
   canBlock: boolean
+  /** The list with nothing open on it - where the close cross points. Junking
+   *  something goes there, since the conversation has just left every list this
+   *  reader could have been standing in. */
+  closeHref: string
 }
 
 /** What to call where it stands, on the button that says so. Not a sentence:
@@ -61,7 +66,7 @@ const STATUS_WORDS: Record<string, string> = {
 
 export function ThreadActions({
   threadId, status, assigneeUserId, snoozeUntil, staff, timezone,
-  spam, spamOwnerName, senderAddress, senderBlocked, canBlock,
+  spam, spamOwnerName, senderAddress, senderBlocked, canBlock, closeHref,
 }: Props) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
@@ -112,7 +117,7 @@ export function ThreadActions({
   return (
     <>
       <div className="uin-thread-actions">
-        {/* The basket, the clock, then whose it is, then where it stands. All
+        {/* The junk sign, the clock, then whose it is, then where it stands. All
             four sit on the subject line now, hard against the way out of the
             conversation: they are what you press on the way OUT of one, and a
             row of them on a line of their own was a band of chrome between the
@@ -128,26 +133,31 @@ export function ThreadActions({
           senderAddress={senderAddress}
           senderBlocked={senderBlocked}
           canBlock={canBlock}
+          closeHref={closeHref}
           disabled={busy}
         />
-        <Dropdown
-          className="uin-icon-btn uin-icon-btn-framed"
-          label={AlarmIcon}
-          ariaLabel="Set when this comes back"
-          title="Snooze"
-          align="end"
-          width={280}
-          disabled={busy}
-          panelClassName="uin-menu-snooze"
-        >
-          <SnoozePanel
-            status={status}
-            timezone={timezone}
-            busy={busy}
-            onSnooze={(until) => void patch({ status: 'snoozed', snoozeUntil: until.toISOString() })}
-            onWake={() => void patch({ status: 'open' })}
-          />
-        </Dropdown>
+        {/* The other wordless one, and given the same tooltip as the junk sign
+            for the same reason: a clock on its own is a guess until something
+            says which of the four things a clock could mean this one is. */}
+        <AdminTooltip body="Snooze - set when this comes back">
+          <Dropdown
+            className="uin-icon-btn uin-icon-btn-framed"
+            label={AlarmIcon}
+            ariaLabel="Set when this comes back"
+            align="end"
+            width={280}
+            disabled={busy}
+            panelClassName="uin-menu-snooze"
+          >
+            <SnoozePanel
+              status={status}
+              timezone={timezone}
+              busy={busy}
+              onSnooze={(until) => void patch({ status: 'snoozed', snoozeUntil: until.toISOString() })}
+              onWake={() => void patch({ status: 'open' })}
+            />
+          </Dropdown>
+        </AdminTooltip>
 
         {/* Whose it is. It said "With nobody yet", which describes the state
             rather than offering the thing you press it to do - and the state is

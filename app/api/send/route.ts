@@ -3,10 +3,10 @@ import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { canReplyToInbox } from '@/modules/unified-inbox/lib/access'
-import { discardDraftAfterSend, getThread } from '@/modules/unified-inbox/lib/db'
+import { discardDraftAfterSend, getThread, standDownScheduledDraft } from '@/modules/unified-inbox/lib/db'
 import { applyFollowUpAfterSend } from '@/modules/unified-inbox/lib/follow-up'
 import { sendMessage } from '@/modules/unified-inbox/lib/send'
-import { replyWords, sendProviderReply } from '@/modules/unified-inbox/lib/provider-send'
+import { sendProviderReply } from '@/modules/unified-inbox/lib/provider-send'
 import { visibleChannelKeys } from '@/modules/unified-inbox/lib/provider-registry'
 import { SendBody } from '@/modules/unified-inbox/lib/validation'
 
@@ -29,6 +29,37 @@ import { SendBody } from '@/modules/unified-inbox/lib/validation'
 // storage, and a message carrying a few megabytes of quote PDFs takes longer
 // than a bare reply.
 export const maxDuration = 60
+
+/**
+ * Takes the timer off the draft this send was written in, before a byte leaves.
+ *
+ * Sending by hand a message that is also set to go out on its own is now an
+ * ordinary thing to do - it is what the Send now button on a scheduled message
+ * does - and the two roads to the mail server know nothing about each other.
+ * The queue claims a row by moving it out of 'scheduled' and posts only what it
+ * claimed, so clearing the state here in one statement is what makes exactly
+ * one of the two send it. Idempotency is no help across the two: the composer's
+ * key is its own, and the queue's is derived from the draft's id.
+ *
+ * A refusal rather than a wait, because the wait is seconds and the honest
+ * answer is short: it is already on its way, and it will be in Sent.
+ */
+async function timerIsOff(
+  draftId: string | null | undefined,
+  userId: string,
+): Promise<{ ok: true } | { ok: false; response: Response }> {
+  if (!draftId) return { ok: true }
+  if (await standDownScheduledDraft(draftId, userId) === 'in-flight') {
+    return {
+      ok: false,
+      response: errorResponse(
+        'That one is already on its way out on its own. Give it a moment and look in Sent.',
+        409,
+      ),
+    }
+  }
+  return { ok: true }
+}
 
 export async function POST(request: Request) {
   const user = await getSessionFromCookie()
@@ -55,12 +86,16 @@ export async function POST(request: Request) {
         400,
       )
     }
+    const standDown = await timerIsOff(body.draftId, user.id)
+    if (!standDown.ok) return standDown.response
     const result = await sendProviderReply({
       threadId: thread.id,
-      // These channels carry words, not markup - a chat window and a text
-      // message have nowhere to put a typeface - so the catalogue goes as the
-      // same lines the text half of an email carries, where it was put.
-      text: await replyWords(body.bodyHtml, body.products ?? []),
+      // Handed over as it was typed. What a channel can actually carry of it -
+      // which emphasis, written with which markers - is that channel's own
+      // answer, so the rendering happens there rather than here; the catalogue
+      // goes as the same lines the text half of an email carries, where it was
+      // put.
+      body: { html: body.bodyHtml },
       authorUserId: user.id,
       authorName: user.displayName ?? null,
       products: body.products ?? [],
@@ -85,6 +120,9 @@ export async function POST(request: Request) {
   if (!await canReplyToInbox(user, inboxId)) {
     return errorResponse('You do not have permission to send from that inbox.', 403)
   }
+
+  const standDown = await timerIsOff(body.draftId, user.id)
+  if (!standDown.ok) return standDown.response
 
   const result = await sendMessage({ ...body, authorUserId: user.id })
 

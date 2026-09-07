@@ -49,8 +49,9 @@ function hasFiles(transfer: DataTransfer | null): boolean {
   return false
 }
 
-/** Everything dropped, read out of the event before it is emptied. Folders and
- *  anything refused come back as sentences rather than files. */
+/** Everything dropped, read out of the event before it is emptied. A folder is
+ *  the one thing only a drop can tell, so it is the one refusal made here; the
+ *  rest are left to addFiles, which the Choose files box goes through as well. */
 function gather(transfer: DataTransfer): { files: File[]; refusals: string[] } {
   const files: File[] = []
   const refusals: string[] = []
@@ -77,13 +78,7 @@ function gather(transfer: DataTransfer): { files: File[]; refusals: string[] } {
     }
   }
 
-  const accepted: File[] = []
-  for (const file of files) {
-    const refusal = refuseDroppedFile({ name: file.name, type: file.type, size: file.size })
-    if (refusal) refusals.push(refusal)
-    else accepted.push(file)
-  }
-  return { files: accepted, refusals }
+  return { files, refusals }
 }
 
 /** How many go up at once. Enough that three small files feel instant, few
@@ -91,6 +86,9 @@ function gather(transfer: DataTransfer): { files: File[]; refusals: string[] } {
 const AT_ONCE = 3
 
 export type AttachmentDrop = {
+  /** Files chosen some other way than by dragging - the Choose files box in the
+   *  attachment dialog - put through the same refusals and the same queue. */
+  addFiles: (files: File[], refusals?: string[]) => void
   /** Spread onto whatever element is the target. */
   dropProps: {
     onDragEnter: (event: ReactDragEvent<HTMLElement>) => void
@@ -237,6 +235,31 @@ export function useAttachmentDrop({ disabled = false, onAttached }: {
     if (depth.current === 0) setDragging(false)
   }, [])
 
+  /** The one way in for both gestures. `refusals` carries anything the caller
+   *  already knew it could not take - a dropped folder - so those sentences and
+   *  these end up in one list rather than two. */
+  const addFiles = useCallback((incoming: File[], refusals: string[] = []) => {
+    if (disabledRef.current) return
+
+    const accepted: File[] = []
+    const said = [...refusals]
+    for (const file of incoming) {
+      const refusal = refuseDroppedFile({ name: file.name, type: file.type, size: file.size })
+      if (refusal) said.push(refusal)
+      else accepted.push(file)
+    }
+
+    // Refused as a lot rather than as a hundred separate sentences: this is a
+    // folder emptied onto the box by accident, not a hundred decisions.
+    if (accepted.length > MAX_DROPPED_FILES) {
+      setErrors([`That is ${accepted.length} files at once. Add up to ${MAX_DROPPED_FILES} at a time.`])
+      return
+    }
+    setErrors(said)
+    if (accepted.length === 0) return
+    send(accepted)
+  }, [send])
+
   const onDrop = useCallback((event: ReactDragEvent<HTMLElement>) => {
     if (!hasFiles(event.dataTransfer)) return
     event.preventDefault()
@@ -246,19 +269,13 @@ export function useAttachmentDrop({ disabled = false, onAttached }: {
 
     // Synchronously, before anything is awaited - see the note at the top.
     const { files, refusals } = gather(event.dataTransfer)
-
-    if (files.length > MAX_DROPPED_FILES) {
-      setErrors([`That is ${files.length} files at once. Drop up to ${MAX_DROPPED_FILES} at a time.`])
-      return
-    }
-    setErrors(refusals)
-    if (files.length === 0) return
-    send(files)
-  }, [send])
+    addFiles(files, refusals)
+  }, [addFiles])
 
   const dismissErrors = useCallback(() => setErrors([]), [])
 
   return {
+    addFiles,
     dropProps: { onDragEnter, onDragOver, onDragLeave, onDrop },
     dragging,
     progress,

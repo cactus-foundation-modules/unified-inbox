@@ -18,7 +18,7 @@ import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { canOpenThread } from '@/modules/unified-inbox/lib/access'
-import { getInbox, getThreadDetail } from '@/modules/unified-inbox/lib/db'
+import { getInbox, getThreadDetail, setThreadBlocked } from '@/modules/unified-inbox/lib/db'
 import { markThreadSpam, spamOwnerFor, unmarkThreadSpam } from '@/modules/unified-inbox/lib/spam'
 import { ThreadSpamBody } from '@/modules/unified-inbox/lib/validation'
 
@@ -47,7 +47,26 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const owner = spamOwnerFor({ pressedByUserId: user.id, inbox })
 
   if (parsed.data.spam) await markThreadSpam(id, owner)
-  else await unmarkThreadSpam(id, owner)
+  else {
+    await unmarkThreadSpam(id, owner)
+    // And the site's own stamp with it, where the conversation is one the
+    // collecting pass put in the bin because its sender is blocked. Nobody
+    // pressed anything to get it in there, so nothing but this would ever take
+    // it out - a conversation that cannot be rescued is the one failure a spam
+    // folder must not have, and "Not junk" has to mean it on this screen too.
+    //
+    // Only the conversation. The sender stays blocked: letting one through is
+    // not the same decision as opening the front door, and that one is a
+    // different button on a different screen.
+    //
+    // Which is also why `view` is still the right bar for this, even though it
+    // is a site-wide row being cleared. The line this module draws is about
+    // what happens FROM NOW ON: turning a sender away, or letting them back in,
+    // changes what everybody receives for ever and takes `reply`. Rescuing one
+    // conversation the reader can already open changes one conversation, and
+    // the door it came through is exactly where it was.
+    await setThreadBlocked(id, false)
+  }
 
   // `owner` goes back so the screen can say whose bin it landed in when that is
   // not the presser's - "Moved to Sam's spam" is a different sentence from

@@ -7,6 +7,7 @@ import {
   htmlHasWriting,
   isWorthSaving,
   splitAddresses,
+  NOTHING_TO_SEND,
   type DraftForComposer,
 } from '@/modules/unified-inbox/lib/drafts'
 import { plainTextToHtml, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
@@ -25,6 +26,7 @@ import { SnoozePanel } from './SnoozePanel'
 import { AlarmIcon, CloseIcon, CollapseIcon, ExpandIcon, PaperclipIcon, TagIcon } from './icons'
 import { useComposerOpen } from './composer-open'
 import type { DraftSendState } from '@/modules/unified-inbox/lib/types'
+import type { ReplyStyle } from '@/modules/unified-inbox/lib/channel-reply'
 import { appendSlots, refKey, slotHtml, slotRefs } from '@/modules/unified-inbox/lib/products/slots'
 import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 
@@ -72,6 +74,16 @@ type Props = {
   replyAllTo: string[]
   canReply: boolean
   canForward: boolean
+  /** How this conversation is answered: whether somebody types who it goes to,
+   *  and what a reply on it can carry. See lib/channel-reply.ts - a channel
+   *  another module owns takes words, back where they came from, and offering
+   *  a To line, a formatting strip and a paperclip on one is offering three
+   *  things that are quietly thrown away. */
+  style: ReplyStyle
+  /** Who the reply is going to, in words, for the conversations that decide it
+   *  themselves. Printed where the To line would have been. Null on email,
+   *  which says it in the box instead. */
+  destinationLine: string | null
   staff: StaffMember[]
   /** Left over when the inbox this conversation belongs to cannot send - no
    *  sending identity, or the person may read it but not answer it. */
@@ -100,7 +112,7 @@ type Props = {
 }
 
 export function Composer({
-  threadId, inboxId, replyTo, replyAllTo, canReply, canForward, staff,
+  threadId, inboxId, replyTo, replyAllTo, canReply, canForward, style, destinationLine, staff,
   cannotReplyReason, replySubject, forwardSubject, draft, canAddProducts, draftProducts,
   requestedMode, requestedAt, timezone,
 }: Props) {
@@ -263,7 +275,11 @@ export function Composer({
   const setRecipients = forwarding
     ? (value: string) => { setForwardTo(value); setDirty(true) }
     : (value: string) => { setReplyRecipients(value); setRecipientsEdited(true); setDirty(true) }
-  const nobodyToSendTo = !noting && splitAddresses(recipients).length === 0
+  // Only where there is an address to be missing. On a conversation another
+  // module owns nobody types one, the send route ignores `to` entirely, and
+  // this used to disable Send, Send later and the snooze menu on every WhatsApp
+  // message, text and call the hub had collected.
+  const nobodyToSendTo = !noting && style.addressed && splitAddresses(recipients).length === 0
 
   /** What the subject would be if nobody touched it. Only ever shown once the
    *  Subject line has been opened - a reply with a subject nobody typed is what
@@ -275,7 +291,7 @@ export function Composer({
    *  carry a file on, and off while something is in flight for the reason the
    *  chips are greyed then: a message on its way is not one to add to. */
   const drop = useAttachmentDrop({
-    disabled: busy || noting,
+    disabled: busy || noting || !style.attachments,
     onAttached: (item) => {
       setAttachments((prev) => (prev.some((a) => a.key === item.key) ? prev : [...prev, item]))
       setDirty(true)
@@ -404,11 +420,11 @@ export function Composer({
 
   const submit = useCallback(async (): Promise<boolean> => {
     if (!htmlHasWriting(text)) {
-      setError('There is nothing to send yet.')
+      setError(NOTHING_TO_SEND)
       return false
     }
     const to = splitAddresses(recipients)
-    if (mode !== 'note' && to.length === 0) {
+    if (mode !== 'note' && style.addressed && to.length === 0) {
       setError(mode === 'forward' ? 'Say who to forward it to.' : 'Say who this is going to.')
       return false
     }
@@ -421,7 +437,13 @@ export function Composer({
         const response = await fetch(`/api/m/unified-inbox/threads/${threadId}/notes`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, mentions }),
+          body: JSON.stringify({
+            text,
+            mentions,
+            // References only, same as a message: the note is built from what
+            // the shop says when it is saved.
+            products: products.map(({ moduleName, kind, id }) => ({ moduleName, kind, id })),
+          }),
         })
         if (!response.ok) {
           setError(plainReason(
@@ -509,7 +531,7 @@ export function Composer({
     }
   }, [
     attachments, bcc, cc, defaultRecipients, draftId, mentions, mode, products, recipients, router,
-    subject, text, threadId,
+    style.addressed, subject, text, threadId,
   ])
 
   /** What a save sends. In one place because two things send it: the save that
@@ -805,7 +827,15 @@ export function Composer({
       id="uin-composer-text"
       handleRef={editor}
       value={text}
-      onChange={(html) => { setText(html); setDirty(true); setNote('') }}
+      onChange={(html) => {
+        setText(html)
+        setDirty(true)
+        setNote('')
+        // The complaint about an empty box, taken down the moment there is
+        // something in the box. Nothing else is touched: a send that failed
+        // is still a thing that failed.
+        if (htmlHasWriting(html)) setError((shown) => (shown === NOTHING_TO_SEND ? '' : shown))
+      }}
       placeholder={noting ? 'Something for the others to see' : 'Write your reply'}
       label={noting ? 'Your note' : 'Your message'}
     >
@@ -824,6 +854,18 @@ export function Composer({
         <div className="uin-composer-aside-row">
           <p className="uin-recipients uin-composer-aside">
             Only your colleagues see this. Nothing is sent to the customer.
+          </p>
+          {headTools && <span className="uin-field-links">{headTools}</span>}
+        </div>
+      ) : !style.addressed ? (
+        /* A conversation another module owns is not addressed by hand: it goes
+           back where it came from, and the four lines an email opens with - To,
+           Cc, Bcc and Subject - are four boxes nothing on the server reads. In
+           their place, one line saying who is about to receive it, which is the
+           part of the To line that was ever worth having here. */
+        <div className="uin-composer-aside-row">
+          <p className="uin-recipients uin-composer-aside">
+            {destinationLine ?? 'This goes back the way it came.'}
           </p>
           {headTools && <span className="uin-field-links">{headTools}</span>}
         </div>
@@ -1002,7 +1044,7 @@ export function Composer({
         </div>
       )}
 
-      {!noting && (
+      {!noting && style.attachments && (
         <AttachmentDropNotice
           progress={drop.progress}
           errors={drop.errors}
@@ -1024,9 +1066,15 @@ export function Composer({
         />
       )}
 
-      {!noting && pendingSendAt && !waiting && (
+      {/* Drawn on a message already waiting for a time as well as on one being
+          given its first: picking a new time off the clock has to show, and
+          used to do nothing visible at all - the row and both buttons that
+          commit it were hidden the moment a message was scheduled, so choosing
+          a better time silently threw the choice away. */}
+      {!noting && pendingSendAt && (
         <PendingSend
           at={pendingSendAt}
+          replacing={waiting}
           onClear={() => setPendingSendAt(null)}
           timezone={timezone}
           busy={busy}
@@ -1035,6 +1083,24 @@ export function Composer({
 
       {error && <div className="alert alert-danger" role="alert">{error}</div>}
       {note && !error && <div className="alert alert-success" role="status">{note}</div>}
+
+      {/* What is going with the message, on a line of its own above the strip.
+          It used to sit in among the buttons, where three files pushed Send
+          onto a second row and a long filename decided where everything else
+          went. A row of its own costs nothing when there is nothing on it -
+          there is no row at all - and keeps the strip below it still. */}
+      {!noting && style.attachments && attachments.length > 0 && (
+        <div className="uin-composer-row uin-attachment-row">
+          <AttachmentChips
+            attachments={attachments}
+            disabled={busy}
+            onRemove={(key) => {
+              setAttachments((prev) => prev.filter((p) => p.key !== key))
+              setDirty(true)
+            }}
+          />
+        </div>
+      )}
 
       {/* Everything you can do to the message, on one strip along the bottom -
           the place every mail program has kept it. What you do TO the message
@@ -1049,45 +1115,60 @@ export function Composer({
           primary that keeps the first line, because that is the one somebody
           came to press. See uin-send-group in styles.tsx for how. */}
       <div className="uin-composer-row uin-composer-actions">
-        {!noting && (
-          <>
-            <button
-              type="button"
-              className="uin-icon-btn"
-              title="Attach a file, or drag one onto this box"
-              aria-label="Attach a file, or drag one onto this box"
-              onClick={() => setPicking(true)}
-              disabled={busy}
-            >
-              {PaperclipIcon}
-            </button>
-            {canAddProducts && (
-              <button
-                type="button"
-                className="uin-icon-btn"
-                title="Put something you sell on this message"
-                aria-label="Put something you sell on this message"
-                onClick={() => setPickingProduct(true)}
-                disabled={busy}
-              >
-                {TagIcon}
-              </button>
-            )}
-          </>
-        )}
-
-        <RichTextTools />
-
-        {!noting && (
-          <AttachmentChips
-            attachments={attachments}
+        {/* The paperclip only where a file would actually arrive. A reply on a
+            channel another module owns is handed to it as one string, so an
+            attachment on one was picked, uploaded, shown as a chip and then
+            silently left behind by the send route. */}
+        {!noting && style.attachments && (
+          <button
+            type="button"
+            className="uin-icon-btn"
+            title="Attach a file, or drag one onto this box"
+            aria-label="Attach a file, or drag one onto this box"
+            onClick={() => setPicking(true)}
             disabled={busy}
-            onRemove={(key) => {
-              setAttachments((prev) => prev.filter((p) => p.key !== key))
-              setDirty(true)
-            }}
-          />
+          >
+            {PaperclipIcon}
+          </button>
         )}
+        {/* On a note as well as on a reply. A note is where somebody asks a
+            colleague about a chair, and on a discussion it is the only box there
+            is - so leaving the catalogue off it meant the one conversation whose
+            whole purpose is "look at this one" was the one that could not. What
+            goes out is different, not what may be picked: a note prints the
+            product as words on our own screen and puts it on the conversation's
+            context line, and nothing is sent to anybody. */}
+        {canAddProducts && (
+          <button
+            type="button"
+            className="uin-icon-btn"
+            title={noting
+              ? 'Put something you sell in this note'
+              : 'Put something you sell on this message'}
+            aria-label={noting
+              ? 'Put something you sell in this note'
+              : 'Put something you sell on this message'}
+            onClick={() => setPickingProduct(true)}
+            disabled={busy}
+          >
+            {TagIcon}
+          </button>
+        )}
+
+        {/* The formatting strip, cut to what will actually arrive. An email
+            carries the lot. A channel carries whatever it declared and nothing
+            else - WhatsApp has bold, italic and strikethrough, written with a
+            marker rather than a tag, and has no colour, no link with words of
+            its own and no bullet list at all - so those three buttons are
+            drawn and the other three are not. A channel that declared nothing
+            takes plain words and gets no strip. A note keeps the whole strip
+            whatever the conversation is: it is never sent anywhere, and it is
+            drawn as markup on this screen. */}
+        {noting || style.richText ? (
+          <RichTextTools />
+        ) : style.styles.length > 0 ? (
+          <RichTextTools styles={style.styles} />
+        ) : null}
 
         <span className="uin-composer-gap" />
 
@@ -1131,7 +1212,7 @@ export function Composer({
               snooze" - because that is what picking it changed. There used to be
               a separate "Save it for then" here, which meant three ways to send
               on one strip and two of them a thumb apart. */}
-          {!noting && !waiting && (
+          {!noting && (
             <Dropdown
               className="btn btn-secondary btn-sm"
               label={pendingWallClock ? 'Send later & snooze' : 'Send & snooze'}
@@ -1166,44 +1247,69 @@ export function Composer({
             </Dropdown>
           )}
 
-          {!waiting && (
+          {/* A message already waiting for its time, that has been edited since.
+              Its own button because the other two commit a decision - send it,
+              send it then - and this one commits nothing but the writing: the
+              departure time it already has is left exactly where it is. Without
+              it there was no way at all to correct a scheduled message and keep
+              the time, and the writing quietly rode out on whatever saved it
+              next. */}
+          {!noting && waiting && !pendingWallClock && hasUnsaved && (
             <button
               type="button"
-              className="btn btn-primary btn-sm"
-              onClick={() => {
-                if (!noting && pendingWallClock) {
-                  void save(pendingWallClock, pendingFollowUp)
-                  return
-                }
-                void submit()
-              }}
-              // Nothing to send to means the server would refuse it anyway, and
-              // finding that out by pressing Send is finding it out too late.
-              disabled={busy || nobodyToSendTo}
+              className="uin-chip"
+              disabled={busy}
+              onClick={() => { void save() }}
             >
-              {busyWith === 'send' || (busyWith === 'save' && pendingWallClock)
-                ? (noting ? 'Saving...' : 'Sending...')
-                : noting ? 'Save note' : pendingWallClock ? 'Send later' : 'Send now'}
+              {busyWith === 'save' ? 'Saving...' : 'Save changes'}
             </button>
           )}
+
+          {/* One button, always: with a time picked it commits that time, and on
+              a message already waiting for one it is the way to send it by hand
+              after all. It used to disappear the moment a message was
+              scheduled, which left "send it now instead" as no answer at
+              all. */}
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => {
+              if (!noting && pendingWallClock) {
+                void save(pendingWallClock, pendingFollowUp)
+                return
+              }
+              void submit()
+            }}
+            // Nothing to send to means the server would refuse it anyway, and
+            // finding that out by pressing Send is finding it out too late.
+            disabled={busy || nobodyToSendTo}
+          >
+            {busyWith === 'send' || (busyWith === 'save' && pendingWallClock)
+              ? (noting ? 'Saving...' : 'Sending...')
+              : noting ? 'Save note' : pendingWallClock ? 'Send later' : 'Send now'}
+          </button>
         </span>
       </div>
 
+      {/* Left open after a pick, like the catalogue below it: attaching six
+          files is one errand, and a dialog that shut itself after the first
+          would be five more trips into it. */}
       {picking && (
         <AttachmentPicker
+          drop={drop}
+          attached={attachments}
           onClose={() => setPicking(false)}
           onPick={(item) => {
             setAttachments((prev) =>
               prev.some((a) => a.key === item.key) ? prev : [...prev, item],
             )
             setDirty(true)
-            setPicking(false)
           }}
         />
       )}
 
-      {/* Left open after a pick, unlike the file list: quoting somebody three
-          chairs is one errand, not three trips into the catalogue. */}
+      {/* Left open after a pick as well: quoting somebody three chairs is one
+          errand, not three trips into the catalogue. */}
       {pickingProduct && (
         <ProductPicker
           chosen={products}

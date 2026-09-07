@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { detailLine, humanStatus, money, shortDate, toDate, toNumber } from './format'
+import { detailLine, humanStatus, inList, likeTerm, money, shortDate, toDate, toNumber } from './format'
 
 describe('toNumber', () => {
   it('copes with what a NUMERIC column actually hands back', () => {
@@ -61,5 +61,38 @@ describe('detailLine and dates', () => {
     expect(shortDate('2026-07-11T23:30:00.000Z', 'Europe/London')).toBe('12 Jul 2026')
     expect(shortDate('2026-07-11T23:30:00.000Z', 'UTC')).toBe('11 Jul 2026')
     expect(toDate(null)).toBeNull()
+  })
+})
+
+describe('inList', () => {
+  it('never binds a NUL, because Postgres will not take one', () => {
+    // The empty list used to become a sentinel string starting with \u0000, on
+    // the reasoning that nothing real could equal it. Nothing can, because
+    // Postgres refuses the parameter outright - "invalid byte sequence for
+    // encoding UTF8: 0x00" - and took the whole query with it. Anything this
+    // hands back must be bindable.
+    for (const values of [[], ['a@example.com']]) {
+      for (const value of inList(values).values) {
+        expect(String(value)).not.toContain(String.fromCharCode(0))
+      }
+    }
+  })
+
+  it('an empty list is an expression nothing matches, with nothing bound', () => {
+    const empty = inList([])
+    expect(empty.values).toEqual([])
+    expect(empty.sql).toContain('NULL')
+  })
+
+  it('passes real values through as parameters', () => {
+    expect(inList(['a@example.com', 'b@example.com']).values)
+      .toEqual(['a@example.com', 'b@example.com'])
+  })
+})
+
+describe('likeTerm', () => {
+  it('escapes the wildcards rather than dropping them', () => {
+    expect(likeTerm('DW_1')).toBe('%DW\\_1%')
+    expect(likeTerm(' 50% ')).toBe('%50\\%%')
   })
 })

@@ -62,11 +62,25 @@ export function detailLine(...parts: Array<string | null | undefined>): string |
  * A list of strings for an IN clause.
  *
  * `Prisma.join` on an empty array produces `IN ()`, which is a syntax error
- * rather than an empty result - so an empty list becomes one value nothing can
- * equal. Callers check first anyway; this is the belt to that pair of braces.
+ * rather than an empty result, so an empty list has to become something.
+ *
+ * It becomes `IN (NULL)`, which is never true and never matches - and, unlike
+ * the sentinel string it used to be, is something Postgres will accept. The
+ * sentinel began with a NUL character on the reasoning that no real address
+ * could ever contain one. Quite right, and the reason is that a text parameter
+ * containing a NUL is not a value Postgres will take AT ALL: binding one fails
+ * the whole statement with `invalid byte sequence for encoding "UTF8": 0x00`.
+ * So every query that reached this branch threw instead of returning nothing,
+ * which is how the attach picker came back empty on a conversation with nobody
+ * outside it - a discussion between colleagues has no addresses to rank by, and
+ * the ranking clause took the whole query down with it.
+ *
+ * `NOT IN` on this would be a trap - `x NOT IN (NULL)` is NULL rather than true,
+ * so nothing would ever match. Nothing in this module writes one, and anything
+ * that wants to should say so in SQL rather than reach for this.
  */
 export function inList(values: readonly string[]): Prisma.Sql {
-  return Prisma.join(values.length > 0 ? [...values] : ['\u0000-no-such-value'])
+  return values.length > 0 ? Prisma.join([...values]) : Prisma.sql`NULL`
 }
 
 /**

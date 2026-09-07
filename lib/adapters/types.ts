@@ -76,9 +76,14 @@ export type ContextSection = {
   moreHref: string | null
 }
 
-/** Everything we know about the person, for an adapter to match on. */
+/** Everything we know about whoever is on the other end, for an adapter to
+ *  match on. Beside a conversation this is the people ON it rather than the one
+ *  person it was matched to - see buildThreadContextQuery. */
 export type ContextQuery = {
-  /** Their addresses, plus-stripped and lower cased. Never empty in practice. */
+  /** Their addresses, plus-stripped and lower cased. Empty on a conversation
+   *  with nobody outside the building on it, which is what a discussion between
+   *  colleagues is - so an adapter must cope with the empty list rather than
+   *  assume it away. */
   emails: string[]
   /** Their numbers, digits only. */
   phones: string[]

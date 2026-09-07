@@ -1,6 +1,6 @@
 'use client'
 
-import type { SearchRequest, StatusFilter } from '@/modules/unified-inbox/lib/list'
+import type { SearchRequest, SearchStatus } from '@/modules/unified-inbox/lib/list'
 
 // The boxes a search is made of, and nothing about where they are drawn.
 //
@@ -32,7 +32,7 @@ export type SearchPlaces = {
   showUnrouted: boolean
 }
 
-const STATUS_LABELS: Array<{ value: StatusFilter; label: string }> = [
+const STATUS_LABELS: Array<{ value: SearchStatus; label: string }> = [
   { value: 'all', label: 'Any status' },
   { value: 'open', label: 'Still open' },
   { value: 'snoozed', label: 'Set aside for later' },
@@ -95,7 +95,7 @@ export function SearchFields({
         <span>Where it stands</span>
         <select
           value={request.status}
-          onChange={(event) => set('status', event.target.value as StatusFilter)}
+          onChange={(event) => set('status', event.target.value as SearchStatus)}
         >
           {STATUS_LABELS.map((status) => (
             <option key={status.value} value={status.value}>{status.label}</option>

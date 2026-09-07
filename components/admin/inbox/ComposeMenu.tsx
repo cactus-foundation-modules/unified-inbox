@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { ChevronDownIcon, NoteIcon, PenIcon, PhoneIcon, SmsIcon } from './icons'
 
@@ -81,7 +82,13 @@ export function ComposeMenu({ composeHref, entries }: Props) {
   useEffect(() => {
     if (!open) return
     const onPointerDown = (event: PointerEvent) => {
-      if (!wrap.current?.contains(event.target as Node)) setOpen(false)
+      // The menu itself is drawn into the page rather than in here (see below),
+      // so "inside" is two boxes now: the split button, and the menu wherever it
+      // has been put. Asking only the first is how pressing an entry closed the
+      // menu out from under the press.
+      const target = event.target as Node
+      if (wrap.current?.contains(target) || menu.current?.contains(target)) return
+      setOpen(false)
     }
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -151,7 +158,14 @@ export function ComposeMenu({ composeHref, entries }: Props) {
         {ChevronDownIcon}
       </button>
 
-      {open && at && (
+      {/* Into the page itself, like every other panel in here that is drawn at
+          window coordinates. The head of the rail this button sits in is
+          position: sticky, a sticky box makes a stacking context, and a fixed
+          menu inside one cannot get out of it however high its z-index - which
+          put this under the pinned head of the conversation and the note bar,
+          behind the middle and right columns. Never open on a first render, so
+          the server and the browser agree about the markup. */}
+      {open && at && typeof document !== 'undefined' && createPortal(
         <div
           className="uin-compose-menu"
           role="menu"
@@ -174,7 +188,8 @@ export function ComposeMenu({ composeHref, entries }: Props) {
               </span>
             </Link>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

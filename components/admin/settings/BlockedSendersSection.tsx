@@ -12,11 +12,17 @@ import { EmptyState, FieldGroup, ListRow, ListRowHeader, MUTED } from './ui'
 // on a settings page that blocks whatever is typed into it is a box that
 // eventually holds a customer's address with one letter wrong in it.
 //
-// LIFTING ONE IS ONLY here, and that is the other half of the same argument.
-// The block covers every inbox the site has, so it is a fact about how the site
-// is set up rather than about any one conversation - and the conversation it
-// was made from may well have been tidied away months ago. A block nobody could
+// LIFTING ONE IS HERE, and that is the other half of the same argument. The
+// block covers every inbox the site has, so it is a fact about how the site is
+// set up rather than about any one conversation - and the conversation it was
+// made from may well have been tidied away months ago. A block nobody could
 // find again would be a customer nobody could work out why they had lost.
+//
+// It is also on the Spam folder now, behind a button in the head of the list -
+// same route, same order, same wording on the button. Not a second list: that
+// is where blocked post lands, so that is where somebody is standing when the
+// question occurs to them. This page remains the one that can be reached
+// without opening the inbox at all.
 // ---------------------------------------------------------------------------
 
 export function BlockedSendersSection({ blocked, users, busy, call }: {
@@ -44,11 +50,12 @@ export function BlockedSendersSection({ blocked, users, busy, call }: {
     <FieldGroup
       title="Blocked senders"
       hint={<>
-        Nothing from these addresses is collected into any inbox on this site - shared or
-        personal. You block somebody from a conversation, using the junk button at the top of it;
-        this is where you let them back in. Blocking never deleted anything: their old
-        conversations are still here, and anything they sent while they were blocked is still
-        sitting on the mail server, exactly where it landed.
+        Nothing from these addresses reaches an inbox on this site - shared or personal. It is
+        collected and dropped straight into the Spam folder instead, marked as dealt with and
+        left unread, so you can see what they sent without any of it landing in front of
+        anybody. You block somebody from a conversation, using the junk button at the top of it;
+        this is where you let them back in, and so is the Spam folder itself. Blocking never
+        deleted anything: their old conversations are still exactly where they were.
       </>}
     >
       {blocked.length === 0 ? (
