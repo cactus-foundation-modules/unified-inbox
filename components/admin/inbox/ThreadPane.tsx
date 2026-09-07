@@ -6,6 +6,8 @@ import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 import type { ReplyStyle } from '@/modules/unified-inbox/lib/channel-reply'
 import { avatarHref, channelLabel, formatFull, formatWhen, inboxHref, initialsFor, splitQuotedText } from '@/modules/unified-inbox/lib/list'
 import { draftHref } from '@/modules/unified-inbox/lib/drafts'
+import { attributionLine, forwardHeaderRows } from '@/modules/unified-inbox/lib/compose'
+import type { QuotedPreview } from '@/modules/unified-inbox/lib/quoted-preview'
 import { describeSendAt } from '@/modules/unified-inbox/lib/scheduled'
 import { AtIcon, BackIcon, ClockIcon, CloseIcon, InboundIcon, NoteIcon, OutboundIcon, PaperclipIcon, TickIcon } from './icons'
 import { Avatar } from './Avatar'
@@ -203,6 +205,14 @@ const AUTO_LABELS: Record<string, string> = {
  * deciding whether to ring a customer who has "read" their quote deserves to
  * know which of the two happened. Every message on a site with receipts
  * switched off has none of these, and this renders nothing.
+ *
+ * A followed link sits BESIDE the open rather than instead of it, and is the
+ * only one of these that can appear twice over: the two answer different
+ * questions - whether the message was looked at, and whether the quote in it
+ * was - and a message can easily have the second without the first, since an
+ * open is a picture that plenty of mail apps never load. It only appears at all
+ * where the mail service rewrites the addresses in the message, which is a
+ * setting on its account rather than on this site.
  */
 function DeliveryReceipt({ message, now, timezone }: { message: ThreadMessageView; now: Date; timezone: string }) {
   const hardBounce = message.bouncedAt
@@ -228,6 +238,19 @@ function DeliveryReceipt({ message, now, timezone }: { message: ThreadMessageVie
           title="Something at the other end is holding it up. It may still get through on its own."
         >
           Held up on the way
+        </span>
+      )}
+      {message.clickedAt && (
+        <span
+          className="uin-tag uin-tag-done"
+          title={
+            `A link in it was followed: ${formatFull(message.clickedAt, timezone)}`
+            + (message.clickCount > 1 ? ` - ${message.clickCount} in all, the last one ${formatFull(message.lastClickAt, timezone)}` : '')
+            + '. Worth knowing: some office email systems check every link in a message when it arrives, so several at once within a minute of it landing is more likely to be their security than them.'
+          }
+        >
+          {TickIcon} Followed a link {formatWhen(message.clickedAt, now, timezone)}
+          {message.clickCount > 1 ? ` (${message.clickCount} times)` : ''}
         </span>
       )}
       {message.openedAt ? (
@@ -633,6 +656,31 @@ export function ThreadPane({
   // delete button refreshes instead, so this is server truth again.
   const ordered = newestFirst ? [...messages].reverse() : messages
 
+  // What the writing box shows under the words, folded away behind "Show the
+  // earlier messages". Built here rather than fetched: the conversation has
+  // already been read out of the database, and the line above the quotation is
+  // written by the same functions that write it into the message that leaves -
+  // so what the box shows and what the customer receives cannot drift apart.
+  //
+  // Notes are left out. One is written for colleagues on this screen and is
+  // never quoted into anything that goes anywhere, which is also what the send
+  // route's own lookup refuses to do.
+  const quotedPreviews: QuotedPreview[] = messages
+    .filter((message) => message.direction !== 'note')
+    .map((message) => ({
+      id: message.id,
+      sentAtMs: message.sentAt.getTime(),
+      attribution: attributionLine(message, timezone),
+      forwardHeader: forwardHeaderRows(message, timezone),
+      hasHtml: message.hasHtml,
+      hasRemoteImages: message.remoteImages > 0,
+      ownSender: message.ownSender,
+      // Only where there is no markup to fetch into the frame. Carrying the
+      // words of every message twice over would double a long conversation on
+      // the wire to say something about one of them.
+      bodyText: message.hasHtml ? null : message.bodyText,
+    }))
+
   // A draft opens the box on the way in, and nothing else does: a conversation
   // is opened to be read far more often than to be answered.
   const openAs = draft && draft.mode !== 'new' ? draft.mode : null
@@ -812,6 +860,7 @@ export function ThreadPane({
             draft={draft}
             canAddProducts={canAddProducts && productsTravel(thread.channel)}
             draftProducts={draftProducts}
+            quotedPreviews={quotedPreviews}
             timezone={timezone}
           />
         )}
@@ -839,6 +888,11 @@ export function ThreadPane({
                 tools={(
                   <MessageMenu
                     threadId={thread.id}
+                    /* An answer quotes the message it was asked for, so the
+                       arrow carries which one it sits on. A note is never
+                       quoted into anything that leaves the site, so it carries
+                       nothing and the send falls back to the newest message. */
+                    messageId={message.direction === 'note' ? null : message.id}
                     canReply={canReply}
                     canReplyAll={canReply && replyAllTo.length > replyTo.length}
                     canForward={canReply && style.forward}
@@ -868,6 +922,7 @@ export function ThreadPane({
             draft={draft}
             canAddProducts={canAddProducts && productsTravel(thread.channel)}
             draftProducts={draftProducts}
+            quotedPreviews={quotedPreviews}
             timezone={timezone}
           />
         )}

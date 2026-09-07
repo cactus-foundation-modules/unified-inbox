@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { isClickWrapper } from '@/modules/unified-inbox/lib/tracking-beacons'
 
 // ---------------------------------------------------------------------------
 // Where a link in somebody else's email actually goes.
@@ -44,6 +45,12 @@ export function LinkPeek({ link, onClose }: { link: PeekedLink | null; onClose: 
 
   const parsed = safeUrl(link.href)
   const openable = parsed !== null && OPENABLE.has(parsed.protocol)
+  // A link the sending service rewrote on the way out. It is the address in
+  // every message we send through Brevo with link tracking on, and it is the
+  // address in our own copy of one. Nothing follows it on its own - the frame
+  // hands the click here instead of going anywhere - so this is only ever a
+  // deliberate press, and the only thing owed is saying what the press does.
+  const tracked = isClickWrapper(link.href)
   // A mailto has no host worth printing, and printing "" reads as a bug.
   const host = parsed && parsed.protocol !== 'mailto:' ? parsed.host : null
   const saidSomethingElse = link.text !== '' && link.text !== link.href && link.text !== stripSlash(link.href)
@@ -96,6 +103,13 @@ export function LinkPeek({ link, onClose }: { link: PeekedLink | null; onClose: 
             <div className="alert alert-danger" role="alert">
               This is not an ordinary web address, so it will not be opened from here. Nothing about
               that is normal in an email, and it is worth being suspicious of.
+            </div>
+          )}
+          {tracked && (
+            <div className="alert alert-info" role="note">
+              This is not the real address. It goes to the email service first, which writes down
+              that the link was followed and then sends you on. If this is a message you sent,
+              opening it here will be counted as the person you sent it to having clicked it.
             </div>
           )}
           {openable && (

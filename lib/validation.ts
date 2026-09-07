@@ -144,6 +144,10 @@ const AttachmentRef = z.object({
 export const DraftBody = z.object({
   id: z.string().min(1).optional(),
   threadId: z.string().min(1).nullable().optional(),
+  /** The message on that conversation being answered. Checked against the
+   *  conversation when the draft is sent, not when it is saved: what it names
+   *  can be deleted in between, and a draft is not the moment to refuse. */
+  inReplyToMessageId: z.string().min(1).nullable().optional(),
   inboxId: z.string().min(1).nullable().optional(),
   mode: z.enum(['new', 'reply', 'reply-all', 'forward']).default('new'),
   to: z.array(z.string().min(1)).max(50).optional(),

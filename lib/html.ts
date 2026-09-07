@@ -109,3 +109,92 @@ export function readableHtml(html: string | null | undefined): string | null {
   if (!html) return html ?? null
   return blockRemoteImages(html)
 }
+
+// ---------------------------------------------------------------------------
+// Pictures that came inside the message.
+//
+// A signature written in Outlook, a logo on a quote, a screenshot pasted into a
+// sentence: none of those are kept on a web server. They arrive as ordinary
+// attachments and the markup points at them by their Content-ID header rather
+// than by an address - <img src="cid:image001.png@01D9">. Resolving that
+// against the parts the message arrived with is what every mail client does,
+// and what this module never did, so each one drew an empty box.
+//
+// Nothing is fetched from anywhere to show one, which is why this is not gated
+// behind "Show pictures" the way a remote image is: the bytes are already ours,
+// sitting under this module's own key prefix, and there is no sender left to
+// learn anything from serving them.
+//
+// Read path only, like readableHtml above and for the same reason: lib/
+// compose.ts quotes the STORED markup under a reply, and a quote whose picture
+// addresses have been swapped for this site's own routes is a reply that points
+// the recipient at a login page.
+// ---------------------------------------------------------------------------
+
+/** Attribute a cid: address is parked on when nothing in the message answers to
+ *  it. The tag is left with no src rather than pointing at something no browser
+ *  can fetch, so it renders as its alt text instead of a broken picture. */
+export const INLINE_SRC_ATTR = 'data-uin-cid'
+
+const IMG_SRC_RE = /<img\b([^>]*?)\ssrc\s*=\s*("([^"]*)"|'([^']*)')/gi
+
+/** True when the markup references a part of the message by Content-ID at all.
+ *  Cheap enough to ask of every message so the database is only asked about the
+ *  few that have one. */
+export function hasInlineImages(html: string | null | undefined): boolean {
+  return !!html && /\ssrc\s*=\s*["']\s*cid:/i.test(html)
+}
+
+/** The Content-ID each cid: image names, in the order they appear. */
+export function inlineImageCids(html: string | null | undefined): string[] {
+  if (!html) return []
+  const out: string[] = []
+  for (const match of html.matchAll(IMG_SRC_RE)) {
+    const cid = cidOf(match[3] ?? match[4] ?? '')
+    if (cid) out.push(cid)
+  }
+  return out
+}
+
+/**
+ * Point every cid: image at the part of the message it names.
+ *
+ * `hrefFor(cid)` decides the address - the route that serves that part's bytes
+ * back - and returns null when nothing in the message answers to that name, in
+ * which case the tag loses its src and keeps the name on a data attribute.
+ *
+ * Idempotent by construction: a tag that has been rewritten no longer has a
+ * cid: src to rewrite, and a parked one has no src at all.
+ */
+export function rewriteInlineImages(html: string, hrefFor: (cid: string) => string | null): string {
+  return html.replace(IMG_SRC_RE, (match, before, _quoted, dq, sq) => {
+    const cid = cidOf(dq ?? sq ?? '')
+    if (!cid) return match
+    const href = hrefFor(cid)
+    return href
+      ? `<img${before} src="${quoteAttr(href)}"`
+      : `<img${before} ${INLINE_SRC_ATTR}="${quoteAttr(cid)}"`
+  })
+}
+
+/** The Content-ID inside a cid: address, or empty for a src that is not one.
+ *  Angle brackets are stripped: senders write both `cid:<x@y>` and `cid:x@y`,
+ *  and the header they are quoting from carries them. */
+function cidOf(src: string): string {
+  const value = src.trim()
+  if (!/^cid:/i.test(value)) return ''
+  return decodeEntities(value.slice(4)).trim().replace(/^<|>$/g, '').trim()
+}
+
+function decodeEntities(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+}
+
+function quoteAttr(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+}

@@ -926,6 +926,11 @@ async function fileMessage(
         contentType: attachment.contentType || null,
         sizeBytes: attachment.size ?? null,
         imapPartId: String(index),
+        // What the markup points at a signature logo or a pasted screenshot by.
+        // mailparser hands back `cid` with the angle brackets already off it;
+        // `contentId` is the raw header and keeps them. Either is matched on the
+        // way out, so take the tidier one.
+        contentId: attachment.cid || attachment.contentId || null,
       })
     }
 

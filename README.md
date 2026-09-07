@@ -67,6 +67,11 @@ the same human collapse into one story.
   where each conversation stands underneath them - open, snoozed, done or the
   lot - the conversations below, and whichever one you have open beside them.
   Reply, reply to everybody, forward, or leave a note only your colleagues see.
+  The arrow you press is the message you answer: a reply written against the
+  fourth message of nine quotes that fourth message and threads against it,
+  rather than quoting whatever happens to be at the bottom, and a draft
+  remembers which one it was answering. **Show the earlier messages** under the
+  writing box opens what will be quoted, in full, before it goes.
   A brand new message opens in a box over the top, so the list stays where it
   was. A conversation read the ordinary way round - oldest first - opens on
   what was last said rather than at the beginning, so a thread with forty
@@ -178,6 +183,9 @@ the same human collapse into one story.
   when there was nothing to see. And if the person it is addressed to writes to
   you before it leaves, the message is held rather than sent - their
   conversation says so, with a link to what was waiting.
+- **A picked time is not lost.** Choosing a time off the alarm clock and then
+  clicking away, or closing the box, sets it going rather than quietly handing
+  you back an ordinary draft - closing says so first, naming the time.
 - **Scheduled.** What you have set going waits under **Scheduled**, its own row
   beside Drafts, soonest first - Drafts is what you have not finished, this is
   what is going out without you. Nothing is settled until it leaves: open one
@@ -213,6 +221,9 @@ the same human collapse into one story.
   list when you are done.
 - **Pictures stay off** until you ask for them, and when you do they are fetched
   by the site rather than by your browser, so a sender learns nothing about you.
+  Pictures the message BROUGHT WITH IT - a signature logo, a pasted screenshot -
+  are shown straight away, because there is nothing to fetch and no sender to
+  learn anything.
 - **Settings** for how far back to go when starting out, how long to keep
   things, and what to do about attachments.
 - **Sending another module's post from one of your inboxes.** Purchase Orders'

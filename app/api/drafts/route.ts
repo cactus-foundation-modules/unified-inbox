@@ -127,6 +127,8 @@ export async function POST(request: Request) {
     authorUserId: user.id,
     inboxId,
     threadId: thread?.id ?? null,
+    // Only meaningful on a conversation. A message starting one answers nothing.
+    inReplyToMessageId: thread ? body.inReplyToMessageId ?? null : null,
     mode: body.mode,
     to,
     cc,

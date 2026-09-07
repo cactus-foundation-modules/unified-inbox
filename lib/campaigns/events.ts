@@ -21,7 +21,7 @@ import { addSuppression, markAddressBounced, recordSendEvent } from './store'
 // ---------------------------------------------------------------------------
 
 export type CampaignEvent = {
-  kind: 'delivered' | 'opened' | 'proxy_open' | 'bounced' | 'receipt'
+  kind: 'delivered' | 'opened' | 'proxy_open' | 'clicked' | 'bounced' | 'receipt'
   occurredAt: Date
   bounceKind?: string | null
   detail?: string | null
@@ -41,7 +41,14 @@ export async function applyCampaignEvent(sendId: string, event: CampaignEvent): 
   // simply not counted, because "how many opened it" is a number people make
   // decisions with and half of it being Apple's image cache is worse than not
   // having it.
-  const kind = event.kind === 'delivered' || event.kind === 'opened' || event.kind === 'bounced'
+  //
+  // A CLICK is counted, and is the one number on this screen worth more than
+  // the opens beside it: an image cache cannot follow a link. It is still not
+  // spotless - an office mail scanner checks every address in an arriving
+  // message - but that is a fixed overhead across a list rather than the half
+  // of it that Apple's proxy accounts for on the opens.
+  const kind = event.kind === 'delivered' || event.kind === 'opened'
+    || event.kind === 'clicked' || event.kind === 'bounced'
     ? event.kind
     : null
   if (!kind) return false

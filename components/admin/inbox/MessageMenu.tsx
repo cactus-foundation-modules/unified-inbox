@@ -16,12 +16,22 @@ import { MoreIcon, ReplyIcon } from './icons'
 // here to do, and burying it a level down to make room for Forward taxes the
 // common case to pay for the rare one.
 //
+// The message it sits on is the message it answers. Both the arrow and the two
+// entries above it carry that id to the writing box, which sends it with the
+// reply so the words quoted underneath are the ones being answered rather than
+// whatever happens to be at the bottom of the conversation.
+//
 // Its own island, and a small one, because ThreadPane is a server component
 // that renders four hundred lines of somebody's conversation and should stay
 // one. See MessageActions for the same argument made at more length.
 
 type Props = {
   threadId: string
+  /** The message these controls sit on, which is the one an answer quotes.
+   *  Null on an internal note: a note is written for colleagues on this screen
+   *  and is never quoted into anything that leaves, so answering from one falls
+   *  back to the newest message that actually went somewhere. */
+  messageId: string | null
   /** Whether this reader may answer this conversation at all. No arrow and no
    *  Forward when they may not - decided on the server, per inbox. */
   canReply: boolean
@@ -36,7 +46,7 @@ type Props = {
   canForward: boolean
 }
 
-export function MessageMenu({ threadId, canReply, canReplyAll, canForward }: Props) {
+export function MessageMenu({ threadId, messageId, canReply, canReplyAll, canForward }: Props) {
   const router = useRouter()
   const { toggle } = useComposerOpen()
   const [busy, setBusy] = useState(false)
@@ -72,8 +82,8 @@ export function MessageMenu({ threadId, canReply, canReplyAll, canForward }: Pro
         width={200}
         disabled={busy}
       >
-        {canReplyAll && <MenuItem onClick={() => toggle('reply-all')}>Reply all</MenuItem>}
-        {canForward && <MenuItem onClick={() => toggle('forward')}>Forward</MenuItem>}
+        {canReplyAll && <MenuItem onClick={() => toggle('reply-all', messageId)}>Reply all</MenuItem>}
+        {canForward && <MenuItem onClick={() => toggle('forward', messageId)}>Forward</MenuItem>}
         {/* Only where there is no arrow beside these dots. On a conversation
             that CAN be answered, the full note box is one press of the arrow
             and one chip away, and a fourth entry here would be a second door
@@ -91,7 +101,7 @@ export function MessageMenu({ threadId, canReply, canReplyAll, canForward }: Pro
           className="uin-icon-btn"
           title="Reply"
           aria-label="Reply to this message"
-          onClick={() => toggle('reply')}
+          onClick={() => toggle('reply', messageId)}
         >
           {ReplyIcon}
         </button>

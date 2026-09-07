@@ -44,12 +44,13 @@ export function ReceiptsPanel({ settings, busy, call }: {
       title="What happened to a reply after you sent it"
       blurb={<>
         On its own, &ldquo;Sent&rdquo; only means the email service took the message off your hands.
-        Switch these on and a reply can also tell you it arrived, that somebody opened it, or that it
-        bounced straight back. Worth having when you are deciding whether to chase somebody.
+        Switch these on and a reply can also tell you it arrived, that somebody opened it, that they
+        followed a link in it, or that it bounced straight back. Worth having when you are deciding
+        whether to chase somebody.
       </>}
     >
       <CheckField
-        label="Tell me when a reply is delivered, opened or bounces"
+        label="Tell me when a reply is delivered, opened, clicked or bounces"
         checked={draft.trackOpens}
         onChange={(trackOpens) => setDraft({ ...draft, trackOpens })}
         hint={<>
@@ -60,6 +61,17 @@ export function ReceiptsPanel({ settings, busy, call }: {
           carries on saying nothing but &ldquo;Sent&rdquo;.
         </>}
       />
+
+      <div className="alert alert-info">
+        <p style={{ margin: 0, fontSize: '0.875rem' }}>
+          <strong>Links followed</strong> ride along with that switch, but only if link tracking is
+          switched on in your email service&rsquo;s own settings - it has to be handling the links in
+          your messages to know one was used. If nothing ever says &ldquo;followed a link&rdquo;,
+          that is the setting to go and look at. Do bear in mind that some office email systems check
+          every link in a message the moment it arrives, so a handful all at once is more likely to
+          be their security than a person having a read.
+        </p>
+      </div>
 
       <CheckField
         label="Ask the person’s own email program for a read receipt"

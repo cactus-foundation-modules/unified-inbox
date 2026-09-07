@@ -83,6 +83,13 @@ export type Draft = {
   inboxId: string | null
   /** The conversation being answered, or null for one starting from nothing. */
   threadId: string | null
+  /** Which message on that conversation is being answered, when somebody
+   *  pressed Reply on one rather than on the conversation. It is what gets
+   *  quoted under the reply, so a draft finished tomorrow still quotes the
+   *  message it was written against - see migrations/049_draft_in_reply_to.sql.
+   *  Null means the newest message, which is what every draft written before
+   *  this column meant. */
+  inReplyToMessageId: string | null
   mode: DraftMode
   to: string[]
   cc: string[]

@@ -1936,9 +1936,58 @@ const CSS = `
   line-height: 1.5;
   color: var(--color-text-muted);
 }
-/* The count sits at the left-hand end of a strip that otherwise pushes
-   everything right, so it reads as a note rather than as another answer. */
-.uin-modal-foot-note { margin-right: auto; }
+/* What is on the message, a file to a line, under the box they were dropped
+   into. A count beside the Done button was the wrong end of the dialog and the
+   wrong amount of detail - somebody who has just attached the wrong file twice
+   needs the names, and needs a cross beside each of them. */
+.uin-attach-heading {
+  margin: 0.25rem 0 0;
+  font-size: 0.75rem;
+  font-weight: 650;
+  color: var(--color-text-secondary);
+}
+.uin-attach-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; }
+.uin-attach-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 0.375rem);
+  background: var(--color-surface-raised);
+  font-size: 0.8125rem;
+}
+/* The name gives up its room first and ends in an ellipsis; the whole of it
+   stays on the tooltip. The size and the cross never move. */
+.uin-attach-list-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text);
+}
+.uin-attach-list-size { flex: none; font-size: 0.75rem; color: var(--color-text-secondary); }
+/* Padded out to a target something over twenty-four pixels each way, which a
+   bare cross at this size is nowhere near. */
+.uin-attach-list-x {
+  flex: none;
+  border: 0;
+  border-radius: var(--radius, 0.375rem);
+  background: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.35rem 0.45rem;
+  margin-right: -0.25rem;
+}
+.uin-attach-list-x:hover, .uin-attach-list-x:focus-visible {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
 /* What is going with the message, on a line of its own above the strip of
    buttons rather than in among them. Tighter than a strip of controls: these
    are chips, and they bring their own height. */
@@ -2301,6 +2350,24 @@ const CSS = `
   min-height: 6rem;
   resize: none;
 }
+/* What will be quoted under the reply, folded away under the writing box.
+   Dressed as the quotation it describes rather than as another panel of the
+   composer: a rule down the left, secondary text, and the whole thing set in
+   from the words above it, which is how the message it stands for will look
+   when it arrives. */
+.uin-quoted-preview { margin: 0.5rem 0 0; }
+.uin-quoted-preview-body {
+  margin-top: 0.5rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+.uin-quoted-preview-line {
+  margin: 0 0 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+}
+
 @media (max-width: 599px) {
   .uin-field-row { grid-template-columns: 3.25rem minmax(0, 1fr); }
   .uin-field-hint { display: none; }

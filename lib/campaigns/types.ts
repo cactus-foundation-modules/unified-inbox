@@ -139,6 +139,9 @@ export type CampaignSend = {
   sentAt: Date | null
   deliveredAt: Date | null
   openedAt: Date | null
+  /** When a link in it was first followed. Only ever set where the mail service
+   *  rewrites the addresses in the message so it can see one being used. */
+  clickedAt: Date | null
   bouncedAt: Date | null
   bounceKind: string | null
   bounceDetail: string | null

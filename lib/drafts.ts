@@ -115,6 +115,8 @@ export function htmlHasWriting(html: string): boolean {
  *  box that no longer deserves it is one people learn to read straight past. */
 export const NOTHING_TO_SEND = 'There is nothing to send yet.'
 export const NEEDS_A_SUBJECT = 'Give the message a subject.'
+export const NEEDS_A_RECIPIENT = 'Say who this is going to.'
+export const NEEDS_SOMEBODY_TO_FORWARD_TO = 'Say who to forward it to.'
 
 /** The first line or so of what was written, for the list. Nothing is
  *  sanitised here because nothing is rendered as markup - what it is handed is
@@ -162,6 +164,10 @@ export function draftHref(
 export type DraftForComposer = {
   id: string
   inboxId: string | null
+  /** Which message on the conversation this answers, so a draft reopened
+   *  tomorrow still quotes the message it was written against rather than
+   *  whatever has arrived since. Null means the newest one. */
+  inReplyToMessageId: string | null
   mode: Draft['mode']
   to: string[]
   cc: string[]
@@ -198,6 +204,7 @@ export function forComposer(draft: Draft): DraftForComposer {
   return {
     id: draft.id,
     inboxId: draft.inboxId,
+    inReplyToMessageId: draft.inReplyToMessageId,
     mode: draft.mode,
     to: draft.to,
     cc: draft.cc,

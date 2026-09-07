@@ -8,7 +8,7 @@ import {
   insertOutboundMessage,
   settleDelivery,
 } from './db'
-import { getModuleSenderInboxId } from './module-senders'
+import { getModuleCopyInboxId } from './module-senders'
 import { generateMessageId } from './compose'
 import { buildSnippet, cleanMessageId, normaliseSubject } from './threading'
 import { cacheAttachment } from './attachments'
@@ -18,17 +18,20 @@ import { htmlToText } from './html'
 // Core handing this module a copy of another module's automatic email
 // (core.outbound-email-record - see core's lib/email/record.ts).
 //
-// The other half of outbound-identity.ts. That one says which of the site's
+// The companion to outbound-identity.ts. That one says which of the site's
 // addresses purchasing writes from, so a supplier's reply comes back to the
 // people chasing the order. This one puts the thing they are replying TO in
 // the same place: a purchase order sent to a supplier starts a conversation in
-// the inbox it left as, and the supplier's answer lands underneath it instead
-// of arriving on its own with nobody able to see what we asked for.
+// the inbox it is filed to, and the supplier's answer lands underneath it
+// instead of arriving on its own with nobody able to see what we asked for.
 //
-// The switch is the one the site has already thrown. An inbox chosen for a
-// module on that module's settings tab means "this module's post is ours", and
-// a module nobody has chosen an inbox for is filed nowhere, exactly as before -
-// there would be no inbox to put it in and no address for anyone to reply to.
+// Its own switch since migration 046, and deliberately not the sending one.
+// The shop's order emails are the case that separated them: they go out through
+// the site's sending service and never touch a mail folder, so nothing shows
+// what the customer was told - and yet changing the address a confirmation
+// arrives from is a customer-facing decision an owner may not want to take to
+// get that copy. A module nobody has chosen a filing inbox for is filed
+// nowhere, exactly as before.
 //
 // Never throws. Core catches anyway, but a purchase order that reached the
 // supplier and then reported itself as failed because a filing write went wrong
@@ -44,11 +47,11 @@ import { htmlToText } from './html'
  * order rather than starting a third one (see threadsForMessageIds).
  */
 async function record(email: RecordedOutboundEmail): Promise<void> {
-  const inboxId = await getModuleSenderInboxId(email.moduleName)
+  const inboxId = await getModuleCopyInboxId(email.moduleName)
   if (!inboxId) return
 
-  // Cascaded away with its inbox, so this is only ever null in the gap between
-  // a delete and its cascade.
+  // Nulled out with its inbox (ON DELETE SET NULL), so this is only ever null
+  // in the gap between a delete and the row being swept.
   const inbox = await getInbox(inboxId)
   if (!inbox) return
 

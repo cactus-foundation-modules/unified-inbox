@@ -1,5 +1,7 @@
 import { lookup } from 'node:dns/promises'
 import { REMOTE_SRC_ATTR } from './html'
+import { isDisplayableImageType } from './inline-images'
+import { isOpenBeacon } from './tracking-beacons'
 
 // ---------------------------------------------------------------------------
 // Showing the pictures in an email, once somebody has asked to see them.
@@ -51,17 +53,34 @@ function decodeEntities(value: string): string {
     .replace(/&amp;/g, '&')
 }
 
+/** The parked addresses that are worth offering to show, which is every one of
+ *  them bar the sending service's own counters. Used for the count on the
+ *  screen: a message whose only remote picture is an open beacon has nothing to
+ *  show, and offering "Show pictures" for it is a button that does nothing. */
+export function showableRemoteImageUrls(html: string | null | undefined): string[] {
+  return remoteImageUrls(html).filter((url) => !isOpenBeacon(url))
+}
+
 /**
  * Put the pictures back, pointed at this site rather than at the sender.
  *
  * `hrefFor(index)` decides the address - the route that fetches picture number
  * `index` of this message. Anything the fetcher later refuses simply fails to
  * load, which looks like a broken image and costs nothing else.
+ *
+ * Except a counter, which is left exactly where it was found. Showing the
+ * pictures in a message we sent is not a decision to tell Brevo the recipient
+ * read it, and the frame's own policy allows nothing without a src - so a
+ * beacon left parked makes no request from either side. The index still
+ * advances over it: the numbering is the whole contract with the picture route,
+ * and it is read off the same list.
  */
 export function restoreRemoteImages(html: string, hrefFor: (index: number) => string): string {
+  const urls = remoteImageUrls(html)
   let index = -1
-  return html.replace(REMOTE_ATTR_RE, () => {
+  return html.replace(REMOTE_ATTR_RE, (match) => {
     index += 1
+    if (isOpenBeacon(urls[index] ?? '')) return match
     return `src="${hrefFor(index).replace(/"/g, '&quot;')}"`
   })
 }
@@ -69,10 +88,6 @@ export function restoreRemoteImages(html: string, hrefFor: (index: number) => st
 /** How much of a picture is worth carrying. Beyond this it is not a picture in
  *  an email, it is somebody using the site as a file host. */
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024
-
-const IMAGE_TYPES = new Set([
-  'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/bmp', 'image/x-icon',
-])
 
 /** Address ranges that are not out on the internet at all: the machine itself,
  *  the private networks a host sits on, and the link-local address cloud
@@ -113,8 +128,18 @@ export type ImageFetchResult =
  * Redirects are followed by hand so every hop is checked rather than only the
  * first - a permissive first hop pointing at 169.254.169.254 is the whole of
  * the attack.
+ *
+ * The sending service's own counters are refused outright, wherever the address
+ * came from and whoever asked. The frame above no longer points at them, and
+ * this is the second lock on that door: the picture route works off a position
+ * in the stored message, so the number of a beacon can still be asked for by
+ * hand. Checked on every hop as well - a redirect INTO a counter counts just
+ * the same as being sent straight at one.
  */
 export async function fetchRemoteImage(rawUrl: string, hops = 3): Promise<ImageFetchResult> {
+  if (isOpenBeacon(rawUrl)) {
+    return { ok: false, reason: 'That is the email service counting who opened the message, not a picture.' }
+  }
   let url: URL
   try {
     url = new URL(rawUrl.startsWith('//') ? `https:${rawUrl}` : rawUrl)
@@ -153,7 +178,9 @@ export async function fetchRemoteImage(rawUrl: string, hops = 3): Promise<ImageF
   if (!response.ok) return { ok: false, reason: 'That picture is no longer there.' }
 
   const contentType = (response.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase()
-  if (!IMAGE_TYPES.has(contentType)) {
+  // One allow-list for every picture this module serves, wherever it came from
+  // - see lib/inline-images.ts. SVG is markup with script in it and is not on it.
+  if (!isDisplayableImageType(contentType)) {
     return { ok: false, reason: 'That is not a picture.' }
   }
   const declared = Number(response.headers.get('content-length') ?? '0')

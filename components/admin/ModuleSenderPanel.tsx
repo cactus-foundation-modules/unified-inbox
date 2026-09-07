@@ -5,7 +5,8 @@ import { usePathname } from 'next/navigation'
 
 // ---------------------------------------------------------------------------
 // The box another module's settings tab shows: which of your inboxes that
-// module's automatic emails go out as.
+// module's automatic emails go out as, and which inbox a copy of them is kept
+// in.
 //
 // It renders on Purchase Orders' settings and on the shop's, but it belongs to
 // this module - core drops it into a slot those tabs publish, and neither of
@@ -13,9 +14,16 @@ import { usePathname } from 'next/navigation'
 // lib/modules/hosted-settings.ts). Take this module away and the box goes with
 // it, leaving no gap and no setting behind.
 //
-// Saves itself the moment you choose, rather than waiting on the host's own
-// Save button, which would not save it: a button that appears to cover a box it
-// does not is worse than no button at all.
+// Two questions rather than one since migration 046, because they are two
+// decisions. The shop's order emails go out through the site's sending service
+// and never touch a mail folder, so nobody can see afterwards what a customer
+// was told - and yet which address a confirmation arrives from is a
+// customer-facing choice an owner may well not want to make in order to fix
+// that. Either dropdown works perfectly well on its own.
+//
+// Each saves itself the moment you choose, rather than waiting on the host's
+// own Save button, which would not save it: a button that appears to cover a
+// box it does not is worse than no button at all.
 // ---------------------------------------------------------------------------
 
 const API = '/api/m/unified-inbox/admin/module-senders'
@@ -33,24 +41,28 @@ const CARD: React.CSSProperties = {
 
 type InboxOption = { id: string; name: string; address: string }
 
+/** The two things this box sets, as the API spells them. */
+type Field = 'inboxId' | 'copyInboxId'
+
 export type ModuleSenderPanelProps = {
   /** The module whose mail this box is about, as its manifest spells it. */
   moduleName: string
   /** What the emails in question are, in the host's own words - "your purchase
-   *  orders", "your order confirmations". Written into the sentence, so it has
-   *  to read as the object of "send ... from". */
+   *  orders", "your order confirmations". Written into both sentences, so it has
+   *  to read as the object of "send ... from" and of "keep a copy of ... in". */
   what: string
 }
 
 export function ModuleSenderPanel({ moduleName, what }: ModuleSenderPanelProps) {
   const [inboxes, setInboxes] = useState<InboxOption[] | null>(null)
   const [inboxId, setInboxId] = useState<string>('')
+  const [copyInboxId, setCopyInboxId] = useState<string>('')
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   // What was chosen before this attempt, so a save that does not land can put
   // the box back rather than leaving it showing an address it did not save.
-  const savedInboxId = useRef<string>('')
+  const saved = useRef<Record<Field, string>>({ inboxId: '', copyInboxId: '' })
   // "Saved." is about one moment, so it goes away again on its own.
   const clearStatus = useRef<ReturnType<typeof setTimeout> | null>(null)
   // The admin lives under a path the site chooses, and this panel is rendered on
@@ -73,7 +85,8 @@ export function ModuleSenderPanel({ moduleName, what }: ModuleSenderPanelProps) 
         const data = await res.json()
         setInboxes(data.inboxes ?? [])
         setInboxId(data.inboxId ?? '')
-        savedInboxId.current = data.inboxId ?? ''
+        setCopyInboxId(data.copyInboxId ?? '')
+        saved.current = { inboxId: data.inboxId ?? '', copyInboxId: data.copyInboxId ?? '' }
       })
       .catch(() => { if (live) setHidden(true) })
     return () => { live = false }
@@ -81,9 +94,13 @@ export function ModuleSenderPanel({ moduleName, what }: ModuleSenderPanelProps) 
 
   useEffect(() => () => { if (clearStatus.current) clearTimeout(clearStatus.current) }, [])
 
-  async function choose(next: string) {
-    const previous = savedInboxId.current
-    setInboxId(next)
+  // One dropdown at a time. The request names only the field that changed, so
+  // the other setting is left exactly as it is on the server rather than being
+  // written back from a copy this page may have been holding for an hour.
+  async function choose(field: Field, next: string) {
+    const previous = saved.current[field]
+    const show = field === 'inboxId' ? setInboxId : setCopyInboxId
+    show(next)
     setSaving(true)
     setStatus('')
     setError('')
@@ -92,20 +109,20 @@ export function ModuleSenderPanel({ moduleName, what }: ModuleSenderPanelProps) 
       const res = await fetch(API, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ module: moduleName, inboxId: next || null }),
+        body: JSON.stringify({ module: moduleName, [field]: next || null }),
       })
       if (res.ok) {
-        savedInboxId.current = next
+        saved.current = { ...saved.current, [field]: next }
         setStatus('Saved.')
         clearStatus.current = setTimeout(() => setStatus(''), 4000)
       } else {
         const data = await res.json().catch(() => null)
         setError(data?.error ?? 'That did not save. Try again.')
-        setInboxId(previous)
+        show(previous)
       }
     } catch {
       setError('Could not reach the site. Check your connection and try again.')
-      setInboxId(previous)
+      show(previous)
     } finally {
       setSaving(false)
     }
@@ -118,7 +135,7 @@ export function ModuleSenderPanel({ moduleName, what }: ModuleSenderPanelProps) 
   if (!inboxes) {
     return (
       <div style={CARD}>
-        <h3 style={{ margin: '0 0 0.75rem', fontSize: 'var(--text-base)' }}>Which inbox this comes from</h3>
+        <h3 style={{ margin: '0 0 0.75rem', fontSize: 'var(--text-base)' }}>Where this email goes</h3>
         <p style={{ ...MUTED, margin: 0 }}>Fetching your addresses&hellip;</p>
       </div>
     )
@@ -126,13 +143,13 @@ export function ModuleSenderPanel({ moduleName, what }: ModuleSenderPanelProps) 
 
   return (
     <div style={CARD}>
-      <h3 style={{ margin: '0 0 0.75rem', fontSize: 'var(--text-base)' }}>Which inbox this comes from</h3>
+      <h3 style={{ margin: '0 0 0.75rem', fontSize: 'var(--text-base)' }}>Where this email goes</h3>
 
       {inboxes.length === 0 ? (
         <p style={{ ...MUTED, margin: 0 }}>
           You have not set up any inboxes yet. Add one under{' '}
-          <a href={`/${adminPath}/config?tab=unified-inbox`}>Settings, Unified Inbox</a>, and this address can be
-          the one {what} go out as.
+          <a href={`/${adminPath}/config?tab=unified-inbox`}>Settings, Unified Inbox</a>, and it can be the address{' '}
+          {what} go out as, or the place a copy of them is kept.
         </p>
       ) : (
         <>
@@ -142,7 +159,7 @@ export function ModuleSenderPanel({ moduleName, what }: ModuleSenderPanelProps) 
               id={`uin-sender-${moduleName}`}
               value={inboxId}
               disabled={saving}
-              onChange={(e) => choose(e.target.value)}
+              onChange={(e) => choose('inboxId', e.target.value)}
             >
               <option value="">The site&rsquo;s usual address</option>
               {inboxes.map((inbox) => (
@@ -157,6 +174,29 @@ export function ModuleSenderPanel({ moduleName, what }: ModuleSenderPanelProps) 
               site&rsquo;s usual address, nothing changes.
             </span>
           </div>
+
+          <div className="field">
+            <label htmlFor={`uin-copy-${moduleName}`}>Keep a copy of {what} in</label>
+            <select
+              id={`uin-copy-${moduleName}`}
+              value={copyInboxId}
+              disabled={saving}
+              onChange={(e) => choose('copyInboxId', e.target.value)}
+            >
+              <option value="">Do not keep a copy</option>
+              {inboxes.map((inbox) => (
+                <option key={inbox.id} value={inbox.id}>
+                  {inbox.name} ({inbox.address})
+                </option>
+              ))}
+            </select>
+            <span className="field-hint">
+              Each one turns up in that inbox as a conversation of its own, so you can see what was actually sent
+              and any reply lands underneath it. Worth switching on whichever address they go out as: email the
+              site sends for you never appears in a mail folder otherwise, because it does not go through one.
+            </span>
+          </div>
+
           {status && <p role="status" style={{ ...MUTED, margin: 0, color: 'var(--color-success)' }}>{status}</p>}
           {/* Destructive-hover rather than danger: danger on text this small does
               not clear AA on a pale ground. */}

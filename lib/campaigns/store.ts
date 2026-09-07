@@ -128,6 +128,7 @@ function mapSend(r: Record<string, unknown>): CampaignSend {
     sentAt: (r.sent_at as Date | null) ?? null,
     deliveredAt: (r.delivered_at as Date | null) ?? null,
     openedAt: (r.opened_at as Date | null) ?? null,
+    clickedAt: (r.clicked_at as Date | null) ?? null,
     bouncedAt: (r.bounced_at as Date | null) ?? null,
     bounceKind: (r.bounce_kind as string | null) ?? null,
     bounceDetail: (r.bounce_detail as string | null) ?? null,
@@ -897,7 +898,7 @@ export async function listSendsForRecipient(recipientId: string): Promise<Campai
 export async function recordSendEvent(
   sendId: string,
   event: {
-    kind: 'delivered' | 'opened' | 'bounced'
+    kind: 'delivered' | 'opened' | 'clicked' | 'bounced'
     occurredAt: Date
     bounceKind?: string | null
     detail?: string | null
@@ -905,10 +906,12 @@ export async function recordSendEvent(
 ): Promise<CampaignSend | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     UPDATE "uin_campaign_sends"
-       SET "delivered_at" = CASE WHEN ${event.kind} = 'delivered'
+       SET "delivered_at" = CASE WHEN ${event.kind}::text IN ('delivered', 'clicked')
                                  THEN COALESCE("delivered_at", ${event.occurredAt}) ELSE "delivered_at" END,
            "opened_at" = CASE WHEN ${event.kind} = 'opened'
                               THEN COALESCE("opened_at", ${event.occurredAt}) ELSE "opened_at" END,
+           "clicked_at" = CASE WHEN ${event.kind} = 'clicked'
+                               THEN COALESCE("clicked_at", ${event.occurredAt}) ELSE "clicked_at" END,
            "bounced_at" = CASE WHEN ${event.kind} = 'bounced'
                                THEN COALESCE("bounced_at", ${event.occurredAt}) ELSE "bounced_at" END,
            "bounce_kind" = CASE WHEN ${event.kind} = 'bounced'

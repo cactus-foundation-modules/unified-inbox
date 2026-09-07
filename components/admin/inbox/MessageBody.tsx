@@ -64,9 +64,14 @@ type Props = {
    *  domains. The warning is about what a stranger learns from a tracking pixel,
    *  and there is no stranger here, so our own pictures are simply shown. */
   ownSender: boolean
+  /** Whether to open the earlier messages inside it rather than folding them
+   *  away. Off when reading a conversation, where the sections above have
+   *  already been read. On in the writing box, where the whole point of showing
+   *  the message is to see everything that will go out beneath the reply. */
+  showQuoted?: boolean
 }
 
-export function MessageBody({ messageId, hasRemoteImages, ownSender }: Props) {
+export function MessageBody({ messageId, hasRemoteImages, ownSender, showQuoted = false }: Props) {
   const frame = useRef<HTMLIFrameElement | null>(null)
   const [height, setHeight] = useState(OPENING_HEIGHT)
   const [showImages, setShowImages] = useState(ownSender)
@@ -150,7 +155,8 @@ export function MessageBody({ messageId, hasRemoteImages, ownSender }: Props) {
     setRestored(true)
   }, [messageId, ownSender])
 
-  const src = `/api/m/unified-inbox/messages/${encodeURIComponent(messageId)}/body${showImages ? '?images=1' : ''}`
+  const query = [showImages ? 'images=1' : '', showQuoted ? 'quoted=1' : ''].filter(Boolean).join('&')
+  const src = `/api/m/unified-inbox/messages/${encodeURIComponent(messageId)}/body${query ? `?${query}` : ''}`
 
   const failed = failedSrc === src
 
@@ -178,9 +184,18 @@ export function MessageBody({ messageId, hasRemoteImages, ownSender }: Props) {
           className="alert alert-info uin-remote-note"
           style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}
         >
+          {/* Says which pictures, because a message can have both kinds and this
+              used to read as a flat untruth. A signature written in Outlook
+              carries its icons INSIDE the message as data, and a picture that is
+              already in the message is not fetched from anywhere - there is no
+              request to make and nothing for the sender to learn, so it is simply
+              shown. Only what is kept on somebody else's server is held back, and
+              saying so stops the note claiming nothing has loaded while half the
+              signature is plainly on screen. */}
           <span style={{ flex: '1 1 14rem' }}>
-            Pictures in this message have not been loaded. Loading them tells the sender the
-            message was opened.
+            Pictures kept on the sender&rsquo;s own website have not been loaded. Loading them
+            tells the sender the message was opened. Anything carried inside the message itself
+            is already there.
           </span>
           <button
             type="button"

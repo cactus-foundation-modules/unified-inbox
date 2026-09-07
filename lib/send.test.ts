@@ -422,6 +422,60 @@ describe('sendMessage - the sending identity (D3)', () => {
   })
 })
 
+describe('sendMessage - which message is being answered', () => {
+  // Pressing Reply on the fourth message of nine quotes the fourth message.
+  // Before this the composer said nothing about which one it meant, so the send
+  // route quoted the newest on the conversation, and every reply written part
+  // way up a long thread went out with the wrong words under it.
+  const EARLIER = {
+    ...INBOUND,
+    id: 'msg-in-earlier',
+    messageIdHeader: 'earlier@customer.com',
+    references: ['oldest@customer.com'],
+    subject: 'Chairs',
+    bodyText: 'What are the sizes?',
+    bodyHtml: '<p>What are the sizes?</p>',
+    sentAt: new Date('2026-03-01T09:00:00Z'),
+  }
+
+  it('quotes the message the reply was written against, not the newest', async () => {
+    db.getQuotableMessage.mockResolvedValue(EARLIER)
+    await sendMessage(baseRequest({ inReplyToMessageId: 'msg-in-earlier' }))
+    const sent = transport.deliver.mock.calls[0]![0]
+    expect(sent.html).toContain('What are the sizes?')
+    expect(sent.html).not.toContain('Do you have them in blue?')
+  })
+
+  it('threads against that message, so the customer sees the reply where they wrote', async () => {
+    db.getQuotableMessage.mockResolvedValue(EARLIER)
+    await sendMessage(baseRequest({ inReplyToMessageId: 'msg-in-earlier' }))
+    const headers = transport.deliver.mock.calls[0]![0].headers as Record<string, string>
+    expect(headers['In-Reply-To']).toBe('<earlier@customer.com>')
+    expect(headers['References']).toBe('<oldest@customer.com> <earlier@customer.com>')
+  })
+
+  it('looks it up on the conversation being answered, never on its own', async () => {
+    db.getQuotableMessage.mockResolvedValue(EARLIER)
+    await sendMessage(baseRequest({ inReplyToMessageId: 'msg-in-earlier' }))
+    expect(db.getQuotableMessage).toHaveBeenCalledWith('msg-in-earlier', 'thread-1')
+  })
+
+  it('falls back to the newest when what it names has gone, rather than losing the writing', async () => {
+    // Deleted, or on another conversation entirely, which the scoped lookup
+    // answers the same way: nothing. What somebody has typed still goes.
+    db.getQuotableMessage.mockResolvedValue(null)
+    const result = await sendMessage(baseRequest({ inReplyToMessageId: 'msg-somewhere-else' }))
+    expect(result.ok).toBe(true)
+    expect(transport.deliver.mock.calls[0]![0].html).toContain('Do you have them in blue?')
+  })
+
+  it('quotes the newest when nobody said which, which is the box under the conversation', async () => {
+    await sendMessage(baseRequest())
+    expect(db.getQuotableMessage).not.toHaveBeenCalled()
+    expect(transport.deliver.mock.calls[0]![0].html).toContain('Do you have them in blue?')
+  })
+})
+
 describe('sendMessage - recipients', () => {
   it('answers Reply-To rather than From when the sender set one (E13)', async () => {
     db.newestMessageOnThread.mockResolvedValue({ ...INBOUND, replyTo: 'sales@customer.com' })

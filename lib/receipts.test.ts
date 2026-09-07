@@ -63,6 +63,30 @@ describe('normaliseBrevoEvent', () => {
     expect(normaliseBrevoEvent(tagged('unique_proxy_open'))?.event.kind).toBe('proxy_open')
   })
 
+  it('files a click and keeps the address that was followed', () => {
+    const result = normaliseBrevoEvent(tagged('click', { link: 'https://example.co.uk/quote/1' }))
+    expect(result?.event.kind).toBe('clicked')
+    expect(result?.event.detail).toBe('https://example.co.uk/quote/1')
+    // The campaign half of Brevo spells the same field differently.
+    expect(normaliseBrevoEvent(tagged('click', { URL: 'https://example.co.uk/chairs' }))?.event.detail)
+      .toBe('https://example.co.uk/chairs')
+  })
+
+  it('files a click that names no address rather than dropping it', () => {
+    // The count still means something without the link, and an event thrown
+    // away is an event nobody can ever get back.
+    const result = normaliseBrevoEvent(tagged('click'))
+    expect(result?.event.kind).toBe('clicked')
+    expect(result?.event.detail).toBeNull()
+  })
+
+  it('will not put anything but a web address on the screen', () => {
+    // It ends up in a tooltip in the admin, so a javascript: link arriving in
+    // somebody else's payload is not something to store and show.
+    expect(normaliseBrevoEvent(tagged('click', { link: 'javascript:alert(1)' }))?.event.detail).toBeNull()
+    expect(normaliseBrevoEvent(tagged('click', { link: 'mailto:someone@example.com' }))?.event.detail).toBeNull()
+  })
+
   it('files a bounce with the reason and how bad it was', () => {
     const hard = normaliseBrevoEvent(tagged('hard_bounce', { reason: 'unknown recipient' }))
     expect(hard?.event.kind).toBe('bounced')
@@ -79,8 +103,8 @@ describe('normaliseBrevoEvent', () => {
     // resets. None of those are conversations, and filing them would be worse
     // than useless.
     expect(normaliseBrevoEvent({ event: 'delivered', email: 'a@b.com' })).toBeNull()
-    expect(normaliseBrevoEvent(tagged('click'))).toBeNull()
     expect(normaliseBrevoEvent(tagged('unsubscribed'))).toBeNull()
+    expect(normaliseBrevoEvent(tagged('request'))).toBeNull()
     expect(normaliseBrevoEvent(null)).toBeNull()
     expect(normaliseBrevoEvent('delivered')).toBeNull()
   })

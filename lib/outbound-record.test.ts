@@ -3,13 +3,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Filing a module's automatic email as a conversation.
 //
 // Two things worth holding down. Nothing is filed for a module the site has not
-// given an inbox to - there would be no address for anybody to reply to, and an
-// unasked-for conversation appearing in a mailbox is a surprise nobody wants.
+// picked a filing inbox for - an unasked-for conversation appearing in a
+// mailbox is a surprise nobody wants, and since migration 046 that choice is
+// its own switch rather than a side effect of choosing a sending address.
 // And what IS filed carries the service's own Message-ID, because that is the
 // handle the supplier's reply comes back on and the entire reason the copy is
 // worth keeping.
 
-const senders = vi.hoisted(() => ({ getModuleSenderInboxId: vi.fn() }))
+const senders = vi.hoisted(() => ({ getModuleCopyInboxId: vi.fn() }))
 vi.mock('./module-senders', () => senders)
 
 const db = vi.hoisted(() => ({
@@ -55,22 +56,22 @@ beforeEach(() => {
 })
 
 describe('filing a module email', () => {
-  it('files nothing for a module with no inbox of its own', async () => {
-    senders.getModuleSenderInboxId.mockResolvedValue(null)
+  it('files nothing for a module nobody has asked for copies of', async () => {
+    senders.getModuleCopyInboxId.mockResolvedValue(null)
     await unifiedInboxOutboundRecord.record(EMAIL)
     expect(db.createOutboundThread).not.toHaveBeenCalled()
     expect(db.insertOutboundMessage).not.toHaveBeenCalled()
   })
 
   it('files nothing when the chosen inbox has gone', async () => {
-    senders.getModuleSenderInboxId.mockResolvedValue('inbox-1')
+    senders.getModuleCopyInboxId.mockResolvedValue('inbox-1')
     db.getInbox.mockResolvedValue(null)
     await unifiedInboxOutboundRecord.record(EMAIL)
     expect(db.createOutboundThread).not.toHaveBeenCalled()
   })
 
-  it('starts a conversation in the inbox the module writes from', async () => {
-    senders.getModuleSenderInboxId.mockResolvedValue('inbox-1')
+  it('starts a conversation in the inbox chosen for its copies', async () => {
+    senders.getModuleCopyInboxId.mockResolvedValue('inbox-1')
     await unifiedInboxOutboundRecord.record(EMAIL)
 
     expect(db.createOutboundThread).toHaveBeenCalledWith(
@@ -89,7 +90,7 @@ describe('filing a module email', () => {
   })
 
   it('strips the brackets off a Message-ID core put on it', async () => {
-    senders.getModuleSenderInboxId.mockResolvedValue('inbox-1')
+    senders.getModuleCopyInboxId.mockResolvedValue('inbox-1')
     await unifiedInboxOutboundRecord.record({ ...EMAIL, messageIdHeader: '<uin.abc@deskwell.co.uk>' })
     expect(db.insertOutboundMessage).toHaveBeenCalledWith(
       expect.objectContaining({ messageIdHeader: 'uin.abc@deskwell.co.uk' }),
@@ -97,7 +98,7 @@ describe('filing a module email', () => {
   })
 
   it('keeps the service\'s own id, which is what a reply comes back on', async () => {
-    senders.getModuleSenderInboxId.mockResolvedValue('inbox-1')
+    senders.getModuleCopyInboxId.mockResolvedValue('inbox-1')
     await unifiedInboxOutboundRecord.record(EMAIL)
     expect(db.settleDelivery).toHaveBeenCalledWith('message-1', {
       status: 'sent',
@@ -106,7 +107,7 @@ describe('filing a module email', () => {
   })
 
   it('keeps the document that travelled with it', async () => {
-    senders.getModuleSenderInboxId.mockResolvedValue('inbox-1')
+    senders.getModuleCopyInboxId.mockResolvedValue('inbox-1')
     db.insertOutboundAttachment.mockResolvedValue('attachment-1')
     await unifiedInboxOutboundRecord.record({
       ...EMAIL,
@@ -126,7 +127,7 @@ describe('filing a module email', () => {
   })
 
   it('claims no attachment on a site with nowhere to keep one', async () => {
-    senders.getModuleSenderInboxId.mockResolvedValue('inbox-1')
+    senders.getModuleCopyInboxId.mockResolvedValue('inbox-1')
     media.isMediaProviderConfigured.mockReturnValue(false)
     await unifiedInboxOutboundRecord.record({
       ...EMAIL,

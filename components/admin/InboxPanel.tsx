@@ -1665,6 +1665,11 @@ export async function UnifiedInboxPanel({
       spam={params.spamOnly}
       spamOwnerName={params.spamOnly ? folderOwnerName : null}
       canManage={canManage}
+      /* Blocking a pile of senders at once changes what everybody on the site
+         receives from now on, so it takes the grant for acting on the outside
+         world rather than the one for reading it - the same line the single
+         conversation's junk button draws. */
+      canBlock={canSendOut}
       /* Any of the cuts, not only the words: "nothing matches that" is the
          honest answer to a date range that catches nothing too, and "nothing
          here" in front of a narrowed list reads as an empty inbox. */

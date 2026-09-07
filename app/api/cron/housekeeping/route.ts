@@ -4,6 +4,7 @@ import { sweepAbandonedUploads, sweepRetention, sweepStalledSends } from '@/modu
 import { pruneDeliveries } from '@/modules/unified-inbox/lib/webhooks-db'
 import { getSettings, wakeDueMentions } from '@/modules/unified-inbox/lib/db'
 import { pruneCampaignLogs } from '@/modules/unified-inbox/lib/campaigns/store'
+import { reconcileBrevoWebhooks } from '@/modules/unified-inbox/lib/brevo-webhooks'
 
 // The daily tidy: the retention window, and the people it leaves holding
 // nothing.
@@ -65,6 +66,26 @@ export async function GET(request: NextRequest) {
   campaignCutoff.setMonth(campaignCutoff.getMonth() - settings.campaignLogMonths)
   const campaignRows = await pruneCampaignLogs(campaignCutoff, 500)
 
+  // Telling the mail service what to send us, again.
+  //
+  // Which list of events we want is decided in this module's own code, so an
+  // update can change it - clicks were added to it long after the webhook on
+  // every existing site was registered. Registering happens when somebody saves
+  // the settings and nowhere else, which meant an update that asked for a new
+  // event quietly never received one until the owner happened to press Save on
+  // a screen they had no reason to open.
+  //
+  // So once a night, if the site is watching at all. It is a reconcile rather
+  // than a registration - it reads what the account already has and puts it
+  // right - and it is written not to throw, because a key that expired in
+  // March must not be what stops the retention sweep running in April. It also
+  // quietly repairs the older case this file was not written for: a site
+  // restored from a backup, whose webhook points at whatever the old site's
+  // address was.
+  const brevoAccounts = settings.trackOpens
+    ? (await reconcileBrevoWebhooks(true).catch(() => [])).filter((one) => !one.ok).length
+    : 0
+
   return NextResponse.json({
     ok: true,
     stalledSends,
@@ -73,6 +94,7 @@ export async function GET(request: NextRequest) {
     abandonedUploads: uploads.removed,
     abandonedUploadFailures: uploads.failures,
     campaignRows,
+    brevoAccountsUnreachable: brevoAccounts,
     ...retention,
   })
 }

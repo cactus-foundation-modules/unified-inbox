@@ -4,6 +4,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import type { ThreadListRow } from '@/modules/unified-inbox/lib/db'
+import { normaliseAddress } from '@/modules/unified-inbox/lib/addresses'
 import {
   avatarHref,
   channelLabel,
@@ -91,6 +92,12 @@ type Props = {
    *  send them to. Being told where a button is on a screen you are not allowed
    *  to open is worse than not being told. */
   canManage: boolean
+  /** Whether this reader may shut the site's front door. Marking a pile of
+   *  conversations as junk is a thing anybody who can read them may do to their
+   *  own screen; turning their senders away changes what everybody receives, so
+   *  it takes the same grant as answering one - see the block dialog below and
+   *  the single-conversation SpamButton, which draws the same line. */
+  canBlock: boolean
   searching: boolean
   now: Date
   /** The site's timezone, handed down by the server-rendered panel so this
@@ -121,7 +128,7 @@ function ChannelBadge({ channel }: { channel: string }) {
 
 export function ThreadListView({
   base, params, rows, total, page, openThreadId, staffById, meId, inboxNames, showAvatars,
-  neverSynced, spam, spamOwnerName, canManage, searching, now, timezone,
+  neverSynced, spam, spamOwnerName, canManage, canBlock, searching, now, timezone,
 }: Props) {
   const router = useRouter()
   const pages = pageCount(total, PER_PAGE)
@@ -129,6 +136,12 @@ export function ThreadListView({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [merging, setMerging] = useState(false)
+  // Who the "block them as well?" question is about, once the junk has already
+  // been moved. Held here rather than read off the picked rows because by the
+  // time it is asked the picking has been cleared - the move happened, so the
+  // selection it was made from is gone, exactly as it is after every other
+  // button in this bar. Empty means no question is on the screen.
+  const [blocking, setBlocking] = useState<string[]>([])
   // Where a shift-clicked run is measured from: the row picked last on its own.
   // A ref rather than state - nothing on the screen draws it, so changing it
   // has no business redrawing forty rows.
@@ -148,6 +161,56 @@ export function ThreadListView({
   const onScreen = useMemo(() => new Set(rows.map((r) => r.id)), [rows])
   const picked = useMemo(() => selected.filter((id) => onScreen.has(id)), [selected, onScreen])
   const pickedSet = useMemo(() => new Set(picked), [picked])
+  const pickedRows = useMemo(() => rows.filter((row) => pickedSet.has(row.id)), [rows, pickedSet])
+
+  /** Which of the bar's buttons are worth offering.
+   *
+   *  A button that would change nothing is worse than no button: somebody picks
+   *  six conversations they have all read, presses Mark as read because it is
+   *  sitting there, and six requests go out to write down what was already
+   *  written down. Worse, the bar reads as though there were something left to
+   *  do - so the one press that WOULD do something is harder to find among four
+   *  that would not.
+   *
+   *  So each one appears only where at least one picked conversation is not
+   *  already in the state it would put them in. "At least one" rather than "all"
+   *  on purpose: five read and one unread is exactly when Mark as read is the
+   *  button somebody wants, and hiding it until every last one is unread would
+   *  be a stricter rule that helps nobody.
+   *
+   *  The bar can never empty itself. Read and unread are opposites, so one of
+   *  those two is always offered whatever is picked. */
+  const offer = useMemo(() => ({
+    done: pickedRows.some((row) => row.status !== 'done'),
+    read: pickedRows.some((row) => row.unread),
+    unread: pickedRows.some((row) => !row.unread),
+    open: pickedRows.some((row) => row.status !== 'open'),
+  }), [pickedRows])
+
+  /** Everybody the picked conversations could be blocked on, once they are in
+   *  the bin - distinct, normalised, and only where there is a front door to
+   *  shut in the first place.
+   *
+   *  Discussions are left out: both ends of one are colleagues, and the address
+   *  on it is somebody who works here. So is anything without an `@`, which is
+   *  every caller and every text message - the junk still moves, and only the
+   *  question afterwards is missing, exactly as it is on a single conversation.
+   *
+   *  Whether any of them is blocked ALREADY is deliberately not asked. The list
+   *  of blocked senders is settings-grade reading (it names colleagues, and its
+   *  route takes `manage`), and handing a copy to everybody who can open a list
+   *  to save one line of a dialog is not a trade worth making. Blocking is
+   *  written with ON CONFLICT DO NOTHING, so anybody already turned away simply
+   *  stays that way, and the dialog says so. */
+  const blockable = useMemo(() => {
+    const found = new Set<string>()
+    for (const row of pickedRows) {
+      if (row.startedByUserId) continue
+      const address = normaliseAddress(row.participantAddress ?? '')
+      if (address.includes('@')) found.add(address)
+    }
+    return [...found]
+  }, [pickedRows])
 
   const clearPicked = useCallback(() => {
     anchorRef.current = null
@@ -221,34 +284,96 @@ export function ThreadListView({
     else toggle(id, index)
   }, [extendTo, toggle])
 
-  /** One request per conversation rather than a bulk endpoint: the thread PATCH
-   *  already exists, already checks who may touch which inbox, and six of them
-   *  in parallel is not the thing that will slow this screen down. Settled
-   *  rather than raced, so one refusal does not hide five successes. */
-  const applyToPicked = useCallback(async (body: Record<string, unknown>) => {
-    if (picked.length === 0) return
+  /** One request per conversation rather than a bulk endpoint: the routes
+   *  already exist, already check who may touch which inbox, and six of them in
+   *  parallel is not the thing that will slow this screen down. Settled rather
+   *  than raced, so one refusal does not hide five successes.
+   *
+   *  Answers whether ANY of them went through, which the junk button needs: a
+   *  question about blocking senders, put after a move that was refused
+   *  outright, is a question about nothing. */
+  const runOnPicked = useCallback(async (send: (id: string) => Promise<Response>): Promise<boolean> => {
+    if (picked.length === 0) return false
+    const count = picked.length
     setBusy(true)
     setError('')
     try {
       const results = await Promise.allSettled(picked.map((id) =>
-        fetch(`/api/m/unified-inbox/threads/${id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        }).then((r) => { if (!r.ok) throw new Error('refused') })
+        send(id).then((r) => { if (!r.ok) throw new Error('refused') })
       ))
       const failed = results.filter((r) => r.status === 'rejected').length
       if (failed > 0) {
-        setError(failed === picked.length
+        setError(failed === count
           ? 'None of those could be changed.'
-          : `${failed} of ${picked.length} could not be changed. The rest were.`)
+          : `${failed} of ${count} could not be changed. The rest were.`)
       }
       clearPicked()
       router.refresh()
+      return failed < count
     } finally {
       setBusy(false)
     }
   }, [picked, router, clearPicked])
+
+  const applyToPicked = useCallback((body: Record<string, unknown>) => runOnPicked((id) =>
+    fetch(`/api/m/unified-inbox/threads/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  ), [runOnPicked])
+
+  /** The whole picked pile into the bin, and then - and only then - the second
+   *  question.
+   *
+   *  Two decisions, kept apart exactly as they are on a single conversation
+   *  (see SpamButton, which explains why at length). The move is one person's
+   *  opinion about their own screen and happens on the press; blocking the
+   *  senders is a fact about the site, covers every address it has, and is
+   *  asked rather than assumed. The order matters: somebody who reads the
+   *  question, decides they cannot be bothered and presses Escape has still
+   *  done the thing they pressed the button for. */
+  const markPickedSpam = useCallback(async () => {
+    // Read before the run, because the run clears the picking it comes off.
+    const addresses = blockable
+    const moved = await runOnPicked((id) => fetch(`/api/m/unified-inbox/threads/${id}/spam`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ spam: true }),
+    }))
+    if (moved && canBlock && addresses.length > 0) setBlocking(addresses)
+  }, [blockable, canBlock, runOnPicked])
+
+  /** Shut the door on all of them. One request per address rather than a list,
+   *  for the same reason as above, and settled for the same reason again - the
+   *  error names how many of them did not take, and the ones that did are still
+   *  blocked. */
+  const blockAll = useCallback(async () => {
+    const addresses = blocking
+    if (addresses.length === 0) return
+    setBusy(true)
+    setError('')
+    try {
+      const results = await Promise.allSettled(addresses.map((address) =>
+        fetch('/api/m/unified-inbox/blocked-senders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address, blocked: true }),
+        }).then((r) => { if (!r.ok) throw new Error('refused') })
+      ))
+      const failed = results.filter((r) => r.status === 'rejected').length
+      if (failed > 0) {
+        // Kept on the screen after the dialog shuts. The move already happened
+        // and did not fail; what failed is the door.
+        setError(failed === addresses.length
+          ? 'Nobody was blocked. The junk was still moved.'
+          : `${failed} of ${addresses.length} could not be blocked. The rest were.`)
+      }
+    } finally {
+      setBusy(false)
+      setBlocking([])
+    }
+  }, [blocking])
 
   /** What merging the picked rows would do, worked out before anybody is asked
    *  to agree to it: which conversation the rest fold into, and whether doing it
@@ -348,22 +473,41 @@ export function ThreadListView({
           <span className="uin-bulk-count">
             {picked.length} selected
           </span>
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                  onClick={() => void applyToPicked({ status: 'done' })}>
-            Mark as done
-          </button>
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                  onClick={() => void applyToPicked({ unread: false })}>
-            Mark as read
-          </button>
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                  onClick={() => void applyToPicked({ unread: true })}>
-            Mark as unread
-          </button>
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                  onClick={() => void applyToPicked({ status: 'open' })}>
-            Open again
-          </button>
+          {/* Each of these only where it would actually do something - see
+              `offer` above for why a button that changes nothing is worse than
+              no button at all. */}
+          {offer.done && (
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                    onClick={() => void applyToPicked({ status: 'done' })}>
+              Mark as done
+            </button>
+          )}
+          {offer.read && (
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                    onClick={() => void applyToPicked({ unread: false })}>
+              Mark as read
+            </button>
+          )}
+          {offer.unread && (
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                    onClick={() => void applyToPicked({ unread: true })}>
+              Mark as unread
+            </button>
+          )}
+          {offer.open && (
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                    onClick={() => void applyToPicked({ status: 'open' })}>
+              Open again
+            </button>
+          )}
+          {/* Not in the Spam folder, where everything on the screen is already
+              in the bin and the button would be an offer to do it again. */}
+          {!spam && (
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                    onClick={() => void markPickedSpam()}>
+              Mark as spam
+            </button>
+          )}
           {/* Two or more, because merging one conversation into itself is not a
               thing - and only for whoever set the addresses up, since a merge
               across two of them changes who can read what. */}
@@ -559,6 +703,45 @@ export function ThreadListView({
         busy={busy}
         onCancel={() => setMerging(false)}
         onConfirm={() => { setMerging(false); void merge() }}
+      />
+
+      {/* The second decision, once the junk is already out of the way. Cancel is
+          the ordinary answer and leaves the front door where it was - the move
+          happened whichever way this is answered. */}
+      <ConfirmDialog
+        open={blocking.length > 0}
+        title={blocking.length > 1 ? `Block all ${blocking.length} of them as well?` : 'Block them as well?'}
+        body={<>
+          {/* Whose bin each one landed in is worked out per conversation on the
+              server, and a pile picked off one list can span several addresses -
+              so this says which rule was applied rather than naming a folder it
+              cannot know. "Moved to your spam" would be a plain untruth over a
+              colleague's own post. */}
+          <p>
+            They are in a spam folder now: your own, or the colleague&rsquo;s where the address is
+            theirs rather than the team&rsquo;s. Nothing is deleted, and nobody else&rsquo;s view
+            of them has changed.
+          </p>
+          <p>
+            Would you also like to turn {blocking.length > 1 ? 'these senders' : <strong>{blocking[0]}</strong>} away
+            in future? Nothing further from them would reach an inbox on this site - shared or
+            personal. It would be dropped straight in here instead, marked as dealt with and left
+            unread, so you can still see what they sent. Nothing already here would be touched,
+            anybody already turned away simply stays that way, and you can let them back in from
+            the Spam folder or from the inbox settings.
+          </p>
+          {blocking.length > 1 && (
+            <ul>
+              {blocking.map((address) => <li key={address}><strong>{address}</strong></li>)}
+            </ul>
+          )}
+        </>}
+        confirmLabel={blocking.length > 1 ? 'Block them all' : 'Block them'}
+        cancelLabel="No, just move them"
+        destructive
+        busy={busy}
+        onCancel={() => { if (!busy) setBlocking([]) }}
+        onConfirm={() => void blockAll()}
       />
     </>
   )

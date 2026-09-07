@@ -184,6 +184,10 @@ async function sendOneScheduled(
   const result = await sendMessage({
     threadId: draft.threadId ?? undefined,
     inboxId,
+    // Whichever message it was written against, so a reply set for Monday
+    // quotes the message somebody answered rather than whatever arrived over
+    // the weekend. Null is the newest, which is what it always did.
+    inReplyToMessageId: draft.inReplyToMessageId ?? undefined,
     mode: draft.mode,
     to: draft.to.length > 0 ? draft.to : undefined,
     cc: draft.cc.length > 0 ? draft.cc : undefined,

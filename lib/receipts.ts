@@ -24,15 +24,25 @@
 //   separately: telling somebody their customer read the email when the
 //   customer's phone merely downloaded it is the kind of wrong that ends in a
 //   badly judged phone call.
+//
+//   A click is the same story one step along, and it only exists at all when
+//   the mail service is rewriting the links in the message so it can see them
+//   being followed. It is the strongest ordinary signal there is - somebody
+//   went somewhere - and it is still not proof of a person: an office security
+//   scanner opens every link in an arriving email to check where it goes, and
+//   it does them all at once. Which is why the WHICH LINK is kept rather than
+//   only a count, and why several links inside the same second are filed as
+//   several clicks rather than collapsing into one.
 // ---------------------------------------------------------------------------
 
 /** The strongest thing we know about a message, in the order it is worth. */
-export type DeliveryEventKind = 'delivered' | 'opened' | 'proxy_open' | 'bounced' | 'receipt'
+export type DeliveryEventKind = 'delivered' | 'opened' | 'proxy_open' | 'clicked' | 'bounced' | 'receipt'
 
 export type NormalisedDeliveryEvent = {
   kind: DeliveryEventKind
   occurredAt: Date
-  /** A sentence for a person. The bounce reason, mostly. */
+  /** A sentence for a person: the bounce reason, mostly, and the address that
+   *  was followed on a click. */
   detail: string | null
   /** 'hard' | 'soft' | 'blocked' | 'spam' | 'invalid' | 'deferred' | 'error',
    *  and null for anything that is not a failure. */
@@ -40,13 +50,19 @@ export type NormalisedDeliveryEvent = {
 }
 
 /** The events we ask Brevo to send us, in the spelling its subscription API
- *  wants. Deliberately short: clicks are somebody else's feature, and a
- *  deferral is the mail service talking to itself about a retry it is about to
- *  make anyway. */
+ *  wants. Deliberately short: a deferral is the mail service talking to itself
+ *  about a retry it is about to make anyway, and an unsubscribe belongs to the
+ *  campaign half of the module rather than to a reply.
+ *
+ *  `click` only ever arrives if link tracking is switched on in the Brevo
+ *  account itself - the service has to be rewriting the addresses in the
+ *  message to know one was followed. Subscribing to it when it is off costs
+ *  nothing and reports nothing, which is why there is no switch for it here. */
 export const BREVO_SUBSCRIBED_EVENTS = [
   'delivered',
   'opened',
   'uniqueOpened',
+  'click',
   'hardBounce',
   'softBounce',
   'blocked',
@@ -127,6 +143,25 @@ function firstString(payload: Record<string, unknown>, keys: string[]): string |
 }
 
 /**
+ * The address that was followed, out of a click event.
+ *
+ * Brevo writes it as `link` on a transactional event and `URL` on a campaign
+ * one, and the two halves of this module both go through here. Kept short
+ * because it is shown on the screen and stored in a column somebody may one day
+ * read with their eyes: a tracking address with four hundred characters of
+ * campaign parameters on the end tells nobody anything.
+ *
+ * Only http and https survive. Anything else in there is not a link that was
+ * clicked, and it is about to be put in front of a person.
+ */
+function clickedLink(payload: Record<string, unknown>): string | null {
+  const raw = firstString(payload, ['link', 'URL', 'url'])
+  if (!raw) return null
+  if (!/^https?:\/\//i.test(raw)) return null
+  return raw.slice(0, 500)
+}
+
+/**
  * One pushed Brevo event, turned into something this module can file.
  *
  * Returns null for anything that is not about a message of ours - which is most
@@ -166,12 +201,21 @@ export function normaliseBrevoEvent(
       },
     }
   }
+  // Brevo calls it `click` when it pushes one, and `clicks` on some older
+  // accounts. Both, for the same reason both spellings of a bounce are taken:
+  // finding out in production means a fortnight of filing nothing.
+  if (name === 'click' || name === 'clicks') {
+    return {
+      messageId,
+      event: { kind: 'clicked', occurredAt, detail: clickedLink(payload), bounceKind: null },
+    }
+  }
   const bounceKind = BOUNCE_KINDS[name]
   if (bounceKind) {
     return { messageId, event: { kind: 'bounced', occurredAt, detail: reason, bounceKind } }
   }
-  // Sent, request, click, unsubscribed and anything Brevo adds later. Not an
-  // error - just not something this module has an opinion about.
+  // Sent, request, unsubscribed and anything Brevo adds later. Not an error -
+  // just not something this module has an opinion about.
   return null
 }
 

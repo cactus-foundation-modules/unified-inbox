@@ -7,6 +7,7 @@ import { alignToTop } from './pane-scroll'
 import type { DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
 import type { ReplyStyle } from '@/modules/unified-inbox/lib/channel-reply'
 import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
+import type { QuotedPreview } from '@/modules/unified-inbox/lib/quoted-preview'
 
 // Where the writing box appears, once somebody has asked for one. Whether it is
 // open at all lives in composer-open.tsx, which both this and the box itself
@@ -36,6 +37,9 @@ type SlotProps = {
   canAddProducts: boolean
   /** What the draft was carrying out of it, already looked up. */
   draftProducts: ProductChoice[]
+  /** Every message on the conversation that a reply could quote, described
+   *  well enough for the box to show the one it is quoting. */
+  quotedPreviews: QuotedPreview[]
   timezone: string
 }
 
@@ -78,7 +82,12 @@ export function ComposerSlot(props: SlotProps) {
   if (!opened) return null
   return (
     <div id="uin-composer" ref={slot}>
-      <Composer {...props} requestedMode={opened.mode} requestedAt={opened.at} />
+      <Composer
+        {...props}
+        requestedMode={opened.mode}
+        requestedAt={opened.at}
+        requestedReplyToId={opened.messageId}
+      />
     </div>
   )
 }

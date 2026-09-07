@@ -12,11 +12,12 @@ import {
   htmlHasWriting,
   isWorthSaving,
   splitAddresses,
+  NEEDS_A_RECIPIENT,
   NEEDS_A_SUBJECT,
   NOTHING_TO_SEND,
   type DraftForComposer,
 } from '@/modules/unified-inbox/lib/drafts'
-import { plainTextToHtml, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
+import { describeSendAt, plainTextToHtml, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
 import { AttachmentChips, AttachmentPicker, plainReason, type Attachment } from './AttachmentPicker'
 import { ProductPicker, productKey } from './ProductPicker'
 import { AttachmentDropNotice, AttachmentDropOverlay } from './AttachmentDropChrome'
@@ -230,9 +231,12 @@ export function ComposeView({
    *  KEEP it, which is what somebody closing a half-written message nearly
    *  always wants and what the old two-answer version could not do. */
   const askToLeave = useCallback(() => {
-    if (hasUnsaved) setAsking('leave')
+    // A time picked and not yet committed counts as something to lose: leaving
+    // on it without a word is how somebody ends up with an ordinary draft where
+    // they thought they had a message going out in the morning.
+    if (hasUnsaved || pendingSendAt) setAsking('leave')
     else leave()
-  }, [hasUnsaved, leave])
+  }, [hasUnsaved, leave, pendingSendAt])
 
   // Read out of a box so the listener below can be put on the page once and
   // left there, rather than being torn down and rebuilt on every keystroke.
@@ -296,14 +300,16 @@ export function ComposeView({
   // so the browser is asked to check. It only fires when there is something to
   // lose: a guard that fires on an empty box is a guard people learn to ignore.
   useEffect(() => {
-    if (!hasUnsaved) return
+    // A picked time is a loss of the same kind: nothing on the row says it,
+    // and the message somebody believes is going out in the morning is not.
+    if (!hasUnsaved && !pendingSendAt) return
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault()
       event.returnValue = ''
     }
     window.addEventListener('beforeunload', onBeforeUnload)
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
-  }, [hasUnsaved])
+  }, [hasUnsaved, pendingSendAt])
 
   /** Return in one of the short lines at the top moves on to the next one,
    *  which is what every mail program does and what fingers expect. It never
@@ -334,7 +340,7 @@ export function ComposeView({
     }
     const recipients = splitAddresses(to)
     if (recipients.length === 0) {
-      setError('Say who this is going to.')
+      setError(NEEDS_A_RECIPIENT)
       return
     }
     if (!subject.trim()) {
@@ -548,7 +554,7 @@ export function ComposeView({
             href={closeHref}
             aria-label="Close without sending"
             onClick={(event) => {
-              if (!hasUnsaved || opensElsewhere(event)) return
+              if ((!hasUnsaved && !pendingSendAt) || opensElsewhere(event)) return
               event.preventDefault()
               setAsking('leave')
             }}
@@ -609,7 +615,11 @@ export function ComposeView({
                   <RecipientField
                     id="uin-new-to"
                     value={to}
-                    onChange={(next) => { setTo(next); setDirty(true) }}
+                    onChange={(next) => {
+                      setTo(next)
+                      setDirty(true)
+                      if (splitAddresses(next).length > 0) clearOnceAnswered(NEEDS_A_RECIPIENT)
+                    }}
                     inboxId={inboxId || null}
                     onEnter={onLineKeyDown(showCc ? 'uin-new-cc' : showBcc ? 'uin-new-bcc' : 'uin-new-subject')}
                     placeholder="name@example.com, somebody.else@example.com"
@@ -925,6 +935,10 @@ export function ComposeView({
               <AttachmentPicker
                 drop={drop}
                 attached={attachments}
+                onRemove={(key) => {
+                  setAttachments((prev) => prev.filter((p) => p.key !== key))
+                  setDirty(true)
+                }}
                 onClose={() => setPicking(false)}
                 onPick={(item) => {
                   setAttachments((prev) =>
@@ -968,11 +982,19 @@ export function ComposeView({
            going out whatever this dialog decides - so it is asked about in its
            own words. Saying "keep this as a draft" over the top of a message
            leaving on Monday describes the wrong thing entirely. */
-        title={waiting ? 'Keep the changes?' : 'Keep this as a draft?'}
-        body={waiting
+        title={pendingSendAt ? 'Set it going?' : waiting ? 'Keep the changes?' : 'Keep this as a draft?'}
+        body={pendingSendAt
+          // A time picked off the alarm clock and not committed is KEPT rather
+          // than dropped: it is what somebody answered when they were asked
+          // when it should go, and binning it silently is how a message people
+          // believe is going out in the morning turns out to be a draft.
+          ? `Nothing has been sent yet. It goes out ${describeSendAt(pendingSendAt, new Date(), timezone)} on its own, and waits under Scheduled until then - where you can still change it, move it or stop it.`
+          : waiting
           ? 'This one is still set to go out on its own. Saving keeps what you have changed and leaves the time exactly where it is.'
           : 'Nothing here has been sent. It can wait under Drafts until you come back to it.'}
-        confirmLabel={waiting ? 'Save the changes' : 'Save it as a draft'}
+        confirmLabel={pendingSendAt
+          ? 'Save it and set it going'
+          : waiting ? 'Save the changes' : 'Save it as a draft'}
         cancelLabel="Keep writing"
         busy={busy}
         other={{
@@ -989,7 +1011,10 @@ export function ComposeView({
         }}
         onCancel={() => { if (!busy) setAsking(null) }}
         onConfirm={() => {
-          void save().then((ok) => {
+          void save(
+            pendingSendAt ? toWallClock(pendingSendAt, timezone) : undefined,
+            pendingFollowUp,
+          ).then((ok) => {
             setAsking(null)
             // A save that did not happen leaves the screen where it is, with
             // the reason on it. Closing anyway would be the exact loss this

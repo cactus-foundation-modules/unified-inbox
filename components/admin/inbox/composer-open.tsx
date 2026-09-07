@@ -16,6 +16,11 @@ import type { ComposerMode } from './Composer'
 // message. Two places, one answer, so the answer lives here rather than in
 // either of them.
 //
+// Which message was pressed is carried along with the mode, because it is the
+// one the reply quotes. Pressing Reply on the fourth message of nine and being
+// handed the ninth message's words to send back is answering one thing and
+// quoting another.
+//
 // A half-written draft opens the box on the way in. A draft nobody can see is
 // a draft nobody finishes.
 //
@@ -23,12 +28,15 @@ import type { ComposerMode } from './Composer'
 // this - the cross in its corner shuts it - and the slot renders the box, so
 // keeping both in one module would have the two importing each other.
 
-type Opened = { mode: ComposerMode; at: number } | null
+type Opened = { mode: ComposerMode; at: number; messageId: string | null } | null
 
 type ComposerOpenValue = {
   opened: Opened
-  /** Presses the same button twice to close it, a different one to switch. */
-  toggle: (mode: ComposerMode) => void
+  /** Presses the same button twice to close it, a different one to switch.
+   *  `messageId` is the message the button was pressed on, which is the one
+   *  the reply quotes - null where the box was opened for the conversation
+   *  rather than for anything in it, which means the newest message. */
+  toggle: (mode: ComposerMode, messageId?: string | null) => void
   /** Shuts it outright, whatever it was open as. What the cross in the corner
    *  of the box does once the question about the draft has been answered. */
   close: () => void
@@ -45,13 +53,19 @@ export function useComposerOpen(): ComposerOpenValue {
 export function ComposerOpenProvider({
   initialMode, children,
 }: { initialMode: ComposerMode | null; children: ReactNode }) {
-  const [opened, setOpened] = useState<Opened>(initialMode ? { mode: initialMode, at: 0 } : null)
+  const [opened, setOpened] = useState<Opened>(
+    initialMode ? { mode: initialMode, at: 0, messageId: null } : null,
+  )
 
   // `at` counts presses, so pressing Forward while a forward is already open
   // still reaches the composer as a fresh instruction rather than as no change
   // at all. Which matters once somebody has switched mode inside the box.
-  const toggle = useCallback((mode: ComposerMode) => {
-    setOpened((current) => (current?.mode === mode ? null : { mode, at: (current?.at ?? 0) + 1 }))
+  const toggle = useCallback((mode: ComposerMode, messageId: string | null = null) => {
+    setOpened((current) => (
+      current?.mode === mode && current.messageId === messageId
+        ? null
+        : { mode, at: (current?.at ?? 0) + 1, messageId }
+    ))
   }, [])
 
   const close = useCallback(() => { setOpened(null) }, [])

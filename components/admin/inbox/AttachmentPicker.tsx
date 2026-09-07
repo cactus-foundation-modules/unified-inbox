@@ -1,6 +1,9 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+  type ChangeEvent, type DragEvent as ReactDragEvent,
+} from 'react'
 import { createPortal } from 'react-dom'
 import { MAX_DROPPED_BYTES, describeBytes } from '@/modules/unified-inbox/lib/uploads'
 import { AttachmentDropNotice, AttachmentDropOverlay } from './AttachmentDropChrome'
@@ -51,7 +54,7 @@ type MediaItem = {
   size?: number | null
 }
 
-export function AttachmentPicker({ drop, attached, onPick, onClose }: {
+export function AttachmentPicker({ drop, attached, onPick, onRemove, onClose }: {
   /** The composer's upload queue, so anything started here outlives the dialog. */
   drop: AttachmentDrop
   /** What is already on the message: the count at the foot, and the reason a
@@ -59,6 +62,10 @@ export function AttachmentPicker({ drop, attached, onPick, onClose }: {
    *  offered again. */
   attached: Attachment[]
   onPick: (item: Attachment) => void
+  /** Takes one back off again, without shutting the dialog. Attaching the wrong
+   *  file and having to close the box to undo it is a silly place to leave
+   *  somebody, and the list below is exactly where they will look. */
+  onRemove: (key: string) => void
   onClose: () => void
 }) {
   const [items, setItems] = useState<MediaItem[]>([])
@@ -163,6 +170,32 @@ export function AttachmentPicker({ drop, attached, onPick, onClose }: {
     return () => document.removeEventListener('keydown', onKeyDown, true)
   }, [])
 
+  /**
+   * The composer's drop handlers, with the bubbling stopped at this dialog.
+   *
+   * A portal is a portal in the DOM only. React sends an event up the tree it
+   * RENDERED, and this dialog is rendered by the composer - so a file dropped
+   * on this card ran the composer's handler as well, on its own box, and one
+   * drop uploaded and attached the file TWICE. The Choose files box never did,
+   * because it calls addFiles itself and there is nothing to bubble.
+   *
+   * Stopped rather than untangled: this dialog is drawn over the composer, so
+   * anything that lands on it is this dialog's, and the composer has no
+   * business hearing about it. The Choose files path is untouched - one way in
+   * either way, and that way is addFiles.
+   */
+  const dropProps = useMemo(() => {
+    const { onDragEnter, onDragOver, onDragLeave, onDrop } = drop.dropProps
+    const mine = (handler: (event: ReactDragEvent<HTMLElement>) => void) =>
+      (event: ReactDragEvent<HTMLElement>) => { event.stopPropagation(); handler(event) }
+    return {
+      onDragEnter: mine(onDragEnter),
+      onDragOver: mine(onDragOver),
+      onDragLeave: mine(onDragLeave),
+      onDrop: mine(onDrop),
+    }
+  }, [drop.dropProps])
+
   /** Files off the chooser. The value is cleared afterwards so choosing the
    *  same file twice in a row is two goes rather than one and then nothing. */
   const onChosen = useCallback((event: ChangeEvent<HTMLInputElement>) => {
@@ -191,8 +224,9 @@ export function AttachmentPicker({ drop, attached, onPick, onClose }: {
         aria-label="Attach files to this message"
         // The whole card, not just the box inside it: somebody dragging a quote
         // at this dialog is aiming at the dialog, and asking them to hit a
-        // particular rectangle inside it is asking them to aim twice.
-        {...drop.dropProps}
+        // particular rectangle inside it is asking them to aim twice. Not the
+        // composer's handlers straight off the hook - see dropProps above.
+        {...dropProps}
       >
         <AttachmentDropOverlay dragging={drop.dragging} />
 
@@ -307,24 +341,44 @@ export function AttachmentPicker({ drop, attached, onPick, onClose }: {
             errors={drop.errors}
             dismissErrors={drop.dismissErrors}
           />
+
+          {/* What is on the message, a file to a line, under the box they were
+              dropped into. It used to be a count beside the Done button, which
+              is the wrong end of the dialog and the wrong amount of detail:
+              "3 files on this message" is no help at all to somebody who has
+              just attached the wrong one twice. */}
+          {attached.length > 0 && (
+            <>
+              <p className="uin-attach-heading">On this message</p>
+              <ul className="uin-attach-list">
+                {attached.map((item) => (
+                  <li key={item.key}>
+                    <span className="uin-attach-list-name" title={item.filename}>{item.filename}</span>
+                    <span className="uin-attach-list-size">
+                      {describeFile(item.sizeBytes, item.contentType)}
+                    </span>
+                    <button
+                      type="button"
+                      className="uin-attach-list-x"
+                      aria-label={`Take ${item.filename} off this message`}
+                      onClick={() => onRemove(item.key)}
+                    >
+                      &times;
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </div>
 
         <div className="uin-modal-foot">
-          <span className="uin-recipients uin-modal-foot-note">{countAttached(attached.length)}</span>
           <button type="button" className="btn btn-primary btn-sm" onClick={onClose}>Done</button>
         </div>
       </div>
     </div>,
     document.body,
   )
-}
-
-/** What the foot of the dialog says. Counted out in words at the low numbers,
- *  because "1 files" is the sort of thing that makes a site look unfinished. */
-function countAttached(count: number): string {
-  if (count === 0) return 'Nothing attached yet.'
-  if (count === 1) return 'One file on this message.'
-  return `${count} files on this message.`
 }
 
 /**

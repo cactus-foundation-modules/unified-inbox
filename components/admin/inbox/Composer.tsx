@@ -7,10 +7,12 @@ import {
   htmlHasWriting,
   isWorthSaving,
   splitAddresses,
+  NEEDS_A_RECIPIENT,
+  NEEDS_SOMEBODY_TO_FORWARD_TO,
   NOTHING_TO_SEND,
   type DraftForComposer,
 } from '@/modules/unified-inbox/lib/drafts'
-import { plainTextToHtml, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
+import { describeSendAt, plainTextToHtml, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
 import { AttachmentChips, AttachmentPicker, plainReason, type Attachment } from './AttachmentPicker'
 import { ProductPicker, productKey } from './ProductPicker'
 import { AttachmentDropNotice, AttachmentDropOverlay } from './AttachmentDropChrome'
@@ -29,6 +31,9 @@ import type { DraftSendState } from '@/modules/unified-inbox/lib/types'
 import type { ReplyStyle } from '@/modules/unified-inbox/lib/channel-reply'
 import { appendSlots, refKey, slotHtml, slotRefs } from '@/modules/unified-inbox/lib/products/slots'
 import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
+import { pickQuotedPreview, type QuotedPreview } from '@/modules/unified-inbox/lib/quoted-preview'
+import { MessageBody } from './MessageBody'
+import { MessageText } from './MessageText'
 
 // The composer: reply, reply to everybody, forward, and an internal note.
 //
@@ -108,13 +113,20 @@ type Props = {
   /** Counts those presses, so pressing Forward twice still reads as a second
    *  instruction rather than as nothing having changed. */
   requestedAt?: number
+  /** Which message that press was made on - the one being answered, and so the
+   *  one quoted under the answer. Null where the box was opened for the
+   *  conversation rather than for a message in it, which means the newest. */
+  requestedReplyToId?: string | null
+  /** Every message on the conversation a reply could quote. The box shows the
+   *  one it is actually quoting, folded away - see lib/quoted-preview.ts. */
+  quotedPreviews: QuotedPreview[]
   timezone: string
 }
 
 export function Composer({
   threadId, inboxId, replyTo, replyAllTo, canReply, canForward, style, destinationLine, staff,
   cannotReplyReason, replySubject, forwardSubject, draft, canAddProducts, draftProducts,
-  requestedMode, requestedAt, timezone,
+  requestedMode, requestedAt, requestedReplyToId, quotedPreviews, timezone,
 }: Props) {
   const router = useRouter()
   const { close: closeComposer } = useComposerOpen()
@@ -143,6 +155,18 @@ export function Composer({
     const body = draft ? (draft.bodyFormat === 'html' ? draft.body : plainTextToHtml(draft.body)) : ''
     return slotRefs(body).length > 0 ? body : appendSlots(body, draftProducts)
   })
+
+  // Which message is being answered. It travels with the send, and the server
+  // quotes that message under the reply - so answering the fourth message of
+  // nine no longer arrives with the ninth one's words underneath it.
+  //
+  // A draft remembers it too, because a reply saved on Tuesday and sent on
+  // Friday still answers Tuesday's message. Null throughout means "the newest
+  // message on the conversation", which is what the box does when it was opened
+  // for the conversation rather than for anything in it.
+  const [replyToId, setReplyToId] = useState<string | null>(
+    () => requestedReplyToId ?? draft?.inReplyToMessageId ?? null,
+  )
 
   /** Who a reply of this kind would go to, as one line of text. */
   const defaultRecipients = useCallback(
@@ -240,6 +264,10 @@ export function Composer({
   // Waiting for its own time, or going out this minute. Either way it is out of
   // this composer's hands.
   const waiting = sendState === 'scheduled' || sendState === 'sending'
+
+  /** The chosen departure time in the shape the server reads it in: a wall
+   *  clock with no zone on it, meant in the SITE's zone. */
+  const pendingWallClock = pendingSendAt ? toWallClock(pendingSendAt, timezone) : null
   // Typed since the last time any of it was put down somewhere. What the
   // beforeunload guard below is asking about, and it is deliberately not "is
   // there text", because text that has just been saved is not at risk.
@@ -258,6 +286,10 @@ export function Composer({
       setMode(requestedMode)
       setError('')
       setNote('')
+      // A later press is a press on a message, so it re-aims what gets quoted.
+      // Undefined is a caller that has nothing to say about it, which leaves
+      // whatever the box was already answering.
+      if (requestedReplyToId !== undefined) setReplyToId(requestedReplyToId)
       // Switching between a reply and a reply to everybody refills the To box,
       // because that is the whole of what the difference means - unless
       // somebody has already edited it, in which case their answer stands.
@@ -269,6 +301,20 @@ export function Composer({
 
   const forwarding = mode === 'forward'
   const noting = mode === 'note'
+  /** The message that will be quoted under this one, or null on a conversation
+   *  with nothing quotable on it. The same rule the send route follows - what
+   *  was pressed, else the newest - so the panel below is not describing a
+   *  different message from the one that goes out. */
+  const quoting = useMemo(
+    () => pickQuotedPreview(quotedPreviews, replyToId),
+    [quotedPreviews, replyToId],
+  )
+  /** Whether the panel below the words is actually open. A shut <details> still
+   *  MOUNTS what is inside it - it only hides it - and what is inside this one
+   *  is a frame that fetches a whole message and runs a script to measure
+   *  itself. Every reply anybody started would have loaded a message nobody had
+   *  asked to see. */
+  const [showingQuoted, setShowingQuoted] = useState(false)
   /** The line the message is actually addressed by, whichever box it came out
    *  of. */
   const recipients = forwarding ? forwardTo : replyRecipients
@@ -418,6 +464,20 @@ export function Composer({
     }
   }, [router, threadId])
 
+  /** Which sentence an empty To line earns here. Forwarding and replying are
+   *  the same complaint about the same empty box, but a reply is not being
+   *  forwarded and saying so would be a small lie. Named once so that the box
+   *  can take its own warning down again once somebody has answered it. */
+  const needsSomebody = mode === 'forward' ? NEEDS_SOMEBODY_TO_FORWARD_TO : NEEDS_A_RECIPIENT
+
+  /** Takes down a complaint about an empty box now that the box has been
+   *  filled in. Only that one sentence: a send that actually failed, or a
+   *  different box still left blank, has nothing to do with what was just
+   *  typed and must stay on screen. */
+  const clearOnceAnswered = useCallback((answered: string) => {
+    setError((shown) => (shown === answered ? '' : shown))
+  }, [])
+
   const submit = useCallback(async (): Promise<boolean> => {
     if (!htmlHasWriting(text)) {
       setError(NOTHING_TO_SEND)
@@ -425,7 +485,7 @@ export function Composer({
     }
     const to = splitAddresses(recipients)
     if (mode !== 'note' && style.addressed && to.length === 0) {
-      setError(mode === 'forward' ? 'Say who to forward it to.' : 'Say who this is going to.')
+      setError(needsSomebody)
       return false
     }
     if (inFlight.current) return false
@@ -473,6 +533,10 @@ export function Composer({
             })),
             products: products.map(({ moduleName, kind, id }) => ({ moduleName, kind, id })),
             includeOriginalAttachments: mode === 'forward',
+            // What is being answered or sent on, so the words quoted underneath
+            // are that message's. Left out is the newest on the conversation,
+            // which is what the box opened from the conversation itself means.
+            inReplyToMessageId: replyToId ?? undefined,
             idempotencyKey: token.current,
             draftId: draftId ?? undefined,
           }),
@@ -504,6 +568,10 @@ export function Composer({
       setPicked([])
       setMentions([])
       setMentionQuery('')
+      // Back to the newest message. What was just answered has an answer under
+      // it now, and the empty box is the conversation's box again until
+      // somebody presses the arrow on a particular message.
+      setReplyToId(null)
       setDirty(false)
       // The draft went with the message, and so did any time on it - and any
       // sleep that was waiting behind that time.
@@ -530,8 +598,8 @@ export function Composer({
       setBusyWith(null)
     }
   }, [
-    attachments, bcc, cc, defaultRecipients, draftId, mentions, mode, products, recipients, router,
-    style.addressed, subject, text, threadId,
+    attachments, bcc, cc, defaultRecipients, draftId, mentions, mode, needsSomebody, products,
+    recipients, replyToId, router, style.addressed, subject, text, threadId,
   ])
 
   /** What a save sends. In one place because two things send it: the save that
@@ -544,6 +612,7 @@ export function Composer({
   ) => ({
     id: draftId ?? undefined,
     threadId,
+    inReplyToMessageId: replyToId,
     mode: mode === 'note' ? ('reply' as const) : mode,
     to: mode === 'note' ? [] : splitAddresses(recipients),
     cc: splitAddresses(cc),
@@ -571,7 +640,9 @@ export function Composer({
     // that sleep has to survive a send that happens days later with nobody
     // watching, so the instruction rides on the draft too.
     snoozeUntil: sleepUntil ? sleepUntil.toISOString() : null,
-  }), [attachments, bcc, cc, draftId, mode, products, recipients, subject, text, threadId])
+  }), [
+    attachments, bcc, cc, draftId, mode, products, recipients, replyToId, subject, text, threadId,
+  ])
 
   /** Puts the box down as a draft, with or without a time on it. Saving and
    *  scheduling are one request on purpose: a scheduled message IS a draft with
@@ -674,7 +745,10 @@ export function Composer({
    *  longer carries a "Throw the draft away" chip - the cross is the one place
    *  that question is asked now, and it has to be able to ask it about a draft
    *  that was saved a moment ago and not touched since. */
-  const closeIsAQuestion = hasUnsaved || (!noting && !!draftId)
+  // A time picked and not yet committed counts too: shutting the box on it
+  // without asking is how somebody ends up with an ordinary draft where they
+  // thought they had a message going out in the morning.
+  const closeIsAQuestion = hasUnsaved || !!pendingWallClock || (!noting && !!draftId)
 
   /** The cross in the corner of the box, and the one on the popped-out window.
    *  With nothing to lose it simply shuts; otherwise it asks the one question
@@ -701,31 +775,47 @@ export function Composer({
    * A new draft carries no id, so two requests that both land are two drafts; a
    * blip that loses somebody's writing is worse than that, and a refusal
    * repeated is only a refusal.
+   *
+   * A TIME PICKED OFF THE ALARM CLOCK TRAVELS WITH IT. It used to be dropped
+   * here without a word: somebody chose "Tomorrow morning", clicked onto the
+   * next conversation, and got an ordinary draft with no time on it and nothing
+   * said about the one they picked. Picking a time is the instruction; the only
+   * reason it is not written the moment it is picked is that "send it then" and
+   * "send it then and put this to sleep" are two different presses, and neither
+   * of those is a reason to throw the answer away when the screen moves.
+   *
+   * If the server refuses the TIME - a moment that has been and gone by the
+   * time the request lands, an address nobody may send from any more - the same
+   * writing goes again with no time on it, because a refusal must never cost
+   * somebody the words. They get a draft rather than a scheduled message, which
+   * is the smaller of the two losses and the one they can see.
    */
   const saveInBackground = useCallback(() => {
-    const payload = draftPayload()
-    if (!isWorthSaving(payload)) return
-    const body = JSON.stringify(payload)
-    const post = async (): Promise<boolean> => {
+    const timed = draftPayload(pendingWallClock ?? undefined, pendingWallClock ? pendingFollowUp : undefined)
+    if (!isWorthSaving(timed)) return
+    const post = async (payload: ReturnType<typeof draftPayload>): Promise<boolean> => {
       const response = await fetch('/api/m/unified-inbox/drafts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body,
+        body: JSON.stringify(payload),
         keepalive: true,
       })
       // The two failures told apart by which of them this is: a rejection is
       // the line, a false answer here is the server.
       return response.ok
     }
-    void post()
-      .catch(() => post())
+    void post(timed)
+      .catch(() => post(timed))
+      // A refusal with a time on it is tried once more without one, so the
+      // writing survives a departure the server would not take.
+      .then((ok) => (ok || !pendingWallClock ? ok : post(draftPayload())))
       // Said out loud in the one place there is left to say it. Nothing on
       // screen can be told: whoever wrote this is two screens away by now.
       .then((ok) => {
         if (!ok) console.error('[unified-inbox] a draft was refused on the way out')
       })
       .catch(() => console.error('[unified-inbox] a draft could not be put down on the way out'))
-  }, [draftPayload])
+  }, [draftPayload, pendingFollowUp, pendingWallClock])
 
   // A click on a link that would take the screen somewhere else was caught by
   // the listener above. It used to raise a dialog asking whether to lose the
@@ -755,10 +845,6 @@ export function Composer({
     leaving.current = false
     router.push(going)
   }, [leavingTo, noting, router, saveInBackground])
-
-  /** The chosen departure time in the shape the server reads it in: a wall
-   *  clock with no zone on it, meant in the SITE's zone. */
-  const pendingWallClock = pendingSendAt ? toWallClock(pendingSendAt, timezone) : null
 
   // Whoever is already picked stays on screen whatever is typed, so a name
   // cannot be taken off by a search that hides the chip it was on.
@@ -831,10 +917,7 @@ export function Composer({
         setText(html)
         setDirty(true)
         setNote('')
-        // The complaint about an empty box, taken down the moment there is
-        // something in the box. Nothing else is touched: a send that failed
-        // is still a thing that failed.
-        if (htmlHasWriting(html)) setError((shown) => (shown === NOTHING_TO_SEND ? '' : shown))
+        if (htmlHasWriting(html)) clearOnceAnswered(NOTHING_TO_SEND)
       }}
       placeholder={noting ? 'Something for the others to see' : 'Write your reply'}
       label={noting ? 'Your note' : 'Your message'}
@@ -877,7 +960,10 @@ export function Composer({
               <RecipientField
                 id="uin-reply-to"
                 value={recipients}
-                onChange={setRecipients}
+                onChange={(next) => {
+                  setRecipients(next)
+                  if (splitAddresses(next).length > 0) clearOnceAnswered(needsSomebody)
+                }}
                 inboxId={inboxId}
                 onEnter={onLineEnter(showCc ? 'uin-reply-cc' : showBcc ? 'uin-reply-bcc' : showSubject ? 'uin-reply-subject' : 'uin-composer-text')}
                 placeholder="name@example.com"
@@ -1000,6 +1086,63 @@ export function Composer({
       <div className="uin-compose-message">
         <RichTextBox />
       </div>
+
+      {/* What goes out underneath the words, and until now the box said nothing
+          whatever about it. The quotation itself is built when the message is
+          actually sent - it has to be, since the markup that leaves is
+          sanitised on its way out and a stranger's email never touches this
+          page - so the only way to find out what a customer would receive was
+          to send it and go and read your own copy.
+
+          Folded away, and phrased the way the same fold is phrased on a message
+          in the conversation above, because it is the same thing being said. It
+          is shown rather than edited: what will be quoted is decided by which
+          arrow was pressed, and a box somebody could type into would be a
+          second copy of the message going out under the first.
+
+          Only where a quotation is actually appended. A note is not sent to
+          anybody, and a reply on a channel another module owns is handed over as
+          one string with nothing beneath it. */}
+      {!noting && style.addressed && quoting && (
+        <details
+          className="uin-quoted-preview"
+          onToggle={(event) => setShowingQuoted(event.currentTarget.open)}
+        >
+          <summary className="uin-chip uin-summary">
+            {forwarding ? 'Show what you are forwarding' : 'Show the earlier messages'}
+          </summary>
+          {showingQuoted && (
+            <div className="uin-quoted-preview-body">
+              {forwarding ? (
+                <p className="uin-quoted-preview-line">
+                  ---------- Forwarded message ----------
+                  {quoting.forwardHeader.map(([label, value]) => (
+                    <span key={label}><br />{label}: {value}</span>
+                  ))}
+                </p>
+              ) : (
+                <p className="uin-quoted-preview-line">{quoting.attribution}</p>
+              )}
+              {quoting.hasHtml ? (
+                <MessageBody
+                  messageId={quoting.id}
+                  hasRemoteImages={quoting.hasRemoteImages}
+                  ownSender={quoting.ownSender}
+                  /* Opened rather than folded again. The point of the panel is
+                     to see everything that goes out beneath the reply, and a
+                     fold inside a fold hides exactly what was asked for. */
+                  showQuoted
+                />
+              ) : (
+                <MessageText
+                  text={quoting.bodyText ?? '(this message had nothing in it)'}
+                  foldQuoted={false}
+                />
+              )}
+            </div>
+          )}
+        </details>
+      )}
 
       {noting && staff.length > 0 && (
         <div className="uin-composer-row">
@@ -1298,6 +1441,10 @@ export function Composer({
         <AttachmentPicker
           drop={drop}
           attached={attachments}
+          onRemove={(key) => {
+            setAttachments((prev) => prev.filter((p) => p.key !== key))
+            setDirty(true)
+          }}
           onClose={() => setPicking(false)}
           onPick={(item) => {
             setAttachments((prev) =>
@@ -1355,15 +1502,24 @@ export function Composer({
       ) : (
         <ConfirmDialog
           open={closing}
-          title="Keep this as a draft?"
+          // Three situations now. A time picked off the alarm clock and not yet
+          // committed is kept rather than dropped - it is what the person
+          // answered when they were asked when it should go - so the question
+          // and both answers say what is actually about to happen, instead of
+          // offering to "keep this as a draft" and quietly binning the time.
+          title={pendingWallClock ? 'Set it going?' : 'Keep this as a draft?'}
           // Two situations, and one of them is new: the cross now asks about a
           // draft that was saved a minute ago and not touched since, because
           // the chip that used to throw one away has gone off the strip. There
           // is nothing to save in that case, so it does not offer to.
-          body={hasUnsaved
+          body={pendingWallClock
+            ? `Nothing has been sent yet. It goes out ${describeSendAt(pendingSendAt, new Date(), timezone)} on its own, and waits under Scheduled until then - where you can still change it, move it or stop it.`
+            : hasUnsaved
             ? 'Nothing here has been sent. It can wait under Drafts, and here, until you come back to it.'
             : 'It is already waiting under Drafts, and here, until you come back to it.'}
-          confirmLabel={hasUnsaved ? 'Save it as a draft' : 'Leave it as a draft'}
+          confirmLabel={pendingWallClock
+            ? 'Save it and set it going'
+            : hasUnsaved ? 'Save it as a draft' : 'Leave it as a draft'}
           cancelLabel="Keep writing"
           busy={busy}
           other={{
@@ -1379,8 +1535,10 @@ export function Composer({
           }}
           onCancel={() => { if (!busy) setClosing(false) }}
           onConfirm={() => {
-            if (!hasUnsaved) { setClosing(false); closeComposer(); return }
-            void save().then((ok) => {
+            // Nothing typed and no time waiting to be set: there is genuinely
+            // nothing to write down, and the box simply shuts.
+            if (!hasUnsaved && !pendingWallClock) { setClosing(false); closeComposer(); return }
+            void save(pendingWallClock ?? undefined, pendingFollowUp).then((ok) => {
               if (!ok) return
               setClosing(false)
               closeComposer()

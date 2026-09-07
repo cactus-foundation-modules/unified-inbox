@@ -6,8 +6,9 @@ import { normaliseAddress } from './addresses'
 import type { ThreadRef } from './threading'
 import { mergedStatus, mergedUnread, validateMerge } from './thread-merge'
 import type { OutboundCandidate } from './relay-copy'
-import { readableHtml } from './html'
-import { remoteImageUrls } from './remote-images'
+import { hasInlineImages, readableHtml, rewriteInlineImages } from './html'
+import { inlineImageHref, matchInlinePart, type InlineImagePart } from './inline-images'
+import { showableRemoteImageUrls } from './remote-images'
 import { DRAFT_MODES, DRAFT_SEND_STATES, isInboxKind, isSignatureKind } from './types'
 import type {
   AttachmentFetchMode,
@@ -1409,10 +1410,15 @@ export async function insertAttachment(data: {
   contentType: string | null
   sizeBytes: number | null
   imapPartId: string
+  /** The part's Content-ID header, when it had one. What the markup points at
+   *  a signature logo or a pasted screenshot by - see lib/inline-images.ts. */
+  contentId: string | null
 }): Promise<string> {
   const rows = await prisma.$queryRaw<{ id: string }[]>`
-    INSERT INTO "uin_attachments" ("message_id", "filename", "content_type", "size_bytes", "imap_part_id")
-    VALUES (${data.messageId}, ${data.filename}, ${data.contentType}, ${data.sizeBytes}, ${data.imapPartId})
+    INSERT INTO "uin_attachments"
+      ("message_id", "filename", "content_type", "size_bytes", "imap_part_id", "content_id")
+    VALUES (${data.messageId}, ${data.filename}, ${data.contentType}, ${data.sizeBytes},
+            ${data.imapPartId}, ${data.contentId})
     RETURNING "id"
   `
   return rows[0]!.id
@@ -1437,6 +1443,9 @@ export type AttachmentRow = {
   inboxId: string | null
   /** External URL for provider attachments (e.g. Twilio voicemail recordings). */
   externalUrl: string | null
+  /** The Content-ID the message refers to this part by, when it declared one.
+   *  Empty on everything that arrived before migration 048. */
+  contentId: string | null
 }
 
 function mapAttachment(r: Record<string, unknown>): AttachmentRow {
@@ -1457,6 +1466,7 @@ function mapAttachment(r: Record<string, unknown>): AttachmentRow {
     threadId: r.thread_id as string,
     inboxId: (r.inbox_id as string | null) ?? null,
     externalUrl: (r.external_url as string | null) ?? null,
+    contentId: (r.content_id as string | null) ?? null,
   }
 }
 
@@ -1482,6 +1492,25 @@ export async function listAttachmentsForMessage(messageId: string): Promise<Atta
      ORDER BY a."created_at" ASC
   `
   return rows.map(mapAttachment)
+}
+
+/** The parts of one message a cid: address could be naming, in the order they
+ *  arrived. Deliberately every attachment rather than only the ones carrying a
+ *  Content-ID: anything that landed before migration 048 has none, and the
+ *  filename is what matches those - see matchInlinePart. */
+export async function inlineImagePartsForMessage(messageId: string): Promise<InlineImagePart[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "id", "content_id", "filename", "content_type"
+      FROM "uin_attachments"
+     WHERE "message_id" = ${messageId}
+     ORDER BY "created_at" ASC
+  `
+  return rows.map((r) => ({
+    id: r.id as string,
+    contentId: (r.content_id as string | null) ?? null,
+    filename: (r.filename as string | null) ?? '',
+    contentType: (r.content_type as string | null) ?? null,
+  }))
 }
 
 export async function recordAttachmentStored(id: string, stored: {
@@ -1963,9 +1992,27 @@ function mapQuotable(r: Record<string, unknown>): QuotableMessage {
   }
 }
 
-export async function getQuotableMessage(id: string): Promise<QuotableMessage | null> {
+/**
+ * One named message, to be quoted under a reply to it.
+ *
+ * `threadId` is not optional in spirit: the id comes off a button in somebody's
+ * browser, and the body it names is about to be quoted into an email leaving
+ * this site. Scoped to the conversation being answered, a made-up id finds
+ * nothing rather than lifting a paragraph out of another inbox's post.
+ *
+ * Notes are excluded for the same reason. An internal note is written for
+ * colleagues on this screen and must never leave the building, whatever id is
+ * posted at this.
+ */
+export async function getQuotableMessage(
+  id: string,
+  threadId?: string | null,
+): Promise<QuotableMessage | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT * FROM "uin_messages" WHERE "id" = ${id}
+    SELECT * FROM "uin_messages"
+     WHERE "id" = ${id}
+       AND "direction" <> 'note'
+       ${threadId ? Prisma.sql`AND "thread_id" = ${threadId}` : Prisma.empty}
   `
   return rows[0] ? mapQuotable(rows[0]) : null
 }
@@ -2986,6 +3033,12 @@ export type ThreadMessageRow = {
   /** 'human' | 'proxy' | 'receipt'. A proxy open is the recipient's mail app
    *  fetching the picture, not the recipient. */
   openSource: string | null
+  /** When a link in it was first followed, and how many times any link has
+   *  been. Only ever filled in where the mail service rewrites the addresses in
+   *  the message, which is a setting on its account rather than on this site. */
+  clickedAt: Date | null
+  lastClickAt: Date | null
+  clickCount: number
   bouncedAt: Date | null
   bounceKind: string | null
   bounceDetail: string | null
@@ -3008,7 +3061,7 @@ function mapThreadMessage(r: Record<string, unknown>): ThreadMessageRow {
     subject: (r.subject as string | null) ?? null,
     bodyText: (r.body_text as string | null) ?? null,
     hasHtml: !!html && html.trim().length > 0,
-    remoteImages: remoteImageUrls(readableHtml(html)).length,
+    remoteImages: showableRemoteImageUrls(readableHtml(html)).length,
     snippet: (r.snippet as string | null) ?? null,
     sentAt: r.sent_at as Date,
     hasAttachments: !!r.has_attachments,
@@ -3021,6 +3074,9 @@ function mapThreadMessage(r: Record<string, unknown>): ThreadMessageRow {
     lastOpenAt: (r.last_open_at as Date | null) ?? null,
     openCount: Number(r.open_count ?? 0),
     openSource: (r.open_source as string | null) ?? null,
+    clickedAt: (r.clicked_at as Date | null) ?? null,
+    lastClickAt: (r.last_click_at as Date | null) ?? null,
+    clickCount: Number(r.click_count ?? 0),
     bouncedAt: (r.bounced_at as Date | null) ?? null,
     bounceKind: (r.bounce_kind as string | null) ?? null,
     bounceDetail: (r.bounce_detail as string | null) ?? null,
@@ -3077,7 +3133,7 @@ export async function getMessageHtml(id: string): Promise<{
   const r = rows[0]
   if (!r) return null
   return {
-    html: readableHtml(r.body_html as string | null),
+    html: await withInlineImages(id, readableHtml(r.body_html as string | null)),
     text: (r.body_text as string | null) ?? null,
     threadId: r.thread_id as string,
     // An outbound message carries the inbox it was sent from; an inbound one
@@ -3086,6 +3142,51 @@ export async function getMessageHtml(id: string): Promise<{
     providerModule: (r.provider_module as string | null) ?? null,
     subject: (r.subject as string | null) ?? null,
   }
+}
+
+/** Who may read one message, without dragging its markup along. The body route
+ *  wants the HTML and the access columns together; a route serving one picture
+ *  out of a message wants the second half on its own, and asking for the first
+ *  as well would fetch a newsletter out of the database once per picture in it. */
+export async function getMessageAccess(id: string): Promise<{
+  threadId: string
+  inboxId: string | null
+  providerModule: string | null
+} | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT m."inbox_id", m."thread_id", t."inbox_id" AS "thread_inbox_id", t."provider_module"
+      FROM "uin_messages" m
+      JOIN "uin_threads" t ON t."id" = m."thread_id"
+     WHERE m."id" = ${id}
+  `
+  const r = rows[0]
+  if (!r) return null
+  return {
+    threadId: r.thread_id as string,
+    inboxId: ((r.inbox_id as string | null) ?? (r.thread_inbox_id as string | null)) ?? null,
+    providerModule: (r.provider_module as string | null) ?? null,
+  }
+}
+
+/**
+ * Point the pictures that came inside the message at the parts that hold them.
+ *
+ * On the read path rather than the sync path, for the same reason readableHtml
+ * is: lib/compose.ts quotes the STORED markup under a reply, and a quote whose
+ * pictures point at this site's own routes is a reply that sends the recipient
+ * to a login page. Everything that reads a message goes through here, so the
+ * frame and anything else asking see the same markup.
+ *
+ * The database is only asked about a message that references a part at all,
+ * which is a handful of them.
+ */
+async function withInlineImages(messageId: string, html: string | null): Promise<string | null> {
+  if (!html || !hasInlineImages(html)) return html
+  const parts = await inlineImagePartsForMessage(messageId)
+  return rewriteInlineImages(html, (cid) => {
+    const part = matchInlinePart(cid, parts)
+    return part ? inlineImageHref(messageId, part.id) : null
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -3622,6 +3723,7 @@ function mapDraft(r: Record<string, unknown>): Draft {
     authorUserId: r.author_user_id as string,
     inboxId: (r.inbox_id as string | null) ?? null,
     threadId: (r.thread_id as string | null) ?? null,
+    inReplyToMessageId: (r.in_reply_to_message_id as string | null) ?? null,
     mode: DRAFT_MODES.includes(mode) ? mode : 'new',
     to: (r.to_addresses as string[] | null) ?? [],
     cc: (r.cc_addresses as string[] | null) ?? [],
@@ -4023,6 +4125,10 @@ export type DraftInput = {
   authorUserId: string
   inboxId: string | null
   threadId: string | null
+  /** The message on that conversation being answered, or null for the newest -
+   *  which is what every caller written before somebody could reply to a
+   *  particular message means. */
+  inReplyToMessageId?: string | null
   mode: DraftMode
   to: string[]
   cc: string[]
@@ -4087,6 +4193,10 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
   // is no longer going anywhere is a conversation that goes quiet for nothing.
   const snoozeUntil = sendAt ? data.snoozeUntil ?? null : null
   const bcc = data.bcc ?? []
+  // Left out is "the newest message on the conversation", which is what the
+  // send route does with a null and what every draft written before somebody
+  // could answer a particular message carries.
+  const inReplyTo = data.inReplyToMessageId ?? null
   const bodyFormat = data.bodyFormat ?? 'text'
   const products = data.products ?? []
   const schedule = keep
@@ -4099,6 +4209,7 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
     const updated = await prisma.$queryRaw<Record<string, unknown>[]>`
       UPDATE "uin_drafts" AS d
          SET "inbox_id"     = ${data.inboxId},
+             "in_reply_to_message_id" = ${inReplyTo},
              "mode"         = ${data.mode},
              "to_addresses" = ${data.to}::text[],
              "cc_addresses" = ${data.cc}::text[],
@@ -4120,16 +4231,17 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
 
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     INSERT INTO "uin_drafts"
-      ("author_user_id", "inbox_id", "thread_id", "mode", "to_addresses",
+      ("author_user_id", "inbox_id", "thread_id", "in_reply_to_message_id", "mode", "to_addresses",
        "cc_addresses", "bcc_addresses", "subject", "body", "body_format", "attachments",
        "products", "send_at", "send_state", "follow_up_minutes", "snooze_until")
-    VALUES (${data.authorUserId}, ${data.inboxId}, ${data.threadId}, ${data.mode},
+    VALUES (${data.authorUserId}, ${data.inboxId}, ${data.threadId}, ${inReplyTo}, ${data.mode},
             ${data.to}::text[], ${data.cc}::text[], ${bcc}::text[], ${data.subject},
             ${data.body}, ${bodyFormat}, ${JSON.stringify(data.attachments)}::jsonb,
             ${JSON.stringify(products)}::jsonb, ${sendAt}, ${sendState}, ${followUp},
             ${snoozeUntil})
     ON CONFLICT ("thread_id", "author_user_id") WHERE "thread_id" IS NOT NULL
     DO UPDATE SET "inbox_id"     = EXCLUDED."inbox_id",
+                  "in_reply_to_message_id" = EXCLUDED."in_reply_to_message_id",
                   "mode"         = EXCLUDED."mode",
                   "to_addresses" = EXCLUDED."to_addresses",
                   "cc_addresses" = EXCLUDED."cc_addresses",
@@ -6355,9 +6467,11 @@ export async function exportThreadsForPerson(personId: string): Promise<Array<{
 
 /** One thing that happened to a sent message. `receipt_unread` is a read
  *  receipt saying the message was deleted without being opened, which is worth
- *  recording and is emphatically not an open. */
+ *  recording and is emphatically not an open. `clicked` carries the address
+ *  that was followed in `detail`, and is the one kind where two events in the
+ *  same second are two events (M047). */
 export type DeliveryUpdate = {
-  kind: 'delivered' | 'opened' | 'proxy_open' | 'bounced' | 'receipt' | 'receipt_unread'
+  kind: 'delivered' | 'opened' | 'proxy_open' | 'clicked' | 'bounced' | 'receipt' | 'receipt_unread'
   occurredAt: Date
   detail: string | null
   bounceKind: string | null
@@ -6384,12 +6498,29 @@ export async function recordDeliveryEvent(
   `
   if (!owned[0]) return false
 
-  const inserted = await prisma.$queryRaw<{ id: string }[]>`
-    INSERT INTO "uin_delivery_events" ("message_id", "kind", "source", "detail", "occurred_at")
-    VALUES (${messageId}, ${update.kind}, ${update.source}, ${update.detail}, ${update.occurredAt})
-    ON CONFLICT ("message_id", "kind", "occurred_at") DO NOTHING
-    RETURNING "id"
-  `
+  // Two unique indexes, so two conflict targets - and each has to name the
+  // index's own WHERE clause, because Postgres will not infer a partial index
+  // without it. A click deduplicates on the address as well as the moment: a
+  // scanner working through every link in a message does them all inside one
+  // second, and those are five clicks rather than one (M047).
+  const detail = update.detail === null ? null : update.detail.slice(0, 2000)
+  const inserted = update.kind === 'clicked'
+    ? await prisma.$queryRaw<{ id: string }[]>`
+        INSERT INTO "uin_delivery_events" ("message_id", "kind", "source", "detail", "occurred_at")
+        VALUES (${messageId}, ${update.kind}, ${update.source}, ${detail}, ${update.occurredAt})
+        ON CONFLICT ("message_id", "occurred_at", COALESCE("detail", ''))
+          WHERE "kind" = 'clicked'
+          DO NOTHING
+        RETURNING "id"
+      `
+    : await prisma.$queryRaw<{ id: string }[]>`
+        INSERT INTO "uin_delivery_events" ("message_id", "kind", "source", "detail", "occurred_at")
+        VALUES (${messageId}, ${update.kind}, ${update.source}, ${detail}, ${update.occurredAt})
+        ON CONFLICT ("message_id", "kind", "occurred_at")
+          WHERE "kind" <> 'clicked'
+          DO NOTHING
+        RETURNING "id"
+      `
   // Already had it. The counters must not move, which is the entire reason the
   // insert happens before the update rather than beside it.
   if (!inserted[0]) return false
@@ -6442,6 +6573,23 @@ async function applyDeliveryEvent(messageId: string, update: DeliveryUpdate): Pr
          SET "last_open_at" = GREATEST(COALESCE("last_open_at", ${update.occurredAt}), ${update.occurredAt}),
              "open_source"  = COALESCE("open_source", 'proxy'),
              "delivered_at" = COALESCE("delivered_at", ${update.occurredAt})
+       WHERE "id" = ${messageId}
+    `
+    return
+  }
+
+  if (update.kind === 'clicked') {
+    // Deliberately does NOT touch the open columns, for the same reason a proxy
+    // open does not: a click can be a mail scanner checking where a link goes,
+    // and "they opened it" is a sentence somebody rings a customer on the
+    // strength of. It does imply delivery, though - nothing gets followed out
+    // of a message that never landed.
+    await prisma.$executeRaw`
+      UPDATE "uin_messages"
+         SET "clicked_at"    = COALESCE("clicked_at", ${update.occurredAt}),
+             "last_click_at" = GREATEST(COALESCE("last_click_at", ${update.occurredAt}), ${update.occurredAt}),
+             "click_count"   = "click_count" + 1,
+             "delivered_at"  = COALESCE("delivered_at", ${update.occurredAt})
        WHERE "id" = ${messageId}
     `
     return

@@ -243,8 +243,11 @@ export function quoteForReply(original: QuotedOriginal, timezone: string): { htm
  * this site sending as a domain it does not own, which fails DMARC and costs
  * the site its sending reputation (E12).
  */
-export function quoteForForward(original: QuotedOriginal, timezone: string): { html: string; text: string } {
-  const rows: Array<[string, string]> = [
+export function forwardHeaderRows(
+  original: Pick<QuotedOriginal, 'sentAt' | 'fromName' | 'fromAddress' | 'subject' | 'toAddresses'>,
+  timezone: string,
+): Array<[string, string]> {
+  return [
     ['From', [original.fromName, original.fromAddress].filter(Boolean).join(' ') || 'unknown'],
     ['Date', formatInSiteTimezone(original.sentAt, timezone, {
       day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
@@ -252,6 +255,12 @@ export function quoteForForward(original: QuotedOriginal, timezone: string): { h
     ['Subject', original.subject ?? '(no subject)'],
     ['To', original.toAddresses.join(', ') || 'unknown'],
   ]
+}
+
+export function quoteForForward(original: QuotedOriginal, timezone: string): { html: string; text: string } {
+  // The same rows the writing box shows before it goes, rather than a second
+  // version of them that could drift away from this one.
+  const rows = forwardHeaderRows(original, timezone)
   const body = original.bodyHtml
     ? sanitizeEmailHtml(original.bodyHtml)
     : `<p>${escapeHtml(original.bodyText ?? '').replace(/\n/g, '<br />')}</p>`

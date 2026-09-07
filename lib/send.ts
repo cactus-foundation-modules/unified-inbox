@@ -148,8 +148,22 @@ export async function prepareSend(request: SendRequest): Promise<
   const inbox = await getInbox(inboxId)
   if (!inbox) return { ok: false, reason: 'That inbox no longer exists.' }
 
+  // What is being answered, and therefore what gets quoted under the answer.
+  //
+  // The message somebody actually pressed Reply on, when they pressed it on a
+  // message. Answering the fourth message of nine and being handed the ninth
+  // one's words underneath is the composer quoting a different conversation
+  // than the one on the screen - and on a long thread that is somebody replying
+  // to a customer with the wrong quotation attached to their own sentence.
+  //
+  // Scoped to this conversation on the way out of the database, so an id from
+  // somewhere else finds nothing. Nothing, here, means the newest message
+  // instead: the named one has been deleted, or the thread has been merged
+  // since the box was opened, and refusing the send over it would lose what
+  // somebody has written rather than quote it slightly differently.
   const parent = request.inReplyToMessageId
-    ? await getQuotableMessage(request.inReplyToMessageId)
+    ? (await getQuotableMessage(request.inReplyToMessageId, thread?.id ?? null))
+      ?? (thread ? await newestMessageOnThread(thread.id) : null)
     : thread
       ? await newestMessageOnThread(thread.id)
       : null
