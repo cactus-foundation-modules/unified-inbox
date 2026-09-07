@@ -176,6 +176,10 @@ export type DraftForComposer = {
   /** How long after it goes out the conversation should come back if nobody has
    *  answered, or null for a message nobody wants chasing. */
   followUpMinutes: number | null
+  /** When the conversation should stay asleep until once this one has gone, as
+   *  an ISO stamp - a Date in props arrives at a client component as an empty
+   *  object, so it makes the trip as a string like the departure time above. */
+  snoozeUntil: string | null
   /** Whether mail from the recipient stood it down before it could leave. The
    *  conversation it was held by is not sent to the browser: the composer only
    *  has to say that the timer came off and why. */
@@ -199,6 +203,7 @@ export function forComposer(draft: Draft): DraftForComposer {
     sendState: draft.sendState,
     sendError: draft.sendError,
     followUpMinutes: draft.followUpMinutes,
+    snoozeUntil: draft.snoozeUntil ? draft.snoozeUntil.toISOString() : null,
     held: draft.heldByThreadId !== null,
   }
 }

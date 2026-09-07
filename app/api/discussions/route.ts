@@ -3,7 +3,13 @@ import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { canViewInbox } from '@/modules/unified-inbox/lib/access'
-import { createDiscussionThread, insertNote, recordEvent } from '@/modules/unified-inbox/lib/db'
+import {
+  createDiscussionThread,
+  fileThreadInInboxes,
+  insertNote,
+  ownInboxIdsForUsers,
+  recordEvent,
+} from '@/modules/unified-inbox/lib/db'
 import { notifyMentions } from '@/modules/unified-inbox/lib/mentions'
 import { noteHtml } from '@/modules/unified-inbox/lib/notes'
 import { normaliseSubject } from '@/modules/unified-inbox/lib/threading'
@@ -30,6 +36,20 @@ import { DiscussionBody } from '@/modules/unified-inbox/lib/validation'
 // about who can see it. So naming three addresses starts three discussions,
 // exactly as an email to three of the site's own addresses already becomes
 // three conversations (migrations/020_internal_threads.sql).
+//
+// AND IT LANDS IN THE POST OF WHOEVER IT IS PUT TO. That is the one thing above
+// that a discussion genuinely does not want: three copies of a conversation
+// between three people is three conversations that answer each other into
+// nothing. So the colleagues on the To line do not each get their own - they
+// get THIS one, filed under their own address as well as the starter's, which
+// is the same table and the same rule a conversation belonging to two addresses
+// has used since merging arrived (migrations/031_thread_merges.sql).
+//
+// The addresses are worked out HERE, from the names. A request that could name
+// the address would be a request that could file a note in anybody's private
+// post; a request that names a colleague can only ever reach the address that
+// colleague already owns. Somebody with no address of their own is filed
+// nowhere and reaches it through the ask on their own list, exactly as before.
 
 export async function POST(request: NextRequest) {
   const user = await getSessionFromCookie()
@@ -41,6 +61,19 @@ export async function POST(request: NextRequest) {
     return errorResponse(parsed.error.issues[0]?.message ?? 'That discussion could not be read.', 400)
   }
   const { subject, body, mentions = [] } = parsed.data
+
+  // Whoever it is put to is also asked to look at it: being on the To line of a
+  // discussion IS being asked about it, and a second list saying the same thing
+  // would be two ways to tell one person one thing. Their own name off it -
+  // `whoToTell` drops it anyway - because putting a discussion to yourself is
+  // not asking yourself a question.
+  const toUserIds = [...new Set(parsed.data.toUserIds ?? [])].filter((id) => id !== user.id)
+  const toTell = [...new Set([...toUserIds, ...mentions])]
+
+  // Their own addresses, so it lands in the post they actually read rather than
+  // only in the starter's. Asked once for the whole discussion, not once per
+  // address it is started in.
+  const toInboxIds = await ownInboxIdsForUsers(toUserIds)
 
   // The same address twice is one discussion, not two.
   const inboxIds = [...new Set(parsed.data.inboxIds)]
@@ -64,7 +97,14 @@ export async function POST(request: NextRequest) {
       subject,
       subjectNormalised: normaliseSubject(subject),
       preview: preview || null,
+      startedByUserId: user.id,
+      toUserIds,
     })
+    // The address it was started in has to be on the list too: once a
+    // conversation belongs to several addresses that list is read INSTEAD of
+    // its own inbox, so leaving it off would file the discussion out of the
+    // address it was started in.
+    await fileThreadInInboxes(threadId, [inboxId, ...toInboxIds])
     const messageId = await insertNote({
       threadId,
       channel: 'discussion',
@@ -76,7 +116,7 @@ export async function POST(request: NextRequest) {
     await notifyMentions({
       threadId,
       thread: { id: threadId, inboxId, providerModule: null },
-      mentions,
+      mentions: toTell,
       byUserId: user.id,
       messageId,
       note: body,

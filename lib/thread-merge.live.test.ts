@@ -154,7 +154,13 @@ describe.runIf(shouldRun)('merging conversations, against a real database', () =
     return Number(rows[0]?.count ?? 0)
   }
 
+  /** Whose lists these are. Every list in the module is one person's now -
+   *  "this is junk" is a reader's opinion rather than a fact about the mail
+   *  (see migrations/041_spam.sql) - and nothing here marks anything as junk,
+   *  so any consistent reader will do. */
+  const viewer = 'user-viewer'
   const filters = (over: Partial<Parameters<Db['listThreads']>[0]> = {}) => ({
+    viewerUserId: viewer,
     inboxIds: [chrisInbox, marcusInbox],
     includeUnrouted: true,
     status: 'all' as const,
@@ -295,7 +301,7 @@ describe.runIf(shouldRun)('merging conversations, against a real database', () =
     const loser = await conversation({ inboxId: marcusInbox, subject: 'Unread two', sentAt: LATER })
     await lib.mergeThreads(winner, [loser], null)
 
-    const counts = await lib.unreadCounts([chrisInbox, marcusInbox], false, [])
+    const counts = await lib.unreadCounts(viewer, [chrisInbox, marcusInbox], false, [])
     expect(counts[chrisInbox] ?? 0).toBeGreaterThan(0)
     expect(counts[marcusInbox] ?? 0).toBeGreaterThan(0)
   })

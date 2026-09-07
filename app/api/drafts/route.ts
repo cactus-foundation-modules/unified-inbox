@@ -96,6 +96,13 @@ export async function POST(request: Request) {
   // morning.
   const followUp = decideFollowUp(body.followUpMinutes ?? null)
   if (!followUp.ok) return errorResponse(followUp.reason, 400)
+  // And the sleep behind it, on the same terms. Only a moment that parses is
+  // stored - Zod has already said it is an ISO stamp, so anything left here is
+  // a stamp naming no real instant, and a sleep nobody can read is no sleep.
+  const askedToSleepUntil = body.snoozeUntil ? new Date(body.snoozeUntil) : null
+  if (askedToSleepUntil && Number.isNaN(askedToSleepUntil.getTime())) {
+    return errorResponse('That is not a time the conversation could sleep until.', 400)
+  }
   if (body.sendAt) {
     const decision = decideSendAt(body.sendAt, new Date(), await getSiteTimezone())
     if (!decision.ok) return errorResponse(decision.reason, 400)
@@ -131,6 +138,7 @@ export async function POST(request: Request) {
     products,
     sendAt,
     followUpMinutes: followUp.minutes,
+    snoozeUntil: askedToSleepUntil,
   })
 
   return NextResponse.json({
@@ -138,5 +146,6 @@ export async function POST(request: Request) {
     savedAt: draft.updatedAt.toISOString(),
     sendAt: draft.sendAt ? draft.sendAt.toISOString() : null,
     followUpMinutes: draft.followUpMinutes,
+    snoozeUntil: draft.snoozeUntil ? draft.snoozeUntil.toISOString() : null,
   })
 }

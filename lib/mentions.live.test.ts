@@ -163,12 +163,16 @@ describe.runIf(shouldRun)('asking a colleague to look, against a real database',
       subject: 'The Henderson order',
       subjectNormalised: 'the henderson order',
       preview: 'Something about the Henderson order',
+      startedByUserId: emma,
+      toUserIds: [sam],
     })
     query = await lib.createDiscussionThread({
       inboxId: accounts,
       subject: 'That invoice query',
       subjectNormalised: 'that invoice query',
       preview: 'Something about an invoice',
+      startedByUserId: emma,
+      toUserIds: [sam],
     })
 
     // A real message from a customer, so the list's LATERAL join has something
@@ -314,6 +318,8 @@ describe.runIf(shouldRun)('asking a colleague to look, against a real database',
       subject: 'A new enquiry',
       subjectNormalised: 'a new enquiry',
       preview: 'Somebody wants a quote',
+      startedByUserId: emma,
+      toUserIds: [sam],
     })
     await lib.upsertMention({
       threadId: lead, userId: sam, byUserId: emma, messageId: null, note: 'Yours, I think',

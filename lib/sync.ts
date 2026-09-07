@@ -12,6 +12,7 @@ import {
 } from './addresses'
 import {
   acquireConnectionLock,
+  assignThreadIfUnassigned,
   candidateThreads,
   clearAuthFailures,
   createThread,
@@ -42,6 +43,8 @@ import {
   recordEvent,
   type StoredMessageRef,
 } from './db'
+import { blockedSenderSet, shouldRefuseSender } from './blocked-senders'
+import { ownPostAssignee, ownPostOwners } from './own-post'
 import { prepareInboundHtml, htmlToText } from './html'
 import { chooseRelayCopy, RELAY_COPY_WINDOW_MS } from './relay-copy'
 import { readReadReceipt } from './receipts'
@@ -105,9 +108,12 @@ export type FolderOutcome = {
   scanned: number
   stored: number
   duplicates: number
-  /** Mail dropped unread because it was addressed to none of this site's
-   *  addresses and this account is set to discard that. Counted apart from
-   *  duplicates: one is housekeeping, the other is a decision. */
+  /** Mail dropped unread rather than filed. Two things land here: post
+   *  addressed to none of this site's addresses on an account set to discard
+   *  that, and post from a sender the site has blocked. Counted apart from
+   *  duplicates because both of these are decisions and a duplicate is
+   *  housekeeping. Nothing is deleted either way - the mail stays on the server
+   *  exactly where it landed. */
   discarded: number
   backfillComplete: boolean
   error?: string
@@ -244,6 +250,17 @@ export async function syncConnection(
       select: { emailFromAddress: true },
     })
     const siteSendingAddress = normaliseAddress(siteConfig?.emailFromAddress ?? '')
+    // Read once per account rather than per folder or per message. A block
+    // added halfway through a run takes effect on the next one, which is the
+    // right trade: the alternative is a query for every email on every site,
+    // for a list that is empty on nearly all of them.
+    const blockedSenders = await blockedSenderSet()
+    // Whose own post is whose, read once for the whole account rather than per
+    // message - and not read at all on a site that has never made an individual
+    // inbox, or has turned the rule off.
+    const ownPost = settings.autoAssignOwnPost
+      ? await ownPostOwners(allInboxes)
+      : new Map<string, string>()
 
     for (const folder of folders) {
       if (outOfTime(deadline)) break
@@ -258,6 +275,8 @@ export async function syncConnection(
         ownAddresses,
         discardUnrouted: connection.discardUnrouted,
         siteSendingAddress,
+        blockedSenders,
+        ownPostOwners: ownPost,
       })
       outcome.folders.push(result)
       outcome.stored += result.stored
@@ -343,6 +362,15 @@ type FolderContext = {
   /** The address the site's own automatic mail goes out as, normalised. Empty
    *  when the site has not set one. */
   siteSendingAddress: string | null
+  /** Every sender the site refuses, normalised. Read once for the whole run and
+   *  asked in memory: a site that has blocked forty spammers is forty strings,
+   *  and a query per message would be a query per message. */
+  blockedSenders: ReadonlySet<string>
+  /** Which address is whose own post, for the addresses that are anybody's:
+   *  inbox id to the colleague it belongs to. Empty on a site with no
+   *  individual inboxes, and empty when the setting is switched off, so the
+   *  rule costs nothing at all where it does not apply. See lib/own-post.ts. */
+  ownPostOwners: ReadonlyMap<string, string>
 }
 
 async function syncFolder(ctx: FolderContext): Promise<FolderOutcome> {
@@ -734,6 +762,31 @@ async function fileMessage(
     folderInboxId: ctx.folderInboxId,
   })
 
+  // Turned away at the door.
+  //
+  // AFTER the outbound copy is claimed above and after placeMessage has said
+  // which way this is facing, and both of those orderings matter. A reply a
+  // colleague wrote on their phone comes back to us out of the Sent folder of
+  // an account whose owner might well be on somebody's block list, and refusing
+  // that would quietly stop our own writing reaching the conversations it
+  // belongs to.
+  //
+  // The location is recorded so the next pass walks past it rather than parsing
+  // it again for ever. The message itself is untouched and stays on the mail
+  // server, which is rather the point: nothing here deletes anybody's post, and
+  // unblocking somebody tomorrow leaves what was refused today exactly where
+  // its owner can still find it.
+  if (shouldRefuseSender({ direction, fromAddress, blocked: ctx.blockedSenders })) {
+    await markLocationProcessed({
+      connectionId: ctx.connectionId,
+      folder: ctx.folder.path,
+      uid: entry.uid,
+      messageIdHeader: identity,
+      threadId: null,
+    })
+    return { stored: false, discarded: true, sentAt }
+  }
+
   const automated = classifyAutomated({
     autoSubmitted: headerValue(parsed, 'auto-submitted'),
     precedence: headerValue(parsed, 'precedence'),
@@ -911,6 +964,22 @@ async function fileMessage(
       if (held.length > 0) {
         await recordEvent(thread, null, 'held', { count: held.length, address: fromAddress })
       }
+    }
+
+    // Post at somebody's own address is theirs, so it arrives on their desk
+    // rather than on the unassigned pile only they can see into.
+    //
+    // Automated mail counts, which is where this parts company with the two
+    // blocks above. An out-of-office is not somebody writing back and must not
+    // wake a conversation or mark it unread - but the bounce from a message
+    // this colleague sent is still, unarguably, their post to deal with.
+    //
+    // Nobody is ever displaced: the check that the conversation is free happens
+    // inside the UPDATE. Recorded against nobody in particular, because nobody
+    // in particular did it.
+    const ownPost = ownPostAssignee(input.direction, input.inboxId, ctx.ownPostOwners)
+    if (ownPost && await assignThreadIfUnassigned(thread, ownPost)) {
+      await recordEvent(thread, null, 'assigned', { to: ownPost, automatic: true })
     }
 
     return { threadId: thread, messageId: written }

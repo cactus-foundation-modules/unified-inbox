@@ -40,6 +40,7 @@ import {
 import { normaliseAddress, isValidAddress } from './addresses'
 import { resolveProducts } from './products'
 import { renderProductTable, renderProductText } from './products/render'
+import { refKey, slotRefs } from './products/slots'
 import type { ProductRef } from './products/types'
 import { getSiteTimezone } from '@/lib/config/timezone.server'
 import { normaliseSubject, buildSnippet, cleanMessageId } from './threading'
@@ -250,13 +251,33 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
   // is written, because it is also what gets attached to the conversation
   // afterwards and one read answers both.
   const products = await resolveProducts(request.products ?? [])
-  const choices = products.map((p) => p.choice)
+
+  // Where each one goes. A product the writing has a slot for is rendered on its
+  // own and dropped into that slot; one with no slot - a draft written before
+  // the catalogue went into the writing box, or a caller that only sent
+  // references - runs on under the writing the way it always did.
+  const slotted = new Set(slotRefs(request.bodyHtml).map(refKey))
+  const placed = new Map<string, { html: string; text: string }>()
+  const trailing: typeof products[number]['choice'][] = []
+  for (const { choice } of products) {
+    if (slotted.has(refKey(choice))) {
+      placed.set(refKey(choice), {
+        html: renderProductTable([choice]),
+        text: renderProductText([choice]),
+      })
+    } else {
+      trailing.push(choice)
+    }
+  }
 
   const body = assembleBody({
     bodyHtml: request.bodyHtml,
-    products: choices.length > 0
-      ? { html: renderProductTable(choices), text: renderProductText(choices) }
-      : null,
+    products: {
+      placed,
+      trailing: trailing.length > 0
+        ? { html: renderProductTable(trailing), text: renderProductText(trailing) }
+        : null,
+    },
     // Rendered rather than read: the inbox's signature may be rich text, pasted
     // markup or a stack of email blocks, and only one place knows how to turn
     // each of those into an email.

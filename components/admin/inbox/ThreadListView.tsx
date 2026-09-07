@@ -7,6 +7,8 @@ import type { ThreadListRow } from '@/modules/unified-inbox/lib/db'
 import {
   avatarHref,
   channelLabel,
+  discussionFrom,
+  discussionTo,
   formatFull,
   formatWhen,
   inboxHref,
@@ -62,6 +64,11 @@ type Props = {
   page: number
   openThreadId: string | null
   staffById: Record<string, string>
+  /** Who is reading. A row's own end of a conversation is said as "Me" rather
+   *  than by name: a column of rows all ending in the reader's own name tells
+   *  them nothing they did not already know, and "WorldFirst > Me" is how a
+   *  mail program has put it for thirty years. */
+  meId: string
   /** What each inbox is called, so a row can say which of your addresses it
    *  came in on when nobody has been handed it yet. */
   inboxNames: Record<string, string>
@@ -72,6 +79,14 @@ type Props = {
    *  collection would fill, which is a different problem from a filter that
    *  matches nothing. */
   neverSynced: boolean
+  /** Whether this is the Spam folder. Only the empty state reads it, and it
+   *  needs to: an empty spam folder is the good outcome, and both of the
+   *  sentences below tell somebody looking at one that something is wrong. */
+  spam: boolean
+  /** Whose bin it is, when it is not the reader's own. Only the empty state
+   *  reads it, and it needs to: "only you can see this" is a plain untruth over
+   *  a colleague's folder. */
+  spamOwnerName: string | null
   /** Whether this reader may open the settings the empty state would otherwise
    *  send them to. Being told where a button is on a screen you are not allowed
    *  to open is worse than not being told. */
@@ -105,8 +120,8 @@ function ChannelBadge({ channel }: { channel: string }) {
 }
 
 export function ThreadListView({
-  base, params, rows, total, page, openThreadId, staffById, inboxNames, showAvatars,
-  neverSynced, canManage, searching, now, timezone,
+  base, params, rows, total, page, openThreadId, staffById, meId, inboxNames, showAvatars,
+  neverSynced, spam, spamOwnerName, canManage, searching, now, timezone,
 }: Props) {
   const router = useRouter()
   const pages = pageCount(total, PER_PAGE)
@@ -122,6 +137,14 @@ export function ThreadListView({
   // Anything ticked on a page that has since been replaced - by a filter, a
   // search or the next page - is not on the screen any more, and acting on it
   // would be acting on something nobody can see.
+  // The same staff names, with the reader's own replaced by "Me". Used for the
+  // two ends a row prints and nowhere else: initials and the tooltip on the
+  // circle still come off the real name, because "M" in a circle names nobody.
+  const endNames = useMemo(
+    () => (meId ? { ...staffById, [meId]: 'Me' } : staffById),
+    [staffById, meId],
+  )
+
   const onScreen = useMemo(() => new Set(rows.map((r) => r.id)), [rows])
   const picked = useMemo(() => selected.filter((id) => onScreen.has(id)), [selected, onScreen])
   const pickedSet = useMemo(() => new Set(picked), [picked])
@@ -257,7 +280,28 @@ export function ThreadListView({
   if (rows.length === 0) {
     return (
       <div className="uin-empty">
-        {neverSynced ? (
+        {spam ? (
+          <>
+            {/* First, ahead of everything else: an empty spam folder is not a
+                problem to explain, and "nothing has been collected yet" over the
+                top of one would send somebody off to check their mail account
+                over nothing. */}
+            <strong>Nothing in here</strong>
+            {spamOwnerName ? (
+              <>
+                Junk thrown away out of {spamOwnerName}&rsquo;s post lands here rather than in your
+                own spam folder, because it is their post. Nothing is deleted, so anything that
+                ends up in here by mistake can be taken straight back out again.
+              </>
+            ) : (
+              <>
+                Junk you throw away lands in this folder, and only you can see it - marking
+                something as junk changes nothing for your colleagues. Nothing is deleted, so
+                anything you put in here by mistake can be taken straight back out again.
+              </>
+            )}
+          </>
+        ) : neverSynced ? (
           <>
             <strong>Nothing has been collected yet</strong>
             The first collection runs on the site&rsquo;s hourly round.
@@ -324,19 +368,40 @@ export function ThreadListView({
 
       <ul className="uin-list">
         {rows.map((row, index) => {
-          const who = participantLabel(row)
+          // A discussion is between two colleagues, so both ends of it are
+          // people rather than an outsider and one of our addresses. Read off
+          // the conversation itself, because every message on one is an
+          // internal note and the participant join deliberately looks past
+          // those - which is what used to leave "Unknown sender" against a
+          // discussion somebody here plainly started.
+          const startedBy = discussionFrom(row, endNames)
+          const putTo = discussionTo(row, endNames)
+          const who = startedBy ?? participantLabel(row)
           // Whether there is a human here to take initials off, asked separately
           // from what the row says. "Unknown sender" is a sentence standing in
           // for a name nobody recorded, and initials taken off it put US in a
-          // circle as though somebody of that name had written in.
-          const named = (row.participantName ?? row.participantAddress ?? '').trim() || null
+          // circle as though somebody of that name had written in. Off the real
+          // names, not the printed ones: a row that says "Me" still wants the
+          // reader's own initials in the circle rather than an M.
+          const named = discussionFrom(row, staffById)
+            ?? ((row.participantName ?? row.participantAddress ?? '').trim() || null)
           const open = row.id === openThreadId
-          const assignee = row.assigneeUserId ? staffById[row.assigneeUserId] : null
+          const assignee = row.assigneeUserId ? endNames[row.assigneeUserId] : null
           // Whose desk it is on. A name once somebody has taken it, and the
           // address it arrived at until then - which on a shared inbox is the
           // more useful of the two anyway. Nothing at all on a conversation
           // that landed in no inbox and belongs to nobody.
-          const other = assignee ?? (row.inboxId ? inboxNames[row.inboxId] ?? null : null)
+          //
+          // On a discussion it is who it was put to, ahead of both: a discussion
+          // nobody has been handed would otherwise name the address it sits in,
+          // which on the ordinary one is the starter's own - so the row read
+          // "somebody > the same somebody".
+          const otherEnd = putTo ?? assignee ?? (row.inboxId ? inboxNames[row.inboxId] ?? null : null)
+          // Never the same name twice. A discussion put to nobody is a note to
+          // self, and its address is its starter's own, so the two ends would
+          // otherwise read "Emma > Emma" - which is what a discussion read like
+          // before it had a To line to go on at all.
+          const other = otherEnd === who ? null : otherEnd
           const ticked = pickedSet.has(row.id)
           return (
             <li key={row.id} className="uin-list-item" data-selected={ticked ? 'true' : undefined}>
@@ -356,7 +421,9 @@ export function ThreadListView({
                   </span>
                 ) : (
                   <Avatar
-                    src={showAvatars ? avatarHref('person', row.personId) : null}
+                    src={showAvatars
+                      ? avatarHref(startedBy ? 'user' : 'person', startedBy ? row.startedByUserId : row.personId)
+                      : null}
                     badge={<ChannelBadge channel={row.channel} />}
                     title={named ?? undefined}
                   >

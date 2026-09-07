@@ -5,7 +5,9 @@ import type {
 } from '@/lib/conversations/types'
 import { queueMessageWebhooks } from './webhooks'
 import {
+  assignThreadIfUnassigned,
   claimLocalOutbound,
+  getSettings,
   insertProviderMessage,
   listInboxes,
   providerThreadState,
@@ -15,6 +17,8 @@ import {
   reopenOnReply,
   upsertProviderThread,
 } from './db'
+import { blockedSenderSet } from './blocked-senders'
+import { ownPostOwners } from './own-post'
 import { allConversationProviders } from './provider-registry'
 import { normaliseSubject } from './threading'
 
@@ -176,12 +180,36 @@ export async function syncProvider(
   const summaries = (page?.items ?? []).filter(usableSummary)
   let opened = 0
 
+  // The site's front door, applied to the channels as well as to the post.
+  //
+  // An enquiry form is the obvious way round an email block: the same person,
+  // the same address, arriving through a different door into the same inboxes.
+  // "Blocked" has to mean blocked, so a conversation whose party writes from a
+  // refused address is not collected at all - not opened, not filed, and not
+  // counted. Nothing already here is touched; this only decides what comes in
+  // from now on.
+  //
+  // Only where the channel actually knows an address. A live chat with an
+  // anonymous visitor and a call from a withheld number have nobody to match
+  // against, and refusing on a name would refuse the wrong people.
+  //
+  // Read once per channel per pass, for the same reason the mail side reads it
+  // once per account: it is a handful of strings, and this is the hot loop.
+  const blocked = await blockedSenderSet()
+
   // One read for the whole pass, and only when a channel has actually addressed
   // something: on every site that has never pointed a form at an inbox this
   // costs nothing at all.
-  const ourInboxIds = summaries.some((summary) => summary.destinationId)
-    ? new Set((await listInboxes()).map((inbox) => inbox.id))
-    : new Set<string>()
+  const addressed = summaries.some((summary) => summary.destinationId)
+  const ourInboxes = addressed ? await listInboxes() : []
+  const ourInboxIds = new Set(ourInboxes.map((inbox) => inbox.id))
+  // A channel pointed at one colleague's own address is that colleague's post,
+  // exactly as an email addressed to it would be - so it is handed over the
+  // same way. Nothing is read on a channel that addresses nothing, which is
+  // every channel on a site that has not routed one.
+  const ownPost = addressed && (await getSettings()).autoAssignOwnPost
+    ? await ownPostOwners(ourInboxes)
+    : new Map<string, string>()
 
   for (const summary of summaries) {
     if (outOfTime() || opened >= PROVIDER_THREAD_LIMIT) break
@@ -190,7 +218,14 @@ export async function syncProvider(
     const channel = channelOf(summary.channel, provider.channel)
     const subject = typeof summary.subject === 'string' && summary.subject.trim() ? summary.subject.trim() : null
 
+    // partyOf lower-cases and trims, which is the same normalisation the block
+    // list is stored under - so this is a straight comparison rather than a
+    // guess.
+    const party = partyOf(summary)
+    if (party.email && blocked.has(party.email)) continue
+
     const existing = await providerThreadState(channelKey, summary.id)
+    const inboxId = addressedInbox(summary, ourInboxIds)
 
     const { id: threadId } = await upsertProviderThread({
       providerModule: channelKey,
@@ -202,10 +237,19 @@ export async function syncProvider(
       lastMessageAt,
       lastDirection: 'in',
       unread: summary.unread === true,
-      inboxId: addressedInbox(summary, ourInboxIds),
+      inboxId,
       sourceLabel: sourceLabelOf(summary),
     })
     outcome.conversations += 1
+
+    // Only on the pass that first copies it across. A conversation this hub has
+    // seen before has already been offered to its owner, and asking again every
+    // quarter of an hour would be an UPDATE per conversation per tick for an
+    // answer that cannot have changed.
+    const owner = existing === null && inboxId ? ownPost.get(inboxId) : undefined
+    if (owner && await assignThreadIfUnassigned(threadId, owner)) {
+      await recordEvent(threadId, null, 'assigned', { to: owner, automatic: true })
+    }
 
     // Opening a conversation is the expensive half - a second call into that
     // module, over the network for the telephony one. Skip it when we already
@@ -222,7 +266,6 @@ export async function syncProvider(
     if (messages === null) continue
     opened += 1
 
-    const party = partyOf(summary)
     let stored = 0
     for (const message of messages) {
       if (!message || typeof message.id !== 'string' || message.id.trim() === '') continue

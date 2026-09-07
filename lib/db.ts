@@ -534,6 +534,35 @@ export async function defaultInboxIdFor(userId: string): Promise<string | null> 
   return rows[0]?.inbox_id ?? null
 }
 
+/**
+ * The order one person keeps the top of their rail in, or an empty list when
+ * they have never rearranged it.
+ *
+ * A preference rather than a setting: it is read on every draw of the hub and
+ * written by the person themselves, and nobody else's screen ever shows it.
+ * Keys, not positions - see migrations/043_user_rail_order.sql for what they
+ * are and why nothing validates them.
+ */
+export async function railOrderFor(userId: string): Promise<string[]> {
+  const rows = await prisma.$queryRaw<{ keys: string[] }[]>`
+    SELECT "keys" FROM "uin_user_rail_order" WHERE "user_id" = ${userId} LIMIT 1
+  `
+  return rows[0]?.keys ?? []
+}
+
+/** The whole of that order, replaced. One person's own list, all of which is on
+ *  their screen when they drag it, so there is nothing of anybody else's to
+ *  merge around - which is the difference between this and the site-wide
+ *  orders, where what somebody posts is only ever what they could see. */
+export async function setRailOrder(userId: string, keys: string[]): Promise<void> {
+  await prisma.$executeRaw`
+    INSERT INTO "uin_user_rail_order" ("user_id", "keys")
+    VALUES (${userId}, ${keys}::text[])
+    ON CONFLICT ("user_id") DO UPDATE
+       SET "keys" = ${keys}::text[], "updated_at" = now()
+  `
+}
+
 /** Whether this address is somebody's own rather than a department's.
  *
  *  Asked at send time, because it settles whose signature goes at the foot:
@@ -633,6 +662,7 @@ const DEFAULT_SETTINGS: UnifiedInboxSettings = {
   campaignFooterAddress: null,
   hiddenChannelModules: [],
   channelOrder: [],
+  autoAssignOwnPost: true,
 }
 
 export async function getSettings(): Promise<UnifiedInboxSettings> {
@@ -700,6 +730,12 @@ export async function getSettings(): Promise<UnifiedInboxSettings> {
     // answer a fresh install gets: nothing rearranged, so the channels sit in
     // the order the modules were found in.
     channelOrder: (r.channel_order as string[] | null) ?? [],
+    // ON for a row written before the column existed, which is the same answer
+    // a fresh install gets - and the deliberate exception to the "a new switch
+    // arrives off" rule the two above follow. Those two send something out;
+    // this one only decides whose name goes beside a conversation that nobody
+    // but its owner can open anyway.
+    autoAssignOwnPost: r.auto_assign_own_post === undefined ? true : !!r.auto_assign_own_post,
   }
 }
 
@@ -729,6 +765,7 @@ export async function updateSettings(data: Partial<UnifiedInboxSettings>): Promi
   if (data.campaignFooterAddress !== undefined) sets.push(Prisma.sql`"campaign_footer_address" = ${data.campaignFooterAddress}`)
   if (data.hiddenChannelModules !== undefined) sets.push(Prisma.sql`"hidden_channel_modules" = ${data.hiddenChannelModules}`)
   if (data.channelOrder !== undefined) sets.push(Prisma.sql`"channel_order" = ${data.channelOrder}::text[]`)
+  if (data.autoAssignOwnPost !== undefined) sets.push(Prisma.sql`"auto_assign_own_post" = ${data.autoAssignOwnPost}`)
   if (sets.length === 0) return getSettings()
 
   await prisma.$executeRaw`
@@ -1975,16 +2012,68 @@ export async function createDiscussionThread(data: {
   subject: string
   subjectNormalised: string
   preview: string | null
+  /** Who started it. Named on the row rather than worked out from the opening
+   *  note, because the list asks this question about every conversation it
+   *  draws and a discussion's every message is a note - see
+   *  migrations/040_discussion_parties.sql. */
+  startedByUserId: string
+  /** The colleagues it was put to, in the order they were added. */
+  toUserIds: string[]
 }): Promise<string> {
   const rows = await prisma.$queryRaw<{ id: string }[]>`
     INSERT INTO "uin_threads"
       ("inbox_id", "channel", "subject", "subject_normalised", "preview",
-       "last_message_at", "last_direction", "unread", "message_count")
+       "last_message_at", "last_direction", "unread", "message_count",
+       "started_by_user_id", "to_user_ids")
     VALUES (${data.inboxId}, 'discussion', ${data.subject}, ${data.subjectNormalised},
-            ${data.preview}, now(), 'note', true, 1)
+            ${data.preview}, now(), 'note', true, 1,
+            ${data.startedByUserId}, ${data.toUserIds}::text[])
     RETURNING "id"
   `
   return rows[0]!.id
+}
+
+/**
+ * The addresses of the colleagues a discussion was put to.
+ *
+ * Their OWN address and nothing else: being let in to cover somebody's post is
+ * not being written to, and a shared address a colleague happens to be on is
+ * the team's rather than theirs. A colleague who has not been given an address
+ * of their own comes back with nothing, which is honest - there is nowhere for
+ * it to land, and the ask on their own list is how they reach it.
+ */
+export async function ownInboxIdsForUsers(userIds: string[]): Promise<string[]> {
+  if (userIds.length === 0) return []
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "uin_inboxes"
+     WHERE "kind" = 'individual'
+       AND "owner_user_id" IN (${Prisma.join(userIds)})
+  `
+  return rows.map((r) => r.id)
+}
+
+/**
+ * File one conversation under several of the site's addresses.
+ *
+ * The same table a merge writes (migrations/031_thread_merges.sql), and
+ * deliberately so: every list, tab, unread tally and guest list in this module
+ * already reaches a conversation that belongs to more than one address through
+ * it, so a discussion put to three colleagues needs none of them taught a
+ * second route. The conversation's OWN address has to be among the ids -
+ * `effectiveInboxIds` reads this list INSTEAD of `inbox_id` once it is not
+ * empty, so leaving it out would file a discussion out of the address it was
+ * started in.
+ */
+export async function fileThreadInInboxes(threadId: string, inboxIds: string[]): Promise<void> {
+  const ids = [...new Set(inboxIds)]
+  // One address is what every conversation has, and rows here would say the
+  // same thing at the cost of a join - so nothing is written.
+  if (ids.length < 2) return
+  await prisma.$executeRaw`
+    INSERT INTO "uin_thread_inboxes" ("thread_id", "inbox_id")
+    SELECT ${threadId}, x FROM unnest(${ids}::text[]) AS x
+    ON CONFLICT DO NOTHING
+  `
 }
 
 /** Starts a conversation that begins with us writing to somebody (D12). */
@@ -2031,6 +2120,31 @@ const SEARCH_VECTOR = Prisma.sql`to_tsvector('english',
             coalesce("body_text", ''))`
 
 export type ThreadListFilters = {
+  /** Who is looking. Required rather than optional, so that adding a list to
+   *  this module cannot quietly skip the junk clause below: a caller that has
+   *  not said who is reading does not compile.
+   *
+   *  "This is junk" is one person's opinion about one conversation rather than
+   *  a fact about it (see lib/spam.ts and migrations/041_spam.sql), so every
+   *  list here is a list as ONE named person sees it. */
+  viewerUserId: string
+  /** The Spam folder: one person's bin, rather than everything that is not in
+   *  anybody's. The one filter that turns the clause round instead of dropping
+   *  it - there is no view in this module that shows both. */
+  spamOnly?: boolean
+  /** WHOSE bin, when `spamOnly` is on. Null or absent means the reader's own,
+   *  which is what the Spam entry under "Yours" asks for.
+   *
+   *  A colleague's id is the folder under their name on the rail - the same
+   *  shape as their Sent and their Mentioned - and it exists because junk filed
+   *  in somebody's own address goes into THEIR bin rather than into the bin of
+   *  whoever happened to be covering their post that morning. Without a way to
+   *  look at it, a coverer's mis-click would be a message only its owner could
+   *  ever get back.
+   *
+   *  Resolved against the addresses the reader may actually read before it gets
+   *  here - never trusted from the address bar (E17). */
+  spamOwnerUserId?: string | null
   /** Inbox ids this user may read, already resolved. Empty means none. */
   inboxIds: string[]
   /** Whether they may also see conversations that landed in no inbox at all -
@@ -2051,6 +2165,19 @@ export type ThreadListFilters = {
   unreadOnly?: boolean
   /** A user id, or 'unassigned', or null for "do not filter". */
   assignee?: string | null
+  /** Widen ONE chosen address to take in everything handed to this person,
+   *  wherever it sits. Null everywhere else.
+   *
+   *  It exists because there is no "Assigned to me" screen any more: what is on
+   *  somebody's desk belongs in the address they open on rather than in a
+   *  separate list they have to remember to check. Only ever set alongside
+   *  `inboxId`, and only for the reader's OWN address - an inbox somebody is
+   *  merely passing through has no business showing them work filed elsewhere.
+   *
+   *  It widens the chosen address and nothing else. The visibility clause is a
+   *  separate AND, so a conversation handed to somebody in an address they may
+   *  not read stays exactly as invisible as it was. */
+  alsoAssignedTo?: string | null
   search?: string | null
   /** The search dialog's narrower cuts. Each one asks the conversation whether
    *  ANY message in it matches, which is the only reading that makes sense of a
@@ -2102,8 +2229,14 @@ export type ThreadListRow = {
    *  button. */
   createdAt: Date
   /** Every address the conversation belongs to, where a merge has given it more
-   *  than one. Empty on everything else. */
+   *  than one - or, on a discussion, where it was put to colleagues who have an
+   *  address of their own. Empty on everything else. */
   absorbedInboxIds: string[]
+  /** Who started a discussion. Null on every other channel, where the sending
+   *  end is an address rather than a colleague. */
+  startedByUserId: string | null
+  /** The colleagues a discussion was put to. Empty on every other channel. */
+  toUserIds: string[]
   /** The other party. Taken from their newest message to us where there is
    *  one, because that is the only place their NAME appears - our own replies
    *  carry an address and nothing else - and from the newest thing we sent them
@@ -2163,6 +2296,71 @@ function visibilityClause(
   return Prisma.sql`(${Prisma.join(parts, ' OR ')})`
 }
 
+/**
+ * "Somebody whose junk folder this conversation belongs in has thrown it away."
+ *
+ * Written once and used by the list, the counts and the unread tallies, because
+ * three copies of a rule this shaped is three copies that drift - and a drifted
+ * copy here means junk out of the list and still in the number beside it.
+ *
+ * TWO PEOPLE CAN HAVE THROWN IT AWAY, and they are not the same person.
+ *
+ *   The reader themselves. Junk is one person's opinion, so a conversation in a
+ *   SHARED address that Sam files as junk leaves Sam's lists and nobody else's.
+ *
+ *   The owner of an individual address the conversation sits in. A colleague's
+ *   own post is theirs, and somebody covering it while they are away is trying
+ *   to see what THEY would see - so junk filed in Sam's address is gone from
+ *   Sam's lists and from the lists of everybody covering Sam. Covering somebody
+ *   and reading over their shoulder are the same job; a bin that only emptied
+ *   for one of them would have the coverer working through post Sam has already
+ *   dealt with.
+ *
+ * The inner half only ever runs for a conversation that HAS a junk mark, which
+ * on any real site is a tiny fraction of them - the outer NOT EXISTS is an index
+ * scan on the (thread_id, user_id) primary key and stops there for everything
+ * else. So the cost is bounded by how much junk there is, not by how much post.
+ */
+function spamMatch(viewerUserId: string): Prisma.Sql {
+  return Prisma.sql`EXISTS (
+    SELECT 1 FROM "uin_thread_spam" sp
+     WHERE sp."thread_id" = t."id"
+       AND (
+         sp."user_id" = ${viewerUserId}
+         OR sp."user_id" IN (
+              SELECT i."owner_user_id" FROM "uin_inboxes" i
+               WHERE i."kind" = 'individual'
+                 AND i."owner_user_id" IS NOT NULL
+                 AND (
+                   i."id" = t."inbox_id"
+                   OR EXISTS (
+                        SELECT 1 FROM "uin_thread_inboxes" ti
+                         WHERE ti."thread_id" = t."id" AND ti."inbox_id" = i."id"
+                      )
+                 )
+            )
+       )
+  )`
+}
+
+/**
+ * One named person's spam folder, which is a different question from the one
+ * above.
+ *
+ * The folder lists what is in THAT person's bin and nothing else. Not the wider
+ * rule: a colleague covering Sam sees Sam's junk under Sam's name on the rail,
+ * and their own under their own, and the two lists stay two lists. Answering
+ * this with spamMatch() would put every colleague's junk into everybody's own
+ * spam folder, which is the one place on the screen where a stranger's rubbish
+ * has no business appearing.
+ */
+function spamFolderMatch(ownerUserId: string): Prisma.Sql {
+  return Prisma.sql`EXISTS (
+    SELECT 1 FROM "uin_thread_spam" sp
+     WHERE sp."thread_id" = t."id" AND sp."user_id" = ${ownerUserId}
+  )`
+}
+
 function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
   const where: Prisma.Sql[] = []
   // A conversation that lost a merge is not a conversation any more. It is kept
@@ -2170,6 +2368,27 @@ function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
   // could not move, and every list, count and tally in this file goes through
   // here - which is the point of putting it here rather than in each of them.
   where.push(Prisma.sql`t."merged_into_id" IS NULL`)
+  // Junk is out of every list but the bin it went into. Here rather than in
+  // each of the callers, for the same reason the merge clause above is here: a
+  // junk conversation that fell out of the list and stayed in the count beside
+  // it is exactly the sort of disagreement a spam folder must not have.
+  //
+  // The folder itself asks a NARROWER question than the hiding does - see the
+  // two builders above. Hiding covers "anybody whose bin this belongs in";
+  // the folder is one named person's bin and nobody else's.
+  if (f.spamOnly) {
+    // Absent means "my own bin"; an explicit null means "a bin that belongs to
+    // nobody", which is what a folder scoped to a shared address or to an id
+    // this reader may not open resolves to. Those two must not collapse into
+    // one, so it is `undefined` that falls back and null that yields nothing -
+    // the same rule the rest of this screen follows for a scope that will not
+    // resolve (E17). Falling back there would draw the reader's OWN junk under
+    // a heading with a colleague's name on it.
+    const owner = f.spamOwnerUserId === undefined ? f.viewerUserId : f.spamOwnerUserId
+    where.push(owner === null ? Prisma.sql`false` : spamFolderMatch(owner))
+  } else {
+    where.push(Prisma.sql`NOT ${spamMatch(f.viewerUserId)}`)
+  }
   if (f.unroutedOnly) {
     where.push(Prisma.sql`t."inbox_id" IS NULL AND t."provider_module" IS NULL`)
   } else if (f.providerModule) {
@@ -2179,7 +2398,12 @@ function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
   } else if (f.inboxId) {
     // The merged conversation shows in EVERY address's tab, which is what
     // merging across two of them was asked for.
-    where.push(inboxMatch([f.inboxId]))
+    const here = inboxMatch([f.inboxId])
+    // And, on the address this person opens on, whatever has been put on their
+    // desk from anywhere else they can read. See `alsoAssignedTo` above.
+    where.push(f.alsoAssignedTo
+      ? Prisma.sql`(${here} OR t."assignee_user_id" = ${f.alsoAssignedTo})`
+      : here)
   }
   if (f.status && f.status !== 'all') where.push(Prisma.sql`t."status" = ${f.status}`)
   if (f.unreadOnly) where.push(Prisma.sql`t."unread" = true`)
@@ -2329,7 +2553,7 @@ function threadListQuery(
     SELECT t."id", t."inbox_id", t."person_id", t."channel", t."provider_module", t."subject",
            t."preview", t."status", t."snooze_until", t."assignee_user_id",
            t."last_message_at", t."last_direction", t."unread", t."message_count",
-           t."created_at",
+           t."created_at", t."started_by_user_id", t."to_user_ids",
            COALESCE(
              ARRAY(SELECT ti."inbox_id" FROM "uin_thread_inboxes" ti WHERE ti."thread_id" = t."id"),
              ARRAY[]::text[]
@@ -2378,6 +2602,8 @@ function mapThreadListRow(r: Record<string, unknown>): ThreadListRow {
     messageCount: Number(r.message_count ?? 0),
     createdAt: r.created_at as Date,
     absorbedInboxIds: (r.absorbed_inbox_ids as string[] | null) ?? [],
+    startedByUserId: (r.started_by_user_id as string | null) ?? null,
+    toUserIds: (r.to_user_ids as string[] | null) ?? [],
     participantName: inbound ? ((r.last_from_name as string | null) ?? null) : null,
     // A caller has a number where a correspondent has an address, and the row
     // says whichever of the two there is - "Unknown sender" beside a phone
@@ -2414,6 +2640,11 @@ export async function countThreads(f: ThreadListFilters): Promise<number> {
 /** Unread conversations per inbox, for the numbers on the tabs. Keyed by
  *  inbox id, with the empty string standing for "landed in no inbox". */
 export async function unreadCounts(
+  /** Who is looking. First rather than last so that no existing call site can
+   *  keep compiling without saying - the numbers on the rail are one person's
+   *  numbers, and junk this person threw away must not go on counting against
+   *  the address they threw it out of. */
+  viewerUserId: string,
   inboxIds: string[],
   includeUnrouted: boolean,
   providerModules: string[] = [],
@@ -2437,12 +2668,51 @@ export async function unreadCounts(
        AND t."merged_into_id" IS NULL
        AND t."unread" = true
        AND t."status" <> 'done'
+       AND NOT ${spamMatch(viewerUserId)}
        ${restrict}
      GROUP BY COALESCE(ti."inbox_id", t."inbox_id", 'm:' || t."provider_module")
   `
   const out: Record<string, number> = {}
   for (const r of rows) out[r.key ?? ''] = Number(r.count)
   return out
+}
+
+/**
+ * How much is on this person's desk that is filed somewhere OTHER than their
+ * own address.
+ *
+ * The number that has to be added to their own address on the rail, because
+ * standing in it now shows them that work as well (see `alsoAssignedTo`) and a
+ * count that disagreed with the list under it would send somebody hunting for a
+ * message that was never missing.
+ *
+ * Its own query rather than another key in the tally above, for two reasons. A
+ * conversation in accounts@ handed to this person belongs to accounts@ AND to
+ * their desk, and one grouped row cannot be in two places. And the All entry is
+ * the sum of that tally - so an inflated row in it would make the number beside
+ * All larger than the number of conversations there are.
+ */
+export async function unreadAssignedElsewhere(
+  viewerUserId: string,
+  inboxIds: string[],
+  includeUnrouted: boolean,
+  providerModules: string[],
+  ownInboxId: string,
+): Promise<number> {
+  const visible = visibilityClause(inboxIds, includeUnrouted, providerModules)
+  if (!visible) return 0
+  const rows = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(*)::bigint AS "count"
+      FROM "uin_threads" t
+     WHERE ${visible}
+       AND t."merged_into_id" IS NULL
+       AND t."unread" = true
+       AND t."status" <> 'done'
+       AND t."assignee_user_id" = ${viewerUserId}
+       AND NOT ${inboxMatch([ownInboxId])}
+       AND NOT ${spamMatch(viewerUserId)}
+  `
+  return Number(rows[0]?.count ?? 0)
 }
 
 /**
@@ -2770,6 +3040,25 @@ export async function assignThread(threadId: string, userId: string | null): Pro
        SET "assignee_user_id" = ${userId}, "updated_at" = now()
      WHERE "id" = ${threadId}
   `
+}
+
+/**
+ * Give a conversation to somebody, but only while nobody has it. True when it
+ * took, false when it was already spoken for.
+ *
+ * The emptiness is checked in the same statement that fills it, deliberately.
+ * The caller is the collecting pass (lib/own-post.ts), which is the one place
+ * in this module where two ticks can be filing mail on the same conversation at
+ * the same moment - and a read followed by a write would let the second one
+ * take a conversation off the person the first one gave it to.
+ */
+export async function assignThreadIfUnassigned(threadId: string, userId: string): Promise<boolean> {
+  const changed = await prisma.$executeRaw`
+    UPDATE "uin_threads"
+       SET "assignee_user_id" = ${userId}, "updated_at" = now()
+     WHERE "id" = ${threadId} AND "assignee_user_id" IS NULL
+  `
+  return changed > 0
 }
 
 /** Status and snooze move together: a conversation put to sleep is 'snoozed'
@@ -3240,6 +3529,7 @@ function mapDraft(r: Record<string, unknown>): Draft {
     // A column the check constraint could not have allowed is a row somebody
     // has been at by hand, and a follow-up nobody can read is no follow-up.
     followUpMinutes: typeof r.follow_up_minutes === 'number' ? r.follow_up_minutes : null,
+    snoozeUntil: (r.snooze_until as Date | null) ?? null,
     heldByThreadId: (r.held_by_thread_id as string | null) ?? null,
     heldAt: (r.held_at as Date | null) ?? null,
     createdAt: r.created_at as Date,
@@ -3278,6 +3568,32 @@ export async function listDrafts(
   return rows.map(mapDraft)
 }
 
+/** How many of this person's are waiting on each address, for the Drafts folder
+ *  under a colleague's name - which is only offered where there is something in
+ *  it, so the count has to be known before the rail is drawn rather than after
+ *  somebody has opened the folder.
+ *
+ *  Author-scoped like every other draft query, so the number under Sam's name is
+ *  this reader's own writing on Sam's address and could never be Sam's own.
+ *
+ *  Drafts filed against no address are left out: there is no folder for them to
+ *  appear under, and the Drafts tab itself already counts them.
+ *
+ *  One grouped query rather than one call per address: the rail is drawn on
+ *  every list this hub renders, and a site with nine colleagues on it would
+ *  otherwise ask the same question nine times. */
+export async function countDraftsByInbox(userId: string): Promise<Record<string, number>> {
+  const rows = await prisma.$queryRaw<{ inbox_id: string; count: bigint }[]>`
+    SELECT d."inbox_id" AS "inbox_id", COUNT(*)::bigint AS "count"
+      FROM "uin_drafts" d
+     WHERE ${draftScope(userId)} AND d."inbox_id" IS NOT NULL
+     GROUP BY d."inbox_id"
+  `
+  const counts: Record<string, number> = {}
+  for (const row of rows) counts[row.inbox_id] = Number(row.count)
+  return counts
+}
+
 /** How many are waiting, for the number on the Drafts tab. */
 export async function countDrafts(
   userId: string,
@@ -3293,11 +3609,16 @@ export async function countDrafts(
 // ---------------------------------------------------------------------------
 // Sent.
 //
-// One row per message that left, across every address - which is what a Sent
-// folder has meant since before any of this existed, and the answer to "did that
-// quote actually go, and when". Messages rather than conversations, because a
-// long thread somebody has answered four times is four things sent, and a list
-// that showed it once would be a list of conversations wearing a Sent label.
+// One row per message that left - the answer to "did that quote actually go,
+// and when". Messages rather than conversations, because a long thread somebody
+// has answered four times is four things sent, and a list that showed it once
+// would be a list of conversations wearing a Sent label.
+//
+// TWO folders, asked of the same rows. The entry under Yours is a PERSON's: what
+// this reader has sent, from their own address and from every shared one they
+// write from. The entry under an address on the rail is that ADDRESS's:
+// everything that has left sales@, whoever wrote it, including the mail a module
+// sent on its own. `ownUserId` below is which of the two is being asked for.
 //
 // Internal notes are not sent to anybody, so they are not here. The access rule
 // is the same one the conversation list runs (E17): the visibility clause is
@@ -3334,19 +3655,58 @@ export type SentMessageRow = {
  * something they sent, so it is listed for whoever may read the address it went
  * out as - which is a different question from whether they may read the
  * colleague's inbox it landed in, and the right one: it is their own writing.
+ *
+ * `ownUserId` is the difference between the two Sent folders on the rail. Null
+ * is an ADDRESS's folder - everything that has left sales@, whoever wrote it,
+ * which is what somebody opens it to see. A user id is a PERSON's - the entry
+ * under Yours - and narrows it to their own writing wherever it went out from,
+ * because a folder called Sent under your own name that holds a colleague's
+ * replies is not your Sent folder at all.
  */
 function sentWhere(
   inboxIds: string[],
   includeUnrouted: boolean,
   providerModules: string[],
+  ownUserId: string | null,
 ): Prisma.Sql | null {
   const visible = visibilityClause(inboxIds, includeUnrouted, providerModules)
   if (!visible) return null
   const outbound = Prisma.sql`(m."direction" = 'out' AND ${visible})`
-  if (inboxIds.length === 0) return outbound
-  return Prisma.sql`(${outbound} OR (m."direction" = 'in' AND lower(m."from_address") IN (
-    SELECT lower(i."address") FROM "uin_inboxes" i WHERE i."id" IN (${Prisma.join(inboxIds)})
-  )))`
+  const anybody = inboxIds.length === 0
+    ? outbound
+    : Prisma.sql`(${outbound} OR (m."direction" = 'in' AND lower(m."from_address") IN (
+        SELECT lower(i."address") FROM "uin_inboxes" i WHERE i."id" IN (${Prisma.join(inboxIds)})
+      )))`
+  return ownUserId ? Prisma.sql`(${anybody} AND ${writtenBy(ownUserId)})` : anybody
+}
+
+/**
+ * Whether a message is this person's own writing, for the Sent folder they open
+ * under their own name.
+ *
+ * Two ways of being theirs, because there are two ways a message gets here.
+ * One sent from this hub carries its author, so a reply written from a shared
+ * address is still the person's who wrote it - which is the whole point of the
+ * folder, and the half that could never be worked out from the address alone.
+ *
+ * One collected off a mail server carries nobody: no mailbox anywhere records
+ * which colleague typed a message. That one is theirs when it went out as an
+ * address that is theirs alone, which is the only honest thing that can be said
+ * about it. A reply somebody wrote to a customer on their phone is their own
+ * writing and belongs here; one that left a shared address with no author
+ * belongs to the address rather than to a person, and is read in that address's
+ * own Sent folder instead. Mail a module sent on its own - an order
+ * confirmation, a campaign - has no author for the same reason and lands in the
+ * same place, which is right: nobody typed it.
+ */
+function writtenBy(userId: string): Prisma.Sql {
+  return Prisma.sql`(
+    m."author_user_id" = ${userId}
+    OR (m."author_user_id" IS NULL AND ${SENT_INBOX_ID} IN (
+      SELECT i."id" FROM "uin_inboxes" i
+       WHERE i."kind" = 'individual' AND i."owner_user_id" = ${userId}
+    ))
+  )`
 }
 
 /** The address a listed message went out as, as an inbox id. Outbound mail
@@ -3364,8 +3724,11 @@ export async function listSentMessages(
   providerModules: string[],
   page: number,
   perPage: number,
+  /** Whose folder this is. Null for an address's own - everything that has left
+   *  it, whoever wrote it. See sentWhere. */
+  ownUserId: string | null = null,
 ): Promise<SentMessageRow[]> {
-  const where = sentWhere(inboxIds, includeUnrouted, providerModules)
+  const where = sentWhere(inboxIds, includeUnrouted, providerModules, ownUserId)
   if (!where) return []
   const offset = Math.max(0, (page - 1) * perPage)
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
@@ -3401,8 +3764,9 @@ export async function countSentMessages(
   inboxIds: string[],
   includeUnrouted: boolean,
   providerModules: string[],
+  ownUserId: string | null = null,
 ): Promise<number> {
-  const where = sentWhere(inboxIds, includeUnrouted, providerModules)
+  const where = sentWhere(inboxIds, includeUnrouted, providerModules, ownUserId)
   if (!where) return 0
   const rows = await prisma.$queryRaw<{ count: bigint }[]>`
     SELECT COUNT(*)::bigint AS "count"
@@ -3475,6 +3839,11 @@ export type DraftInput = {
    *  because a chase for a message that is not going anywhere is a conversation
    *  that comes back for no reason. */
   followUpMinutes?: number | null
+  /** When the conversation should stay asleep until once this message has gone.
+   *  Rides with the departure time on the same terms as the chase above: only
+   *  read when `sendAt` is mentioned at all, and taking the time off takes the
+   *  sleep off with it. */
+  snoozeUntil?: Date | null
 }
 
 /**
@@ -3502,15 +3871,19 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
   // the draft back up: whatever mail stood it down has been read by whoever is
   // scheduling it again.
   const followUp = sendAt ? data.followUpMinutes ?? null : null
+  // The sleep rides with the departure time on exactly the same terms, and for
+  // the same reason: a conversation waiting to go quiet behind a message that
+  // is no longer going anywhere is a conversation that goes quiet for nothing.
+  const snoozeUntil = sendAt ? data.snoozeUntil ?? null : null
   const bcc = data.bcc ?? []
   const bodyFormat = data.bodyFormat ?? 'text'
   const products = data.products ?? []
   const schedule = keep
     ? Prisma.sql`"send_at" = "send_at", "send_state" = "send_state", "send_error" = "send_error"`
-    : Prisma.sql`"send_at" = ${sendAt}, "send_state" = ${sendState}, "send_error" = NULL, "claimed_at" = NULL, "follow_up_minutes" = ${followUp}, "held_by_thread_id" = NULL, "held_at" = NULL`
+    : Prisma.sql`"send_at" = ${sendAt}, "send_state" = ${sendState}, "send_error" = NULL, "claimed_at" = NULL, "follow_up_minutes" = ${followUp}, "snooze_until" = ${snoozeUntil}, "held_by_thread_id" = NULL, "held_at" = NULL`
   const scheduleOnConflict = keep
     ? Prisma.sql`"send_at" = "uin_drafts"."send_at", "send_state" = "uin_drafts"."send_state"`
-    : Prisma.sql`"send_at" = EXCLUDED."send_at", "send_state" = EXCLUDED."send_state", "send_error" = NULL, "claimed_at" = NULL, "follow_up_minutes" = EXCLUDED."follow_up_minutes", "held_by_thread_id" = NULL, "held_at" = NULL`
+    : Prisma.sql`"send_at" = EXCLUDED."send_at", "send_state" = EXCLUDED."send_state", "send_error" = NULL, "claimed_at" = NULL, "follow_up_minutes" = EXCLUDED."follow_up_minutes", "snooze_until" = EXCLUDED."snooze_until", "held_by_thread_id" = NULL, "held_at" = NULL`
   if (data.id) {
     const updated = await prisma.$queryRaw<Record<string, unknown>[]>`
       UPDATE "uin_drafts" AS d
@@ -3538,11 +3911,12 @@ export async function saveDraft(data: DraftInput): Promise<Draft> {
     INSERT INTO "uin_drafts"
       ("author_user_id", "inbox_id", "thread_id", "mode", "to_addresses",
        "cc_addresses", "bcc_addresses", "subject", "body", "body_format", "attachments",
-       "products", "send_at", "send_state", "follow_up_minutes")
+       "products", "send_at", "send_state", "follow_up_minutes", "snooze_until")
     VALUES (${data.authorUserId}, ${data.inboxId}, ${data.threadId}, ${data.mode},
             ${data.to}::text[], ${data.cc}::text[], ${bcc}::text[], ${data.subject},
             ${data.body}, ${bodyFormat}, ${JSON.stringify(data.attachments)}::jsonb,
-            ${JSON.stringify(products)}::jsonb, ${sendAt}, ${sendState}, ${followUp})
+            ${JSON.stringify(products)}::jsonb, ${sendAt}, ${sendState}, ${followUp},
+            ${snoozeUntil})
     ON CONFLICT ("thread_id", "author_user_id") WHERE "thread_id" IS NOT NULL
     DO UPDATE SET "inbox_id"     = EXCLUDED."inbox_id",
                   "mode"         = EXCLUDED."mode",
@@ -6163,19 +6537,26 @@ async function recomputeThreadCounters(tx: Tx, threadId: string): Promise<void> 
 
 /**
  * The addresses a conversation belongs to, worked out again from the merges
- * that are still standing.
+ * that are still standing - and, on a discussion, from the colleagues it was
+ * put to.
  *
  * Recomputed rather than adjusted, so an undo needs no bookkeeping of its own
  * and a half-finished sequence of merges and undos cannot leave an address on
  * the list that nothing puts it there any more. A conversation left belonging
  * to nothing but its own inbox has its rows removed entirely - that is what
  * "never been merged" looks like, and it keeps the common case free of rows.
+ *
+ * The discussion half is here rather than left to the route that starts one
+ * because this function DELETES first: without it, merging a discussion and
+ * then undoing the merge would quietly file it out of the addresses of every
+ * colleague it was put to, and nothing on the screen would say so.
  */
 async function recomputeThreadInboxes(tx: Tx, threadId: string): Promise<void> {
   await tx.$executeRaw`DELETE FROM "uin_thread_inboxes" WHERE "thread_id" = ${threadId}`
-  // Nothing merged into it any more, so it belongs to its own address and to
-  // nothing else - which is what having no rows here means. Undoing the last
-  // merge on a conversation therefore leaves it exactly as it was found.
+  // Nothing merged into it any more and nobody it was put to, so it belongs to
+  // its own address and to nothing else - which is what having no rows here
+  // means. Undoing the last merge on a conversation therefore leaves it exactly
+  // as it was found.
   await tx.$executeRaw`
     INSERT INTO "uin_thread_inboxes" ("thread_id", "inbox_id")
     SELECT ${threadId}, ids."inbox_id"
@@ -6190,9 +6571,24 @@ async function recomputeThreadInboxes(tx: Tx, threadId: string): Promise<void> {
           LEFT JOIN "uin_thread_inboxes" li ON li."thread_id" = l."id"
          WHERE l."merged_into_id" = ${threadId}
            AND COALESCE(li."inbox_id", l."inbox_id") IS NOT NULL
+        UNION
+        -- A discussion also belongs to the address of everybody it was put to,
+        -- which is how it lands in their post rather than only in the starter's
+        -- (see migrations/040_discussion_parties.sql). Their OWN address only.
+        SELECT i."id" AS "inbox_id"
+          FROM "uin_threads" d
+          JOIN "uin_inboxes" i
+            ON i."kind" = 'individual' AND i."owner_user_id" = ANY (d."to_user_ids")
+         WHERE d."id" = ${threadId}
       ) ids
      WHERE EXISTS (
        SELECT 1 FROM "uin_threads" l WHERE l."merged_into_id" = ${threadId}
+     )
+        OR EXISTS (
+       SELECT 1 FROM "uin_threads" d
+         JOIN "uin_inboxes" i
+           ON i."kind" = 'individual' AND i."owner_user_id" = ANY (d."to_user_ids")
+        WHERE d."id" = ${threadId}
      )
     ON CONFLICT DO NOTHING
   `

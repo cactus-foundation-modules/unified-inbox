@@ -117,6 +117,13 @@ export type Draft = {
    *  because it is a length of time rather than a moment: the moment is not
    *  known until the message actually leaves. */
   followUpMinutes: number | null
+  /** When the conversation should stay asleep until once this message has
+   *  actually gone, or null for one nobody asked that of. A moment rather than
+   *  a length of time - the opposite of `followUpMinutes` above, and for the
+   *  opposite reason: a chase is counted from when the message leaves, whereas
+   *  Friday is Friday whichever hour of Monday the message went out. Rides with
+   *  `sendAt`: taking the time off takes this off with it. */
+  snoozeUntil: Date | null
   /** The conversation whose arrival stood this message down, or null - which is
    *  what it is for all but a handful of drafts. Set when mail turns up from
    *  somebody a scheduled message was addressed to: the time comes off, the
@@ -342,6 +349,13 @@ export type UnifiedInboxSettings = {
    *  after everything named here, so a new channel arrives at the end of the
    *  group rather than in the middle of an order somebody chose. */
   channelOrder: string[]
+  /** Whether post arriving at a colleague's own address is handed to that
+   *  colleague. On by default, and on for existing sites as well as new ones:
+   *  an individual inbox is already one named person's and nobody else's, so a
+   *  conversation sitting in one with no name against it was never really
+   *  unassigned work - it only counted as some. See lib/own-post.ts for the
+   *  four things it checks and what it deliberately leaves alone. */
+  autoAssignOwnPost: boolean
 }
 
 // ---------------------------------------------------------------------------

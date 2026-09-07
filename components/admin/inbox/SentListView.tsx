@@ -10,8 +10,13 @@ import {
 } from '@/modules/unified-inbox/lib/list'
 import { OutboundIcon, PaperclipIcon, TickIcon } from './icons'
 
-// Everything that has left, newest first, across every address this person can
-// read.
+// What has been sent, newest first.
+//
+// Two lists wear this one component, and `mine` says which. The entry under
+// Yours is this reader's own writing, wherever it went out from; the one hanging
+// under an address is everything that has left THAT address, whoever wrote it.
+// Only two things on the row care - what an empty one says, and whether naming
+// the author tells anybody anything.
 //
 // One row per message rather than per conversation: a thread somebody has
 // answered four times is four things sent, and "did that quote actually go, and
@@ -34,6 +39,9 @@ type Props = {
    *  anybody reading a list. */
   inboxNames: Record<string, string>
   staffById: Record<string, string>
+  /** Whether this is the reader's own Sent folder rather than an address's.
+   *  Everything in it is theirs, so the author is not worth a tag on every row. */
+  mine: boolean
   now: Date
   timezone: string
 }
@@ -54,7 +62,7 @@ function recipientLabel(row: SentMessageRow): string | null {
 }
 
 export function SentListView({
-  base, params, rows, total, page, openThreadId, inboxNames, staffById, now, timezone,
+  base, params, rows, total, page, openThreadId, inboxNames, staffById, mine, now, timezone,
 }: Props) {
   const pages = pageCount(total, PER_PAGE)
 
@@ -62,8 +70,11 @@ export function SentListView({
     return (
       <div className="uin-empty">
         <strong>Nothing has gone out yet</strong>
-        Every reply and every message written here turns up in this list once it has left, with
-        what became of it beside it.
+        {mine
+          ? 'Every message you send turns up in this list once it has left - from your own address'
+            + ' and from every shared one you write from - with what became of it beside it.'
+          : 'Every message that leaves this address turns up in this list once it has gone, whoever'
+            + ' wrote it, with what became of it beside it.'}
       </div>
     )
   }
@@ -73,7 +84,10 @@ export function SentListView({
       <ul className="uin-list">
         {rows.map((row) => {
           const who = recipientLabel(row)
-          const author = row.authorUserId ? staffById[row.authorUserId] : null
+          // Who wrote it, on an address's folder where two colleagues answer the
+          // same post. Never on somebody's own folder: everything in that one is
+          // theirs, and their own name down every row of it says nothing.
+          const author = !mine && row.authorUserId ? staffById[row.authorUserId] : null
           const inboxName = row.inboxId ? inboxNames[row.inboxId] : null
           const hardBounce = row.bouncedAt
             && ['hard', 'blocked', 'invalid', 'spam', 'error'].includes(row.bounceKind ?? '')

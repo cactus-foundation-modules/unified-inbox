@@ -42,8 +42,37 @@ export function recordHref(link: RecordLink): string | null {
   // listing it belongs to - so it opens in the same editor its parent does.
   // Nothing here needs to know how the two are joined, which is exactly as much
   // as this module is allowed to know about variations.
+  //
+  // Only ever the fallback for a product: recordDestination below sends one to
+  // the customer's own page where the shop publishes one, and lands here when
+  // it does not - the product has been withdrawn, or the site has no address to
+  // hang a link off. The editor is then the right answer, being where somebody
+  // would go to find out why there is no page.
   if (link.moduleName === 'shop' && (link.recordType === 'product' || link.recordType === 'variation')) {
     return `m/shop/products/${link.recordId}`
   }
   return null
+}
+
+/**
+ * The whole address a link on the screen opens: the customer's own page where
+ * the record has one, and the record's page under the admin root otherwise.
+ *
+ * Both halves of the screen call this rather than recordHref, so a product
+ * attached to a conversation opens the same page in the rail beside a person as
+ * it does on the line under a conversation's subject.
+ *
+ * `publicUrls` is what publicRecordUrls in ./record-urls.ts worked out on the
+ * server, keyed by link id. Empty is a perfectly good answer - a conversation
+ * with nothing but orders on it has no public pages to offer.
+ */
+export function recordDestination(
+  link: RecordLink,
+  adminPath: string,
+  publicUrls: Record<string, string>,
+): string | null {
+  const published = publicUrls[link.id]
+  if (published) return published
+  const href = recordHref(link)
+  return href ? `/${adminPath}/${href}` : null
 }

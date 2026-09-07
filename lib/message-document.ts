@@ -25,7 +25,25 @@ import { quotedHtmlIndex } from './list'
 // ---------------------------------------------------------------------------
 
 /** Styles for the frame. Deliberately gentle - anything stronger would be this
- *  module overruling the sender about what their message looks like. */
+ *  module overruling the sender about what their message looks like.
+ *
+ *  `overflow-wrap` is here and `word-break` is deliberately NOT, and the
+ *  difference is not the hair-splitting it looks. `overflow-wrap: break-word`
+ *  breaks a word that has nowhere else to go and changes nothing about how wide
+ *  a box wants to be. `word-break: break-word` is the legacy spelling of
+ *  `overflow-wrap: anywhere`, and THAT one feeds back into intrinsic sizing: a
+ *  box's minimum width stops being "as wide as its longest word" and becomes "as
+ *  wide as one letter". Almost every marketing email is a table, and a table
+ *  hands each column the width its contents insist on - so telling the whole
+ *  document that nothing insists on any width lets those columns collapse.
+ *
+ *  In Safari that is exactly what happened, and it is nastier than it sounds:
+ *  the button in a WhatsApp notification came out 43 pixels wide instead of 188,
+ *  its label still set to never wrap and still painted white, so the words ran
+ *  out of the blue box onto the white page and simply disappeared. A button
+ *  reading "View" instead of "View in WhatsApp Manager", with no clue anywhere
+ *  that anything had gone wrong. Chrome and Firefox both render it correctly,
+ *  which is the other half of why it took some finding. */
 const FRAME_STYLES = `
   html, body { margin: 0; padding: 0; }
   body {
@@ -34,9 +52,7 @@ const FRAME_STYLES = `
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     font-size: 0.9375rem;
     line-height: 1.55;
-    padding: 0.25rem 0.125rem;
     overflow-wrap: break-word;
-    word-break: break-word;
   }
   img, video { max-width: 100%; height: auto; }
   table { max-width: 100%; }

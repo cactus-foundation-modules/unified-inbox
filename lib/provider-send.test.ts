@@ -12,17 +12,58 @@ const getThreadDetail = vi.hoisted(() => vi.fn())
 const insertProviderMessage = vi.hoisted(() => vi.fn())
 const recountProviderThread = vi.hoisted(() => vi.fn())
 const setThreadRead = vi.hoisted(() => vi.fn())
+const recordLink = vi.hoisted(() => vi.fn())
+const threadHasLink = vi.hoisted(() => vi.fn())
 const providerForKey = vi.hoisted(() => vi.fn())
+const resolveProducts = vi.hoisted(() => vi.fn())
 
 vi.mock('./db', () => ({
   getThreadDetail,
   insertProviderMessage,
   recountProviderThread,
   setThreadRead,
+  recordLink,
+  threadHasLink,
 }))
 vi.mock('./provider-registry', () => ({ providerForKey }))
+vi.mock('./products', () => ({ resolveProducts }))
 
-const { sendProviderReply } = await import('./provider-send')
+const { replyWords, sendProviderReply } = await import('./provider-send')
+
+/** One product as the shop answers for it, in the shape the renderer wants. */
+function chair(over: Record<string, unknown> = {}) {
+  return {
+    choice: {
+      moduleName: 'shop',
+      kind: 'product',
+      id: 'p1',
+      name: 'Ergo Task Chair',
+      options: null,
+      optionPairs: [],
+      price: '£249.00',
+      priceFrom: false,
+      priceSuffix: '+ VAT',
+      imageUrl: null,
+      url: 'https://example.com/ergo',
+      sku: null,
+      variationCount: 0,
+      ...over,
+    },
+    link: {
+      moduleName: 'shop',
+      recordType: 'product',
+      recordId: (over.id as string) ?? 'p1',
+      label: 'Ergo Task Chair',
+    },
+  }
+}
+
+/** The markup the writing box produces for one of them. */
+function slot(id = 'p1'): string {
+  return `<div class="uin-product-slot uin-richtext-block uin-ps--shop--product--${id}" `
+    + 'contenteditable="false"><span class="uin-ps-words"><strong>Ergo Task Chair</strong>'
+    + '</span><span class="uin-ps-price">£249.00 + VAT</span></div>'
+}
 
 const thread = {
   id: 't1',
@@ -67,7 +108,81 @@ beforeEach(() => {
   setThreadRead.mockReset().mockResolvedValue(undefined)
   send.mockReset().mockResolvedValue(undefined)
   providerForKey.mockReset().mockResolvedValue(providerWith(send))
+  recordLink.mockReset().mockResolvedValue(undefined)
+  threadHasLink.mockReset().mockResolvedValue(false)
+  resolveProducts.mockReset().mockResolvedValue([])
   vi.spyOn(console, 'error').mockImplementation(() => {})
+})
+
+describe('the words a channel is sent', () => {
+  it('is what was written when nothing was quoted', async () => {
+    expect(await replyWords('<p>On its way.</p>')).toBe('On its way.')
+  })
+
+  it('puts a product where its block was, as the same lines an email carries', async () => {
+    resolveProducts.mockResolvedValue([chair()])
+    const words = await replyWords(
+      `<p>This one:</p>${slot()}<p>Let me know.</p>`,
+      [{ moduleName: 'shop', kind: 'product', id: 'p1' }],
+    )
+    expect(words).toContain('Ergo Task Chair - £249.00 + VAT')
+    expect(words).toContain('https://example.com/ergo')
+    // The block's own preview markup does not travel; only what the renderer
+    // writes does.
+    expect(words).not.toContain('uin-ps-price')
+    expect(words.indexOf('This one')).toBeLessThan(words.indexOf('Ergo Task Chair'))
+    expect(words.indexOf('Ergo Task Chair')).toBeLessThan(words.indexOf('Let me know'))
+  })
+
+  it('runs a product with no block onto the end rather than losing it', async () => {
+    resolveProducts.mockResolvedValue([chair()])
+    const words = await replyWords(
+      '<p>As discussed.</p>',
+      [{ moduleName: 'shop', kind: 'product', id: 'p1' }],
+    )
+    expect(words.indexOf('As discussed')).toBeLessThan(words.indexOf('Ergo Task Chair'))
+  })
+
+  it('takes out a block whose product has been withdrawn since it was picked', async () => {
+    resolveProducts.mockResolvedValue([])
+    const words = await replyWords(
+      `<p>Here you go.</p>${slot()}`,
+      [{ moduleName: 'shop', kind: 'product', id: 'p1' }],
+    )
+    expect(words).toBe('Here you go.')
+  })
+})
+
+describe('what the conversation is left carrying', () => {
+  it('attaches what was quoted, so the rail says what this is about', async () => {
+    resolveProducts.mockResolvedValue([chair()])
+    await sendProviderReply({
+      threadId: 't1',
+      text: 'Ergo Task Chair - £249.00 + VAT',
+      authorUserId: 'u1',
+      authorName: 'Marcus',
+      products: [{ moduleName: 'shop', kind: 'product', id: 'p1' }],
+    })
+    expect(recordLink).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: 't1',
+      moduleName: 'shop',
+      recordType: 'product',
+      recordId: 'p1',
+    }))
+  })
+
+  it('does not attach the same chair twice over two messages', async () => {
+    resolveProducts.mockResolvedValue([chair()])
+    threadHasLink.mockResolvedValue(true)
+    await sendProviderReply({
+      threadId: 't1',
+      text: 'Same again',
+      authorUserId: 'u1',
+      authorName: 'Marcus',
+      products: [{ moduleName: 'shop', kind: 'product', id: 'p1' }],
+    })
+    expect(recordLink).not.toHaveBeenCalled()
+  })
 })
 
 describe('sendProviderReply', () => {

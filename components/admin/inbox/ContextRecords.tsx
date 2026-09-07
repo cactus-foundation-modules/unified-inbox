@@ -2,9 +2,10 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import type { ContextHint } from '@/modules/unified-inbox/lib/adapters/types'
 import type { LinkKind } from '@/modules/unified-inbox/lib/linking'
 import type { RecordLink } from '@/modules/unified-inbox/lib/types'
-import { recordHref, recordLabel } from '@/modules/unified-inbox/lib/record-links'
+import { recordDestination, recordLabel } from '@/modules/unified-inbox/lib/record-links'
 import { ChevronDownIcon } from './icons'
 import { AddLink, LinkActions, type LinkKindChoice } from './LinkActions'
 
@@ -40,7 +41,20 @@ type Props = {
    *  off, because taking it off would be claiming the enquiry came from
    *  somewhere else. So it is the one thing on this line that is not a link. */
   sourceLabel: string | null
+  /** Standing facts about whoever is writing - "Existing customer" - from the
+   *  same adapters the records come from. They sit on this line because they
+   *  answer the same question the records do, and like the source label they are
+   *  not records: nobody attached them and there is nothing to take off. The
+   *  adapter that offers one drops it as soon as a record of the kind that
+   *  answers the question exactly is attached, so the vague version and the
+   *  precise one are never on the line together. */
+  hints: ContextHint[]
   links: RecordLink[]
+  /** Where the ones with a page of their own on the shop actually open, keyed
+   *  by link id. A product is on the conversation because somebody quoted it,
+   *  so following it opens the page the customer was sent rather than the
+   *  editor behind it. Worked out on the server - see lib/record-urls.ts. */
+  publicUrls: Record<string, string>
   canEdit: boolean
   /** What may be added here at all: the record kinds whose module is
    *  installed and whose records this viewer may see. */
@@ -69,7 +83,8 @@ const MENU_HEIGHT = 260
 const GAP = 6
 
 export function ContextRecords({
-  threadId, adminPath, sourceLabel, links, canEdit, kinds, defaultKind, compact = false,
+  threadId, adminPath, sourceLabel, hints, links, publicUrls, canEdit, kinds, defaultKind,
+  compact = false,
 }: Props) {
   const [open, setOpen] = useState(false)
   // Where to draw it, in window coordinates. Fixed rather than absolute,
@@ -139,10 +154,17 @@ export function ContextRecords({
   // Nothing on it and nothing that could go on it - no shop, no purchasing, or
   // no permission to see either. A row saying "no context" beside an arrow that
   // opens an empty menu is a row that only ever wastes a line.
-  if (!sourceLabel && links.length === 0 && !canAdd) return null
+  if (!sourceLabel && hints.length === 0 && links.length === 0 && !canAdd) return null
 
-  const parts = sourceLabel ? [sourceLabel, ...links.map(recordLabel)] : links.map(recordLabel)
+  const parts = [
+    ...(sourceLabel ? [sourceLabel] : []),
+    ...hints.map((hint) => hint.label),
+    ...links.map(recordLabel),
+  ]
   const summary = parts.length > 0 ? parts.join(', ') : 'No context yet'
+  // Whether anything at all precedes the records on the line, so the first of
+  // them knows whether to write a comma in front of itself.
+  const beforeLinks = (sourceLabel ? 1 : 0) + hints.length
 
   return (
     <div className={compact ? 'uin-ctxbar uin-ctxbar-compact' : 'uin-ctxbar'} ref={wrap}>
@@ -151,22 +173,35 @@ export function ContextRecords({
       {!compact && (
       <span className="uin-ctxbar-line" title={summary}>
         {sourceLabel && <span className="uin-ctxbar-source">{sourceLabel}</span>}
+        {hints.map((hint, index) => (
+          <Fragment key={hint.id}>
+            {(index > 0 || sourceLabel) && ', '}
+            <Link
+              href={`/${adminPath}/${hint.href}`}
+              target="_blank"
+              rel="noreferrer"
+              title={hint.title}
+            >
+              {hint.label}
+            </Link>
+          </Fragment>
+        ))}
         {links.length > 0
           ? links.map((link, index) => {
-            const href = recordHref(link)
+            const href = recordDestination(link, adminPath, publicUrls)
             const label = recordLabel(link)
             return (
               <Fragment key={link.id}>
-                {(index > 0 || sourceLabel) && ', '}
+                {(index > 0 || beforeLinks > 0) && ', '}
                 {href ? (
-                  <Link href={`/${adminPath}/${href}`} target="_blank" rel="noreferrer">
+                  <Link href={href} target="_blank" rel="noreferrer">
                     {label}
                   </Link>
                 ) : label}
               </Fragment>
             )
           })
-          : !sourceLabel && summary}
+          : beforeLinks === 0 && summary}
       </span>
       )}
       <button
@@ -197,17 +232,36 @@ export function ContextRecords({
           {sourceLabel && (
             <p className="uin-ctx-sub">Came from {sourceLabel}.</p>
           )}
-          {links.length > 0 ? (
+          {links.length > 0 || hints.length > 0 ? (
             <ul className="uin-ctx-list">
+              {hints.map((hint) => (
+                <li key={hint.id} className="uin-ctx-row">
+                  <div className="uin-ctx-main">
+                    <Link
+                      href={`/${adminPath}/${hint.href}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={hint.title}
+                      onClick={() => setOpen(false)}
+                    >
+                      {hint.label}
+                    </Link>
+                  </div>
+                  {/* The whole of the fact, once there is room for it. On the
+                      line above there is only room for the label. */}
+                  <span className="uin-ctx-sub">{hint.title}</span>
+                </li>
+              ))}
               {links.map((link) => {
-                const href = recordHref(link)
+                const href = recordDestination(link, adminPath, publicUrls)
                 const label = recordLabel(link)
                 return (
-                  <li key={link.id} className="uin-ctx-row">
+                  <li key={link.id} className={canEdit ? 'uin-ctx-row uin-ctx-row--x' : 'uin-ctx-row'}>
+                    {canEdit && <LinkActions linkId={link.id} label={label} onThread />}
                     <div className="uin-ctx-main">
                       {href ? (
                         <Link
-                          href={`/${adminPath}/${href}`}
+                          href={href}
                           target="_blank"
                           rel="noreferrer"
                           onClick={() => setOpen(false)}
@@ -223,7 +277,6 @@ export function ContextRecords({
                         </span>
                       )}
                     </div>
-                    {canEdit && <LinkActions linkId={link.id} label={label} onThread />}
                   </li>
                 )
               })}

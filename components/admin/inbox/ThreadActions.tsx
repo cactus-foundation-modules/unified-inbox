@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Dropdown, MenuItem } from './Dropdown'
 import { SnoozePanel } from './SnoozePanel'
+import { SpamButton } from './SpamButton'
 import { UndoToast } from './UndoToast'
 import { AlarmIcon, ChevronDownIcon } from './icons'
 
@@ -32,6 +33,21 @@ type Props = {
   /** The site's timezone, so "tomorrow morning" is nine o'clock here rather
    *  than nine o'clock UTC. */
   timezone: string
+  /** Whether THIS reader has put it in their spam folder. One person's own
+   *  opinion, which is why it rides here rather than in `status` beside Done
+   *  and Snoozed: those two are the conversation's, shared by everybody who can
+   *  read it, and junk is not. */
+  spam: boolean
+  /** The colleague whose spam folder it would land in, when that is not the
+   *  reader's own - see spamOwnerFor. Null the rest of the time. */
+  spamOwnerName: string | null
+  /** Who wrote it, for the question the junk button asks afterwards. Null where
+   *  there is nobody to block. */
+  senderAddress: string | null
+  /** Whether that sender is already refused across the whole site. */
+  senderBlocked: boolean
+  /** Whether this reader may do the refusing. */
+  canBlock: boolean
 }
 
 /** What to call where it stands, on the button that says so. Not a sentence:
@@ -43,7 +59,10 @@ const STATUS_WORDS: Record<string, string> = {
   snoozed: 'Snoozed',
 }
 
-export function ThreadActions({ threadId, status, assigneeUserId, snoozeUntil, staff, timezone }: Props) {
+export function ThreadActions({
+  threadId, status, assigneeUserId, snoozeUntil, staff, timezone,
+  spam, spamOwnerName, senderAddress, senderBlocked, canBlock,
+}: Props) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -93,11 +112,24 @@ export function ThreadActions({ threadId, status, assigneeUserId, snoozeUntil, s
   return (
     <>
       <div className="uin-thread-actions">
-        {/* The clock first, then whose it is, then where it stands. All three
-            sit on the subject line now, hard against the way out of the
+        {/* The basket, the clock, then whose it is, then where it stands. All
+            four sit on the subject line now, hard against the way out of the
             conversation: they are what you press on the way OUT of one, and a
             row of them on a line of their own was a band of chrome between the
-            subject and the message. */}
+            subject and the message.
+            Junk goes first, on the left, because it is the one press that ends
+            the conversation rather than arranging it - the same place every
+            mail program puts it, and the furthest of the four from the reply
+            arrow. */}
+        <SpamButton
+          threadId={threadId}
+          spam={spam}
+          ownerName={spamOwnerName}
+          senderAddress={senderAddress}
+          senderBlocked={senderBlocked}
+          canBlock={canBlock}
+          disabled={busy}
+        />
         <Dropdown
           className="uin-icon-btn uin-icon-btn-framed"
           label={AlarmIcon}

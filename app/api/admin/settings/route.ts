@@ -17,6 +17,7 @@ import {
   unroutedCount,
   updateSettings,
 } from '@/modules/unified-inbox/lib/db'
+import { listBlockedSenders } from '@/modules/unified-inbox/lib/blocked-senders'
 import { allProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
 import { reconcileBrevoWebhooks } from '@/modules/unified-inbox/lib/brevo-webhooks'
 import { clashMessage, mailboxClashes } from '@/modules/unified-inbox/lib/reply-catcher-guard'
@@ -32,7 +33,7 @@ export async function GET() {
   if (!user) return errorResponse('Not authenticated', 401)
   if (!await hasPermission(user, 'unifiedinbox.manage')) return errorResponse('Forbidden', 403)
 
-  const [connections, inboxes, access, defaults, settings, collection, unrouted, people, categories, clashes, retention, users, channels] = await Promise.all([
+  const [connections, inboxes, access, defaults, settings, collection, unrouted, people, categories, clashes, retention, users, channels, blockedSenders] = await Promise.all([
     listConnections(),
     listInboxes(),
     listAllInboxAccess(),
@@ -50,6 +51,7 @@ export async function GET() {
       orderBy: { username: 'asc' },
     }),
     allProviderChannels(),
+    listBlockedSenders(),
   ])
 
   return NextResponse.json({
@@ -94,6 +96,17 @@ export async function GET() {
     // The whole site's list rather than this reader's: whether a channel is on
     // the screen is one decision for everybody.
     channels,
+    // Everybody the site refuses. This screen is the only place a block can be
+    // undone: the button that makes one lives on a conversation, where somebody
+    // has the evidence in front of them, and the list of them is a fact about
+    // how the site is set up. A block nobody could find again would be a
+    // customer nobody could work out why they had lost.
+    blockedSenders: blockedSenders.map((row) => ({
+      id: row.id,
+      address: row.address,
+      blockedByUserId: row.blockedByUserId,
+      createdAt: row.createdAt.toISOString(),
+    })),
     // Without a site encryption key there is nowhere safe to put a mailbox
     // password, so the screen says so rather than saving one in the clear.
     encryptionReady: isEncryptionKeyUsable(),
@@ -141,6 +154,7 @@ const Body = z.object({
   // dropped, so switching a module off and back on again does not silently
   // un-hide its channel.
   hiddenChannelModules: z.array(z.string().trim().min(1).max(100)).max(50).optional(),
+  autoAssignOwnPost: z.boolean().optional(),
 })
 
 export async function PATCH(request: NextRequest) {

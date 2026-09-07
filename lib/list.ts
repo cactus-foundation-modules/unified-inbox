@@ -45,6 +45,14 @@ export type InboxParams = {
    *  Same slot again - it is a list of things to work through, and which list
    *  is on the left is one choice. */
   mentionsOnly: boolean
+  /** The "Spam" tab: what THIS reader has marked as junk, across every address
+   *  they can read. Same slot again, and the same reason.
+   *
+   *  One person's own, always. Junk is an opinion rather than a fact about the
+   *  mail (see migrations/041_spam.sql), so unlike Sent and Mentioned there is
+   *  no colleague's version of this folder to scope it to: `sam@` has no spam
+   *  folder, Sam does. */
+  spamOnly: boolean
   /** Which colleague's address the Sent or Mentioned list above is narrowed to,
    *  or null for this reader's own across every address they can read. The rail
    *  offers no Drafts folder under a colleague - a draft is its author's - but
@@ -80,6 +88,16 @@ export type InboxParams = {
   /** A user id, the literal 'unassigned', or null for no filter. */
   assignee: string | null
   search: string | null
+  /** Whether this address is a search's OWN screen rather than a list somebody
+   *  has narrowed where it stands. The two ask the same question of the same
+   *  rows - the difference is what is drawn over them: the box in the head of
+   *  the list narrows what is in front of you and leaves the screen alone,
+   *  while the search everybody arrives at through the magnifier draws its own
+   *  head across the list and the conversation, with every cut it made showing
+   *  in it. Written as one word in the address rather than guessed from the
+   *  cuts, because a search typed into the little box is not the same act and
+   *  has no business rearranging the screen. */
+  searchPage: boolean
   /** The narrower cuts the search dialog can add on top of the words: who it
    *  came from, who it went to, what the subject says, whether anything is
    *  attached, and the two ends of a date range. All of them optional, all of
@@ -156,11 +174,18 @@ function calendarDate(raw: string | undefined): string | null {
   return date.getUTCMonth() === m - 1 && date.getUTCDate() === d ? value : null
 }
 
-/** The three lists that can be looked at inside ONE address as well as across
- *  every address somebody can read. Written `sent:<inbox id>` in the query
- *  string, which is what the folders under a colleague's name on the rail point
- *  at. */
-const SCOPED_FOLDERS = ['sent', 'drafts', 'mentions'] as const
+/** The lists that can be looked at inside ONE address as well as across every
+ *  address somebody can read. Written `sent:<inbox id>` in the query string,
+ *  which is what the folders under a colleague's name on the rail point at.
+ *
+ *  Spam is scoped by a different thing from the other three and it matters. The
+ *  others narrow to an ADDRESS - what left sales@, what somebody was tagged in
+ *  on sales@. A spam folder belongs to a PERSON, so `spam:<inbox id>` means
+ *  "the bin of whoever owns that address" and is only meaningful on an
+ *  individual one. The panel resolves the id against the addresses this reader
+ *  may open and refuses to find an owner for a shared address, so the folder
+ *  under a colleague's name is theirs and the entry under Yours is your own. */
+const SCOPED_FOLDERS = ['sent', 'drafts', 'mentions', 'spam'] as const
 
 type ScopedFolder = (typeof SCOPED_FOLDERS)[number]
 
@@ -201,7 +226,7 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
       !isChannel && !scoped.folder
         && inbox && inbox !== 'all' && inbox !== 'none' && inbox !== 'drafts'
         && inbox !== 'sent' && inbox !== 'contacts' && inbox !== 'campaigns'
-        && inbox !== 'mentions'
+        && inbox !== 'mentions' && inbox !== 'spam'
         ? inbox
         : null,
     providerModule: channel.length > 0 ? channel : null,
@@ -211,6 +236,7 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
     contactsOnly: inbox === 'contacts',
     campaignsOnly: inbox === 'campaigns',
     mentionsOnly: inbox === 'mentions' || scoped.folder === 'mentions',
+    spamOnly: inbox === 'spam' || scoped.folder === 'spam',
     folderInboxId: scoped.inboxId,
     campaignId: sp.campaign ? sp.campaign : null,
     contactsView: sp.view === 'organisations' ? 'organisations' : 'people',
@@ -223,6 +249,7 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
     oldestFirst: sp.sort === 'oldest',
     assignee: sp.assignee ? sp.assignee : null,
     search: search.length > 0 ? search.slice(0, 200) : null,
+    searchPage: sp.find === '1',
     fromText: text(sp.from),
     toText: text(sp.to),
     subjectText: text(sp.subject),
@@ -320,6 +347,7 @@ export function buildSearchHref(
   if (request.mode === 'contacts') {
     return inboxHref(base, current, {
       ...cleared,
+      find: '1',
       inbox: 'contacts',
       q: value(request.q),
       // The narrower cuts belong to the post, and so do the two views of it.
@@ -329,6 +357,10 @@ export function buildSearchHref(
   }
   return inboxHref(base, current, {
     ...cleared,
+    // Every search lands on its own screen rather than on a list quietly
+    // shorter than it was: the cuts that made it are then in front of the
+    // reader to change, instead of behind a dialog that closed itself.
+    find: '1',
     // The address book's own params go with it rather than lingering over a
     // list of conversations.
     view: null, org: null, edit: null, import: null, cat: null,
@@ -339,11 +371,30 @@ export function buildSearchHref(
     subject: value(request.subject),
     att: request.withAttachment ? '1' : null,
     unread: request.unreadOnly ? '1' : null,
+    // Whoever a list happened to be narrowed to does not follow a search onto
+    // its own screen: carried along, it would be a filter narrowing the results
+    // with nothing anywhere saying so.
+    assignee: null,
     // Open is what the ordinary list shows and needs no saying; the other three
     // are a deliberate choice and go in the address.
     status: request.status === 'open' ? null : request.status,
     after: calendarDate(request.after),
     before: calendarDate(request.before),
+  })
+}
+
+/**
+ * The address the way out of a search leads to: the same tab, with the search
+ * and every cut it made taken off.
+ *
+ * Here rather than in the bar because it is the exact opposite of the builder
+ * above and the two want reading together - a cut added in one and forgotten in
+ * the other is a search somebody cannot get out of.
+ */
+export function leaveSearchHref(base: string, current: Record<string, string>): string {
+  return inboxHref(base, current, {
+    find: null, q: null, from: null, to: null, subject: null, att: null,
+    after: null, before: null, unread: null, status: null, page: null,
   })
 }
 
@@ -389,10 +440,13 @@ export function searchRequestFrom(current: Record<string, string>): SearchReques
 }
 
 /** The tabs a search can be pointed at: one address, one channel, the mail that
- *  landed nowhere, or the lot. The other four are not narrower views of the
+ *  landed nowhere, or the lot. The other five are not narrower views of the
  *  post - they are different lists altogether - so a search opened over one of
- *  them looks everywhere rather than at nothing. */
-const NOT_A_SCOPE = ['drafts', 'sent', 'contacts', 'campaigns']
+ *  them looks everywhere rather than at nothing. Mentioned belongs in this list
+ *  for the same reason Drafts does: it is a list of jobs colleagues have asked
+ *  about, the words never reach it, and a search pointed there would have been
+ *  a search pointed at nothing while saying otherwise. */
+const NOT_A_SCOPE = ['drafts', 'sent', 'contacts', 'campaigns', 'mentions']
 
 function searchableScope(inbox: string): string {
   if (!inbox || NOT_A_SCOPE.includes(inbox)) return 'all'
@@ -572,6 +626,49 @@ export function participantLabel(row: {
   return 'Unknown sender'
 }
 
+/**
+ * The two ends of a discussion, in names.
+ *
+ * Every other conversation has an outsider at one end and one of the site's own
+ * addresses at the other, and the list says so by reading the newest message
+ * that was not an internal note. A discussion has no outsider and no message
+ * that is anything BUT a note, so both ends are colleagues and both are read
+ * off the conversation itself (see migrations/040_discussion_parties.sql).
+ *
+ * Pure, and handed the same staff list the rest of the list is drawn from, so
+ * nothing here goes near a database. A name that will not resolve - somebody
+ * who has left - is left out rather than shown as an id, which is the answer
+ * this list already gives for an assignee who has gone.
+ */
+export function discussionFrom(
+  row: { channel: string; startedByUserId?: string | null },
+  staffById: Record<string, string>,
+): string | null {
+  if (row.channel !== 'discussion') return null
+  const id = row.startedByUserId
+  return (id ? staffById[id] : null) ?? null
+}
+
+/** How many of the people a discussion was put to are named outright before the
+ *  rest are counted. Two fits the width a list row has; past that it is a
+ *  sentence rather than a heading. */
+const NAMED_RECIPIENTS = 2
+
+export function discussionTo(
+  row: { channel: string; toUserIds?: string[] },
+  staffById: Record<string, string>,
+): string | null {
+  if (row.channel !== 'discussion') return null
+  const names = (row.toUserIds ?? [])
+    .map((id) => staffById[id])
+    .filter((name): name is string => !!name)
+  if (names.length === 0) return null
+  if (names.length === 1) return names[0]!
+  if (names.length === 2) return `${names[0]} and ${names[1]}`
+  const rest = names.length - NAMED_RECIPIENTS
+  return `${names.slice(0, NAMED_RECIPIENTS).join(', ')} and ${rest} ${rest === 1 ? 'other' : 'others'}`
+}
+
 /** One or two letters for the avatar circle. Deliberately not a colour: the
  *  circle is decoration, and nothing about who sent a message may depend on
  *  being able to tell two colours apart. */
@@ -739,11 +836,26 @@ export function moveInOrder<T>(list: T[], from: number, to: number): T[] {
  * arrangement somebody chose.
  */
 export function sortByChannelOrder<T extends { key: string }>(channels: T[], order: string[]): T[] {
-  if (order.length === 0) return channels
+  return sortByStoredOrder(channels, order)
+}
+
+/**
+ * The same job for any list the rail keeps an order for, said by its keys.
+ *
+ * Two lists want it and they are not the same kind of thing: the channels,
+ * whose order is the site's, and the top of the rail, whose order is one
+ * person's own (see migrations/043_user_rail_order.sql). What they share is the
+ * rule about absences, which is the part worth having in one place - an entry
+ * the order has never heard of sorts after every entry it names, so a folder
+ * added by an update arrives at the end of the group rather than in the middle
+ * of an arrangement somebody chose.
+ */
+export function sortByStoredOrder<T extends { key: string }>(items: T[], order: string[]): T[] {
+  if (order.length === 0) return items
   const rank = new Map(order.map((key, index) => [key, index]))
-  // A stable sort, so two channels the order says nothing about stay in the
+  // A stable sort, so two entries the order says nothing about stay in the
   // order they arrived in rather than swapping places between page loads.
-  return [...channels].sort((a, b) => (
+  return [...items].sort((a, b) => (
     (rank.get(a.key) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.key) ?? Number.MAX_SAFE_INTEGER)
   ))
 }

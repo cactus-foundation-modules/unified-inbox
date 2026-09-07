@@ -16,9 +16,17 @@ import { LinkPeek, type PeekedLink } from './LinkPeek'
  * They are real anchors rather than buttons dressed up as links, so right-click
  * and copy, and open-in-a-new-tab, all behave the way they do everywhere else.
  * Only the plain left click is taken over.
+ *
+ * `foldQuoted` is off for an internal note, and only for one. Folding away
+ * everything after a line beginning with "> " is right for mail, where that
+ * line is the message being answered; a note is somebody typing a sentence, and
+ * a note that opened with a quotation would have had half of itself hidden
+ * behind a toggle that says "Show the earlier messages" about a conversation
+ * that has none.
  */
-export function MessageText({ text }: { text: string }) {
-  const { body, quoted } = splitQuotedText(text)
+export function MessageText({ text, foldQuoted = true }: { text: string; foldQuoted?: boolean }) {
+  const split = splitQuotedText(text)
+  const { body, quoted } = foldQuoted ? split : { body: text, quoted: null }
   const [peek, setPeek] = useState<PeekedLink | null>(null)
 
   return (

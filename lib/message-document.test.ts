@@ -64,6 +64,17 @@ describe('buildMessageDocument', () => {
     expect(doc).not.toContain('#uin-fit { overflow: hidden; }')
   })
 
+  it('never tells the message that a word may break anywhere', () => {
+    const doc = buildMessageDocument({ html: '<p>hi</p>', nonce: 'abc' })
+    // word-break: break-word is overflow-wrap: anywhere under an older name, and
+    // it drags a box's minimum width down to a single letter. Email is table
+    // layout, table layout gives a column the width its contents insist on, and
+    // this is how a button ends up 43 pixels wide with its own label hanging out
+    // of it in white on a white page. overflow-wrap on its own does not do that.
+    expect(doc).toContain('overflow-wrap: break-word;')
+    expect(doc).not.toContain('word-break')
+  })
+
   it('carries the nonce on the one script it has', () => {
     const doc = buildMessageDocument({ html: '<p>hi</p>', nonce: 'nonce-value' })
     const scripts = doc.match(/<script/g) ?? []

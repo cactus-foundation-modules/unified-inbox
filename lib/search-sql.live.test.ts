@@ -98,6 +98,11 @@ describe.runIf(shouldRun)('the search queries, against a real database', () => {
    *  is the inbox nobody in these tests is on, which is what makes the last
    *  one worth running. */
   const visible = () => ({
+    /* Whose list it is. Every list in the module is one person's now - "this is
+       junk" is a reader's opinion rather than a fact about the mail (see
+       migrations/041_spam.sql) - and nothing here marks anything as junk, so
+       any consistent reader will do. */
+    viewerUserId: 'user-viewer',
     inboxIds: [salesId],
     includeUnrouted: false,
     status: 'all' as const,

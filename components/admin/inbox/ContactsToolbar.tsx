@@ -34,11 +34,18 @@ type Props = {
   categories: Array<{ id: string; name: string; people: number }>
   /** The one being filtered on, if any. */
   categoryId: string | null
+  /** Whether this head carries its own search box. Off on a search's own
+   *  screen, where the same box is already drawn across the top of the whole
+   *  thing: two search boxes an inch apart, one of which quietly asks a
+   *  narrower question than the other, is worse than either on its own. The
+   *  rest of the row - the labels, and the two ways of adding somebody - is not
+   *  a search and stays. */
+  showSearch: boolean
 }
 
 export function ContactsToolbar({
   base, params, view, search, peopleCount, organisationCount, canEdit, canImport,
-  categories, categoryId,
+  categories, categoryId, showSearch,
 }: Props) {
   // Any change starts again at page one and closes whatever card was open - it
   // belongs to the list being left.
@@ -74,18 +81,20 @@ export function ContactsToolbar({
   return (
     <>
       <div className="uin-search-row">
-        <QueryForm base={base} hidden={hidden} className="uin-search">
-          <label className="sr-only" htmlFor="uin-contact-search">Search the address book</label>
-          <span className="uin-search-icon" aria-hidden="true">{SearchIcon}</span>
-          <input
-            id="uin-contact-search"
-            name="q"
-            type="search"
-            defaultValue={search ?? ''}
-            placeholder="Name, address, number or postcode"
-          />
-          <button type="submit" className="sr-only">Search</button>
-        </QueryForm>
+        {showSearch && (
+          <QueryForm base={base} hidden={hidden} className="uin-search">
+            <label className="sr-only" htmlFor="uin-contact-search">Search the address book</label>
+            <span className="uin-search-icon" aria-hidden="true">{SearchIcon}</span>
+            <input
+              id="uin-contact-search"
+              name="q"
+              type="search"
+              defaultValue={search ?? ''}
+              placeholder="Name, address, number or postcode"
+            />
+            <button type="submit" className="sr-only">Search</button>
+          </QueryForm>
+        )}
         {canImport && view === 'people' && (
           <Link
             className="btn btn-secondary btn-sm"

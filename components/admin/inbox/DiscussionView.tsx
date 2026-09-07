@@ -15,10 +15,16 @@ import { ComposeCancel, ComposeModal } from './ComposeModal'
 //
 // To is colleagues, and that is the whole of what is asked: there is no outside
 // party to write to, only people here to put it to. WHERE it sits is not asked
-// at all - it goes in the address the person starting it calls their own, which
-// the server settles (see InboxPanel). A tick list of addresses was a question
-// with one sensible answer nine times in ten, and the tenth - putting a word to
-// a team by starting it in their inbox - is what the To line is for.
+// at all - it goes in the address the person starting it calls their own AND in
+// the address of everybody it is put to, which the server settles from the
+// names (see the discussions route). A tick list of addresses was a question
+// with one sensible answer nine times in ten, and naming a colleague is a
+// better way of asking the tenth than naming their mailbox.
+//
+// The keyboard starts on To rather than on Subject, which is where a form that
+// addresses something has always started. Subject when there is nobody to
+// address - a site with one person in it - because a To line that is not drawn
+// is not somewhere focus can go.
 
 type StaffMember = { id: string; name: string }
 
@@ -35,7 +41,7 @@ export function DiscussionView({ base, params, inboxId, staff }: Props) {
   const router = useRouter()
   const [subject, setSubject] = useState('')
   const [text, setText] = useState('')
-  const [mentions, setMentions] = useState<string[]>([])
+  const [to, setTo] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -45,7 +51,7 @@ export function DiscussionView({ base, params, inboxId, staff }: Props) {
   const inFlight = useRef(false)
 
   const closeHref = inboxHref(base, params, {})
-  const guard = subject.trim().length > 0 || text.trim().length > 0
+  const guard = subject.trim().length > 0 || text.trim().length > 0 || to.length > 0
 
   const submit = useCallback(async () => {
     if (!subject.trim()) {
@@ -68,7 +74,7 @@ export function DiscussionView({ base, params, inboxId, staff }: Props) {
           inboxIds: [inboxId],
           subject: subject.trim(),
           body: text,
-          mentions,
+          toUserIds: to,
         }),
       })
       const data = await response.json().catch(() => null)
@@ -91,7 +97,7 @@ export function DiscussionView({ base, params, inboxId, staff }: Props) {
       inFlight.current = false
       setBusy(false)
     }
-  }, [base, inboxId, mentions, params, router, subject, text])
+  }, [base, inboxId, params, router, subject, text, to])
 
   return (
     <ComposeModal
@@ -99,7 +105,7 @@ export function DiscussionView({ base, params, inboxId, staff }: Props) {
       closeHref={closeHref}
       guard={guard}
       noun="discussion"
-      focusId="uin-discussion-subject"
+      focusId={staff.length > 0 ? 'uin-discussion-to' : 'uin-discussion-subject'}
     >
       {({ askToLeave }) => (
         <>
@@ -111,8 +117,8 @@ export function DiscussionView({ base, params, inboxId, staff }: Props) {
                   <ColleagueField
                     id="uin-discussion-to"
                     colleagues={staff}
-                    chosen={mentions}
-                    onChange={setMentions}
+                    chosen={to}
+                    onChange={setTo}
                     placeholder="Start typing a name"
                   />
                 </div>

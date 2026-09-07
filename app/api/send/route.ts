@@ -5,9 +5,8 @@ import { errorResponse } from '@/lib/utils'
 import { canReplyToInbox } from '@/modules/unified-inbox/lib/access'
 import { discardDraftAfterSend, getThread } from '@/modules/unified-inbox/lib/db'
 import { applyFollowUpAfterSend } from '@/modules/unified-inbox/lib/follow-up'
-import { htmlToText } from '@/modules/unified-inbox/lib/html'
 import { sendMessage } from '@/modules/unified-inbox/lib/send'
-import { sendProviderReply } from '@/modules/unified-inbox/lib/provider-send'
+import { replyWords, sendProviderReply } from '@/modules/unified-inbox/lib/provider-send'
 import { visibleChannelKeys } from '@/modules/unified-inbox/lib/provider-registry'
 import { SendBody } from '@/modules/unified-inbox/lib/validation'
 
@@ -59,10 +58,12 @@ export async function POST(request: Request) {
     const result = await sendProviderReply({
       threadId: thread.id,
       // These channels carry words, not markup - a chat window and a text
-      // message have nowhere to put a typeface.
-      text: htmlToText(body.bodyHtml),
+      // message have nowhere to put a typeface - so the catalogue goes as the
+      // same lines the text half of an email carries, where it was put.
+      text: await replyWords(body.bodyHtml, body.products ?? []),
       authorUserId: user.id,
       authorName: user.displayName ?? null,
+      products: body.products ?? [],
     })
     if (!result.ok) return errorResponse(result.reason, 400)
     const discarded = await discardDraftAfterSend(body.draftId, user.id)

@@ -92,6 +92,7 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
 
   let chrisInbox = ''
   let emmaInbox = ''
+  let salesInbox = ''
   const chris = 'user-chris'
   const emma = 'user-emma'
   let connectionId = ''
@@ -136,8 +137,35 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
       imapPassword: 'nothing-real',
     })
     connectionId = connection.id
-    chrisInbox = (await lib.createInbox({ name: 'Chris', address: 'chris@deskwell.co.uk', connectionId })).id
-    emmaInbox = (await lib.createInbox({ name: 'Emma', address: 'emma@deskwell.co.uk', connectionId })).id
+    // The two staff accounts first: an individual inbox has an owner, and the
+    // owner is a foreign key.
+    await db.$executeRawUnsafe(`INSERT INTO "Role" ("id", "name") VALUES ('role-staff', 'Staff')`)
+    for (const [id, email, username] of [
+      [chris, 'chris@deskwell.co.uk', 'chris'],
+      [emma, 'emma@deskwell.co.uk', 'emma'],
+    ]) {
+      await db.$executeRawUnsafe(
+        `INSERT INTO "User" ("id", "email", "username", "roleId", "updatedAt")
+         VALUES ($1, $2, $3, 'role-staff', now())`,
+        id, email, username,
+      )
+    }
+
+    // Two people's own addresses and one the business owns. The kinds matter to
+    // every case below: a message nobody is recorded as having written is its
+    // sender's when it left an address that is one person's alone, and the
+    // address's own when it left a shared one.
+    chrisInbox = (await lib.createInbox({
+      name: 'Chris', address: 'chris@deskwell.co.uk', connectionId,
+      kind: 'individual', ownerUserId: chris,
+    })).id
+    emmaInbox = (await lib.createInbox({
+      name: 'Emma', address: 'emma@deskwell.co.uk', connectionId,
+      kind: 'individual', ownerUserId: emma,
+    })).id
+    salesInbox = (await lib.createInbox({
+      name: 'Sales', address: 'sales@deskwell.co.uk', connectionId,
+    })).id
 
     // What the sync now files for a colleague message: inbound, on the
     // recipient's thread, from an address this site serves.
@@ -213,8 +241,9 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
       autoKind: null,
     })
 
-    // And Emma's reply to that customer: ordinary outbound, which the Sent list
-    // has always shown and must carry on showing.
+    // And Emma's reply to that customer: ordinary outbound, collected off the
+    // mail server rather than typed here, so no author is recorded. It went out
+    // as an address that is Emma's alone, which is what makes it hers.
     await db.$executeRawUnsafe(
       `INSERT INTO "uin_messages"
          ("thread_id", "inbox_id", "direction", "channel", "message_id_header", "from_address",
@@ -225,20 +254,34 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
       customerThread,
       emmaInbox,
     )
-    // Two real staff accounts, because the drafts table has a foreign key to
-    // "User" and the Drafts folder is scoped by both address and author.
-    await db.$executeRawUnsafe(`INSERT INTO "Role" ("id", "name") VALUES ('role-staff', 'Staff')`)
-    for (const [id, email, username] of [
-      [chris, 'chris@deskwell.co.uk', 'chris'],
-      [emma, 'emma@deskwell.co.uk', 'emma'],
-    ]) {
-      await db.$executeRawUnsafe(
-        `INSERT INTO "User" ("id", "email", "username", "roleId", "updatedAt")
-         VALUES ($1, $2, $3, 'role-staff', now())`,
-        id, email, username,
-      )
-    }
 
+    // The shared address, and the whole point of the two folders. Somebody asks
+    // sales@ for a price; Chris answers it from this hub, so the row carries him
+    // as its author; and the site's own order confirmation leaves the same
+    // address with no author at all, because no person typed it.
+    const salesThread = await lib.createThread({
+      inboxId: salesInbox,
+      subject: 'Ten chairs',
+      subjectNormalised: 'ten chairs',
+      preview: 'what would ten of these cost',
+      lastMessageAt: new Date('2026-09-03T09:00:00Z'),
+      lastDirection: 'in',
+      unread: true,
+    })
+    await db.$executeRawUnsafe(
+      `INSERT INTO "uin_messages"
+         ("thread_id", "inbox_id", "direction", "channel", "message_id_header", "from_address",
+          "to_addresses", "subject", "snippet", "sent_at", "author_user_id")
+       VALUES ($1, $2, 'out', 'email', 'chris-on-sales@deskwell.co.uk', 'sales@deskwell.co.uk',
+               ARRAY['buyer@example.com']::text[], 'Re: Ten chairs', 'here is the price',
+               TIMESTAMP '2026-09-03 10:00:00', $3),
+              ($1, $2, 'out', 'email', 'order@deskwell.co.uk', 'sales@deskwell.co.uk',
+               ARRAY['buyer@example.com']::text[], 'Your order', 'thank you for your order',
+               TIMESTAMP '2026-09-03 11:00:00', NULL)`,
+      salesThread,
+      salesInbox,
+      chris,
+    )
     // One draft on each address, and one on no address at all - the half-written
     // answer to a chat, which belongs to its author rather than to a folder.
     for (const [author, inboxId, subject] of [
@@ -310,6 +353,82 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
     expect(await lib.countSentMessages([], true, [])).toBe(0)
   })
 
+  // The folder under Yours, which is a PERSON's rather than an address's. Same
+  // rows, one more clause, and it is a clause with a subquery inside an OR
+  // inside an AND - the shape that has failed to parse on a live site before.
+  describe('somebody\u2019s own Sent folder', () => {
+    /** What Chris sees under Yours: he may read all three addresses. */
+    const chrisSees = () => lib.listSentMessages(
+      [chrisInbox, emmaInbox, salesInbox], false, [], 1, 25, chris,
+    )
+
+    it('leaves a colleague\u2019s writing out, on an address they both read', async () => {
+      const rows = await chrisSees()
+      // The colleague message he wrote, and his own reply from the shared
+      // address. Not Emma's reply to the customer, which is hers, and not the
+      // order confirmation, which nobody typed.
+      expect(rows.map((r) => r.subject)).toEqual(['Re: Ten chairs', 'test'])
+      expect(await lib.countSentMessages(
+        [chrisInbox, emmaInbox, salesInbox], false, [], chris,
+      )).toBe(2)
+    })
+
+    it('keeps what somebody sent from a SHARED address', async () => {
+      // The half no address could answer: sales@ is nobody's, so the only thing
+      // that makes this reply Chris's is that the row says he wrote it.
+      const rows = await chrisSees()
+      expect(rows[0]?.subject).toBe('Re: Ten chairs')
+      expect(rows[0]?.inboxId).toBe(salesInbox)
+    })
+
+    it('keeps mail collected off the server that left their own address', async () => {
+      // Nothing in a mailbox records who typed a message, so Emma's reply has no
+      // author. It went out as an address that is hers alone, and it is hers.
+      const rows = await lib.listSentMessages(
+        [chrisInbox, emmaInbox, salesInbox], false, [], 1, 25, emma,
+      )
+      expect(rows.map((r) => r.subject)).toEqual(['Re: A quote please'])
+      expect(await lib.countSentMessages(
+        [chrisInbox, emmaInbox, salesInbox], false, [], emma,
+      )).toBe(1)
+    })
+
+    it('leaves out mail a module sent on its own', async () => {
+      // The order confirmation left sales@ with no author. It belongs to the
+      // address rather than to a person, so it is in nobody's own folder.
+      for (const who of [chris, emma]) {
+        const rows = await lib.listSentMessages(
+          [chrisInbox, emmaInbox, salesInbox], false, [], 1, 25, who,
+        )
+        expect(rows.map((r) => r.subject)).not.toContain('Your order')
+      }
+    })
+
+    it('still holds the address\u2019s own folder to everything that left it', async () => {
+      // The other half of the pair, and the reason the module mail is not lost:
+      // the folder hanging under sales@ on the rail, which names one address and
+      // nobody at all.
+      const rows = await lib.listSentMessages([salesInbox], false, [], 1, 25)
+      expect(rows.map((r) => r.subject)).toEqual(['Your order', 'Re: Ten chairs'])
+      expect(await lib.countSentMessages([salesInbox], false, [])).toBe(2)
+    })
+
+    it('lists nothing for somebody who wrote nothing', async () => {
+      expect(await lib.listSentMessages(
+        [chrisInbox, emmaInbox, salesInbox], false, [], 1, 25, 'user-nobody',
+      )).toEqual([])
+      expect(await lib.countSentMessages(
+        [chrisInbox, emmaInbox, salesInbox], false, [], 'user-nobody',
+      )).toBe(0)
+    })
+
+    it('runs the unrouted-only shape with the author clause on it too', async () => {
+      // No inbox ids at all, which builds the WHERE a different way, with the
+      // person's clause ANDed onto it.
+      expect(await lib.countSentMessages([], true, [], chris)).toBe(0)
+    })
+  })
+
   // The Drafts folder has two shapes - every one of this person's, or narrowed
   // to the address a folder names - and both are raw SQL that nothing else
   // runs. What they must never do is reach a colleague's, which is what the
@@ -338,6 +457,18 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
       expect(await lib.listDrafts(chris, [emmaInbox])).toEqual([])
       // Narrowing to an address leaves out the one filed on no address at all.
       expect(await lib.countDrafts(chris, [chrisInbox, emmaInbox])).toBe(1)
+    })
+
+    it('counts them per address, this person\u2019s own only, unfiled ones left out', async () => {
+      // What the rail asks before it decides whether the folder under a
+      // colleague's name exists at all. Chris has one on chris@ and one filed
+      // nowhere: the second has no folder to appear under, so it is not here.
+      // Emma's, on an address Chris may read, is hers and stays out of his.
+      expect(await lib.countDraftsByInbox(chris)).toEqual({ [chrisInbox]: 1 })
+      expect(await lib.countDraftsByInbox(emma)).toEqual({ [emmaInbox]: 1 })
+      // Nobody's drafts, and a GROUP BY that returns no rows at all - the shape
+      // the rail sees on a site where nothing has been half-written.
+      expect(await lib.countDraftsByInbox('user-nobody')).toEqual({})
     })
 
     it('lists nothing at all when the list of addresses is empty', async () => {

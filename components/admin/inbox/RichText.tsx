@@ -4,6 +4,7 @@ import {
   createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
   type ReactNode,
 } from 'react'
+import { BLOCK_CLASS, BLOCK_OFF_CLASS, openUpAround } from '@/modules/unified-inbox/lib/richtext-blocks'
 import { LinkIcon, ListIcon, NumberedListIcon, PaletteIcon } from './icons'
 
 // The writing box, with enough formatting to write an email in and no more.
@@ -103,9 +104,16 @@ type RichTextValue = {
   rememberSelection: () => void
   /** Put the caret back where it was, and say whether anything is selected. */
   restoreSelection: () => boolean
+  /** Drop a block of markup in where the caret was. */
+  insertHtml: (html: string) => void
   placeholder: string
   label: string
 }
+
+/** What something outside the provider can ask the box to do. Handed out
+ *  through a ref rather than context because the composer DRAWS the provider -
+ *  it is above it, not inside it, so it cannot read the context it supplies. */
+export type RichTextHandle = { insertHtml: (html: string) => void }
 
 const RichTextContext = createContext<RichTextValue | null>(null)
 
@@ -125,13 +133,17 @@ type Props = {
   /** Named by something else on the screen, because the label above the box is
    *  the one the rest of the form uses. */
   label: string
+  /** Filled in with the box's handle while it is on the screen, for whatever
+   *  drew the provider - the catalogue picker, which puts a product where the
+   *  caret is. */
+  handleRef?: { current: RichTextHandle | null }
   /** The box and the buttons, in whatever order the composer wants them. */
   children: ReactNode
 }
 
 /** Holds the writing box and the commands that act on it. Draw a RichTextBox
  *  inside it for the words, and a RichTextTools wherever the buttons belong. */
-export function RichText({ id, value, onChange, placeholder, label, children }: Props) {
+export function RichText({ id, value, onChange, placeholder, label, handleRef, children }: Props) {
   const box = useRef<HTMLDivElement | null>(null)
   /** Where the caret was when the link box was opened. */
   const savedRange = useRef<Range | null>(null)
@@ -188,6 +200,58 @@ export function RichText({ id, value, onChange, placeholder, label, children }: 
     return !!selection && !selection.isCollapsed
   }, [])
 
+  /**
+   * A block of markup, dropped in where the caret was.
+   *
+   * "Where the caret was" is the whole difficulty: whatever asked for this took
+   * the focus off the box to ask - a dialog, a menu - so the browser's own idea
+   * of the selection is somewhere else by now. The remembered range is used when
+   * it is genuinely inside this box, and the end of the writing otherwise, which
+   * is where somebody who has not put a caret anywhere means.
+   *
+   * A line break goes in behind it so there is somewhere to type: a block at the
+   * very end of a contentEditable with nothing after it is a box that will not
+   * take another word.
+   */
+  const insertHtml = useCallback((html: string) => {
+    const el = box.current
+    if (!el) return
+    el.focus()
+    const selection = window.getSelection()
+    const saved = savedRange.current
+    if (selection) {
+      const range = saved && el.contains(saved.commonAncestorContainer)
+        ? saved
+        : (() => {
+          const end = document.createRange()
+          end.selectNodeContents(el)
+          end.collapse(false)
+          return end
+        })()
+      selection.removeAllRanges()
+      selection.addRange(range)
+    }
+    try {
+      document.execCommand('styleWithCSS', false, 'false')
+      document.execCommand('insertHTML', false, `${html}<br />`)
+    } catch {
+      // Same failure the formatting buttons are written to survive: nothing is
+      // lost, and the block goes on the end rather than nowhere at all.
+      el.insertAdjacentHTML('beforeend', `${html}<br />`)
+    }
+    openUpAround(el)
+    rememberSelection()
+    emit()
+  }, [emit, rememberSelection])
+
+  // Handed out while the box is on the screen and taken back when it goes, so
+  // nothing can write into a box that has been unmounted.
+  useEffect(() => {
+    if (!handleRef) return
+    handleRef.current = { insertHtml }
+    return () => { handleRef.current = null }
+  }, [handleRef, insertHtml])
+
   // Only when they differ. Every keystroke already put its own markup in the
   // box, and writing it back would move the caret to the front of it. Here
   // rather than in RichTextBox because this is where the box's ref is made -
@@ -199,11 +263,20 @@ export function RichText({ id, value, onChange, placeholder, label, children }: 
     if (el.innerHTML === value) return
     // An empty box is genuinely empty, so the placeholder underneath shows.
     el.innerHTML = value
+    // A draft written elsewhere - or migrated, with its products run onto the
+    // end - arrives with its blocks shoulder to shoulder. Nothing is emitted
+    // for this: the line breaks are somewhere to put a caret, not something
+    // anybody wrote, and the first keystroke reports them anyway.
+    openUpAround(el)
   }, [value])
 
   const api = useMemo<RichTextValue>(
-    () => ({ id, attach, emit, exec, rememberSelection, restoreSelection, placeholder, label }),
-    [attach, emit, exec, id, label, placeholder, rememberSelection, restoreSelection],
+    () => ({
+      id, attach, emit, exec, rememberSelection, restoreSelection, insertHtml, placeholder, label,
+    }),
+    [
+      attach, emit, exec, id, insertHtml, label, placeholder, rememberSelection, restoreSelection,
+    ],
   )
 
   return <RichTextContext.Provider value={api}>{children}</RichTextContext.Provider>
@@ -211,7 +284,22 @@ export function RichText({ id, value, onChange, placeholder, label, children }: 
 
 /** The words themselves. */
 export function RichTextBox() {
-  const { id, attach, emit, exec, placeholder, label } = useRichText()
+  const { id, attach, emit, exec, rememberSelection, placeholder, label } = useRichText()
+
+  /** The little cross on a block - a product, today - takes the whole block
+   *  out. The box has no idea what it removed, which is the point: a block is
+   *  whatever wears the class, and the thing that put it there decides what
+   *  goes in it. */
+  const onClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    const off = (event.target as Element | null)?.closest?.(`.${BLOCK_OFF_CLASS}`)
+    if (!off) return
+    event.preventDefault()
+    off.closest(`.${BLOCK_CLASS}`)?.remove()
+    // Taking the middle one of three out puts the other two together, and they
+    // need a line between them as much as they ever did.
+    openUpAround(event.currentTarget)
+    emit()
+  }, [emit])
 
   /** The two shortcuts fingers already know. Everything else is a button: a
    *  keystroke nobody was told about is not a feature. */
@@ -235,8 +323,12 @@ export function RichTextBox() {
         aria-label={label}
         data-placeholder={placeholder}
         onInput={emit}
-        onBlur={emit}
+        // Where the caret was, kept on the way out: anything that opens over the
+        // box to ask a question - the link box, the catalogue - takes the focus
+        // with it, and what it puts back has to land where somebody was writing.
+        onBlur={() => { rememberSelection(); emit() }}
         onKeyDown={onKeyDown}
+        onClick={onClick}
         // Arbitrary markup off a clipboard brings a web page's layout, its
         // fonts and its tracking pixels with it. The words are what somebody
         // meant to paste.

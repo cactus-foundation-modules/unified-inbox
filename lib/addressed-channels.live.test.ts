@@ -78,6 +78,12 @@ const MODULE_MIGRATIONS = path.join(process.cwd(), 'modules/unified-inbox/migrat
 
 const KEY = 'a'.repeat(64)
 
+/** Whose lists these are. Every conversation list in the module is a list as
+ *  one PERSON sees it now, because "this is junk" is that reader's opinion
+ *  rather than a fact about the mail (see migrations/041_spam.sql). Nothing in
+ *  this suite marks anything as junk, so any consistent reader will do. */
+const VIEWER = 'user-viewer'
+
 type Extension = (typeof import('@/lib/db/prisma'))['stalePlanRetryExtension']
 
 async function connect(uri: string, extension: Extension): Promise<ExtendedPrismaClient> {
@@ -262,7 +268,7 @@ describe.runIf(shouldRun)('a channel that addressed its conversations, against a
     await arrive('c1', { inboxId: salesId, sourceLabel: 'Get in touch' })
     await arrive('c2', { inboxId: null, sourceLabel: 'Get in touch' })
 
-    const counts = await queries.unreadCounts([salesId, accountsId], false, ['contact-form'])
+    const counts = await queries.unreadCounts(VIEWER, [salesId, accountsId], false, ['contact-form'])
     // Everything filed at sales@ across this suite, the addressed enquiries
     // among them - asked as "more than none" rather than as an exact number,
     // because the tests above deliberately leave rows behind.
@@ -271,6 +277,7 @@ describe.runIf(shouldRun)('a channel that addressed its conversations, against a
     expect(counts['m:contact-form']).toBeGreaterThan(0)
 
     const bySales = await queries.listThreads({
+      viewerUserId: VIEWER,
       inboxIds: [salesId],
       includeUnrouted: false,
       inboxId: salesId,
@@ -279,6 +286,7 @@ describe.runIf(shouldRun)('a channel that addressed its conversations, against a
       perPage: 50,
     })
     const byChannel = await queries.listThreads({
+      viewerUserId: VIEWER,
       inboxIds: [salesId, accountsId],
       includeUnrouted: false,
       // Both, exactly as the screen asks it: the channels this reader may see,
@@ -301,6 +309,7 @@ describe.runIf(shouldRun)('a channel that addressed its conversations, against a
 
     // Somebody on sales@ only, who may read the contact form channel.
     const rows = await queries.listThreads({
+      viewerUserId: VIEWER,
       inboxIds: [salesId],
       includeUnrouted: false,
       providerModules: ['contact-form'],

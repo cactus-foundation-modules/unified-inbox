@@ -3,8 +3,11 @@ import {
   buildSearchHref,
   channelLabel,
   chooseSendingInbox,
+  discussionFrom,
+  discussionTo,
   formatCalendarDate,
   isSearching,
+  leaveSearchHref,
   mergeOrder,
   searchRequestFrom,
   sortByChannelOrder,
@@ -80,6 +83,46 @@ describe('parseInboxParams', () => {
     })
     expect(parseInboxParams({ inbox: 'abc' }).sentOnly).toBe(false)
     expect(parseInboxParams({}).sentOnly).toBe(false)
+  })
+
+  it('reads the Spam tab, which is a folder rather than an inbox id', () => {
+    expect(parseInboxParams({ inbox: 'spam' })).toMatchObject({
+      inboxId: null,
+      spamOnly: true,
+      sentOnly: false,
+      draftsOnly: false,
+      mentionsOnly: false,
+      unroutedOnly: false,
+      providerModule: null,
+    })
+    // An address genuinely called "spam" would be an id, and reading the folder
+    // out of one is how somebody's post disappears into a folder of junk.
+    expect(parseInboxParams({ inbox: 'abc' }).spamOnly).toBe(false)
+    expect(parseInboxParams({}).spamOnly).toBe(false)
+  })
+
+  it('reads a colleague-scoped Spam folder, which is whose bin rather than which address', () => {
+    // `spam:<id>` is the folder under a colleague's name on the rail, and it
+    // means "the bin of whoever owns that address" rather than "the junk filed
+    // at that address". Junk in somebody's own inbox goes into THEIR bin, so
+    // without this a coverer's mis-click would be a message only its owner
+    // could ever get back.
+    const scoped = parseInboxParams({ inbox: 'spam:inbox_7' })
+    expect(scoped.spamOnly).toBe(true)
+    expect(scoped.folderInboxId).toBe('inbox_7')
+    // And it is not read as an address, which would have listed that inbox's
+    // ordinary post under a heading saying Spam.
+    expect(scoped.inboxId).toBeNull()
+  })
+
+  it('falls back to your own bin when the colon carries nothing after it', () => {
+    // A link that lost its value is not a scope, the same as `sent:` - it is
+    // your own spam folder rather than an address nobody has.
+    expect(parseInboxParams({ inbox: 'spam:' })).toMatchObject({
+      spamOnly: true,
+      folderInboxId: null,
+      inboxId: null,
+    })
   })
 
   it('reads which draft is being finished', () => {
@@ -197,6 +240,41 @@ describe('participantLabel and initialsFor', () => {
     expect(initialsFor('Jane Smith')).toBe('JS')
     expect(initialsFor('jane@example.com')).toBe('JE')
     expect(initialsFor('')).toBe('?')
+  })
+})
+
+describe('discussionFrom and discussionTo', () => {
+  const staff = { 'u-emma': 'Emma', 'u-sam': 'Sam', 'u-marcus': 'Marcus', 'u-ada': 'Ada' }
+
+  it('says nothing at all about a conversation that is not a discussion', () => {
+    expect(discussionFrom({ channel: 'email', startedByUserId: 'u-emma' }, staff)).toBeNull()
+    expect(discussionTo({ channel: 'email', toUserIds: ['u-sam'] }, staff)).toBeNull()
+  })
+
+  it('names the colleague who started it', () => {
+    expect(discussionFrom({ channel: 'discussion', startedByUserId: 'u-emma' }, staff)).toBe('Emma')
+  })
+
+  it('falls back to nothing when the starter has left, rather than showing an id', () => {
+    expect(discussionFrom({ channel: 'discussion', startedByUserId: 'u-gone' }, staff)).toBeNull()
+    expect(discussionFrom({ channel: 'discussion', startedByUserId: null }, staff)).toBeNull()
+  })
+
+  it('names who it was put to, and counts the rest past two', () => {
+    expect(discussionTo({ channel: 'discussion', toUserIds: [] }, staff)).toBeNull()
+    expect(discussionTo({ channel: 'discussion', toUserIds: ['u-sam'] }, staff)).toBe('Sam')
+    expect(discussionTo({ channel: 'discussion', toUserIds: ['u-sam', 'u-marcus'] }, staff))
+      .toBe('Sam and Marcus')
+    expect(discussionTo({ channel: 'discussion', toUserIds: ['u-sam', 'u-marcus', 'u-ada'] }, staff))
+      .toBe('Sam, Marcus and 1 other')
+    expect(discussionTo(
+      { channel: 'discussion', toUserIds: ['u-sam', 'u-marcus', 'u-ada', 'u-emma'] }, staff,
+    )).toBe('Sam, Marcus and 2 others')
+  })
+
+  it('leaves out somebody who has left rather than naming an id', () => {
+    expect(discussionTo({ channel: 'discussion', toUserIds: ['u-gone', 'u-sam'] }, staff)).toBe('Sam')
+    expect(discussionTo({ channel: 'discussion', toUserIds: ['u-gone'] }, staff)).toBeNull()
   })
 })
 
@@ -397,6 +475,48 @@ describe('the search dialog', () => {
     }
   })
 
+  it('lands on the search\'s own screen rather than on a quietly shorter list', () => {
+    const href = buildSearchHref(base, carried, { ...searchRequestFrom({}), q: 'invoice' })
+    expect(new URLSearchParams(href.split('?')[1]).get('find')).toBe('1')
+    // The address book half of the same box gets the same screen.
+    const contacts = buildSearchHref(base, carried, {
+      ...searchRequestFrom({}), mode: 'contacts', q: 'Sally',
+    })
+    expect(new URLSearchParams(contacts.split('?')[1]).get('find')).toBe('1')
+    // And it is read back off the address, which is the only thing that draws
+    // the head over the list.
+    expect(parseInboxParams({ q: 'invoice', find: '1' }).searchPage).toBe(true)
+    // The box in the head of the list narrows where it stands and rearranges
+    // nothing.
+    expect(parseInboxParams({ q: 'invoice' }).searchPage).toBe(false)
+  })
+
+  it('leaves whoever the list was assigned to behind, since the search screen cannot say it is on', () => {
+    const href = buildSearchHref(
+      base,
+      { ...carried, assignee: 'u1' },
+      { ...searchRequestFrom({}), q: 'invoice' },
+    )
+    expect(new URLSearchParams(href.split('?')[1]).get('assignee')).toBeNull()
+  })
+
+  it('lets go of the search and every cut it made on the way out', () => {
+    const href = leaveSearchHref(base, {
+      tab: 'unified-inbox', inbox: 'inbox-1', find: '1', q: 'invoice', from: 'Sally',
+      to: 'Sam', subject: 'chairs', att: '1', after: '2026-09-01', before: '2026-09-30',
+      unread: '1', status: 'all', page: '3', id: 'thread-1',
+    })
+    const params = new URLSearchParams(href.split('?')[1])
+    for (const key of ['find', 'q', 'from', 'to', 'subject', 'att', 'after', 'before', 'unread', 'status', 'page']) {
+      expect(params.get(key)).toBeNull()
+    }
+    // Where the reader was standing, and what they had open, stay put: leaving
+    // a search is not leaving the inbox.
+    expect(params.get('inbox')).toBe('inbox-1')
+    expect(params.get('id')).toBe('thread-1')
+    expect(params.get('tab')).toBe('unified-inbox')
+  })
+
   it('leaves open out of the address, because open is what the list shows anyway', () => {
     const href = buildSearchHref(base, carried, {
       ...searchRequestFrom({}),
@@ -452,6 +572,9 @@ describe('the search dialog', () => {
     expect(searchRequestFrom({ inbox: 'drafts', q }).scope).toBe('all')
     expect(searchRequestFrom({ inbox: 'sent', q }).scope).toBe('all')
     expect(searchRequestFrom({ inbox: 'campaigns', q }).scope).toBe('all')
+    // Mentioned is a list of jobs colleagues have asked about rather than a
+    // place the words could reach, so it is not one either.
+    expect(searchRequestFrom({ inbox: 'mentions', q }).scope).toBe('all')
     // The address book is the one that is not a scope but IS a mode.
     expect(searchRequestFrom({ inbox: 'contacts', q })).toMatchObject({ mode: 'contacts', scope: 'all' })
     // A channel another module owns is a perfectly good place to look.

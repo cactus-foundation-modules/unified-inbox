@@ -146,11 +146,25 @@ function absoluteImage(url: unknown, siteUrl: string | null): string | null {
   return siteUrl ? `${siteUrl}${value}` : null
 }
 
+/** Just enough of the shop's settings to address a page. readSettings above is
+ *  three queries about money, and a link has no use for any of it. */
+type PageSettings = Pick<ShopSettings, 'rootStyle' | 'siteUrl'>
+
+async function readPageSettings(): Promise<PageSettings> {
+  const rows = await prisma
+    .$queryRaw<{ config: unknown }[]>`
+      SELECT "config" FROM "shp_settings" WHERE "id" = 'singleton' LIMIT 1
+    `
+    .catch(() => [] as { config: unknown }[])
+  const config = (rows[0]?.config ?? {}) as Record<string, unknown>
+  return { rootStyle: config.productUrlStyle === 'ROOT', siteUrl: getSiteUrlOrNull() }
+}
+
 /** The absolute address of a product's own page. A variation's slug is the
  *  hidden child's, which is the address the shop itself publishes - opening the
  *  parent's page with that variation already chosen. Null with no site address
  *  to hang it off: a relative link in somebody else's inbox goes nowhere. */
-function productPage(slug: unknown, settings: ShopSettings): string | null {
+function productPage(slug: unknown, settings: PageSettings): string | null {
   const value = typeof slug === 'string' ? slug.trim() : ''
   if (!value || !settings.siteUrl) return null
   const path = settings.rootStyle
@@ -455,6 +469,59 @@ export const shopProducts: ProductSource = {
         },
       })
     }
+    return out
+  },
+
+  /**
+   * Where the customer would see each of these, keyed `kind:id`.
+   *
+   * Both kinds are rows of the shop's own product table - a variation is the
+   * hidden child of its listing, published at its own slug so the page opens
+   * with that variation already chosen - so neither one needs shop-variations
+   * to be installed to be addressed. Nothing that is not on sale gets an
+   * address: a listing that has been withdrawn or taken out of the catalogue
+   * has no page to send anybody to, and a link to a 404 is worse than no link.
+   */
+  async pageUrls(refs): Promise<Map<string, string>> {
+    const productIds = refs.filter((r) => r.kind === 'product').map((r) => r.id)
+    const variationIds = refs.filter((r) => r.kind === 'variation').map((r) => r.id)
+    const out = new Map<string, string>()
+    if (productIds.length === 0 && variationIds.length === 0) return out
+
+    const settings = await readPageSettings()
+    // No address for the site is no absolute link, and a relative one on this
+    // screen would point at the admin rather than the shop.
+    if (!settings.siteUrl) return out
+
+    if (productIds.length > 0) {
+      const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+        SELECT p."id", p."slug"
+          FROM "shp_products" p
+         WHERE p."id" IN (${inList(productIds)})
+           AND p."status" = 'ACTIVE'
+           AND p."catalogue_hidden" = false
+      `
+      for (const row of rows) {
+        const url = productPage(row.slug, settings)
+        if (url) out.set(`product:${row.id as string}`, url)
+      }
+    }
+
+    if (variationIds.length > 0) {
+      // No catalogue_hidden test here: a variation is hidden from the catalogue
+      // by definition, which is not the same thing as being unpublished.
+      const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+        SELECT c."id", c."slug"
+          FROM "shp_products" c
+         WHERE c."id" IN (${inList(variationIds)})
+           AND c."status" = 'ACTIVE'
+      `
+      for (const row of rows) {
+        const url = productPage(row.slug, settings)
+        if (url) out.set(`variation:${row.id as string}`, url)
+      }
+    }
+
     return out
   },
 }

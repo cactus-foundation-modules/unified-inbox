@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { avatarHref, inboxHref, initialsFor, moveInOrder, splitInboxes } from '@/modules/unified-inbox/lib/list'
+import { avatarHref, inboxHref, initialsFor, moveInOrder, sortByStoredOrder, splitInboxes } from '@/modules/unified-inbox/lib/list'
 import {
   AssignedIcon, AtIcon, ChevronRightIcon, FileIcon, FolderIcon, InboxIcon, MegaphoneIcon,
-  PeopleIcon, SendIcon,
+  PeopleIcon, SendIcon, SpamIcon,
 } from './icons'
 import { Avatar } from './Avatar'
 import { CheckNowButton, type CheckNowNotice } from './CheckNowButton'
+import { NewMailNotifier } from './NewMailNotifier'
 import { InboxSearch } from './InboxSearch'
 import { ComposeMenu, type ComposeMenuEntry } from './ComposeMenu'
 
@@ -26,14 +27,26 @@ import { ComposeMenu, type ComposeMenuEntry } from './ComposeMenu'
 //
 // FIVE GROUPS, and the split is the useful one rather than the tidy one.
 // "Yours" is the handful of places one person opens all day - their own
-// address, everything at once, what has been handed to them, what they have
-// been tagged in, what they have half-written and what they have sent. "Shared
-// inboxes" is the addresses the business owns, which is where a colour beside
-// each name earns its keep: on a site with six of them the name is read second
-// and the colour first. "Team inboxes" is colleagues' own post this person has
-// been let in to - covering somebody's mail while they are away, working their
-// diary - and each one opens out into that colleague's Sent and Mentioned. Then the channels another module owns, then the three screens that
+// address, everything at once, what they have been tagged in, what they have
+// half-written and what they have sent. Sent there is THEIRS: their own writing,
+// wherever it went out from. What has been HANDED to them is not a place: it
+// shows in their own address, beside the post that arrived there, because a
+// second list somebody has to remember to check is a list that goes unchecked.
+// "Shared inboxes" is the addresses the business owns, which is where a colour
+// beside each name earns its keep: on a site with six of them the name is read
+// second and the colour first. Each one opens out into its own Sent folder -
+// everything that has left it, whoever wrote it, including the mail a module
+// sent on its own - which is the question somebody asks of a shared address and
+// cannot ask of their own folder. "Team inboxes" is colleagues' own post this
+// person has been let in to - covering somebody's mail while they are away,
+// working their diary - and each one opens out into that colleague's Sent,
+// Mentioned and bin, plus whatever this reader has left half-written on the
+// address. Then the channels another module owns, then the three screens that
 // are not a list of post at all.
+//
+// The two groups that open out do it the same way, through Branch below: the
+// coloured dot in front of the name IS the arrow, and it becomes one under the
+// pointer.
 //
 // Two different things put an address under Yours and they are not the same
 // fact. An INDIVIDUAL inbox this person OWNS is their own post. A SHARED inbox
@@ -56,12 +69,15 @@ import { ComposeMenu, type ComposeMenuEntry } from './ComposeMenu'
 // last arrived, because that is the question somebody is really asking when
 // they reach for the button.
 //
-// Three of the groups can be dragged into the order somebody wants them in -
-// the shared addresses, the colleagues' inboxes and the channels - and each of
+// Every group can be dragged into the order somebody wants it in, and each of
 // them keeps to itself: a list is put in an order against the other things in
 // the same list, and a channel landing among the addresses would be nonsense.
-// Only Yours sits still, because where an address sits there is decided by
-// whose it is rather than by where anybody put it.
+//
+// Yours is the odd one out, and the difference is whose order it is. The shared
+// addresses, the colleagues' inboxes and the channels are the SITE's - one
+// arrangement everybody opens - so rearranging them takes the permission that
+// looks after the place. Yours is one person's own working day, seen by nobody
+// else, so it is saved against the person and needs no permission at all.
 //
 // Dropping saves straight away and the rail moves first: the gesture is over in
 // half a second and a list that snaps back while a request finishes reads as a
@@ -102,21 +118,18 @@ type Props = {
    *  colleague's name, or null for All. */
   current: string | null
   /** Who is reading, for the picture and initials at the head of the rail, and
-   *  for what "assigned to me" means. */
+   *  for telling their own address apart from the ones merely pinned to it. */
   me: { id: string; name: string }
   /** Whether to ask for their own picture at all. Off unless the site has
    *  switched it on - see Settings, People. */
   showAvatars: boolean
-  /** Conversations sitting on this person's own desk, across every address they
-   *  can read. */
-  assignedCount: number
   /** Things colleagues have tagged this person in and that they have not dealt
    *  with yet. Open only: something set aside until Thursday is not waiting, and
    *  a number that counts it makes the place look busier than it is. */
   askedCount: number
-  /** Who the list is currently filtered to, so "Assigned to me" can say whether
-   *  it is the thing being looked at. */
-  assignee: string | null
+  /** The order this person keeps the top of the rail in, by entry key. Empty
+   *  when they have never rearranged it, which leaves it as it comes. */
+  railOrder: string[]
   /** How many people are in the address book, beside Contacts. */
   contactCount: number
   /** Whether this person may write campaigns. Its own grant: somebody who may
@@ -126,10 +139,22 @@ type Props = {
   /** Whether conversations that landed in no inbox are this person's to see. */
   showUnrouted: boolean
   unroutedCount: number
-  /** Whether Drafts is worth offering: somebody who can write from nowhere and
-   *  has nothing put down half-written has no use for it. */
+  /** Whether Drafts is worth offering: nothing put down half-written, no
+   *  folder. The panel keeps it while the reader is standing in it, so emptying
+   *  the folder does not take the list they are on out of the rail. */
   showDrafts: boolean
   draftCount: number
+  /** How many this reader has left on each address, keyed by inbox id, for the
+   *  Drafts folder under a colleague's name. Absent or zero means no folder -
+   *  same rule as the tab above. Author-scoped in the query behind it, so a
+   *  number here is always this reader's own writing. */
+  draftCounts: Record<string, number>
+  /** How much is in this person's own spam folder. Always offered, unlike
+   *  Drafts: the folder is where junk goes the moment anybody presses the
+   *  button, so it has to be somewhere they can already see - a folder that
+   *  appears only once it has something in it is a folder people assume ate
+   *  their message. */
+  spamCount: number
   /** Where "Write a message" goes, or null when there is no address this person
    *  may send from - in which case the button is not there at all, rather than
    *  there and disappointing. */
@@ -272,6 +297,76 @@ function Entry({ item }: { item: RailItem }) {
   )
 }
 
+/**
+ * One address that opens out into folders of its own.
+ *
+ * The colour IS the control. It used to be a chevron sitting in front of the
+ * row, which cost every one of those names an indent the other groups did not
+ * have, for an arrow most people never press - so the dot that was inside the
+ * link comes out of it and becomes the button, in exactly the place the dot
+ * stood. It reads as a coloured dot until the pointer is on the row, and turns
+ * into the arrow then.
+ *
+ * Outside the link rather than inside it, because a control inside a link is one
+ * you cannot press without going where the link goes.
+ *
+ * The folders are hidden rather than unmounted, so the button always controls
+ * something that exists.
+ */
+function Branch({ id, item, opens, folders, open, onToggle }: {
+  /** The address, for the id the button points its aria-controls at. */
+  id: string
+  /** The row itself - where it goes, what it is called, whether it can be
+   *  dragged. Its `tone` is the dot, which is why it is not drawn as an Entry. */
+  item: RailItem
+  /** What the button says it opens, said out of sight: "the folders under Sam",
+   *  "the Sent folder under Sales". */
+  opens: string
+  folders: RailItem[]
+  open: boolean
+  onToggle: () => void
+}) {
+  return (
+    <li>
+      <div className="uin-rail-branch">
+        <button
+          type="button"
+          className="uin-rail-twist"
+          aria-expanded={open}
+          aria-controls={`uin-rail-folders-${id}`}
+          onClick={onToggle}
+        >
+          <span className="uin-rail-dot" data-tone={item.tone ?? toneFor(id)} aria-hidden="true" />
+          <span className="uin-rail-twist-icon" aria-hidden="true">{ChevronRightIcon}</span>
+          <span className="sr-only">{open ? `Hide ${opens}` : `Show ${opens}`}</span>
+        </button>
+        <Link
+          className="uin-rail-item"
+          href={item.href}
+          aria-current={item.active ? 'page' : undefined}
+          title={item.title}
+          draggable={item.dragId ? true : undefined}
+          data-uin-drag={item.dragId ? '1' : undefined}
+          data-uin-id={item.dragId}
+          data-uin-dragging={item.dragging ? '1' : undefined}
+          data-uin-over={item.over ? '1' : undefined}
+        >
+          <span className="uin-rail-name">{item.name}</span>
+          {item.count}
+          {item.hint && <span className="sr-only">. {item.hint}</span>}
+        </Link>
+      </div>
+      <ul
+        id={`uin-rail-folders-${id}`}
+        className="uin-rail-list uin-rail-sub"
+        hidden={!open}
+      >
+        {folders.map((folder) => <Entry key={folder.key} item={folder} />)}
+      </ul>
+    </li>
+  )
+}
+
 /** What is said, out of sight, on a row somebody can move. The gesture itself
  *  is a mouse gesture; this is the same job for anybody who is not holding
  *  one. */
@@ -385,8 +480,8 @@ function useRailDrag(enabled: boolean, move: (fromId: string, toId: string) => v
 
 
 export function NavRail({
-  base, params, inboxes, channels, allCount, current, me, showAvatars, assignedCount, askedCount, assignee,
-  showUnrouted, unroutedCount, showDrafts, draftCount, contactCount, showCampaigns, composeHref,
+  base, params, inboxes, channels, allCount, current, me, showAvatars, askedCount, railOrder,
+  showUnrouted, unroutedCount, showDrafts, draftCount, draftCounts, spamCount, contactCount, showCampaigns, composeHref,
   composeEntries,
   defaultInboxId, canReorder, canCheckNow, autoCheckSeconds, lastCheckedAt, timezone,
 }: Props) {
@@ -402,6 +497,10 @@ export function NavRail({
     setNoticeSeq((seq) => seq + 1)
   }, [])
   const [order, setOrder] = useState(inboxes)
+  // The top of the rail in this person's own order, held as keys. Optimistic
+  // like the two site-wide orders below it and for the same reason: a list that
+  // snaps back while a request finishes reads as a bug.
+  const [mineOrder, setMineOrder] = useState(railOrder)
   // The channels in the order the site keeps them, beside the addresses and for
   // the same reason: a drag has to move on the screen before the save comes
   // back, or a list that snaps back mid-gesture reads as a bug.
@@ -412,6 +511,10 @@ export function NavRail({
   // would make every list below reload to draw three static rows.
   const [opened, setOpened] = useState<string[]>([])
   const [error, setError] = useState('')
+  // Whether this browser can be nudged at all, which only the browser knows.
+  // See the box at the foot of the rail: on a site with no mail account the
+  // bell is the only thing in it, and an empty bordered box is worse than none.
+  const [bellShown, setBellShown] = useState(false)
 
   // When a check this page ran actually opened the accounts, or null until one
   // has. Held beside what the server said rather than replacing it, and the
@@ -444,6 +547,15 @@ export function NavRail({
     lastServerKey.current = serverKey
     setOrder(inboxes)
   }, [serverKey, inboxes])
+
+  // And for the personal order, which the server sends back on every draw.
+  const mineKey = railOrder.join('|')
+  const lastMineKey = useRef(mineKey)
+  useEffect(() => {
+    if (lastMineKey.current === mineKey) return
+    lastMineKey.current = mineKey
+    setMineOrder(railOrder)
+  }, [mineKey, railOrder])
 
   // The same bargain for the channels. Their own key rather than a shared one:
   // an address arriving must not throw away a channel somebody is halfway
@@ -541,8 +653,8 @@ export function NavRail({
 
   // Changing where you are always goes back to page one, drops whichever
   // conversation was open - it belongs to the list being left - and lets go of
-  // "assigned to me", which is a place of its own in this rail rather than a
-  // filter that follows you around.
+  // whoever the last list was narrowed to, which is a cut made on one list
+  // rather than a thing that follows somebody around the rail.
   const link = (inbox: string | null, changes: Record<string, string | null> = {}) =>
     inboxHref(base, params, {
       inbox, page: null, id: null, person: null, compose: null, draft: null, assignee: null,
@@ -552,12 +664,15 @@ export function NavRail({
       ...changes,
     })
 
-  // Three lists that can be put in an order, and one that cannot. The addresses
-  // under Yours sit still: they are where they are because of whose they are,
-  // and a person's own inbox moving about the top of the rail would be one
-  // colleague rearranging what everybody else opens first. Everything else -
-  // the shared addresses, the colleagues' inboxes, the channels - is a list
-  // somebody looks after, and looking after it means saying what order it is in.
+  // What the address a nudge is about is called. Null when this person has not
+  // been given one of their own, where the honest answer is "everything you can
+  // read" and naming an address would be a plain untruth.
+  const ownInboxName = inboxes.find((inbox) => inbox.id === defaultInboxId)?.name ?? null
+
+  // The three lists whose order is the SITE's - the shared addresses, the
+  // colleagues' inboxes, the channels. One arrangement everybody opens, so
+  // arranging them is a job for whoever looks after the place. Yours is the
+  // fourth list and is nothing like them: see `orderedMine` below.
   const sharedDraggable = canReorder && shared.length > 1
   const teamDraggable = canReorder && team.length > 1
   const channelsDraggable = canReorder && channelOrder.length > 1
@@ -576,7 +691,18 @@ export function NavRail({
     key: inbox.id,
     href: link(inbox.id),
     active: current === inbox.id,
-    tone: toneFor(inbox.id),
+    // An address that is this reader's OWN wears a person rather than one of
+    // the five colours. The colours are how a shared address is recognised at a
+    // glance among six of them; there is only ever one of these, it is the row
+    // they open on every morning, and saying "this one is you" is more use than
+    // saying which of five arbitrary tones it happens to hash to.
+    //
+    // A SHARED address merely pinned to the top keeps its colour: purchasing@ is
+    // still the team's, and it is the same address, in the same colour, on
+    // everybody else's rail.
+    ...(inbox.kind === 'individual' && inbox.ownerUserId === me.id
+      ? { icon: AssignedIcon }
+      : { tone: toneFor(inbox.id) }),
     name: inbox.name,
     title: drag
       ? inbox.address
@@ -595,7 +721,15 @@ export function NavRail({
   })
 
 
-  const mine: RailItem[] = [
+  // The default arrangement of the top of the rail, before this person's own
+  // order is applied to it.
+  //
+  // There is no "Assigned to me" here any more. What has been handed to
+  // somebody now shows in the address they open on, beside the post that
+  // arrived there - which is the screen they are already looking at, rather
+  // than a second list they had to remember to go and check. See
+  // `alsoAssignedTo` in lib/db.ts for the widening that does it.
+  const mineBase: RailItem[] = [
     // Ahead of All, because they are what this person opened the hub to read.
     ...yours.map((inbox) => inboxEntry(inbox, null)),
     {
@@ -603,29 +737,17 @@ export function NavRail({
       // Named rather than left out: with an address of their own, an empty
       // inbox param means "take me to mine", so All has to say so out loud.
       href: link('all'),
-      active: current === null && !assignee,
+      active: current === null,
       icon: InboxIcon,
       name: 'All',
       count: <Count value={allCount} />,
     },
     {
-      // A place rather than a filter chip. "What is on my desk" is the first
-      // question of the morning on any shared address, and it was a dropdown
-      // and two presses away.
-      key: 'assigned',
-      href: link('all', { assignee: me.id }),
-      active: assignee === me.id,
-      icon: AssignedIcon,
-      name: 'Assigned to me',
-      title: 'Conversations handed to you, across every address you can read',
-      count: <Count value={assignedCount} word="waiting" quiet />,
-    },
-    {
-      // Beside "Assigned to me", because it answers the other half of the same
-      // question. Being handed a conversation and being asked about one are two
-      // different acts - one moves the whole thing onto your desk, the other
-      // asks you about a bit of it - and a colleague who only ever gets the
-      // second had nowhere at all to see them.
+      // Being handed a conversation and being asked about one are two different
+      // acts - one moves the whole thing onto your desk, the other asks you
+      // about a bit of it. The first now lands in the address above; this is
+      // the second, and a colleague who only ever gets it would otherwise have
+      // nowhere at all to see them.
       key: 'mentions',
       href: link('mentions'),
       active: current === 'mentions',
@@ -652,9 +774,84 @@ export function NavRail({
       active: current === 'sent',
       icon: SendIcon,
       name: 'Sent',
-      title: 'Everything that has left, from every address you can read',
+      // Yours, and it says so. What has left a SHARED address, whoever wrote
+      // it, hangs under that address further down the rail - which is where
+      // somebody goes to ask "has that quote gone out" rather than "did I send
+      // it". A folder under your own name holding a colleague's replies is not
+      // your Sent folder at all.
+      title: 'Everything you have sent, from your own address and every shared one you write from',
+    },
+    {
+      // Last under Yours, which is where every mail program in the world puts
+      // it: a place you go on purpose rather than one you pass through, and the
+      // one folder here whose number going up is not good news.
+      //
+      // Yours alone, and named so. What one person files as junk is what a
+      // colleague reads every Tuesday, so nothing here changed anybody else's
+      // screen - which is worth saying out loud, because "I marked it as spam"
+      // otherwise sounds like something that happened to the whole team.
+      //
+      // The count is quiet, like the two above it rather than like an address:
+      // an address's number means "there is something new to read", and this
+      // one means "there is something in the bin".
+      key: 'spam',
+      href: link('spam'),
+      active: current === 'spam',
+      icon: SpamIcon,
+      name: 'Spam',
+      title: 'What you have marked as junk. Yours alone - nobody else sees this list.',
+      count: <Count value={spamCount} word="marked as junk" quiet />,
     },
   ]
+
+  // ...and the same list in the order this person put it in.
+  //
+  // The one group on the rail whose order is NOT the site's. The addresses
+  // below, the colleagues' inboxes and the channels are one arrangement
+  // everybody opens, so arranging them takes the permission that looks after
+  // the place. These half-dozen are one person's own working day - somebody who
+  // lives in Sent wants it second, somebody who never opens it wants it last -
+  // and nobody else's screen changes by a pixel. So it needs no permission at
+  // all, and it is saved against the person rather than against the site.
+  const orderedMine = sortByStoredOrder(mineBase, mineOrder)
+  const mineDraggable = orderedMine.length > 1
+
+  // A plain function rather than a useCallback: the drag hook reads it when a
+  // gesture ends and never as a dependency, and the list it closes over is
+  // rebuilt on every render anyway, so a memo here would only be a memo the
+  // compiler has to reason about.
+  const moveMine = (fromKey: string, toKey: string) => {
+    const keys = orderedMine.map((item) => item.key)
+    const next = moveInOrder(keys, keys.indexOf(fromKey), keys.indexOf(toKey))
+    if (next === keys) return
+    const previous = mineOrder
+    setMineOrder(next)
+    // Told ahead of the answer, exactly as the site-wide orders are: a good save
+    // asks for a refresh, and a key still describing the old order would take
+    // that refresh as somebody else's rearrangement and put the rail back.
+    lastMineKey.current = next.join('|')
+    void saveOrder(
+      '/api/m/unified-inbox/rail-order',
+      { keys: next },
+      () => {
+        lastMineKey.current = previous.join('|')
+        setMineOrder(previous)
+      },
+    )
+  }
+
+  const mineDrag = useRailDrag(mineDraggable, moveMine)
+
+  const mine: RailItem[] = orderedMine.map((item) => (mineDraggable ? {
+    ...item,
+    // Kept rather than replaced: "nobody else can see this one" is worth
+    // hearing before you answer from it, and it does not stop being true
+    // because the row can also be moved.
+    hint: item.hint ? `${item.hint} ${REORDER_HINT}` : REORDER_HINT,
+    dragId: item.key,
+    dragging: mineDrag.state.dragId === item.key,
+    over: mineDrag.state.overId === item.key && mineDrag.state.dragId !== item.key,
+  } : item))
 
   // ---- colleagues' own post -------------------------------------------
   //
@@ -665,28 +862,52 @@ export function NavRail({
   // "has that quote gone out", "what has anybody asked them about". Everything
   // else about the address is still reachable by standing in it.
   //
-  // No Drafts. A draft belongs to whoever wrote it (see lib/drafts.ts), so a
-  // folder under somebody else's name could only ever hold this reader's own
-  // writing, under a heading saying it was theirs.
+  // Drafts is here too, and it is the reader's OWN writing on that address -
+  // a draft belongs to whoever wrote it (see lib/drafts.ts), so a folder under
+  // somebody else's name could hold nothing else. Which is why it is called
+  // "Your drafts" rather than "Drafts": under Sam's name, the short word would
+  // read as Sam's half-written messages, and those are nobody's to see but
+  // Sam's. It is offered only where there is something in it, so an address
+  // this reader has never written from does not carry the row at all.
   //
   // The folders are scoped to THAT address in the query string, so nothing
   // under a colleague's name is ever this reader's own list wearing the
   // colleague's name - the panel resolves the id against the addresses this
   // person may read before it fetches a row (E17).
 
-  /** The folders under one colleague. Mentioned only where there is somebody to
-   *  have been mentioned: an address whose owner's account has gone belongs to
-   *  nobody, and a list of what nobody has been asked about is a heading over an
-   *  empty box for ever. */
+  /** The folders under one colleague. Mentioned - and the bin - only where there
+   *  is somebody for them to belong to: an address whose owner's account has gone
+   *  belongs to nobody, and a list of what nobody has been asked about is a
+   *  heading over an empty box for ever. Your drafts only where you have left
+   *  one on that address, for the same reason the tab above comes and goes. */
+  /** The one folder an address always has: everything that has left it, whoever
+   *  wrote it. Under a colleague's name it answers "has Sam's quote gone out";
+   *  under a shared address it is the address's own post, which is the only
+   *  place the mail a module sent on its own can be read. Both groups use it,
+   *  and one of them has nothing else. */
+  const sentFolderFor = (inbox: TabInbox): RailItem => ({
+    key: `${inbox.id}:sent`,
+    href: link(`sent:${inbox.id}`),
+    active: current === `sent:${inbox.id}`,
+    icon: SendIcon,
+    name: 'Sent',
+    title: `Everything that has left ${inbox.address}, whoever sent it`,
+  })
+
   const foldersFor = (inbox: TabInbox): RailItem[] => [
-    {
-      key: `${inbox.id}:sent`,
-      href: link(`sent:${inbox.id}`),
-      active: current === `sent:${inbox.id}`,
-      icon: SendIcon,
-      name: 'Sent',
-      title: `Everything that has left ${inbox.address}`,
-    },
+    // First, and above the colleague's own two folders, because it is the one
+    // thing under their name that is yours: the writing you left on their
+    // address, waiting for you to finish it.
+    ...((draftCounts[inbox.id] ?? 0) > 0 || current === `drafts:${inbox.id}` ? [{
+      key: `${inbox.id}:drafts`,
+      href: link(`drafts:${inbox.id}`),
+      active: current === `drafts:${inbox.id}`,
+      icon: FileIcon,
+      name: 'Your drafts',
+      title: `Messages you have started on ${inbox.address} and not sent`,
+      count: <Count value={draftCounts[inbox.id] ?? 0} word="saved" quiet />,
+    }] : []),
+    sentFolderFor(inbox),
     ...(inbox.ownerUserId ? [{
       key: `${inbox.id}:mentions`,
       href: link(`mentions:${inbox.id}`),
@@ -694,6 +915,24 @@ export function NavRail({
       icon: AtIcon,
       name: 'Mentioned',
       title: `Conversations here that ${inbox.ownerName ?? 'they'} have been tagged in`,
+    }] : []),
+    // Their bin, and it is here because of where the junk goes rather than as a
+    // convenience. Somebody covering this colleague's post is working it on
+    // their behalf, so what they throw away lands in THIS colleague's spam
+    // folder rather than in their own (see spamOwnerFor). Without somewhere to
+    // look at it, a mis-click while covering would be a message only its owner
+    // could ever get back.
+    //
+    // Only where there is an owner - the same guard Mentioned wears just above,
+    // and for the same reason. A bin belongs to a person; an address whose
+    // colleague's account has gone has nobody whose bin it could be.
+    ...(inbox.ownerUserId ? [{
+      key: `${inbox.id}:spam`,
+      href: link(`spam:${inbox.id}`),
+      active: current === `spam:${inbox.id}`,
+      icon: SpamIcon,
+      name: 'Spam',
+      title: `What has been thrown away out of ${inbox.ownerName ?? 'their'} post`,
     }] : []),
   ]
 
@@ -704,7 +943,7 @@ export function NavRail({
   // answer and it is already on the screen.
   const currentFolderInbox = (() => {
     if (!current) return null
-    for (const folder of ['sent', 'drafts', 'mentions']) {
+    for (const folder of ['sent', 'drafts', 'mentions', 'spam']) {
       if (current.startsWith(`${folder}:`)) return current.slice(folder.length + 1)
     }
     return null
@@ -798,7 +1037,7 @@ export function NavRail({
 
         <div className="uin-rail-group">
           <p className="uin-rail-heading" id="uin-rail-mine">Yours</p>
-          <ul className="uin-rail-list" aria-labelledby="uin-rail-mine">
+          <ul className="uin-rail-list" aria-labelledby="uin-rail-mine" {...mineDrag.handlers}>
             {mine.map((item) => <Entry key={item.key} item={item} />)}
           </ul>
         </div>
@@ -807,10 +1046,22 @@ export function NavRail({
           <div className="uin-rail-group">
             <p className="uin-rail-heading" id="uin-rail-team">Shared inboxes</p>
             <ul className="uin-rail-list" aria-labelledby="uin-rail-team" {...sharedDrag.handlers}>
+              {/* One folder each, and it is the one the rail could not otherwise
+                  reach. Sent under Yours is now this reader's own writing, so
+                  everything that left sales@ - a colleague's reply, an order
+                  confirmation no person typed - is read here, under the address
+                  it belongs to. Nothing else hangs under a shared name: a bin
+                  and a Mentioned list belong to a PERSON, and a shared address
+                  is nobody. */}
               {shared.map((inbox) => (
-                <Entry
+                <Branch
                   key={inbox.id}
+                  id={inbox.id}
                   item={inboxEntry(inbox, sharedDraggable ? sharedDrag.state : null)}
+                  opens={`the Sent folder under ${inbox.name}`}
+                  folders={[sentFolderFor(inbox)]}
+                  open={isOpened(inbox.id)}
+                  onToggle={() => toggleOpen(inbox.id)}
                 />
               ))}
             </ul>
@@ -828,58 +1079,24 @@ export function NavRail({
                 // reach, and calling it "Unknown" would be worse than calling it
                 // what it is.
                 const label = inbox.ownerName ?? inbox.name
-                const open = isOpened(inbox.id)
+                const item = inboxEntry(inbox, teamDraggable ? teamDrag.state : null)
                 return (
-                  <li key={inbox.id}>
-                    <div className="uin-rail-branch">
-                      {/* Outside the link rather than inside it, because a
-                          control inside a link is one you cannot press without
-                          going where the link goes. */}
-                      <button
-                        type="button"
-                        className="uin-rail-twist"
-                        aria-expanded={open}
-                        aria-controls={`uin-rail-folders-${inbox.id}`}
-                        onClick={() => toggleOpen(inbox.id)}
-                      >
-                        <span className="uin-rail-twist-icon" aria-hidden="true">{ChevronRightIcon}</span>
-                        <span className="sr-only">
-                          {open ? `Hide ${label}'s folders` : `Show ${label}'s folders`}
-                        </span>
-                      </button>
-                      <Link
-                        className="uin-rail-item"
-                        href={link(inbox.id)}
-                        aria-current={current === inbox.id ? 'page' : undefined}
-                        title={`${inbox.address} - ${label}'s own post, shared with you`}
-                        draggable={teamDraggable ? true : undefined}
-                        data-uin-drag={teamDraggable ? '1' : undefined}
-                        data-uin-id={teamDraggable ? inbox.id : undefined}
-                        data-uin-dragging={teamDraggable && teamDrag.state.dragId === inbox.id ? '1' : undefined}
-                        data-uin-over={
-                          teamDraggable
-                            && teamDrag.state.overId === inbox.id
-                            && teamDrag.state.dragId !== inbox.id
-                            ? '1'
-                            : undefined
-                        }
-                      >
-                        <span className="uin-rail-dot" data-tone={toneFor(inbox.id)} aria-hidden="true" />
-                        <span className="uin-rail-name">{label}</span>
-                        <Count value={inbox.count} />
-                        {teamDraggable && <span className="sr-only">. {REORDER_HINT}</span>}
-                      </Link>
-                    </div>
-                    {/* Hidden rather than unmounted, so the button above always
-                        controls something that exists. */}
-                    <ul
-                      id={`uin-rail-folders-${inbox.id}`}
-                      className="uin-rail-list uin-rail-sub"
-                      hidden={!open}
-                    >
-                      {foldersFor(inbox).map((item) => <Entry key={item.key} item={item} />)}
-                    </ul>
-                  </li>
+                  <Branch
+                    key={inbox.id}
+                    id={inbox.id}
+                    item={{
+                      ...item,
+                      // Named for the person rather than for the address, which
+                      // is how anybody covering Sam's post thinks of it.
+                      name: label,
+                      title: `${inbox.address} - ${label}'s own post, shared with you`,
+                      hint: teamDraggable ? REORDER_HINT : undefined,
+                    }}
+                    opens={`the folders under ${label}`}
+                    folders={foldersFor(inbox)}
+                    open={isOpened(inbox.id)}
+                    onToggle={() => toggleOpen(inbox.id)}
+                  />
                 )
               })}
             </ul>
@@ -902,36 +1119,52 @@ export function NavRail({
           </ul>
         </div>
 
-        {canCheckNow && (
-          <div className="uin-rail-foot">
-            {/* Whatever the check came back with, in the box the button lives in
-                rather than off under the rail: it is the answer to a press
-                somebody has just made, and it is beside the thing they pressed.
-                Three seconds, then it fades. */}
-            {notice && (
-              <div
-                key={noticeSeq}
-                className="uin-rail-notice"
-                data-fade={notice.tone === 'ok' ? '1' : undefined}
-              >
-                <div className={`alert ${notice.tone === 'ok' ? 'alert-info' : 'alert-danger'}`} role="status">
-                  {notice.text}
-                </div>
+        {/* The box stuck to the foot of the rail. Two things live in it and they
+            are not the same thing: fetching mail on the spot, which takes the
+            permission and a mail account to fetch from, and asking the browser
+            to nudge somebody when post arrives, which anybody who can read the
+            hub can have. It used to be gated as one, which meant a site whose
+            only channels are a chat widget and an enquiry form - no mail
+            account anywhere - had no bell at all. */}
+        <div className="uin-rail-foot" data-bare={!canCheckNow && !bellShown ? '1' : undefined}>
+          {/* Whatever the check came back with, in the box the button lives in
+              rather than off under the rail: it is the answer to a press
+              somebody has just made, and it is beside the thing they pressed.
+              Three seconds, then it fades. */}
+          {canCheckNow && notice && (
+            <div
+              key={noticeSeq}
+              className="uin-rail-notice"
+              data-fade={notice.tone === 'ok' ? '1' : undefined}
+            >
+              <div className={`alert ${notice.tone === 'ok' ? 'alert-info' : 'alert-danger'}`} role="status">
+                {notice.text}
               </div>
-            )}
-            <div className="uin-rail-foot-row">
-              {/* When the post last arrived, which is the question the button
-                  beside it answers. Stuck to the bottom of the rail so it can be
-                  read without scrolling forty conversations to find it. */}
+            </div>
+          )}
+          <div className="uin-rail-foot-row">
+            {/* When the post last arrived, which is the question the button
+                beside it answers. Stuck to the bottom of the rail so it can be
+                read without scrolling forty conversations to find it. */}
+            {canCheckNow && (
               <span className="uin-rail-updated">Updated: {updatedLabel(checkedAt, timezone)}</span>
+            )}
+            <NewMailNotifier
+              userId={me.id}
+              scopeName={ownInboxName}
+              listHref={link(defaultInboxId)}
+              threadHref={(threadId) => link(defaultInboxId, { id: threadId })}
+              onAvailable={setBellShown}
+            />
+            {canCheckNow && (
               <CheckNowButton
                 onResult={showNotice}
                 onChecked={setOwnCheckedAt}
                 autoSeconds={autoCheckSeconds}
               />
-            </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
       {/* Whatever a refused rearrangement had to say. It is the answer to a

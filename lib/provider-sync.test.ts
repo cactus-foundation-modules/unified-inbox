@@ -19,6 +19,10 @@ const allConversationProviders = vi.hoisted(() => vi.fn())
 // tests that care about reopening say so themselves.
 const reopenOnReply = vi.hoisted(() => vi.fn(async (): Promise<'snoozed' | 'done' | null> => null))
 const recordEvent = vi.hoisted(() => vi.fn())
+// Nobody is blocked unless a test says so. Mocked rather than left to reach the
+// database, because collecting a channel now asks the site's block list once per
+// pass and this suite has no database at all.
+const blockedSenderSet = vi.hoisted(() => vi.fn(async (): Promise<Set<string>> => new Set()))
 
 vi.mock('./db', () => ({
   providerThreadState,
@@ -31,6 +35,7 @@ vi.mock('./db', () => ({
   recordEvent,
 }))
 vi.mock('./provider-registry', () => ({ allConversationProviders }))
+vi.mock('./blocked-senders', () => ({ blockedSenderSet }))
 
 const { syncProvider, syncAllProviders } = await import('./provider-sync')
 
@@ -87,11 +92,50 @@ beforeEach(() => {
   reopenOnReply.mockReset().mockResolvedValue(null)
   recordEvent.mockReset().mockResolvedValue(undefined)
   allConversationProviders.mockReset().mockResolvedValue([])
+  blockedSenderSet.mockReset().mockResolvedValue(new Set())
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
 
 describe('syncProvider', () => {
+  it('collects nothing at all from a party the site has blocked', async () => {
+    // The block covers the channels as well as the post, and it has to: an
+    // enquiry form is the obvious way round an email block - the same person,
+    // the same address, arriving through a different door into the same inbox.
+    // So the conversation is not opened, not filed and not counted. Not opened
+    // matters on its own: asking the owning module for the messages is the
+    // expensive half, and there is nothing here worth paying for.
+    blockedSenderSet.mockResolvedValue(new Set(['ada@example.com']))
+    const thread = vi.fn().mockResolvedValue({ summary: summary(), messages: [message()] })
+
+    const outcome = await syncProvider(
+      resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }),
+    )
+
+    expect(thread).not.toHaveBeenCalled()
+    expect(upsertProviderThread).not.toHaveBeenCalled()
+    expect(insertProviderMessage).not.toHaveBeenCalled()
+    expect(outcome.conversations).toBe(0)
+    expect(outcome.messages).toBe(0)
+    // Refused rather than broken: the pass is still a success, it simply had
+    // nothing to bring back.
+    expect(outcome.ok).toBe(true)
+  })
+
+  it('lets everybody else through, including a party with no address at all', async () => {
+    // A live chat with an anonymous visitor and a call from a withheld number
+    // have nobody to match against, and refusing on a name would refuse the
+    // wrong people.
+    blockedSenderSet.mockResolvedValue(new Set(['ada@example.com']))
+    const anonymous = summary({ participant: { name: 'Someone', email: null, phone: null } })
+    const thread = vi.fn().mockResolvedValue({ summary: anonymous, messages: [message()] })
+
+    await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [anonymous] }), thread }))
+
+    expect(upsertProviderThread).toHaveBeenCalled()
+    expect(insertProviderMessage).toHaveBeenCalled()
+  })
+
   it('wakes a sleeping conversation when the party writes on it again', async () => {
     reopenOnReply.mockResolvedValue('snoozed')
     const thread = vi.fn().mockResolvedValue({ summary: summary(), messages: [message()] })

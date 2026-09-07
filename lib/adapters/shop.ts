@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/db/prisma'
 import type {
-  ContextAdapter, ContextItem, ContextQuery, ContextSection, LinkSuggestion, LinkTarget,
+  ContextAdapter, ContextHint, ContextItem, ContextQuery, ContextSection, LinkSuggestion, LinkTarget,
 } from './types'
 import { SECTION_LIMIT, SUGGEST_LIMIT } from './types'
 import { detailLine, humanStatus, inList, likeTerm, money, shortDate, toDate } from './format'
@@ -20,6 +20,7 @@ export const shopAdapter: ContextAdapter = {
   tables: ['shp_orders'],
   linkKind: 'order',
   linkLabel: 'Order',
+  hintSupersededBy: 'order',
 
   async load(query: ContextQuery): Promise<ContextSection | null> {
     const tz = await getSiteTimezone()
@@ -56,6 +57,45 @@ export const shopAdapter: ContextAdapter = {
       items,
       total,
       moreHref: total > items.length ? 'm/shop/orders' : null,
+    }
+  },
+
+  /**
+   * "Existing customer", beside the conversation, when the person writing has
+   * bought something before.
+   *
+   * The one fact about a stranger's message that changes how it gets answered,
+   * and the one the answerer otherwise has to go and look for. Pressing it opens
+   * the orders list already narrowed to them rather than one particular order,
+   * because at this point nobody knows which order they mean - that is rather
+   * the point of the trip.
+   *
+   * Searched on the address the most recent order was placed with, not on the
+   * one they happen to be writing from: those are the same address nine times in
+   * ten and the orders list can only be given one, so it gets the one that
+   * definitely has orders under it.
+   */
+  async hint(query: ContextQuery): Promise<ContextHint | null> {
+    if (query.emails.length === 0) return null
+
+    const rows = await prisma.$queryRaw<{ email: string; total: bigint }[]>`
+      SELECT "customer_email" AS email, COUNT(*) OVER () AS total
+        FROM "shp_orders"
+       WHERE lower("customer_email") IN (${inList(query.emails)})
+       ORDER BY "created_at" DESC
+       LIMIT 1
+    `
+    const row = rows[0]
+    if (!row?.email) return null
+    const total = Number(row.total)
+
+    return {
+      id: 'shop:existing-customer',
+      label: 'Existing customer',
+      title: total === 1
+        ? 'They have ordered from the shop once before. Opens that order.'
+        : `They have ordered from the shop ${total} times before. Opens their orders.`,
+      href: `m/shop/orders?search=${encodeURIComponent(row.email)}`,
     }
   },
 

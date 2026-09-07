@@ -95,6 +95,8 @@ export type Settings = {
    *  values are channel keys and always were for every channel that existed
    *  then. See lib/provider-registry.ts. */
   hiddenChannelModules: string[]
+  /** Whether post arriving at a colleague's own address is handed to them. */
+  autoAssignOwnPost: boolean
 }
 
 export type StaffMember = { id: string; name: string; email: string }
@@ -117,6 +119,16 @@ export type CollectionStat = {
 
 export type RetentionForecast = { cutoff: string; due: number; keptForLinks: number }
 
+/** One sender the site refuses. `blockedByUserId` resolves against `users` on
+ *  the same payload, and is null where that colleague's account has since gone -
+ *  which is a reason to name nobody, never a reason to let the sender back in. */
+export type BlockedSenderRow = {
+  id: string
+  address: string
+  blockedByUserId: string | null
+  createdAt: string
+}
+
 export type Payload = {
   connections: Connection[]
   inboxes: Inbox[]
@@ -138,6 +150,9 @@ export type Payload = {
   users: StaffMember[]
   /** Every channel another module publishes, whether or not it is switched on. */
   channels: ChannelRow[]
+  /** Everybody the site refuses, newest first. This screen is the only place a
+   *  block can be lifted - the button that makes one is on a conversation. */
+  blockedSenders: BlockedSenderRow[]
   encryptionReady: boolean
 }
 

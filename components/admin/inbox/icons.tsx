@@ -48,6 +48,13 @@ export const MoreIcon = <svg {...ICON}><circle cx="12" cy="5.5" r="1.4" fill="cu
 export const AlarmIcon = <svg {...ICON}><circle cx="12" cy="13" r="7" /><path d="M12 9.5V13l2.5 1.5" /><path d="m4 6 3-2.5" /><path d="m20 6-3-2.5" /></svg>
 export const ChevronRightIcon = <svg {...ICON}><path d="m9.5 6 6 6-6 6" /></svg>
 export const ChevronLeftIcon = <svg {...ICON}><path d="m14.5 6-6 6 6 6" /></svg>
+/** Junk. A waste basket, which is what every mail program in the world draws
+ *  for this and therefore the one drawing nobody has to learn. Deliberately NOT
+ *  the octagonal "no entry" sign: that is what blocking somebody means, and
+ *  these are two different presses with two different consequences. */
+export const SpamIcon = <svg {...ICON}><path d="M4 7h16" /><path d="M9.5 7V4.5h5V7" /><path d="M6.5 7l1 12.5h9L17.5 7" /><path d="M10 10.5v6" /><path d="M14 10.5v6" /></svg>
+/** Turning somebody away at the door - the block, as opposed to the basket. */
+export const BlockIcon = <svg {...ICON}><circle cx="12" cy="12" r="8" /><path d="m6.5 6.5 11 11" /></svg>
 export const AtIcon = <svg {...ICON}><circle cx="12" cy="12" r="3.4" /><path d="M15.4 8.6v4.7a2.6 2.6 0 0 0 5.1 0V12a8.5 8.5 0 1 0-3.3 6.7" /></svg>
 /** Take the box out of the page and put it in front of everything, and put it
  *  back again. The same diagonal, pointing the other way. */
@@ -60,3 +67,10 @@ export const LinkIcon = <svg {...ICON}><path d="M10.5 13.5a3.5 3.5 0 0 0 5 0l3-3
 export const ListIcon = <svg {...ICON}><path d="M9 6.5h11" /><path d="M9 12h11" /><path d="M9 17.5h11" /><circle cx="4.75" cy="6.5" r="1.1" fill="currentColor" stroke="none" /><circle cx="4.75" cy="12" r="1.1" fill="currentColor" stroke="none" /><circle cx="4.75" cy="17.5" r="1.1" fill="currentColor" stroke="none" /></svg>
 export const NumberedListIcon = <svg {...ICON}><path d="M9.5 6.5h10.5" /><path d="M9.5 12h10.5" /><path d="M9.5 17.5h10.5" /><path d="M3.6 4.6h1.1v3.6" /><path d="M3.4 10.6a1.1 1.1 0 0 1 1.9.8c0 .8-1.9 1.6-1.9 2.4h2.1" /><path d="M3.5 16.1h1.9l-1.1 1.4a1.1 1.1 0 1 1-.8 1.9" /></svg>
 export const PaletteIcon = <svg {...ICON}><path d="M12 4a8 8 0 1 0 0 16 2 2 0 0 0 1.6-3.2 2 2 0 0 1 1.6-3.2H18a3 3 0 0 0 3-3A7.8 7.8 0 0 0 12 4" /><circle cx="8" cy="11" r="1" fill="currentColor" stroke="none" /><circle cx="11.5" cy="8" r="1" fill="currentColor" stroke="none" /><circle cx="15.5" cy="9.5" r="1" fill="currentColor" stroke="none" /></svg>
+/** A nudge from the browser when post arrives, and the same bell with a line
+ *  through it for the press that turns them off. A bell is what every program
+ *  in the world draws for this, which makes it the one drawing nobody has to
+ *  learn - and the struck-through pair reads as one switch rather than two
+ *  buttons. */
+export const BellIcon = <svg {...ICON}><path d="M6 9a6 6 0 0 1 12 0c0 4 1.5 5.5 1.5 5.5h-15S6 13 6 9Z" /><path d="M10 18a2 2 0 0 0 4 0" /></svg>
+export const BellOffIcon = <svg {...ICON}><path d="M6 9a6 6 0 0 1 8.4-5.5" /><path d="M18 9c0 4 1.5 5.5 1.5 5.5h-12" /><path d="M10 18a2 2 0 0 0 4 0" /><path d="m4 4 16 16" /></svg>

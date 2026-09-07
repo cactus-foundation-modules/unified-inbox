@@ -3,7 +3,9 @@ import type { SessionUser } from '@/lib/auth/session'
 import { existingTables, installedModuleNames } from '../installed'
 import type { LinkKind } from '../linking'
 import type { LinkKindOption } from '../link-kinds'
-import type { ContextAdapter, ContextQuery, ContextSection, LinkSuggestion, LinkTarget } from './types'
+import type {
+  ContextAdapter, ContextHint, ContextQuery, ContextSection, LinkSuggestion, LinkTarget,
+} from './types'
 import { SUGGEST_LIMIT } from './types'
 import { shopAdapter } from './shop'
 import { purchaseOrdersAdapter } from './purchase-orders'
@@ -12,7 +14,7 @@ import { quotesAdapter } from './quote-for-shop'
 import { membersAdapter } from './members'
 
 export type {
-  ContextAdapter, ContextItem, ContextQuery, ContextSection, LinkSuggestion, LinkTarget,
+  ContextAdapter, ContextHint, ContextItem, ContextQuery, ContextSection, LinkSuggestion, LinkTarget,
 } from './types'
 export { SECTION_LIMIT, SUGGEST_LIMIT } from './types'
 
@@ -78,6 +80,42 @@ export async function loadContext(user: SessionUser, query: ContextQuery): Promi
     }),
   )
   return settled.filter((s): s is ContextSection => s !== null && s.items.length > 0)
+}
+
+/**
+ * The standing facts worth saying beside this conversation.
+ *
+ * `attached` is what is already on the conversation, and a hint whose own kind
+ * of record is among them is not asked for at all: "they have ordered before"
+ * costs a query to answer vaguely, and the order sitting next to it on the same
+ * line already answers it exactly.
+ *
+ * Same three gates as the rail, and the same tolerance: one adapter failing
+ * costs its hint and nothing else.
+ */
+export async function loadHints(
+  user: SessionUser,
+  query: ContextQuery,
+  attached: readonly { moduleName: string; recordType: string }[],
+): Promise<ContextHint[]> {
+  const adapters = (await usableAdapters(user)).filter((adapter) => (
+    adapter.hint
+    && !attached.some((link) => (
+      link.moduleName === adapter.moduleName && link.recordType === adapter.hintSupersededBy
+    ))
+  ))
+
+  const settled = await Promise.all(
+    adapters.map(async (adapter) => {
+      try {
+        return await adapter.hint!(query)
+      } catch (err) {
+        console.error(`[unified-inbox] could not ask ${adapter.moduleName} about this person:`, err)
+        return null
+      }
+    }),
+  )
+  return settled.filter((hint): hint is ContextHint => hint !== null)
 }
 
 /**

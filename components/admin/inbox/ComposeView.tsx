@@ -1,7 +1,7 @@
 'use client'
 
 import {
-  useCallback, useEffect, useRef, useState,
+  useCallback, useEffect, useMemo, useRef, useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
@@ -17,19 +17,19 @@ import {
 import { plainTextToHtml, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
 import { AttachmentChips, AttachmentPicker, plainReason, type Attachment } from './AttachmentPicker'
 import { ProductPicker, productKey } from './ProductPicker'
-import { ProductPreview } from './ProductPreview'
 import { AttachmentDropNotice, AttachmentDropOverlay } from './AttachmentDropChrome'
 import { useAttachmentDrop } from './useAttachmentDrop'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Dropdown } from './Dropdown'
 import { PendingSend } from './PendingSend'
 import { RecipientField } from './RecipientField'
-import { RichText, RichTextBox, RichTextTools } from './RichText'
+import { RichText, RichTextBox, RichTextTools, type RichTextHandle } from './RichText'
 import { ScheduleNotice } from './ScheduleNotice'
 import { SendLaterPanel } from './SendLaterPanel'
 import { SnoozePanel } from './SnoozePanel'
 import { AlarmIcon, CloseIcon, PaperclipIcon, TagIcon } from './icons'
 import type { DraftSendState } from '@/modules/unified-inbox/lib/types'
+import { appendSlots, refKey, slotHtml, slotRefs } from '@/modules/unified-inbox/lib/products/slots'
 import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 
 // Writing a brand new message, rather than answering one somebody else started.
@@ -111,20 +111,35 @@ export function ComposeView({
   const [showBcc, setShowBcc] = useState((draft?.bcc ?? []).length > 0)
   const [subject, setSubject] = useState(draft?.subject ?? '')
   // The markup in the writing box. A draft written before the box could hold
-  // any is turned into markup on the way in, so its line breaks survive.
-  const [text, setText] = useState(
-    draft ? (draft.bodyFormat === 'html' ? draft.body : plainTextToHtml(draft.body)) : '',
-  )
+  // any is turned into markup on the way in, so its line breaks survive - and a
+  // draft written before the catalogue went INTO the box has its products run
+  // onto the end, which is where they used to print.
+  const [text, setText] = useState(() => {
+    const body = draft ? (draft.bodyFormat === 'html' ? draft.body : plainTextToHtml(draft.body)) : ''
+    return slotRefs(body).length > 0 ? body : appendSlots(body, draftProducts)
+  })
   const [attachments, setAttachments] = useState<Attachment[]>(
     (draft?.attachments ?? []).map((file) => ({ ...file, sizeBytes: file.sizeBytes ?? null })),
   )
   const [picking, setPicking] = useState(false)
   // What the message carries out of the catalogue. Held as whole products
-  // rather than as references, because the chips have to say what they are -
-  // but only the references are ever sent, and what a customer reads is built
-  // on the server from what the shop says at that moment.
-  const [products, setProducts] = useState<ProductChoice[]>(draftProducts)
+  // rather than as references, because the block in the writing has to say what
+  // they are - but only the references are ever sent, and what a customer reads
+  // is built on the server from what the shop says at that moment.
+  //
+  // The WRITING decides which products are on it, though - this follows it. A
+  // block somebody backspaced over is a product taken off, and there is no
+  // second list that could disagree with what is on the screen.
+  const [picked, setPicked] = useState<ProductChoice[]>(draftProducts)
   const [pickingProduct, setPickingProduct] = useState(false)
+  const products = useMemo(() => {
+    const known = new Map(picked.map((one) => [productKey(one), one]))
+    return slotRefs(text)
+      .map((ref) => known.get(refKey(ref)))
+      .filter((one): one is ProductChoice => one !== undefined)
+  }, [picked, text])
+  /** The writing box, for putting a product where the caret is. */
+  const editor = useRef<RichTextHandle | null>(null)
   // Which job is in flight, rather than merely that one is: a button that says
   // "Saving..." while somebody is sending is a button telling a small lie.
   const [busyWith, setBusyWith] = useState<'send' | 'save' | 'discard' | null>(null)
@@ -144,17 +159,22 @@ export function ComposeView({
   const [sendAt, setSendAt] = useState<string | null>(draft?.sendAt ?? null)
   const [sendState, setSendState] = useState<DraftSendState>(draft?.sendState ?? null)
   const [sendError, setSendError] = useState<string | null>(draft?.sendError ?? null)
-  // The chase set on it, and whether mail from the recipient took the timer off
-  // before it could go. Both travel with the draft rather than being worked out
-  // here: the server decides what a saved schedule means.
+  // The chase set on it, the sleep waiting behind it, and whether mail from the
+  // recipient took the timer off before it could go. All three travel with the
+  // draft rather than being worked out here: the server decides what a saved
+  // schedule means.
   const [followUpMinutes, setFollowUpMinutes] = useState<number | null>(draft?.followUpMinutes ?? null)
+  const [draftSnoozeUntil, setDraftSnoozeUntil] = useState<string | null>(draft?.snoozeUntil ?? null)
   const [held, setHeld] = useState(draft?.held ?? false)
   // A time picked off the alarm clock and not committed yet. The reply box
   // makes the same bargain for the same reason: picking a time and deciding
   // what that time means are one moment's thinking, and a menu that saved on
   // the first click would have to guess which was meant.
   const [pendingSendAt, setPendingSendAt] = useState<Date | null>(null)
-  const [pendingFollowUp, setPendingFollowUp] = useState<number | null>(draft?.followUpMinutes ?? null)
+  // Read once and never set: nothing offers a chase any more. It is here so that
+  // re-saving a draft written back when the composer did offer one keeps the
+  // chase it was given rather than quietly dropping it.
+  const [pendingFollowUp] = useState<number | null>(draft?.followUpMinutes ?? null)
   // Waiting for its own time, or going out this minute. Either way it is out of
   // this composer's hands.
   const waiting = sendState === 'scheduled' || sendState === 'sending'
@@ -391,7 +411,11 @@ export function ComposeView({
    *  Says whether it saved, because the cross in the corner offers to keep the
    *  message and then close - and closing on a save that did not happen is the
    *  loss the question was asked to prevent. */
-  const save = useCallback(async (wallClock?: string | null, followUp?: number | null): Promise<boolean> => {
+  const save = useCallback(async (
+    wallClock?: string | null,
+    followUp?: number | null,
+    sleepUntil?: Date | null,
+  ): Promise<boolean> => {
     const payload = {
       id: draftId ?? undefined,
       inboxId: inboxId || null,
@@ -413,6 +437,12 @@ export function ComposeView({
       // Read by the server only when a time is being set, and cleared with the
       // time when one is taken off.
       followUpMinutes: followUp ?? null,
+      // Where a message starting a conversation has to keep "and I do not want
+      // to see it again until Friday": there is no conversation to put to sleep
+      // until the queue has sent this, days from now with nobody watching, so
+      // the instruction travels on the draft and is carried out at that end.
+      // See lib/follow-up.ts.
+      snoozeUntil: sleepUntil ? sleepUntil.toISOString() : null,
     }
     if (!isWorthSaving(payload)) {
       setError('There is nothing to save yet.')
@@ -442,6 +472,7 @@ export function ComposeView({
       setSendState(at ? 'scheduled' : null)
       setSendError(null)
       setFollowUpMinutes(typeof data?.followUpMinutes === 'number' ? data.followUpMinutes : null)
+      setDraftSnoozeUntil(typeof data?.snoozeUntil === 'string' ? data.snoozeUntil : null)
       // Saving with a time on it stands the message back up: whatever mail held
       // it has been read by whoever is scheduling it again.
       if (at) setHeld(false)
@@ -522,6 +553,7 @@ export function ComposeView({
               strip along the bottom, and both have to mean the same box. */}
           <RichText
             id="uin-new-text"
+            handleRef={editor}
             value={text}
             onChange={(html) => { setText(html); setDirty(true); setNote('') }}
             placeholder="Write your message"
@@ -660,19 +692,6 @@ export function ComposeView({
               <RichTextBox />
             </div>
 
-            {/* Where the products actually go, drawn where they actually go:
-                under the writing and above the signature, which is where the
-                send path puts them - see lib/compose.ts. */}
-            <ProductPreview
-              products={products}
-              keyOf={productKey}
-              disabled={busy}
-              onRemove={(key) => {
-                setProducts((prev) => prev.filter((p) => productKey(p) !== key))
-                setDirty(true)
-              }}
-            />
-
             <AttachmentDropNotice
               progress={drop.progress}
               errors={drop.errors}
@@ -684,6 +703,7 @@ export function ComposeView({
               sendState={sendState}
               sendError={sendError}
               followUpMinutes={followUpMinutes}
+              snoozeUntil={draftSnoozeUntil}
               held={held}
               timezone={timezone}
             />
@@ -691,9 +711,6 @@ export function ComposeView({
             {pendingSendAt && !waiting && (
               <PendingSend
                 at={pendingSendAt}
-                followUp={pendingFollowUp}
-                onFollowUp={(minutes) => { setPendingFollowUp(minutes); setError('') }}
-                onProblem={setError}
                 onClear={() => setPendingSendAt(null)}
                 timezone={timezone}
                 busy={busy}
@@ -787,15 +804,23 @@ export function ComposeView({
                   />
                 </Dropdown>
 
-                {/* "Send & snooze" only while it is going now. A message with a
-                    time on it has not started a conversation yet, so there is
-                    nothing to put to sleep - the chase on the line above is what
-                    covers that case, and it counts from when the message
-                    actually leaves. */}
-                {!waiting && !pendingSendAt && (
+                {/* One pair of buttons whatever has been decided, the same pair
+                    the reply box has. A time picked off the clock changes what
+                    these two SAY and what they do - "Send later", "Send later &
+                    snooze" - rather than taking one of them away, which is what
+                    used to happen: picking a time quietly cost you the ability
+                    to put the conversation to sleep, and left a chase in its
+                    place, which is a different instruction wearing its coat.
+
+                    A message starting a conversation has no conversation yet, so
+                    the sleep cannot be set here and now the way the reply box
+                    sets it. It rides on the draft instead and is applied to the
+                    conversation this message creates, at the moment it is
+                    created. See lib/follow-up.ts. */}
+                {!waiting && (
                   <Dropdown
                     className="btn btn-secondary btn-sm"
-                    label={'Send & snooze'}
+                    label={pendingSendAt ? 'Send later & snooze' : 'Send & snooze'}
                     align="end"
                     width={280}
                     panelClassName="uin-menu-snooze"
@@ -804,8 +829,17 @@ export function ComposeView({
                     <SnoozePanel
                       timezone={timezone}
                       busy={busy}
-                      title="Send it, then sleep until"
-                      onSnooze={(until) => { void submit(until) }}
+                      title={pendingSendAt ? 'Set it going, then sleep until' : 'Send it, then sleep until'}
+                      onSnooze={(until) => {
+                        // With a time on it nothing is sent now: the departure
+                        // is saved, and the sleep is saved alongside it for the
+                        // queue to apply once the message has actually gone.
+                        if (pendingSendAt) {
+                          void save(toWallClock(pendingSendAt, timezone), pendingFollowUp, until)
+                          return
+                        }
+                        void submit(until)
+                      }}
                     />
                   </Dropdown>
                 )}
@@ -855,9 +889,13 @@ export function ComposeView({
                 chosen={products}
                 onClose={() => setPickingProduct(false)}
                 onPick={(item) => {
-                  setProducts((prev) =>
+                  // Into the writing, where the caret is - see the same handler
+                  // on the reply box. The block that lands there is what the
+                  // recipient will see, so the message can be built round it.
+                  setPicked((prev) =>
                     prev.some((p) => productKey(p) === productKey(item)) ? prev : [...prev, item],
                   )
+                  editor.current?.insertHtml(slotHtml(item))
                   setDirty(true)
                 }}
               />

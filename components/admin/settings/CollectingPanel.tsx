@@ -1,7 +1,8 @@
 'use client'
 
 import { useId, useState } from 'react'
-import type { Caller, Inbox, RetentionForecast, Settings } from './types'
+import type { BlockedSenderRow, Caller, Inbox, RetentionForecast, Settings, StaffMember } from './types'
+import { BlockedSendersSection } from './BlockedSendersSection'
 import { CheckField, FieldGroup, FieldRow, FormActions, MUTED, Panel } from './ui'
 
 // ---------------------------------------------------------------------------
@@ -9,10 +10,16 @@ import { CheckField, FieldGroup, FieldRow, FormActions, MUTED, Panel } from './u
 // reads once it is here.
 // ---------------------------------------------------------------------------
 
-export function CollectingPanel({ settings, inboxes, retention, busy, call }: {
+export function CollectingPanel({ settings, inboxes, retention, blockedSenders, users, busy, call }: {
   settings: Settings
   inboxes: Inbox[]
   retention: RetentionForecast | null
+  /** Everybody the site turns away at the door. On this tab because it is the
+   *  same question the rest of it answers - what gets collected - and because
+   *  it is the only place a block can be lifted. */
+  blockedSenders: BlockedSenderRow[]
+  /** For naming whoever did the blocking. */
+  users: StaffMember[]
   busy: boolean
   call: Caller
 }) {
@@ -32,6 +39,11 @@ export function CollectingPanel({ settings, inboxes, retention, busy, call }: {
   const windowEdited = draft.retentionMonths !== settings.retentionMonths
     || draft.retentionKeepLinked !== settings.retentionKeepLinked
 
+  // Whether the site has any address that belongs to one person. Without one
+  // the tick below is real but inert, and a setting that does nothing without
+  // saying so is a setting somebody reports as broken.
+  const hasIndividual = inboxes.some((i) => i.kind === 'individual')
+
   async function save() {
     await call('/settings', {
       method: 'PATCH',
@@ -44,6 +56,7 @@ export function CollectingPanel({ settings, inboxes, retention, busy, call }: {
         newestFirst: draft.newestFirst,
         defaultInboxId: draft.defaultInboxId || null,
         autoCheckSeconds: draft.autoCheckSeconds,
+        autoAssignOwnPost: draft.autoAssignOwnPost,
       }),
     }, 'Settings saved.')
   }
@@ -192,9 +205,29 @@ export function CollectingPanel({ settings, inboxes, retention, busy, call }: {
         />
       </FieldGroup>
 
+      <FieldGroup
+        title="Who gets it"
+        hint={hasIndividual
+          ? undefined
+          : 'Nothing here applies yet: none of your addresses belongs to one person. Set one up under Inboxes and this starts doing something.'}
+      >
+        <CheckField
+          label="Put a colleague’s own post straight on their desk"
+          checked={draft.autoAssignOwnPost}
+          onChange={(autoAssignOwnPost) => setDraft({ ...draft, autoAssignOwnPost })}
+          hint="Only for addresses that belong to one person. Anything arriving at one of those is handed to whoever it belongs to, so it stops showing up as work nobody has picked up - when nobody else could pick it up anyway. Shared addresses like sales@ are left alone, and a conversation somebody has already been given is never taken off them."
+        />
+      </FieldGroup>
+
       <FormActions>
         <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>Save settings</button>
       </FormActions>
+
+      {/* Below the Save button rather than above it, because nothing in it is
+          part of that form: each row saves the moment it is pressed, and a
+          control that has already taken effect sitting above a button marked
+          Save is how somebody comes to believe they have not saved it. */}
+      <BlockedSendersSection blocked={blockedSenders} users={users} busy={busy} call={call} />
     </Panel>
   )
 }

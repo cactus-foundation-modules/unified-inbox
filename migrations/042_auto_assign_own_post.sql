@@ -1,0 +1,51 @@
+-- Unified Inbox - Migration 042: a colleague's own post lands on their desk.
+--
+-- A NEW numbered file rather than an edit to an earlier one: a module migration
+-- is recorded once per install and never runs again, so editing 001 would reach
+-- a fresh install and nobody else. Everything below is idempotent, and there is
+-- no dollar-quoting anywhere - comments included - because the backup
+-- round-trip harness skips a whole module whose migration files carry a pair of
+-- them, which buys a green gate that proved nothing.
+--
+-- BOOLEAN, which this table already stores half a dozen of, so the backup
+-- serialiser and its schema-coverage backstop need no new branch.
+--
+-- ---------------------------------------------------------------------------
+-- An individual inbox is one named colleague's own post at work (see 029). Mail
+-- arriving in one is already theirs by every other measure the module has -
+-- nobody else may even open it unless they were deliberately named on it - and
+-- yet it arrived assigned to nobody, and stayed that way until somebody opened
+-- the conversation and picked their own name off a menu. Every list that counts
+-- unassigned work counted it, and every rota that says "clear the unassigned
+-- pile" pointed at a pile of post only one person could read.
+--
+-- So: mail that lands at a colleague's own address is handed to that colleague.
+--
+-- Site-wide rather than per address, because it is one decision about how the
+-- hub works rather than a property of any one mailbox, and a rule that half the
+-- individual inboxes opted out of would be a rule nobody could describe.
+--
+-- ON by default, and on for existing installs as well as fresh ones, which is
+-- the opposite of what this module usually does with a new switch. The usual
+-- caution is about things that go OUT - tracking, receipts, third-party lookups
+-- - where an update that quietly opted somebody's customers in would be a
+-- betrayal. This one changes nothing but which name is written beside a
+-- conversation only its owner can see, it is undone in one click, and arriving
+-- switched off would make it a feature nobody knows they have.
+--
+-- What it deliberately does NOT do:
+--
+--   * touch a conversation somebody has already been given. It only ever fills
+--     an empty assignee, in the same UPDATE that checks it is empty, so two
+--     collection ticks racing cannot take a conversation off the person the
+--     first one gave it to.
+--   * reach shared addresses. sales@ is the team's, and handing every enquiry
+--     to whoever happens to be named on the address is not what a shared inbox
+--     is for.
+--   * reach a suspended or deleted account. Post assigned to somebody who
+--     cannot log in is post that has been filed out of sight, which is a worse
+--     answer than the unassigned pile it came from.
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE "uin_settings"
+    ADD COLUMN IF NOT EXISTS "auto_assign_own_post" BOOLEAN NOT NULL DEFAULT true;

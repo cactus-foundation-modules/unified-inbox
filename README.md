@@ -41,9 +41,27 @@ the same human collapse into one story.
   is the only version of that promise worth making. Nothing is converted by an
   update: every address on an existing site stays shared until somebody says
   otherwise.
+- **Their own post, on their own desk.** Anything arriving at an address that
+  belongs to one colleague is handed to that colleague as it lands, so it stops
+  counting as work nobody has picked up when nobody else could pick it up
+  anyway. Shared addresses are left alone, a conversation somebody already has
+  is never taken off them, and there is a tick to switch the whole thing off.
+- **Everything of yours in one place.** Opening the hub lands you in your own
+  inbox, and your own inbox is where everything handed to you shows up - even
+  when it arrived at a shared address. There is no separate "assigned to me"
+  list to remember to check, because a list you have to remember to check is a
+  list that goes unchecked. The handful of places at the top of the rail -
+  your address, All, Mentioned, Drafts, Sent, Spam - can be dragged into
+  whatever order suits how you work, and that order is yours alone: nobody
+  else's screen moves.
 - **Collecting the post.** Mail is gathered on the site's own schedule, from the
   inbox and the folders you file things into, so a message read on a phone is
   still here.
+- **A nudge when post arrives.** The first time somebody opens the hub they are
+  offered browser notifications for their own address, and the bell at the foot
+  of the rail turns them on and off after that. The answer is kept in their own
+  browser, because the permission is; nothing is sent while they are looking at
+  the list, and nothing at all once every tab is shut.
 - **Reading and replying.** One screen: your addresses along the top as tabs,
   where each conversation stands underneath them - open, snoozed, done or the
   lot - the conversations below, and whichever one you have open beside them.
@@ -70,9 +88,10 @@ the same human collapse into one story.
   before it happens. It stays merged when somebody replies.
 - **A discussion, a call or a text.** The arrow beside the write button opens
   the three things that are not an email. A **discussion** is a conversation
-  with your colleagues in one of your own addresses - subject, message, and
-  nothing on it is ever sent anywhere, so there is no Reply on it, only the note
-  box. A **call** rings your phone first, then theirs, out of one of the site's
+  with your colleagues - the box opens on the To line, and it lands in your own
+  address and in the address of everybody you put it to, as one conversation
+  rather than a copy each. Subject, message, and nothing on it is ever sent
+  anywhere, so there is no Reply on it, only the note box. A **call** rings your phone first, then theirs, out of one of the site's
   own numbers. A **text** goes to a mobile. The last two need something on the
   site that makes calls and sends texts - the Twilio module today - and neither
   is offered when there is not one. Neither is written down here either: the
@@ -80,23 +99,35 @@ the same human collapse into one story.
   which is one record rather than two disagreeing ones.
 - **Asking a colleague.** Tag somebody in an internal note - the @ button on
   the note line at the foot of a conversation - and it lands on their own
-  **Asked me** list, beside "Assigned to me". Theirs alone: they can set it
+  **Mentioned** list. Theirs alone: they can set it
   aside until Thursday, mark it done and open it again, and none of that touches
   where the conversation itself stands, so three people asked about one order do
   not close it from under each other. Being asked also lets them read that one
   conversation whether or not the address it sits in was ever shared with them -
   one conversation, not the address, and reading rather than answering.
-- **Sent.** One row per message that has left, newest first, across every
-  address you can read, with who it went to, which address it left as, and what
-  became of it where the site is watching. Opening one opens the conversation it
-  belongs to.
+- **Sent.** One row per message that has left, newest first, with who it went
+  to, which address it left as, and what became of it where the site is
+  watching. Opening one opens the conversation it belongs to. Two folders, and
+  the difference is whose. **Sent** at the top of the rail is *yours*: what you
+  have sent, from your own address and from every shared one you write from, and
+  nothing a colleague wrote. Every shared address has its own **Sent** hanging
+  under it - hover the name and the coloured dot turns into an arrow - and that
+  one is the address's: everything that has left sales@, whoever wrote it,
+  including the mail the site sends on its own. Colleagues' addresses open out
+  the same way, into their Sent, their Mentioned and their bin.
 - **Drafts.** Save a half-written reply, or a message you have not finished
   starting, and it waits under the **Drafts** tab until you come back to it.
   Your own only: a shared address does not mean a shared notepad, and nobody
   else can read, finish or throw away what you have started - not even somebody
   who can send as the same address. A reply goes back under its conversation
   with the words still in the box; a new message opens where you left it.
-  Sending one clears it away.
+  Sending one clears it away. The tab is only there while there is something in
+  it - save nothing and there is nothing to see, so the folder appears the
+  moment you put something down and goes again once the last one has left.
+  Covering a colleague's address and left something half-written on it? It shows
+  as **Your drafts** under their name in the rail, on the same terms and named
+  that way on purpose: it is your writing on their address, and theirs is still
+  nobody's to read but theirs.
 - **Writing one.** Both boxes - the reply under a conversation and the new
   message over the list - open on who it is going to, in a box you can change
   rather than a sentence you cannot. **Cc**, **Bcc** and **Subject** are links
@@ -138,6 +169,15 @@ the same human collapse into one story.
   rather than a person, and leaves it where it was - which is what stops a
   mailing list dragging a finished conversation back every week. Your own reply,
   sent from here, does the same.
+- **Finding something.** Two boxes for two jobs. The one in the head of the list
+  makes what is in front of you shorter. The magnifier at the top of the rail -
+  **Ctrl K**, or **Cmd K** on a Mac - looks everywhere you can read at any
+  status, narrowed by who it is from, who it went to, the subject, whether
+  anything is attached and between two dates, and it searches the address book
+  from the same box. Pressing Search lands on a screen of its own: the box
+  across the top of the results and the conversation both, every cut laid out
+  underneath it to change on the spot, and a cross that puts you back on the
+  list when you are done.
 - **Pictures stay off** until you ask for them, and when you do they are fetched
   by the site rather than by your browser, so a sender learns nothing about you.
 - **Settings** for how far back to go when starting out, how long to keep

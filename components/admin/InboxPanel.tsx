@@ -10,11 +10,13 @@ import { canOpenThread, canReplyToInbox, replyableInboxIds, visibleInboxIds } fr
 import {
   attachmentsForThread,
   countDrafts,
+  countDraftsByInbox,
   categoriesForPeople,
   categoriesForPerson,
   countThreadsForPerson,
   countMentions,
   defaultInboxIdFor,
+  railOrderFor,
   countThreads,
   draftForThread,
   draftsHeldByThread,
@@ -52,6 +54,7 @@ import {
   statusCounts,
   threadsForPerson,
   undoableMerges,
+  unreadAssignedElsewhere,
   unreadCounts,
   wakeDueThreads,
   wakeDueMentions,
@@ -60,11 +63,12 @@ import {
 import { isSmsAvailable } from '@/lib/sms/send'
 import { callerNumbers, firstDialler } from '@/lib/dialler/registry'
 import { siteDiallingCode } from '@/lib/phone.server'
-import { attachableKinds, loadContext } from '@/modules/unified-inbox/lib/adapters'
+import { attachableKinds, loadContext, loadHints } from '@/modules/unified-inbox/lib/adapters'
 import { defaultLinkKind } from '@/modules/unified-inbox/lib/link-kinds'
 import { modulesForInbox } from '@/modules/unified-inbox/lib/module-senders'
 import { forComposer } from '@/modules/unified-inbox/lib/drafts'
 import { canAddProducts as canAddProductsFor, resolveProducts } from '@/modules/unified-inbox/lib/products'
+import { publicRecordUrls } from '@/modules/unified-inbox/lib/record-urls'
 import { addressesForPerson, buildContextQuery } from '@/modules/unified-inbox/lib/identity'
 import { identityKey, isOwnSender, resolveOwnDomains } from '@/modules/unified-inbox/lib/people'
 import { PersonView } from './inbox/PersonView'
@@ -85,12 +89,16 @@ import { InboxIcon } from './inbox/icons'
 import { NavRail } from './inbox/NavRail'
 import { CampaignsPanel } from './inbox/campaigns/CampaignsPanel'
 import { StatusTabs } from './inbox/StatusTabs'
+import { SearchBar } from './inbox/SearchBar'
 import { Filters } from './inbox/Filters'
 import { ThreadListView } from './inbox/ThreadListView'
 import { MentionListView } from './inbox/MentionListView'
 import { DraftListView } from './inbox/DraftListView'
 import { SentListView } from './inbox/SentListView'
 import { ThreadPane, type ThreadMessageView } from './inbox/ThreadPane'
+import { spamOwnerFor, threadIsSpamFor } from '@/modules/unified-inbox/lib/spam'
+import { isSenderBlocked } from '@/modules/unified-inbox/lib/blocked-senders'
+import { normaliseAddress } from '@/modules/unified-inbox/lib/addresses'
 import { ComposeView } from './inbox/ComposeView'
 import { DiscussionView } from './inbox/DiscussionView'
 import { SmsView } from './inbox/SmsView'
@@ -209,7 +217,16 @@ export async function UnifiedInboxPanel({
   // taken off somebody's guest list, or deleted, long after it was made theirs,
   // and a tab that opens on "that inbox is not here" is worse than no tab.
   const ownInboxId = await defaultInboxIdFor(user.id)
-  const pinnedInboxId = ownInboxId && visible.has(ownInboxId) ? ownInboxId : null
+  // Falling back to an address that IS theirs, when nobody has pinned one.
+  // Saving an individual inbox writes its owner a default row (see
+  // audienceForSave), so this is usually the same answer twice - but an address
+  // made somebody's before that was true, or a pin cleared since, would leave
+  // them landing on All every morning while their own post sat one click away.
+  // Opening the hub takes somebody to their own inbox, full stop.
+  const ownedInboxId = inboxes.find(
+    (i) => i.kind === 'individual' && i.ownerUserId === user.id,
+  )?.id ?? null
+  const pinnedInboxId = (ownInboxId && visible.has(ownInboxId) ? ownInboxId : null) ?? ownedInboxId
 
   // An address of one's own is where the hub opens when the URL names no tab,
   // so it is settled here, before anything is parsed - every query, count and
@@ -225,6 +242,10 @@ export async function UnifiedInboxPanel({
     // The search dialog's narrower cuts, so a search survives opening one of
     // the conversations it found and coming back to the list.
     'from', 'to', 'subject', 'att', 'after', 'before',
+    // And whether those cuts are a search's own screen or a list somebody
+    // narrowed where it stood, so opening one of the results and coming back
+    // lands on the search rather than on a list with no head to it.
+    'find',
     // The address book's own: which half of it, whose card is open, whether the
     // card is being edited, and whether the importer is up.
     'view', 'org', 'edit', 'import', 'cat',
@@ -268,27 +289,60 @@ export async function UnifiedInboxPanel({
     .filter((person) => person.role.isProtected || hubRoleIds.has(person.roleId))
     .map((person) => ({ id: person.id, name: person.displayName || person.username }))
 
-  const counts = await unreadCounts(visibleIds, canManage, channelModules)
+  const counts = await unreadCounts(user.id, visibleIds, canManage, channelModules)
+  // Before the desk is added below: All is the sum of the addresses, and a
+  // conversation counted twice would make it larger than the list it stands for.
   const allUnread = Object.values(counts).reduce((a, b) => a + b, 0)
 
-  // What has been handed to whoever is reading, across every address they can
-  // see. "Assigned to me" is a place in the rail rather than a filter chip now,
-  // and a place with no number beside it is a place nobody visits.
-  const assignedCount = await countThreads({
-    inboxIds: visibleIds,
-    includeUnrouted: canManage,
-    providerModules: channelModules,
-    assignee: user.id,
-    status: 'open',
-    page: 1,
-    perPage: PER_PAGE,
-  })
+  // What has been handed to whoever is reading and is filed somewhere other
+  // than their own address. It goes onto their own address's number, because
+  // standing in that address is now where they read it - there is no "Assigned
+  // to me" screen to go and look at, and having to remember to look at one was
+  // the whole complaint.
+  const assignedElsewhere = pinnedInboxId
+    ? await unreadAssignedElsewhere(user.id, visibleIds, canManage, channelModules, pinnedInboxId)
+    : 0
+
+  // The order this person keeps the top of their own rail in. Theirs alone, and
+  // saved without anybody's permission - see app/api/rail-order.
+  const railOrder = await railOrderFor(user.id)
 
   // What colleagues have asked this person to look at and they have not dealt
   // with yet. One cheap COUNT on every draw, because it rides on the rail; the
   // list itself is only fetched when that is the tab open, the same as Drafts,
   // Sent and Contacts.
   const askedCount = await openMentionCount(user.id)
+
+  // What this person has thrown away, for the number beside the folder. Theirs
+  // alone: junk is one reader's opinion rather than a fact about the mail (see
+  // lib/spam.ts), so unlike every other count on this rail there is no version
+  // of it that belongs to an address or to the team.
+  //
+  // Counted whether or not it has been read, unlike the addresses above. The
+  // numbers beside those answer "is there anything new"; this one answers "how
+  // much is in there", which is the only question anybody asks of a spam
+  // folder - and marking junk as read before throwing it away is not a thing
+  // anybody does. Hence status 'all' rather than 'open'.
+  //
+  // Through countThreads rather than a tally of its own, so it carries the same
+  // visibility clause the folder's own list carries: what this reader may open,
+  // which channels they may see, whether unfiled post is theirs. A count that
+  // worked it out separately would drift, and a folder saying 4 with three
+  // things in it is the one place that matters - somebody would go looking for
+  // a message they had thrown away and could not find.
+  const spamCount = await countThreads({
+    viewerUserId: user.id,
+    spamOnly: true,
+    // Their own, explicitly. The number under Yours counts your bin; a
+    // colleague's folder carries its own total in the head of the list.
+    spamOwnerUserId: user.id,
+    inboxIds: visibleIds,
+    includeUnrouted: canManage,
+    providerModules: channelModules,
+    status: 'all',
+    page: 1,
+    perPage: PER_PAGE,
+  })
 
   // Writing a new one is a different grant from reading (D16), so the From menu
   // and the button that opens it are both built from the inboxes this person may
@@ -369,18 +423,39 @@ export async function UnifiedInboxPanel({
   // person's, wherever it is filed; a colleague's folder narrows it to the
   // address that folder names, which is this person's own writing on it. The
   // list itself is only fetched when that tab is the one open.
-  const draftCount = await countDrafts(user.id)
+  //
+  // The per-address numbers are the same question asked once per colleague, in
+  // one grouped query: the folder under somebody's name is only offered where
+  // this reader has left something on that address, so the rail cannot be drawn
+  // without them.
+  const [draftCount, draftCounts] = await Promise.all([
+    countDrafts(user.id),
+    countDraftsByInbox(user.id),
+  ])
   const drafts = params.draftsOnly
     ? await listDrafts(user.id, folderAsked ? folderIds : null)
     : []
 
-  // Everything that has left, across every address this person may read, or out
-  // of the one a colleague's folder names. Only fetched when that is the list
-  // being looked at.
+  // What has been sent. Two different lists behind one word, and which one this
+  // is turns on whether an address was named.
+  //
+  // No address is the entry under Yours, and it is a PERSON's folder: this
+  // reader's own writing, from their own address and from every shared one they
+  // write from, and nobody else's. It used to be every message that had left
+  // every address they could read, which on a site with a shared sales@ meant
+  // opening your own Sent folder and finding your colleagues' post in it.
+  //
+  // An address named is that ADDRESS's folder - the one hanging under it on the
+  // rail - and there it is everything that has left, whoever wrote it and
+  // including whatever a module sent on its own. That is what somebody opens it
+  // to see: "has that quote gone out from sales@".
+  //
+  // Only fetched when that is the list being looked at.
+  const sentOwnerId = folderAsked ? null : user.id
   const [sent, sentTotal] = params.sentOnly
     ? await Promise.all([
-        listSentMessages(folderIds, !folderAsked && canManage, folderAsked ? [] : channelModules, params.page, PER_PAGE),
-        countSentMessages(folderIds, !folderAsked && canManage, folderAsked ? [] : channelModules),
+        listSentMessages(folderIds, !folderAsked && canManage, folderAsked ? [] : channelModules, params.page, PER_PAGE, sentOwnerId),
+        countSentMessages(folderIds, !folderAsked && canManage, folderAsked ? [] : channelModules, sentOwnerId),
       ])
     : [[] as Awaited<ReturnType<typeof listSentMessages>>, 0]
 
@@ -404,10 +479,26 @@ export async function UnifiedInboxPanel({
     : [[] as Awaited<ReturnType<typeof listMentions>>, 0, {} as Record<string, number>]
 
   const filters = {
+    viewerUserId: user.id,
+    spamOnly: params.spamOnly,
+    // WHOSE bin. Their own under Yours; a colleague's under that colleague's
+    // name, because junk filed in somebody's own address goes into THEIR bin
+    // (see spamOwnerFor) and a coverer who binned something by mistake has to
+    // be able to go and get it back.
+    //
+    // Null - not undefined - when the scope names an address with no owner, or
+    // one this reader may not open. That draws an empty folder rather than
+    // quietly falling back to their own junk under somebody else's name.
+    spamOwnerUserId: params.spamOnly ? folderOwnerId : undefined,
     inboxIds: visibleIds,
     includeUnrouted: canManage,
     providerModules: channelModules,
     inboxId: params.inboxId,
+    // Standing in their own address means standing in front of everything on
+    // their desk, wherever it was filed. There is no "Assigned to me" screen to
+    // go and look at any more, and there should not be: work handed to somebody
+    // belongs where they already are.
+    alsoAssignedTo: pinnedInboxId && params.inboxId === pinnedInboxId ? user.id : null,
     providerModule: params.providerModule,
     unroutedOnly: params.unroutedOnly,
     status: params.status,
@@ -577,7 +668,14 @@ export async function UnifiedInboxPanel({
       // Automated mail the site sent them: order confirmations, purchase order
       // emails and the like. Brevo sends those and they never touch anybody's
       // Sent folder, so core's ledger is the only record there is (D13).
-      const outbound = await outboundLogForAddresses(addresses)
+      //
+      // Beside it, where the attached records that have a customer-facing page
+      // actually live - the products - because a product is attached to
+      // somebody because it was quoted to them.
+      const [outbound, publicUrls] = await Promise.all([
+        outboundLogForAddresses(addresses),
+        publicRecordUrls(links),
+      ])
 
       personPane = (
         <PersonView
@@ -590,6 +688,7 @@ export async function UnifiedInboxPanel({
           outbound={outbound}
           sections={sections}
           links={links}
+          publicUrls={publicUrls}
           events={events}
           merges={merges}
           categories={worn}
@@ -856,10 +955,57 @@ export async function UnifiedInboxPanel({
         }
       }
 
+      // Junk, as this reader sees it, and whether the sender is already refused.
+      //
+      // Two questions rather than one because they have two different scopes:
+      // the first is a row belonging to this person, the second is a fact about
+      // the whole site. Asked together because the button in the header needs
+      // both before it can decide whether there is a second question worth
+      // putting to anybody.
+      //
+      // The address comes off the newest message THEY sent us, and inbound is
+      // the whole of that clause. `newest` - the one the reply arrow answers -
+      // is our own writing on every conversation a colleague has already
+      // replied to, and reading a sender off it would offer to block one of the
+      // site's own addresses on exactly the conversations somebody is most
+      // likely to be tidying up.
+      //
+      // `replyTo` beats `from` for the same reason it does everywhere else in
+      // this module (E13): a sender who nominated a Reply-To is telling us which
+      // of the two addresses is actually theirs, and it is the one a reply would
+      // have gone to.
+      const lastInbound = [...messages].reverse().find((m) => m.direction === 'in') ?? null
+      const spamSender = lastInbound
+        ? normaliseAddress(lastInbound.replyTo || lastInbound.fromAddress || '')
+        : ''
+      const senderAddress = spamSender.includes('@') ? spamSender : null
+      // Whose bin this one would go into, worked out the same way the route
+      // works it out - a conversation in a colleague's own address is theirs,
+      // and somebody covering it is clearing THEIR bin rather than filling
+      // their own. Asked here as well so the button offers the right one of the
+      // two: a conversation Sam has already binned reads "Not junk" to whoever
+      // is covering Sam, and can be put back.
+      const spamOwnerId = spamOwnerFor({
+        pressedByUserId: user.id,
+        inbox: thread.inboxId
+          ? allInboxes.find((i) => i.id === thread.inboxId) ?? null
+          : null,
+      })
+      const [isSpam, senderBlocked] = await Promise.all([
+        threadIsSpamFor(thread.id, spamOwnerId),
+        senderAddress ? isSenderBlocked(senderAddress) : Promise.resolve(false),
+      ])
+
       const cannotReplyReason = canReply
         ? null
+        // A DISCUSSION SAYS NOTHING. The sentence that used to sit here
+        // explained the missing reply arrow, and on a discussion there is
+        // nothing to explain: the channel is named at the top, every message on
+        // it is marked as a note, and the line at the foot says on its face that
+        // nobody outside sees it. Three places already say it; a fourth, in the
+        // spot a conversation uses to report a problem, read as one.
         : isDiscussion
-        ? 'This is a discussion between colleagues. Nothing on it is ever sent to anybody outside.'
+        ? null
         : thread.providerModule
           ? channel
             ? `${channel.label} conversations are read here and answered where they came from.`
@@ -895,12 +1041,30 @@ export async function UnifiedInboxPanel({
       // have got to it is between them and whoever asked them.
       const ask = await mentionForThread(user.id, thread.id)
 
-      const [links, kindOptions, senderModules, merges] = await Promise.all([
+      const [links, kindOptions, senderModules, merges, contextQuery] = await Promise.all([
         linksForThread(thread.id),
         canEditLinks ? attachableKinds(user) : Promise.resolve([]),
         canEditLinks && thread.inboxId ? modulesForInbox(thread.inboxId) : Promise.resolve([]),
         // Only asked for when there is somebody who could act on the answer.
         canManage ? undoableThreadMerges(thread.id) : Promise.resolve([]),
+        // Who we are dealing with, in the form the adapters match on. Only
+        // worth building once the conversation has been matched to somebody -
+        // a first message from a stranger has nobody to look up.
+        thread.personId ? buildContextQuery(thread.personId) : Promise.resolve(null),
+      ])
+
+      // What the rest of the site already knows about them: "Existing
+      // customer", and nothing longer. Asked after the records rather than
+      // beside them because the records decide which of these are worth asking
+      // for at all - a hint the attached order already answers costs no query.
+      //
+      // With it, where the attached records that have a customer-facing page
+      // actually live. A product is on a conversation because somebody quoted
+      // it, so its name on this line opens the page the customer was sent
+      // rather than the editor behind it.
+      const [hints, publicUrls] = await Promise.all([
+        contextQuery ? loadHints(user, contextQuery, links) : Promise.resolve([]),
+        publicRecordUrls(links),
       ])
 
       // The site's other addresses this conversation belongs to. Its own is
@@ -943,6 +1107,21 @@ export async function UnifiedInboxPanel({
           showAvatars={settings.showAvatars}
           canDeleteMessages={canDeleteMessages}
           blockState={blockState}
+          spamState={{
+            spam: isSpam,
+            /* Whose bin, said out loud when it is not the reader's own.
+               "Moved to Sam's spam" and "Moved to your spam" are different
+               sentences, and somebody covering a colleague's post deserves the
+               one that is true. Null on their own post and on every shared
+               address, where the button means exactly what it looks like. */
+            ownerName: spamOwnerId === user.id ? null : staffById[spamOwnerId] ?? null,
+            senderAddress,
+            senderBlocked,
+            /* Blocking changes what everybody on the site receives, so it takes
+               the grant for acting on the outside world rather than the one for
+               reading it - the same line the channel block next door draws. */
+            canBlock: await hasPermission(user, 'unifiedinbox.reply'),
+          }}
           now={new Date()}
           timezone={timezone}
           heldDrafts={heldDrafts.map((held) => ({
@@ -965,7 +1144,9 @@ export async function UnifiedInboxPanel({
           context={{
             adminPath,
             sourceLabel: thread.sourceLabel,
+            hints,
             links,
+            publicUrls,
             canEditLinks,
             linkKinds: kindOptions,
             defaultLinkKind: defaultLinkKind(kindOptions, senderModules),
@@ -1103,7 +1284,7 @@ export async function UnifiedInboxPanel({
   // A folder under a colleague's name says which folder AND whose, in one
   // value, because the rail highlights one entry and there are three of them
   // under every colleague.
-  const folderTab = params.draftsOnly ? 'drafts' : params.sentOnly ? 'sent' : 'mentions'
+  const folderTab = params.draftsOnly ? 'drafts' : params.sentOnly ? 'sent' : params.spamOnly ? 'spam' : 'mentions'
   const currentTab = params.folderInboxId
     ? `${folderTab}:${params.folderInboxId}`
     : params.draftsOnly
@@ -1114,6 +1295,8 @@ export async function UnifiedInboxPanel({
         ? 'contacts'
         : params.campaignsOnly
           ? 'campaigns'
+          : params.spamOnly
+          ? 'spam'
           : params.mentionsOnly
           ? 'mentions'
           : params.unroutedOnly
@@ -1135,14 +1318,22 @@ export async function UnifiedInboxPanel({
   // post you are looking at, not that it is the sent one.
   const folderPrefix = folderOwnerName ? `${folderOwnerName} \u00b7 ` : ''
   const viewTitle = params.draftsOnly
-    // Never a colleague's name in front of this one: drafts are the reader's
+    // Never a colleague's NAME in front of this one: drafts are the reader's
     // own wherever they are read from, and a heading saying otherwise would be
-    // describing somebody else's writing over the top of their own.
-    ? 'Drafts'
+    // describing somebody else's writing over the top of their own. Which
+    // address they were left on is a different fact and worth saying, because
+    // the folder under a colleague's name is narrowed to that address and
+    // nothing else on the screen says so.
+    ? (folderInbox ? `Drafts \u00b7 ${folderInbox.address}` : 'Drafts')
     : params.sentOnly
       ? `${folderPrefix}Sent`
       : params.contactsOnly
         ? (showingOrganisations ? 'Organisations' : 'Contacts')
+        // No colleague's name in front of this one either, and for the same
+        // reason drafts have none: a spam folder belongs to the person who
+        // filled it, so there is no version of it under somebody else's name.
+        : params.spamOnly
+          ? `${folderPrefix}Spam`
         : params.mentionsOnly
           ? `${folderPrefix}Mentioned`
           : params.unroutedOnly
@@ -1181,7 +1372,7 @@ export async function UnifiedInboxPanel({
            account behind the address has gone, and the rail then falls back to
            what the address is called. */
         ownerName: i.ownerUserId ? staffById[i.ownerUserId] ?? null : null,
-        count: counts[i.id] ?? 0,
+        count: (counts[i.id] ?? 0) + (i.id === pinnedInboxId ? assignedElsewhere : 0),
       }))}
       channels={channels.map((c) => ({
         key: c.key,
@@ -1192,13 +1383,22 @@ export async function UnifiedInboxPanel({
       current={currentTab}
       me={{ id: user.id, name: staffById[user.id] ?? 'You' }}
       showAvatars={settings.showAvatars}
-      assignedCount={assignedCount}
       askedCount={askedCount}
-      assignee={params.assignee}
+      railOrder={railOrder}
       showUnrouted={canManage}
       unroutedCount={counts[''] ?? 0}
-      showDrafts={sendable.length > 0 || draftCount > 0}
+      /* Only where there is something in it. An empty Drafts folder is a row
+         that can only ever disappoint, so it stays away until somebody puts a
+         message down half-written - and stays put while they are standing in
+         it, so deleting the last one does not pull the list out from under the
+         person reading it. */
+      showDrafts={draftCount > 0 || currentTab === 'drafts'}
       draftCount={draftCount}
+      /* Per address, for the folder under a colleague's name - offered on the
+         same terms as the tab above: only where there is something in it. This
+         reader's own writing on that address, never the colleague's. */
+      draftCounts={draftCounts}
+      spamCount={spamCount}
       contactCount={contactCount}
       showCampaigns={canCampaign}
       /* At the head of the rail, on every list: starting a message is the one
@@ -1339,6 +1539,7 @@ export async function UnifiedInboxPanel({
       openThreadId={params.threadId}
       inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
       staffById={staffById}
+      mine={sentOwnerId !== null}
       now={new Date()}
       timezone={timezone}
     />
@@ -1351,9 +1552,12 @@ export async function UnifiedInboxPanel({
       page={params.page}
       openThreadId={params.threadId}
       staffById={staffById}
+      meId={user.id}
       inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
       showAvatars={settings.showAvatars}
       neverSynced={neverSynced}
+      spam={params.spamOnly}
+      spamOwnerName={params.spamOnly ? folderOwnerName : null}
       canManage={canManage}
       /* Any of the cuts, not only the words: "nothing matches that" is the
          honest answer to a date range that catches nothing too, and "nothing
@@ -1396,8 +1600,28 @@ export async function UnifiedInboxPanel({
           module per conversation opened. What is worth knowing beside a
           conversation is what it is ABOUT, and that is one line in the pinned
           header. The rest is the person's own page, one click away. */}
-      <div className="uin-app" data-open={opened ? '1' : '0'} data-context="off">
+      <div
+        className="uin-app"
+        data-open={opened ? '1' : '0'}
+        data-context="off"
+        data-find={params.searchPage ? '1' : '0'}
+      >
         {rail}
+
+        {/* A search's own head, across the list and the conversation both.
+            After the rail in the markup rather than before it, because the rail
+            is where the reader was and this is what they asked for; the grid
+            puts it above both columns either way. */}
+        {params.searchPage && (
+          <SearchBar
+            base={base}
+            params={carried}
+            inboxes={inboxes.map((i) => ({ id: i.id, name: i.name }))}
+            channels={channels.map((c) => ({ key: c.key, label: c.label }))}
+            showUnrouted={canManage}
+            oldestFirst={params.oldestFirst}
+          />
+        )}
 
         <div className="uin-col">
           <div className="uin-col-head">
@@ -1409,7 +1633,16 @@ export async function UnifiedInboxPanel({
             {/* A colleague's Mentioned list is the one that DOES want a title
                 over its tabs: the tabs say where the jobs stand and nothing
                 else on the screen says whose they are. */}
-            {listing && !params.contactsOnly && (!params.mentionsOnly || !!folderOwnerName) && (
+            {/* And on a search's own screen, where the head above holds every
+                cut and the tab row below has come off with them: without this
+                the column of results would be the one list on the hub with
+                nothing at all saying what it is or how much of it there is. */}
+            {/* And a colleague's Spam folder, for the reason directly above:
+                the tabs say where a conversation stands and nothing else on the
+                screen says whose bin you are looking into. Your own needs no
+                title - the rail highlight is unambiguous. */}
+            {(listing || params.searchPage || (params.spamOnly && !!folderOwnerName))
+              && !params.contactsOnly && (!params.mentionsOnly || !!folderOwnerName) && (
               <div className="uin-col-title">
                 <h2>{viewTitle}</h2>
                 <span className="uin-col-total">{headTotal}</span>
@@ -1431,6 +1664,7 @@ export async function UnifiedInboxPanel({
                 canImport={canManage}
                 categories={categoryList.map((c) => ({ id: c.id, name: c.name, people: c.peopleCount }))}
                 categoryId={params.categoryId}
+                showSearch={!params.searchPage}
               />
             ) : params.mentionsOnly ? (
               /* The same four choices the conversation list has, narrowing the
@@ -1448,7 +1682,7 @@ export async function UnifiedInboxPanel({
                   ? `Where an ask stands with ${folderOwnerName}`
                   : 'Where an ask stands with you'}
               />
-            ) : listing ? null : (
+            ) : listing || params.searchPage ? null : (
               <>
                 <Filters
                   base={base}
@@ -1466,6 +1700,9 @@ export async function UnifiedInboxPanel({
                   }}
                   staff={staff}
                   oldestFirst={params.oldestFirst}
+                  /* Their own address, where "who is this on" has one answer
+                     all the way down and the menu is a switch instead. */
+                  ownInbox={!!pinnedInboxId && params.inboxId === pinnedInboxId}
                 />
                 <StatusTabs
                   base={base}

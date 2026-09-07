@@ -31,13 +31,22 @@ import type { Draft } from './types'
 // used to be lost. Setting a reply to go out on Monday morning and then putting
 // the conversation to sleep until Friday is an ordinary pair of instructions -
 // it is how you say "this goes out on Monday and I do not want to see it again
-// until the end of the week" - and it is the pair the composer used to fold
-// into one button, "Send later & snooze". That button has gone; the two
-// instructions are given separately now, which means the send has to leave the
-// sleep it finds alone. So the sleeping time is read before the message is
-// posted and put back afterwards, and where there is also a chase the LATER of
-// the two wins: a chase that fires while somebody has deliberately put the
-// conversation away is a chase that wakes them up early.
+// until the end of the week" - and "Send later & snooze" is the one button that
+// gives both at once. It arrives here by two routes, because there are two
+// kinds of message:
+//
+//   ON THE CONVERSATION, where the reply box put it to sleep on the spot - the
+//   sleep is already on the row, and the send has to leave it alone. So the
+//   sleeping time is read before the message is posted and put back afterwards.
+//
+//   ON THE DRAFT, as `snoozeUntil`, which is the only route open to a message
+//   STARTING a conversation: there is no conversation to put to sleep until the
+//   queue has sent the thing, and by then nobody is there to say so. The
+//   instruction is stored where it was given and carried out at this end.
+//
+// The later of those two wins, and where there is also a chase the LATER again:
+// a chase that fires while somebody has deliberately put the conversation away
+// is a chase that wakes them up early.
 //
 // Never throws. By the time this runs the message has gone, and a conversation
 // that stays in Open is a far smaller loss than a message reported as unsent.
@@ -69,6 +78,10 @@ export function plannedSleepAfterSend(input: {
   sentAt: Date
   /** Where the conversation stood BEFORE the message was posted. */
   was: ThreadSleep
+  /** The sleep asked for on the draft itself, which is how a message starting a
+   *  conversation says it - there was nothing to put to sleep when it was
+   *  written. Left out is none. */
+  snoozeUntil?: Date | null
 }): SleepPlan | null {
   const chaseAt = input.followUpMinutes
     ? followUpAt(input.sentAt, input.followUpMinutes)
@@ -76,11 +89,23 @@ export function plannedSleepAfterSend(input: {
   // Only a sleep that has not already run out. One due five minutes ago is a
   // conversation the next sweep would wake anyway, and putting it back would
   // hide something that is due to be looked at.
-  const asleepUntil = input.was?.status === 'snoozed'
+  const wasAsleepUntil = input.was?.status === 'snoozed'
     && input.was.snoozeUntil
     && input.was.snoozeUntil.getTime() > input.sentAt.getTime()
     ? input.was.snoozeUntil
     : null
+  // The one written on the draft, held to the same test for the same reason: a
+  // message set for Monday and a sleep asked for until Sunday is a sleep that
+  // has run out by the time it could be applied.
+  const askedUntil = input.snoozeUntil
+    && input.snoozeUntil.getTime() > input.sentAt.getTime()
+    ? input.snoozeUntil
+    : null
+  // Two ways of saying the same thing, so the one that keeps the conversation
+  // away longest is the one that was meant.
+  const asleepUntil = wasAsleepUntil && askedUntil
+    ? (wasAsleepUntil.getTime() > askedUntil.getTime() ? wasAsleepUntil : askedUntil)
+    : wasAsleepUntil ?? askedUntil
 
   if (chaseAt && asleepUntil) {
     return asleepUntil.getTime() > chaseAt.getTime()
@@ -96,7 +121,7 @@ export function plannedSleepAfterSend(input: {
 }
 
 export async function applyFollowUpAfterSend(
-  draft: Pick<Draft, 'authorUserId' | 'followUpMinutes'>,
+  draft: Pick<Draft, 'authorUserId' | 'followUpMinutes' | 'snoozeUntil'>,
   threadId: string | null,
   sentAt: Date,
   /** Where the conversation stood before the message went out, so a sleep
@@ -108,6 +133,7 @@ export async function applyFollowUpAfterSend(
     followUpMinutes: draft.followUpMinutes,
     sentAt,
     was,
+    snoozeUntil: draft.snoozeUntil,
   })
   if (!plan) return
   try {

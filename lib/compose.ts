@@ -4,6 +4,7 @@ import { formatInSiteTimezone } from '@/lib/config/timezone'
 import { normaliseAddress, addressDomain, isValidAddress } from './addresses'
 import { CUSTOM_TAG_HEADER, READ_RECEIPT_HEADER, customTagFor } from './receipts'
 import { htmlToText } from './html'
+import { flattenWithProducts, refKey, replaceSlots } from './products/slots'
 
 // ---------------------------------------------------------------------------
 // Building an outgoing message.
@@ -268,37 +269,58 @@ export function quoteForForward(original: QuotedOriginal, timezone: string): { h
   }
 }
 
-/** What the person typed, the products they put on it, their inbox's signature,
- *  and the quoted original, in that order - which is where every mail client
- *  puts the last two and therefore where a reader expects to find them.
+/** What the person typed, their inbox's signature and the quoted original, in
+ *  that order - which is where every mail client puts the last two and
+ *  therefore where a reader expects to find them.
  *
- *  The products go under the writing rather than into it, and that is a
- *  decision rather than an accident: the writing box holds bold, italic, a
- *  colour, a link and two kinds of list on purpose (see RichText.tsx), and a
- *  table dropped into a box like that is a table somebody's next backspace
- *  takes half of. Under the words, built on the server from what the shop says
- *  at that moment, it is the same list every time and it cannot be broken. */
+ *  The products are not a fourth part any more. They go where they were put:
+ *  the writing arrives carrying a slot per product (see lib/products/slots.ts)
+ *  and each slot is swapped here for the table rendered out of the shop's own
+ *  tables. Anything picked with nowhere to go - a draft written before the
+ *  catalogue went into the box - still runs on under the writing, which is
+ *  where it used to print and where that draft's author expects it. */
 export function assembleBody(parts: {
   bodyHtml: string
   /** The catalogue items, already rendered by lib/products/render.ts. Built
    *  from the site's own tables rather than from anything posted, which is why
-   *  it is not put through the sanitiser with the typed half. */
-  products?: { html: string; text: string } | null
+   *  it is not put through the sanitiser with the typed half.
+   *
+   *  `placed` answers for a slot in the writing, keyed the way
+   *  lib/products/slots.ts keys one; `trailing` is what had no slot. */
+  products?: {
+    placed?: Map<string, { html: string; text: string }>
+    trailing?: { html: string; text: string } | null
+  } | null
   /** Already rendered by lib/signature.ts, whichever kind it was written in.
    *  The text half comes with it because a rich text signature reads better
    *  flattened from its markdown than from its HTML. */
   signature: { html: string; text: string } | null
   quoted: { html: string; text: string } | null
 }): { html: string; text: string } {
-  const typed = sanitizeEmailHtml(parts.bodyHtml)
+  const clean = sanitizeEmailHtml(parts.bodyHtml)
+  // The slots survive the sanitiser - a div wearing a class is exactly what its
+  // allow-list keeps - and are swapped for the real thing on this side of it, so
+  // the table that leaves is the one lib/products/render.ts wrote rather than
+  // the one DOMPurify made of it.
+  const placed = parts.products?.placed ?? new Map<string, { html: string; text: string }>()
+  const typed = replaceSlots(clean, (ref) => placed.get(refKey(ref))?.html ?? '')
+
+  // The same markup flattened for the text half, with each slot standing in as
+  // a token until the flattening is done - see flattenWithProducts.
+  const typedText = flattenWithProducts(
+    clean,
+    (ref) => placed.get(refKey(ref))?.text ?? null,
+    htmlToText,
+  )
+
   // Sanitised again on the way out. The pasted kind was cleaned when it was
   // saved, but a row written before that was, or by anything other than the
   // settings screen, has not been - and this is the last gate before it leaves.
   const signature = parts.signature?.html ? sanitizeEmailHtml(parts.signature.html) : ''
   const signatureText = (parts.signature?.text ?? '').trim() || (signature ? htmlToText(signature) : '')
 
-  const products = parts.products?.html ?? ''
-  const productsText = parts.products?.text ?? ''
+  const products = parts.products?.trailing?.html ?? ''
+  const productsText = parts.products?.trailing?.text ?? ''
 
   const html = [
     typed,
@@ -310,7 +332,7 @@ export function assembleBody(parts: {
     .join('')
 
   const text = [
-    htmlToText(typed),
+    typedText,
     productsText ? `\n\n${productsText}` : '',
     signature ? `\n--\n${signatureText}` : '',
     parts.quoted?.text ?? '',

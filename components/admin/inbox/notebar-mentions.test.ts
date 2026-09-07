@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mentionQueryAt } from './NoteBar'
+import { mentionQueryAt, taggedInText } from './NoteBar'
 
 // What is being typed after an @ in the note line, if anything.
 //
@@ -41,5 +41,63 @@ describe('mentionQueryAt', () => {
 
   it('stops at a second @', () => {
     expect(mentionQueryAt('@Chris @Ma', 10)).toEqual({ query: 'Ma', from: 7 })
+  })
+})
+
+// Who a finished note actually asks. A name typed out rather than picked off
+// the menu counts - somebody who writes "@Emma can you look" and presses Return
+// has said what they meant - but only where it could be one person and only
+// where the written name ends where the name ends.
+
+describe('taggedInText', () => {
+  const chris = { id: 'u-chris', name: 'Chris' }
+  const emma = { id: 'u-emma', name: 'Emma' }
+  const sam = { id: 'u-sam', name: 'Sam' }
+  const samSmith = { id: 'u-sam-smith', name: 'Sam Smith' }
+  const staff = [chris, emma, sam, samSmith]
+
+  it('asks nobody when nobody is named', () => {
+    expect(taggedInText('rang them, no answer', staff)).toEqual([])
+    expect(taggedInText('chased sam@example.com about it', staff)).toEqual([])
+  })
+
+  it('asks somebody whose name was typed out rather than picked', () => {
+    expect(taggedInText('@Emma can you look at this', staff)).toEqual(['u-emma'])
+    expect(taggedInText('will ask @Emma tomorrow', staff)).toEqual(['u-emma'])
+  })
+
+  it('does not care how it was capitalised', () => {
+    expect(taggedInText('@emma can you look', staff)).toEqual(['u-emma'])
+  })
+
+  it('takes the longest name it could be, not both', () => {
+    expect(taggedInText('@Sam Smith has the file', staff)).toEqual(['u-sam-smith'])
+    expect(taggedInText('@Sam has the file', staff)).toEqual(['u-sam'])
+  })
+
+  it('will not tag somebody because their name starts a longer word', () => {
+    expect(taggedInText('@Samuel took it', staff)).toEqual([])
+    expect(taggedInText('@Emmanuel took it', staff)).toEqual([])
+  })
+
+  it('leaves two colleagues of the same name to the menu', () => {
+    const smyth = { id: 'u-sam-smyth', name: 'Sam Smith' }
+    expect(taggedInText('@Sam Smith has it', [samSmith, smyth])).toEqual([])
+    // Unless one of them was actually picked, which carries an id rather than a
+    // spelling.
+    expect(taggedInText('@Sam Smith has it', [samSmith, smyth], [smyth])).toEqual(['u-sam-smyth'])
+  })
+
+  it('asks everybody named, once each, in the order they appear', () => {
+    expect(taggedInText('@Chris and @Emma - one of you?', staff)).toEqual(['u-chris', 'u-emma'])
+    expect(taggedInText('@Emma ... @Emma again', staff)).toEqual(['u-emma'])
+  })
+
+  it('drops somebody picked and then deleted back out of the sentence', () => {
+    expect(taggedInText('actually never mind', staff, [emma])).toEqual([])
+  })
+
+  it('needs the @ to start a word', () => {
+    expect(taggedInText('ask.@Emma about it', staff)).toEqual([])
   })
 })

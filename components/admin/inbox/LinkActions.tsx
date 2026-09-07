@@ -59,16 +59,18 @@ export function LinkActions({
     <>
       <button
         type="button"
-        className="uin-ctx-remove"
+        className="uin-ctx-x"
         disabled={busy}
         onClick={() => { setError(''); setAsking(true) }}
-        // The visible word starts the spoken one, so somebody driving the page
-        // by voice can say "Remove" and be understood.
+        // A cross says nothing out loud, so the whole sentence has to be in the
+        // label and in the tooltip: "Remove Order 1234 from this conversation"
+        // rather than "button", and the same words for a mouse hovering it.
         aria-label={`Remove ${label} from this ${where}`}
+        title={`Remove ${label} from this ${where}`}
       >
-        Remove
+        <span aria-hidden="true">&times;</span>
       </button>
-      {error && <span className="uin-ctx-sub" role="alert" style={ERROR_TEXT}>{error}</span>}
+      {error && <span className="uin-ctx-sub uin-ctx-x-error" role="alert" style={ERROR_TEXT}>{error}</span>}
       <ConfirmDialog
         open={asking}
         title="Take this off?"

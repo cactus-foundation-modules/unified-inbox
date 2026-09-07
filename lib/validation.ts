@@ -46,6 +46,14 @@ export const InboxOrderBody = z.object({
   ids: z.array(z.string().min(1)).min(1).max(200),
 })
 
+/** The order one person keeps the top of their own rail in: every entry under
+ *  "Yours", once, in the order they want to read them. Inbox ids and the
+ *  handful of plain words the rail calls its own folders, so bounded the way
+ *  an id is. Capped well above any plausible rail. */
+export const RailOrderBody = z.object({
+  keys: z.array(z.string().trim().min(1).max(200)).min(1).max(100),
+})
+
 /** The order the channels are in, as the rail posts it. Channel keys, so
  *  bounded the way a channel key is - and only the ones the person dragging can
  *  see, which is why the route merges rather than replaces. */
@@ -158,6 +166,12 @@ export const DraftBody = z.object({
    *  reason. Bounds are checked on the server (lib/scheduled.ts), which is also
    *  where the column's own limits are stated. */
   followUpMinutes: z.number().int().nullable().optional(),
+  /** When the conversation should stay asleep until once this message has
+   *  actually gone, as an ISO stamp. An absolute moment rather than a length of
+   *  time, unlike the chase above: a sleep is a date in somebody's week, and
+   *  Friday is Friday whichever hour of Monday the message went out. Read only
+   *  when a time is being set, and cleared with the time when one comes off. */
+  snoozeUntil: z.string().datetime().nullable().optional(),
 })
 
 /** What the reading screen posts when somebody works through a conversation.
@@ -170,6 +184,26 @@ export const ThreadPatchBody = z.object({
   snoozeUntil: z.string().datetime().nullable().optional(),
   /** A user id, or null to hand it back to nobody in particular. */
   assigneeUserId: z.string().min(1).nullable().optional(),
+})
+
+/** Junk, as one person sees it. One boolean, because there are exactly two
+ *  answers and neither of them has a date, a reason or a note attached. */
+export const ThreadSpamBody = z.object({
+  spam: z.boolean(),
+})
+
+/** Shutting the site's front door on somebody, or opening it again.
+ *
+ *  The address is checked for shape here and normalised in lib/blocked-senders.ts
+ *  - two jobs, and mixing them is how a block gets stored in a form that the
+ *  collecting pass then never matches. 320 characters is the longest an email
+ *  address may be (64 local + @ + 255 domain), so anything above it is not one.
+ */
+export const BlockedSenderBody = z.object({
+  address: z.string().trim().min(3).max(320),
+  /** False takes them off the list again. Sent as a value rather than implied
+   *  by the verb, so the same route answers both and the two can never drift. */
+  blocked: z.boolean(),
 })
 
 /** Where one colleague's own ask stands. Deliberately the same three words the
@@ -196,12 +230,20 @@ export const NoteBody = z.object({
 
 /** Starting a discussion: colleagues only, and it goes nowhere near a customer.
  *  Several addresses may be named and each gets its own discussion - see
- *  migrations/029_discussions.sql for why one thread with two guest lists is not
- *  on offer. */
+ *  migrations/030_discussions.sql for why one thread with two guest lists is not
+ *  on offer.
+ *
+ *  `toUserIds` is who it is PUT TO. Colleagues rather than addresses, because
+ *  that is what the To line on the form asks for, and because somebody who has
+ *  not been given an address of their own is still somebody a discussion can be
+ *  put to. Which addresses end up holding it is the server's to work out from
+ *  the names - a client that could name the address would be a client that
+ *  could file a note in anybody's private post. */
 export const DiscussionBody = z.object({
   inboxIds: z.array(z.string().min(1)).min(1, 'Say which address this is for.').max(20),
   subject: z.string().trim().min(1, 'Give the discussion a subject.').max(500),
   body: z.string().min(1, 'There is nothing to say yet.').max(20_000),
+  toUserIds: z.array(z.string().min(1)).max(20).optional(),
   mentions: z.array(z.string().min(1)).max(20).optional(),
 })
 

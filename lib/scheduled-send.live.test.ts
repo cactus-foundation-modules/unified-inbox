@@ -352,6 +352,91 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
     await lib.deleteDraft(draft.id, emma)
   })
 
+  it('keeps a sleep with the time, and drops it when the time comes off', async () => {
+    // The sleep asked for by "Send later & snooze" rides with the departure
+    // time on exactly the same terms as the chase above. It is stored on the
+    // draft because a message STARTING a conversation has no conversation to
+    // put to sleep until the queue has sent it.
+    const sleepUntil = new Date('2027-01-08T09:00:00.000Z')
+    const draft = await lib.saveDraft({
+      authorUserId: emma,
+      inboxId: purchasing,
+      threadId: null,
+      mode: 'new',
+      to: ['supplier@example.com'],
+      cc: [],
+      subject: 'Our order',
+      body: 'Goes Monday, and I do not want it back until Friday.',
+      attachments: [],
+      sendAt: future,
+      snoozeUntil: sleepUntil,
+    })
+    expect(draft.snoozeUntil?.toISOString()).toBe(sleepUntil.toISOString())
+    expect(draft.snoozeUntil).toBeInstanceOf(Date)
+
+    // Read back off the row rather than out of what the INSERT handed over: the
+    // column is TIMESTAMP(3) and this is the only thing that proves it round
+    // trips.
+    expect((await lib.getDraft(draft.id, emma))?.snoozeUntil?.toISOString())
+      .toBe(sleepUntil.toISOString())
+
+    const untouched = await lib.saveDraft({
+      id: draft.id,
+      authorUserId: emma,
+      inboxId: purchasing,
+      threadId: null,
+      mode: 'new',
+      to: ['supplier@example.com'],
+      cc: [],
+      subject: 'Our order',
+      body: 'Same time, same sleep.',
+      attachments: [],
+    })
+    expect(untouched.snoozeUntil?.toISOString()).toBe(sleepUntil.toISOString())
+
+    const cancelled = await lib.saveDraft({
+      id: draft.id,
+      authorUserId: emma,
+      inboxId: purchasing,
+      threadId: null,
+      mode: 'new',
+      to: ['supplier@example.com'],
+      cc: [],
+      subject: 'Our order',
+      body: 'No time, no sleep.',
+      attachments: [],
+      sendAt: null,
+    })
+    expect(cancelled.snoozeUntil).toBeNull()
+    await lib.deleteDraft(draft.id, emma)
+  })
+
+  it('puts the conversation back to sleep for a new message that asked for it', async () => {
+    // The whole point of the column: the queue creates the conversation and
+    // then has to carry out an instruction given days earlier, by somebody who
+    // is not there.
+    const thread = await lib.createThread({
+      inboxId: purchasing,
+      subject: 'New enquiry',
+      subjectNormalised: 'new enquiry',
+      preview: null,
+      lastMessageAt: new Date(),
+      lastDirection: 'out',
+      unread: false,
+    })
+    const sleepUntil = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
+    await followUp.applyFollowUpAfterSend(
+      { authorUserId: emma, followUpMinutes: null, snoozeUntil: sleepUntil },
+      thread,
+      new Date(),
+    )
+    const after = await lib.getThreadDetail(thread)
+    expect(after?.status).toBe('snoozed')
+    expect(after?.snoozeUntil?.toISOString()).toBe(sleepUntil.toISOString())
+    // Putting a conversation to sleep is not a chase, so it hands it to nobody.
+    expect(after?.assigneeUserId).toBeNull()
+  })
+
   it('takes a chase measured in hours, and refuses one measured in a minute', async () => {
     // Migration 023 dropped the day-long floor: the follow-up offers the same
     // answers snoozing does, and "in three hours" is three hours.
@@ -477,7 +562,7 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
 
     const sentAt = new Date('2026-06-02T09:07:00.000Z')
     await followUp.applyFollowUpAfterSend(
-      { authorUserId: emma, followUpMinutes: 60 * 24 * 3 },
+      { authorUserId: emma, followUpMinutes: 60 * 24 * 3, snoozeUntil: null },
       thread,
       sentAt,
     )
@@ -502,7 +587,11 @@ describe.runIf(shouldRun)('sending later, against a real database', () => {
       lastDirection: 'out',
       unread: false,
     })
-    await followUp.applyFollowUpAfterSend({ authorUserId: emma, followUpMinutes: null }, thread, new Date())
+    await followUp.applyFollowUpAfterSend(
+      { authorUserId: emma, followUpMinutes: null, snoozeUntil: null },
+      thread,
+      new Date(),
+    )
     const after = await lib.getThreadDetail(thread)
     expect(after?.status).toBe('open')
     expect(after?.assigneeUserId).toBeNull()

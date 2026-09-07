@@ -31,6 +31,9 @@ type Props = {
   outbound: OutboundLogRow[]
   sections: ContextSection[]
   links: RecordLink[]
+  /** Where the attached records that have a public page open, keyed by link id.
+   *  See lib/record-urls.ts - in practice, the products. */
+  publicUrls: Record<string, string>
   events: PersonEventRow[]
   merges: MergeRow[]
   /** The labels on them, in the list's own order. */
@@ -87,7 +90,8 @@ function describeEvent(event: PersonEventRow): string {
 
 export function PersonView({
   adminPath, base, params, person, identities, threads, outbound, sections, links,
-  events, merges, categories, alsoHere, staffById, canEdit, canManage, now, timezone,
+  publicUrls, events, merges, categories, alsoHere, staffById, canEdit, canManage, now,
+  timezone,
 }: Props) {
   const timeline = buildTimeline(threads, outbound)
   const name = person.displayName || person.primaryEmail || 'Somebody'
@@ -290,6 +294,7 @@ export function PersonView({
               threadId={null}
               sections={sections}
               links={links}
+              publicUrls={publicUrls}
               // The same permission the conversation rail gets. Being able to
               // see what is attached to somebody and never being able to take
               // any of it off read as a broken button rather than a decision.

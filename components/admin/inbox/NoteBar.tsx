@@ -25,12 +25,22 @@ import { NoteIcon, SendIcon } from './icons'
 // presses and a hunt through a wall of chips to do the commonest thing a note
 // is for. The button has gone.
 //
-// The names are still PICKED from a list rather than scraped out of the words
-// afterwards. A colleague called Sam Smith and another called Sam Smyth are not
-// something a regular expression should be deciding between, and a tag hands
-// somebody a job and a way into the conversation - not a thing to get wrong on
-// a near miss. So typing @ opens the list, and it is choosing from it that
-// attaches the name; the words are only what the note ends up saying.
+// The names open in a MENU ABOVE the line, one under another, because there is
+// nothing below the note bar for a menu to open into - it is the bottom edge of
+// the window. It was a row of chips wrapping under the box, a shape people read
+// as things already chosen rather than as things to pick.
+//
+// TYPING THE NAME OUT IS ALSO A TAG. Picking off the menu is still the quick
+// way, but somebody who types "@Emma can you look" and presses Return has said
+// what they meant and had it silently ignored - which is the worst outcome
+// available, because the note READS as though Emma was asked.
+//
+// The one thing not done is guessing. A written name has to match a colleague's
+// name exactly, end where the name ends rather than in the middle of a longer
+// word, and be the ONLY colleague it could be - two people of the same name are
+// left for the menu to tell apart, where the pick carries an id rather than a
+// spelling. The longest match wins, so "@Sam Smith" on a site with a Sam and a
+// Sam Smith is Sam Smith rather than both of them.
 
 /** How many names the menu offers at once. Past eight it is a list to scroll
  *  rather than a list to read, and another letter typed is quicker. */
@@ -52,6 +62,55 @@ export function mentionQueryAt(text: string, caret: number): { query: string; fr
 }
 
 type Person = { id: string; name: string }
+
+/** A letter or a digit, ie a character that means the written name has not
+ *  finished yet. "@Samuel" is not "@Sam" followed by something. */
+const NAME_CHAR = /[\p{L}\p{N}]/u
+
+/**
+ * Who a note actually asks: everybody picked off the menu and still written in
+ * it, plus everybody whose name is written out in full whether they were picked
+ * or not.
+ *
+ * Pure, so the near misses are argued about in a test rather than in somebody's
+ * post. Order is the order they appear, picked names first, and nobody twice.
+ */
+export function taggedInText(text: string, staff: Person[], picked: Person[] = []): string[] {
+  const out: string[] = []
+  const add = (id: string) => { if (!out.includes(id)) out.push(id) }
+
+  // Chosen off the menu, and still in the sentence. Somebody picked and then
+  // deleted back out of it was a thought that changed its mind, and telling them
+  // anyway is how a note quietly asks the wrong person.
+  for (const person of picked) {
+    if (text.includes(`@${person.name}`)) add(person.id)
+  }
+
+  // Written out by hand. Each @ is looked at once, and only a whole name that
+  // could be one person answers to it.
+  const at = /(^|\s)@/g
+  for (let hit = at.exec(text); hit; hit = at.exec(text)) {
+    const tail = text.slice(hit.index + hit[0].length)
+    const lower = tail.toLowerCase()
+    let best: Person[] = []
+    let longest = 0
+    for (const person of staff) {
+      const name = person.name.trim().toLowerCase()
+      if (!name || !lower.startsWith(name)) continue
+      // The name has to END where it ends. Otherwise a colleague called Sam is
+      // tagged by the word "@Samuel", which is somebody else entirely.
+      const next = tail.charAt(name.length)
+      if (next && NAME_CHAR.test(next)) continue
+      if (name.length > longest) { best = [person]; longest = name.length }
+      else if (name.length === longest) best.push(person)
+    }
+    // Exactly one, or nobody. Two colleagues of the same name are a question
+    // the menu answers and a spelling cannot.
+    if (best.length === 1) add(best[0]!.id)
+  }
+
+  return out
+}
 
 type Props = {
   threadId: string
@@ -134,12 +193,7 @@ export function NoteBar({ threadId, staff }: Props) {
     setBusy(true)
     setError('')
     try {
-      // Only the names still written in the sentence. Somebody picked and then
-      // deleted back out of it was a thought that changed its mind, and telling
-      // them anyway is how a note quietly asks the wrong person.
-      const mentions = tagged
-        .filter((person) => note.includes(`@${person.name}`))
-        .map((person) => person.id)
+      const mentions = taggedInText(note, staff, tagged)
       const response = await fetch(`/api/m/unified-inbox/threads/${threadId}/notes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -165,7 +219,7 @@ export function NoteBar({ threadId, staff }: Props) {
       inFlight.current = false
       setBusy(false)
     }
-  }, [router, tagged, text, threadId])
+  }, [router, staff, tagged, text, threadId])
 
   return (
     <div className="uin-notebar">
@@ -240,11 +294,18 @@ export function NoteBar({ threadId, staff }: Props) {
         <span>{busy ? 'Saving...' : 'Note'}</span>
       </button>
 
-      {/* The names, under the line rather than over it: the bar already wraps,
-          and a menu that covers the note you are writing is a menu you close to
-          check what you said. */}
+      {/* The names, one under another, opening upwards out of the bar. The bar
+          is pinned to the bottom of the conversation, so there is nothing below
+          it to open into - and a menu above the line covers the messages, which
+          are still there when it closes, rather than the sentence being
+          written. */}
       {suggestions.length > 0 && (
-        <ul className="uin-notebar-names" id="uin-notebar-names" role="listbox">
+        <ul
+          className="uin-notebar-names"
+          id="uin-notebar-names"
+          role="listbox"
+          aria-label="Colleagues"
+        >
           {suggestions.map((person, index) => (
             <li key={person.id}>
               <button

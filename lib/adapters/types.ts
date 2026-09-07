@@ -42,6 +42,28 @@ export type ContextItem = {
   href: string
 }
 
+/**
+ * A standing fact about the person, drawn on a conversation's context line
+ * beside the records attached to it.
+ *
+ * Not a record and not attachable: nobody put it there and nobody can take it
+ * off, because it is not a claim about this conversation at all - it is what
+ * another module already knows about whoever is on the other end. "They have
+ * bought from us before" is the whole of it, and the useful thing to do with
+ * that is open what they bought, which is what the href is for.
+ */
+export type ContextHint = {
+  /** Unique across every adapter's hints. */
+  id: string
+  /** What it says on the line, in three words at most: 'Existing customer'. */
+  label: string
+  /** The hover text - the same fact, said properly. */
+  title: string
+  /** ADMIN-ROOT RELATIVE, no leading slash, query string allowed:
+   *  `m/shop/orders?search=someone%40example.com`. */
+  href: string
+}
+
 /** One module's worth of context, as one block in the rail. */
 export type ContextSection = {
   moduleName: string
@@ -101,6 +123,21 @@ export type ContextAdapter = {
    * of ours - which is exactly why a pattern is allowed to be generous.
    */
   lookup?(kind: LinkKind, reference: string): Promise<LinkTarget | null>
+  /**
+   * A standing fact about this person worth one word beside the conversation,
+   * or null for nothing worth saying. Optional: most modules have no such fact.
+   */
+  hint?(query: ContextQuery): Promise<ContextHint | null>
+  /**
+   * The record type whose presence on a conversation retires `hint`.
+   *
+   * A hint is the vague version of a question a record answers exactly: once
+   * somebody has attached the actual order, "they have ordered before" is a
+   * line of the header spent saying something less useful than the line beside
+   * it. Declared rather than returned so that a superseded hint costs no query
+   * at all, which is the third rule at the top of this file.
+   */
+  hintSupersededBy?: string
   /**
    * The kind of reference this module owns, and what somebody calls it out
    * loud. Declared rather than mapped in the panel so that the list of things

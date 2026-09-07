@@ -204,16 +204,60 @@ describe('assembleBody', () => {
     expect(out.text).toContain('> old')
   })
 
-  it('puts the products under the writing and above the signature', () => {
+  it('puts a product with no slot under the writing and above the signature', () => {
     const out = assembleBody({
       bodyHtml: '<p>The two we talked about:</p>',
-      products: { html: '<table><tr><td>Ergo Task Chair</td></tr></table>', text: 'Ergo Task Chair' },
+      products: {
+        trailing: { html: '<table><tr><td>Ergo Task Chair</td></tr></table>', text: 'Ergo Task Chair' },
+      },
       signature: { html: '<p>Marcus</p>', text: 'Marcus' },
       quoted: { html: '<blockquote>old</blockquote>', text: '\n\n> old' },
     })
     expect(out.html.indexOf('we talked about')).toBeLessThan(out.html.indexOf('Ergo Task Chair'))
     expect(out.html.indexOf('Ergo Task Chair')).toBeLessThan(out.html.indexOf('Marcus'))
     expect(out.text.indexOf('Ergo Task Chair')).toBeLessThan(out.text.indexOf('Marcus'))
+  })
+
+  it('puts a product where the writing has a slot for it', () => {
+    const out = assembleBody({
+      bodyHtml:
+        '<p>This one first:</p>'
+        + '<div class="uin-product-slot uin-ps--shop--product--p1">stale</div>'
+        + '<p>and then this one:</p>'
+        + '<div class="uin-product-slot uin-ps--shop--product--p2">stale</div>',
+      products: {
+        placed: new Map([
+          ['shop:product:p1', { html: '<table><tr><td>Ergo Task Chair</td></tr></table>', text: 'Ergo Task Chair' }],
+          ['shop:product:p2', { html: '<table><tr><td>Bench Desk</td></tr></table>', text: 'Bench Desk' }],
+        ]),
+      },
+      signature: { html: '<p>Marcus</p>', text: 'Marcus' },
+      quoted: null,
+    })
+    expect(out.html).not.toContain('stale')
+    expect(out.html).not.toContain('uin-product-slot')
+    expect(out.html.indexOf('This one first')).toBeLessThan(out.html.indexOf('Ergo Task Chair'))
+    expect(out.html.indexOf('Ergo Task Chair')).toBeLessThan(out.html.indexOf('and then this one'))
+    expect(out.html.indexOf('and then this one')).toBeLessThan(out.html.indexOf('Bench Desk'))
+    expect(out.html.indexOf('Bench Desk')).toBeLessThan(out.html.indexOf('Marcus'))
+    // And the same order in the text half, off its own renderer rather than
+    // flattened out of the table.
+    expect(out.text.indexOf('This one first')).toBeLessThan(out.text.indexOf('Ergo Task Chair'))
+    expect(out.text.indexOf('Ergo Task Chair')).toBeLessThan(out.text.indexOf('and then this one'))
+    expect(out.text.indexOf('and then this one')).toBeLessThan(out.text.indexOf('Bench Desk'))
+  })
+
+  it('takes out a slot whose product has gone rather than leaving an empty box', () => {
+    const out = assembleBody({
+      bodyHtml:
+        '<p>Here you go.</p>'
+        + '<div class="uin-product-slot uin-ps--shop--product--gone">Withdrawn Chair</div>',
+      products: { placed: new Map() },
+      signature: null,
+      quoted: null,
+    })
+    expect(out.html).toBe('<p>Here you go.</p>')
+    expect(out.text).toBe('Here you go.')
   })
 
   it('leaves a message carrying no products carrying no markup for them either', () => {
@@ -232,8 +276,10 @@ describe('assembleBody', () => {
     const out = assembleBody({
       bodyHtml: '<p>Here you go.</p>',
       products: {
-        html: '<table role="presentation" cellpadding="0"><tr><td width="64">x</td></tr></table>',
-        text: 'x',
+        trailing: {
+          html: '<table role="presentation" cellpadding="0"><tr><td width="64">x</td></tr></table>',
+          text: 'x',
+        },
       },
       signature: null,
       quoted: null,

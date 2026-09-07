@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import type { ContextSection } from '@/modules/unified-inbox/lib/adapters'
 import type { RecordLink } from '@/modules/unified-inbox/lib/types'
-import { recordHref, recordLabel } from '@/modules/unified-inbox/lib/record-links'
+import { recordDestination, recordLabel } from '@/modules/unified-inbox/lib/record-links'
 import { LinkActions } from './LinkActions'
 
 // What the rest of the site knows about the person on the other end of the
@@ -29,22 +29,32 @@ type Props = {
   /** Records that are context for the PERSON. Beside a conversation this is
    *  empty and the block is not drawn - a conversation's own are in its header. */
   links: RecordLink[]
+  /** Where the ones that have a page of their own on the shop actually open,
+   *  keyed by link id. A product is attached because somebody quoted it, so it
+   *  opens the page the customer was sent rather than the editor. */
+  publicUrls: Record<string, string>
   canEditLinks: boolean
 }
 
 function LinkedRecord({
-  link, adminPath, canEdit,
-}: { link: RecordLink; adminPath: string; canEdit: boolean }) {
-  const href = recordHref(link)
+  link, adminPath, publicUrls, canEdit,
+}: {
+  link: RecordLink
+  adminPath: string
+  publicUrls: Record<string, string>
+  canEdit: boolean
+}) {
+  const href = recordDestination(link, adminPath, publicUrls)
   const label = recordLabel(link)
   return (
-    <li className="uin-ctx-row">
+    <li className={canEdit ? 'uin-ctx-row uin-ctx-row--x' : 'uin-ctx-row'}>
+      {canEdit && <LinkActions linkId={link.id} label={label} onThread={false} />}
       <div className="uin-ctx-main">
         {href ? (
           // New tab, same as the line in a conversation's header: following an
           // order from somebody's page is reading the order as well as the
           // page, not instead of it.
-          <Link href={`/${adminPath}/${href}`} target="_blank" rel="noreferrer">{label}</Link>
+          <Link href={href} target="_blank" rel="noreferrer">{label}</Link>
         ) : (
           <span>{label}</span>
         )}
@@ -54,13 +64,12 @@ function LinkedRecord({
           </span>
         )}
       </div>
-      {canEdit && <LinkActions linkId={link.id} label={label} onThread={false} />}
     </li>
   )
 }
 
 export function ContextRail({
-  adminPath, threadId, sections, links, canEditLinks,
+  adminPath, threadId, sections, links, publicUrls, canEditLinks,
 }: Props) {
   // The block still stands on a person's page with nothing in it, because
   // "no context yet" is an answer somebody came looking for. Beside a
@@ -79,6 +88,7 @@ export function ContextRail({
                   key={link.id}
                   link={link}
                   adminPath={adminPath}
+                  publicUrls={publicUrls}
                   canEdit={canEditLinks}
                 />
               ))}

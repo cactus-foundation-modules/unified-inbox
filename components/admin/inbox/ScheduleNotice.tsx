@@ -10,9 +10,8 @@ import type { DraftSendState } from '@/modules/unified-inbox/lib/types'
 // particular time, so anything that changed - it went wrong, it was stood down,
 // it is going now - has to be said out loud where the message is.
 //
-// Shared by both composers. The reply box picks its time from a menu behind the
-// alarm clock and the new-message dialog still has the panel with the chase in
-// it, but what they say afterwards is the same three sentences, and two copies
+// Shared by both composers. Both pick their time from the menu behind the alarm
+// clock, and what they say afterwards is the same three sentences - two copies
 // of a sentence is one copy that gets fixed.
 
 type Props = {
@@ -24,6 +23,9 @@ type Props = {
   /** How long after it goes out the conversation comes back if nobody has
    *  answered, or null for none. */
   followUpMinutes: number | null
+  /** When the conversation stays asleep until once this has gone, as an ISO
+   *  stamp, or null for one nobody asked that of. */
+  snoozeUntil: string | null
   /** Whether mail from the recipient took the timer off before it could go. */
   held: boolean
   /** The site's zone, which is the one every time on the screen is stamped in. */
@@ -31,7 +33,7 @@ type Props = {
 }
 
 export function ScheduleNotice({
-  sendAt, sendState, sendError, followUpMinutes, held, timezone,
+  sendAt, sendState, sendError, followUpMinutes, snoozeUntil, held, timezone,
 }: Props) {
   const scheduled = sendState === 'scheduled' || sendState === 'sending'
 
@@ -67,6 +69,12 @@ export function ScheduleNotice({
                 new Date(),
                 timezone,
               )}, the conversation comes back to whoever wrote it.</>
+          ) : null}
+          {/* Said out loud, because a conversation that has gone quiet with no
+              explanation is a conversation somebody goes looking for. */}
+          {sendState === 'scheduled' && snoozeUntil ? (
+            <> This conversation stays asleep until{' '}
+              {describeSendAt(snoozeUntil, new Date(), timezone)}, unless they write back first.</>
           ) : null}
         </div>
       )}

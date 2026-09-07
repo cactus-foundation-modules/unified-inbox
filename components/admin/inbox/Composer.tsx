@@ -12,20 +12,20 @@ import {
 import { plainTextToHtml, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
 import { AttachmentChips, AttachmentPicker, plainReason, type Attachment } from './AttachmentPicker'
 import { ProductPicker, productKey } from './ProductPicker'
-import { ProductPreview } from './ProductPreview'
 import { AttachmentDropNotice, AttachmentDropOverlay } from './AttachmentDropChrome'
 import { useAttachmentDrop } from './useAttachmentDrop'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Dropdown } from './Dropdown'
 import { PendingSend } from './PendingSend'
 import { RecipientField } from './RecipientField'
-import { RichText, RichTextBox, RichTextTools } from './RichText'
+import { RichText, RichTextBox, RichTextTools, type RichTextHandle } from './RichText'
 import { ScheduleNotice } from './ScheduleNotice'
 import { SendLaterPanel } from './SendLaterPanel'
 import { SnoozePanel } from './SnoozePanel'
 import { AlarmIcon, CloseIcon, CollapseIcon, ExpandIcon, PaperclipIcon, TagIcon } from './icons'
 import { useComposerOpen } from './composer-open'
 import type { DraftSendState } from '@/modules/unified-inbox/lib/types'
+import { appendSlots, refKey, slotHtml, slotRefs } from '@/modules/unified-inbox/lib/products/slots'
 import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 
 // The composer: reply, reply to everybody, forward, and an internal note.
@@ -122,9 +122,15 @@ export function Composer({
   // The markup in the writing box. A draft written before the box could hold
   // any is turned into markup on the way in, so its line breaks survive - and
   // is saved back as markup the first time anybody touches it.
-  const [text, setText] = useState(
-    draft ? (draft.bodyFormat === 'html' ? draft.body : plainTextToHtml(draft.body)) : '',
-  )
+  //
+  // A draft written before the catalogue went INTO the box carries its products
+  // beside the words rather than in them, so they are run onto the end here.
+  // That is where they used to print, and from this moment on they can be moved
+  // about like everything else.
+  const [text, setText] = useState(() => {
+    const body = draft ? (draft.bodyFormat === 'html' ? draft.body : plainTextToHtml(draft.body)) : ''
+    return slotRefs(body).length > 0 ? body : appendSlots(body, draftProducts)
+  })
 
   /** Who a reply of this kind would go to, as one line of text. */
   const defaultRecipients = useCallback(
@@ -176,10 +182,23 @@ export function Composer({
   const [note, setNote] = useState('')
   const [picking, setPicking] = useState(false)
   // What the reply carries out of the catalogue. Whole products here so the
-  // chips can say what they are; only the references are ever sent, and what
-  // the customer reads is built on the server when Send is pressed.
-  const [products, setProducts] = useState<ProductChoice[]>(draftProducts)
+  // block in the writing can say what they are; only the references are ever
+  // sent, and what the customer reads is built on the server when Send is
+  // pressed.
+  //
+  // The WRITING is what decides which products are on the message, though - this
+  // follows it. Somebody who backspaces over a block has taken that product off,
+  // and there is no second list that could disagree with what is on the screen.
+  const [picked, setPicked] = useState<ProductChoice[]>(draftProducts)
   const [pickingProduct, setPickingProduct] = useState(false)
+  const products = useMemo(() => {
+    const known = new Map(picked.map((one) => [productKey(one), one]))
+    return slotRefs(text)
+      .map((ref) => known.get(refKey(ref)))
+      .filter((one): one is ProductChoice => one !== undefined)
+  }, [picked, text])
+  /** The writing box, for putting a product where the caret is. */
+  const editor = useRef<RichTextHandle | null>(null)
   // Where a click was headed when it was caught, or null when nothing was.
   const [leavingTo, setLeavingTo] = useState<string | null>(null)
   const [draftId, setDraftId] = useState<string | null>(draft?.id ?? null)
@@ -190,17 +209,22 @@ export function Composer({
   const [sendAt, setSendAt] = useState<string | null>(draft?.sendAt ?? null)
   const [sendState, setSendState] = useState<DraftSendState>(draft?.sendState ?? null)
   const [sendError, setSendError] = useState<string | null>(draft?.sendError ?? null)
-  // The chase set on it, and whether mail from the recipient took the timer off
-  // before it could go. Both travel with the draft rather than being worked out
-  // here: the server decides what a saved schedule means.
+  // The chase set on it, the sleep waiting behind it, and whether mail from the
+  // recipient took the timer off before it could go. All three travel with the
+  // draft rather than being worked out here: the server decides what a saved
+  // schedule means.
   const [followUpMinutes, setFollowUpMinutes] = useState<number | null>(draft?.followUpMinutes ?? null)
+  const [draftSnoozeUntil, setDraftSnoozeUntil] = useState<string | null>(draft?.snoozeUntil ?? null)
   const [held, setHeld] = useState(draft?.held ?? false)
   // A time somebody has picked off the alarm clock and not yet committed. It is
   // deliberately not saved on the spot: "send it later" and "send it later and
   // put this conversation to sleep until then" are two instructions, and the
   // menu cannot know which one is coming.
   const [pendingSendAt, setPendingSendAt] = useState<Date | null>(null)
-  const [pendingFollowUp, setPendingFollowUp] = useState<number | null>(draft?.followUpMinutes ?? null)
+  // Read once and never set: nothing offers a chase any more. It is here so
+  // that re-saving a draft written back when the composer did offer one keeps
+  // the chase it was given rather than quietly dropping it.
+  const [pendingFollowUp] = useState<number | null>(draft?.followUpMinutes ?? null)
   // Waiting for its own time, or going out this minute. Either way it is out of
   // this composer's hands.
   const waiting = sendState === 'scheduled' || sendState === 'sending'
@@ -451,16 +475,20 @@ export function Composer({
       setRecipientsEdited(false)
       setAttachments([])
       // The catalogue clears with the files, for the same reason: the box is
-      // empty and ready for the next reply, and chips left over from a message
-      // that has already gone are three chairs somebody sends twice.
-      setProducts([])
+      // empty and ready for the next reply, and chairs left over from a message
+      // that has already gone are three chairs somebody sends twice. Emptying
+      // the writing already took the blocks with it; this is what somebody
+      // picked, which is what a second press would otherwise still find.
+      setPicked([])
       setMentions([])
       setMentionQuery('')
       setDirty(false)
-      // The draft went with the message, and so did any time on it.
+      // The draft went with the message, and so did any time on it - and any
+      // sleep that was waiting behind that time.
       setSendAt(null)
       setSendState(null)
       setSendError(null)
+      setDraftSnoozeUntil(null)
       setPendingSendAt(null)
       // Said out loud, because the box emptying could as easily mean something
       // went wrong as mean it went.
@@ -490,6 +518,7 @@ export function Composer({
   const draftPayload = useCallback((
     wallClock?: string | null,
     followUp?: number | null,
+    sleepUntil?: Date | null,
   ) => ({
     id: draftId ?? undefined,
     threadId,
@@ -516,6 +545,10 @@ export function Composer({
     // Read by the server only when a time is being set, and cleared with the
     // time when one is taken off.
     followUpMinutes: followUp ?? null,
+    // Same terms. The conversation is put to sleep here and now as well, but
+    // that sleep has to survive a send that happens days later with nobody
+    // watching, so the instruction rides on the draft too.
+    snoozeUntil: sleepUntil ? sleepUntil.toISOString() : null,
   }), [attachments, bcc, cc, draftId, mode, products, recipients, subject, text, threadId])
 
   /** Puts the box down as a draft, with or without a time on it. Saving and
@@ -525,8 +558,9 @@ export function Composer({
   const save = useCallback(async (
     wallClock?: string | null,
     followUp?: number | null,
+    sleepUntil?: Date | null,
   ): Promise<boolean> => {
-    const payload = draftPayload(wallClock, followUp)
+    const payload = draftPayload(wallClock, followUp, sleepUntil)
     if (!isWorthSaving(payload)) {
       setError('There is nothing to save yet.')
       return false
@@ -555,6 +589,7 @@ export function Composer({
       setSendState(at ? 'scheduled' : null)
       setSendError(null)
       setFollowUpMinutes(typeof data?.followUpMinutes === 'number' ? data.followUpMinutes : null)
+      setDraftSnoozeUntil(typeof data?.snoozeUntil === 'string' ? data.snoozeUntil : null)
       // Saving with a time on it stands the message back up: whatever mail held
       // it has been read by whoever is scheduling it again.
       if (at) setHeld(false)
@@ -594,6 +629,7 @@ export function Composer({
       setSendAt(null)
       setSendState(null)
       setSendError(null)
+      setDraftSnoozeUntil(null)
       setPendingSendAt(null)
       setDirty(false)
       setNote('')
@@ -767,6 +803,7 @@ export function Composer({
     // and both of them have to be talking about the same box.
     <RichText
       id="uin-composer-text"
+      handleRef={editor}
       value={text}
       onChange={(html) => { setText(html); setDirty(true); setNote('') }}
       placeholder={noting ? 'Something for the others to see' : 'Write your reply'}
@@ -922,21 +959,6 @@ export function Composer({
         <RichTextBox />
       </div>
 
-      {/* Where the products actually go, drawn where they actually go. Under
-          the writing and above the signature, which is where the send path puts
-          them - see lib/compose.ts. */}
-      {!noting && (
-        <ProductPreview
-          products={products}
-          keyOf={productKey}
-          disabled={busy}
-          onRemove={(key) => {
-            setProducts((prev) => prev.filter((p) => productKey(p) !== key))
-            setDirty(true)
-          }}
-        />
-      )}
-
       {noting && staff.length > 0 && (
         <div className="uin-composer-row">
           {staff.length > MENTION_CHIPS ? (
@@ -996,6 +1018,7 @@ export function Composer({
           sendState={sendState}
           sendError={sendError}
           followUpMinutes={followUpMinutes}
+          snoozeUntil={draftSnoozeUntil}
           held={held}
           timezone={timezone}
         />
@@ -1004,9 +1027,6 @@ export function Composer({
       {!noting && pendingSendAt && !waiting && (
         <PendingSend
           at={pendingSendAt}
-          followUp={pendingFollowUp}
-          onFollowUp={(minutes) => { setPendingFollowUp(minutes); setError('') }}
-          onProblem={setError}
           onClear={() => setPendingSendAt(null)}
           timezone={timezone}
           busy={busy}
@@ -1127,8 +1147,16 @@ export function Composer({
                 onSnooze={(until) => {
                   // With a time on it nothing is sent now: the departure is
                   // saved and the conversation goes to sleep behind it.
+                  //
+                  // The sleep is written in BOTH places on purpose. Here, so the
+                  // conversation leaves the list this minute, which is what was
+                  // asked for; and on the draft, so that when the message
+                  // actually goes out - days later, with nobody watching - the
+                  // queue knows to put it back to sleep rather than leaving the
+                  // conversation open on the strength of what it happened to
+                  // find. See lib/follow-up.ts.
                   if (pendingWallClock) {
-                    void save(pendingWallClock, pendingFollowUp)
+                    void save(pendingWallClock, pendingFollowUp, until)
                       .then((ok) => { if (ok) void snoozeThread(until) })
                     return
                   }
@@ -1181,9 +1209,15 @@ export function Composer({
           chosen={products}
           onClose={() => setPickingProduct(false)}
           onPick={(item) => {
-            setProducts((prev) =>
+            // Into the writing, where the caret is. The block that lands there
+            // is what the recipient will see, so the message can be built round
+            // it - "this one is the cheapest", the chair, "and this one is what
+            // you asked for" - rather than everything ending up under
+            // everything.
+            setPicked((prev) =>
               prev.some((p) => productKey(p) === productKey(item)) ? prev : [...prev, item],
             )
+            editor.current?.insertHtml(slotHtml(item))
             setDirty(true)
           }}
         />

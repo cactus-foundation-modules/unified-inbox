@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { formatCalendarDate, inboxHref } from '@/modules/unified-inbox/lib/list'
 import { FilterMenu } from './FilterMenu'
 import { QueryForm } from './QueryForm'
-import { SearchIcon, SortIcon } from './icons'
+import { FilterIcon, SearchIcon, SortIcon } from './icons'
 
 // The search, the order, and the narrower cuts across whatever the tabs above
 // have already chosen: only the ones nobody has read, and only the ones handed
@@ -22,10 +22,12 @@ import { SearchIcon, SortIcon } from './icons'
 // so they went behind the button and the row underneath now holds only what is
 // actually switched on.
 //
-// "Mine" used to be a chip here. It is a place in the rail now - Assigned to me
-// - because "what is on my desk" is somewhere you go rather than a filter you
-// remember to press, and having it in both spots meant two things that did the
-// same thing and disagreed about whether they were on.
+// "Mine" used to be a chip here, and then briefly a place in the rail. It is
+// neither now: what has been handed to somebody shows in the address they open
+// on, beside the post that arrived there, because "what is on my desk" is the
+// screen they are already looking at rather than a filter they remember to
+// press or a second list they remember to check. What is left here is the
+// genuinely occasional question - what is on somebody ELSE's desk.
 //
 // All of it lives in the head of the list column, so it stays put while forty
 // conversations go past underneath. It used to sit above the whole workspace,
@@ -60,10 +62,13 @@ type Props = {
   /** Which end of the list is being read from, so the button can say what
    *  pressing it would do rather than what is already true. */
   oldestFirst: boolean
+  /** Whether this is the reader's OWN address, where the menu collapses into a
+   *  single unread toggle. See the note above the button below. */
+  ownInbox: boolean
 }
 
 export function Filters({
-  base, params, unreadOnly, assignee, search, narrowed, staff, oldestFirst,
+  base, params, unreadOnly, assignee, search, narrowed, staff, oldestFirst, ownInbox,
 }: Props) {
   // Any filter change starts again at page one and closes whatever was open,
   // since the conversation on screen may not survive the new filter. A person's
@@ -102,13 +107,36 @@ export function Filters({
           />
           <button type="submit" className="sr-only">Search</button>
         </QueryForm>
-        <FilterMenu
-          base={base}
-          params={params}
-          unreadOnly={unreadOnly}
-          assignee={assignee}
-          staff={staff}
-        />
+        {/* On the reader's OWN address the menu is a menu of one, so it is not
+            a menu. Everything in that list is either post that came to them or
+            work handed to them; "whose desk is this on" has the same answer all
+            the way down, and a panel that has to be opened to find one tick is
+            two presses for a question with one answer. So the same button in
+            the same place becomes a plain switch: press it for the unread,
+            press it again for the lot. Everywhere else - a shared address, All,
+            a channel - the full menu stands, because there the assignee
+            question is the useful one. */}
+        {ownInbox ? (
+          <Link
+            className={unreadOnly ? 'uin-icon-btn uin-icon-btn-on' : 'uin-icon-btn'}
+            href={inboxHref(base, params, { unread: unreadOnly ? null : '1', ...reset })}
+            aria-pressed={unreadOnly}
+            title={unreadOnly ? 'Showing only what you have not read. Press to show everything.' : 'Show only what you have not read'}
+          >
+            {FilterIcon}
+            <span className="sr-only">
+              {unreadOnly ? 'Showing only what you have not read. Show everything.' : 'Show only what you have not read.'}
+            </span>
+          </Link>
+        ) : (
+          <FilterMenu
+            base={base}
+            params={params}
+            unreadOnly={unreadOnly}
+            assignee={assignee}
+            staff={staff}
+          />
+        )}
         {/* Order, not contents. A link rather than a button because it is one
             more thing in the address, like every other choice on this screen. */}
         <Link

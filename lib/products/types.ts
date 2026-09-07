@@ -138,4 +138,14 @@ export type ProductSource = {
    * to send the whole message over it would be the wrong half of the bargain.
    */
   resolve(refs: readonly ProductRef[]): Promise<ResolvedProduct[]>
+  /**
+   * Where each of these is published on the site - the page a customer would be
+   * sent to, never the editor behind it - keyed `kind:id`. Anything without a
+   * page worth pointing at is simply absent from the answer.
+   *
+   * Its own question rather than a second use of resolve(): addressing a link
+   * on a screen wants a slug and nothing else, and resolve() buys a price, a
+   * picture and the shop's tax settings to arrive at one.
+   */
+  pageUrls(refs: readonly ProductRef[]): Promise<Map<string, string>>
 }

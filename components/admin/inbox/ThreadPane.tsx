@@ -84,6 +84,26 @@ type Props = {
   /** Whether the other party on this conversation can be refused from here.
    *  Null when the channel cannot refuse anybody, which is most of them. */
   blockState: { blocked: boolean; channelLabel: string } | null
+  /** Junk, as THIS reader sees it: whether they have put this conversation in
+   *  their own spam folder, who wrote it, whether that sender is already
+   *  refused site-wide, and whether this reader may do the refusing.
+   *
+   *  Not the same thing as `blockState` above and deliberately not folded into
+   *  it. That one asks a CHANNEL to refuse the party on one conversation - the
+   *  phone dropping a caller before it rings - and only a channel that can
+   *  refuse anybody has it at all. This one is about email addresses, is the
+   *  site's own list rather than anybody else's, and covers every inbox on the
+   *  site rather than one conversation on one channel. */
+  spamState: {
+    spam: boolean
+    /** The colleague whose bin it would go into, when that is not the reader -
+     *  a conversation in somebody else's own address. Null on your own post and
+     *  on every shared address. */
+    ownerName: string | null
+    senderAddress: string | null
+    senderBlocked: boolean
+    canBlock: boolean
+  }
   now: Date
   /** Whether to ask for people's own pictures. Off unless the site has switched
    *  it on - see Settings, People. */
@@ -159,11 +179,12 @@ function formatBytes(bytes: number | null): string {
 // Keyed on what the sync engine actually stores. 'out-of-office' was here and
 // is not one of them - the engine writes 'auto-reply' - so that label never
 // appeared and every automatic reply fell through to the general one.
+// 'own-notification' is deliberately absent: mail the site sent itself carries
+// no flag at all (see below), so it needs no wording here either.
 const AUTO_LABELS: Record<string, string> = {
   bounce: 'This one bounced - it never reached them',
   'auto-reply': 'An automatic out-of-office reply',
   bulk: 'Sent to a list rather than written to you',
-  'own-notification': 'Sent by your own website, not by them',
 }
 
 /**
@@ -272,7 +293,7 @@ function MessageHeader({ message, personId, showAvatars, staffById, now, timezon
         <div className="uin-msg-head-lines">
           <div className="uin-msg-head-line">
             <span className="uin-msg-who">{author ?? 'Somebody here'}</span>
-            <span className="uin-msg-dir">{NoteIcon} Internal note, not sent</span>
+            <span className="uin-msg-dir">{NoteIcon} Internal note</span>
           </div>
         </div>
         <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
@@ -388,20 +409,32 @@ function Message({ message, personId, showAvatars, staffById, now, timezone, can
         timezone={timezone}
         tools={tools}
       />
-      {message.autoKind && (
+      {message.autoKind && message.autoKind !== 'own-notification' && (
         <div className="uin-msg-foot uin-msg-flag">
           <span className="uin-tag uin-tag-snoozed">{AUTO_LABELS[message.autoKind] ?? 'Sent automatically'}</span>
         </div>
       )}
       <div className="uin-msg-body">
-        {message.hasHtml ? (
+        {/* A NOTE IS NEVER PUT IN THE FRAME. The frame exists to hold a
+            stranger's markup at arm's length (E16): it is a document of its own,
+            with its own origin, its own white page and a height it has to
+            measure and report back. A note has none of that to protect anybody
+            from - `noteHtml` escapes what a colleague typed and turns the line
+            breaks into <br>, so there is no markup in it at all - and putting
+            one in there drew a white sheet on the note's amber ground with
+            several hundred pixels of nothing under it, waiting for a height that
+            two lines of text were never going to fill. */}
+        {kind !== 'note' && message.hasHtml ? (
           <MessageBody
             messageId={message.id}
             hasRemoteImages={message.remoteImages > 0}
             ownSender={message.ownSender}
           />
         ) : (
-          <MessageText text={message.bodyText ?? '(this message had nothing in it)'} />
+          <MessageText
+            text={message.bodyText ?? '(this message had nothing in it)'}
+            foldQuoted={kind !== 'note'}
+          />
         )}
       </div>
       {(message.attachments.length > 0 || message.deliveryStatus || offerDelete) && (
@@ -555,11 +588,31 @@ function undoableFromEvent(event: ThreadEventRow, merges: ThreadMergeView[]): Th
   return merges.filter((merge) => made.includes(merge.id))
 }
 
+/**
+ * Whether the catalogue is worth offering on this channel.
+ *
+ * It used to be offered on email and nothing else, on the reasoning that a
+ * channel this module does not own carries words rather than markup and a table
+ * of chairs would leave as nothing at all. Half right: the table does not
+ * travel, but the words do - the same lines the text half of every email carries
+ * - and an enquiry off the contact form is ANSWERED BY EMAIL, so the one channel
+ * where somebody most obviously wants to quote a chair was the one channel that
+ * would not let them.
+ *
+ * A text is the exception, and for a reason that is nothing to do with markup:
+ * it is billed by the character. Three products silently trebling the cost of a
+ * text is not a decision to make on somebody's behalf from a button with a
+ * price tag on it.
+ */
+function productsTravel(channel: string): boolean {
+  return channel !== 'sms' && channel !== 'phone'
+}
+
 export function ThreadPane({
   base, params, thread, inboxName, messages, events, staff, taggable, staffById,
   canReply, cannotReplyReason, replyTo, replyAllTo, replySubject, forwardSubject, draft,
   canAddProducts, draftProducts, newestFirst,
-  canDeleteMessages, blockState, now, timezone, heldDrafts, showAvatars,
+  canDeleteMessages, blockState, spamState, now, timezone, heldDrafts, showAvatars,
   context, asked, merges, otherInboxNames, scrollToMessageId,
 }: Props) {
   // The list arrives oldest first. Reversing a copy rather than sorting again:
@@ -611,6 +664,11 @@ export function ThreadPane({
             snoozeUntil={thread.snoozeUntil ? thread.snoozeUntil.toISOString() : null}
             staff={staff}
             timezone={timezone}
+            spam={spamState.spam}
+            spamOwnerName={spamState.ownerName}
+            senderAddress={spamState.senderAddress}
+            senderBlocked={spamState.senderBlocked}
+            canBlock={spamState.canBlock}
           />
           <Link className="uin-thread-close" href={inboxHref(base, params, { id: null })}>
             <span className="uin-back-phone" aria-hidden="true">{BackIcon} Back to the list</span>
@@ -738,10 +796,7 @@ export function ThreadPane({
             replySubject={replySubject}
             forwardSubject={forwardSubject}
             draft={draft}
-            /* Never on a conversation another module owns: a chat window and a
-               text message carry words, and a table of chairs would leave here
-               as nothing at all. */
-            canAddProducts={canAddProducts && !thread.providerModule}
+            canAddProducts={canAddProducts && productsTravel(thread.channel)}
             draftProducts={draftProducts}
             timezone={timezone}
           />
@@ -792,10 +847,7 @@ export function ThreadPane({
             replySubject={replySubject}
             forwardSubject={forwardSubject}
             draft={draft}
-            /* Never on a conversation another module owns: a chat window and a
-               text message carry words, and a table of chairs would leave here
-               as nothing at all. */
-            canAddProducts={canAddProducts && !thread.providerModule}
+            canAddProducts={canAddProducts && productsTravel(thread.channel)}
             draftProducts={draftProducts}
             timezone={timezone}
           />

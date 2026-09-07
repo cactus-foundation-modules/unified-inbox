@@ -76,6 +76,12 @@ type Db = typeof import('./db')
 const SENT_AT = new Date('2026-09-03T09:14:00.000Z')
 const THURSDAY = new Date('2026-09-10T08:00:00.000Z')
 
+/** Whose lists these are. Every conversation list in the module is a list as
+ *  one PERSON sees it now, because "this is junk" is that reader's opinion
+ *  rather than a fact about the mail (see migrations/041_spam.sql). Nothing in
+ *  this suite marks anything as junk, so any consistent reader will do. */
+const VIEWER = 'user-viewer'
+
 describe.runIf(shouldRun)('a reply puts a conversation back in Open, against a real database', () => {
   let vps: VpsConfig
   let role: TestRole
@@ -229,6 +235,7 @@ describe.runIf(shouldRun)('a reply puts a conversation back in Open, against a r
 
   it('moves it out of the tab it was under and into Open', async () => {
     const listed = (status: 'open' | 'snoozed' | 'done') => lib.listThreads({
+      viewerUserId: VIEWER,
       inboxIds: [inboxId], includeUnrouted: false, status, page: 1, perPage: 50,
     }).then((rows) => rows.map((t) => t.id))
 
@@ -271,7 +278,7 @@ describe.runIf(shouldRun)('a reply puts a conversation back in Open, against a r
     // unreadCounts skips done conversations on purpose. That is precisely why a
     // reply to a finished one had to reopen it rather than merely mark it
     // unread: unread and done is unread and invisible.
-    const badge = async () => (await lib.unreadCounts([inboxId], false))[inboxId] ?? 0
+    const badge = async () => (await lib.unreadCounts(VIEWER, [inboxId], false))[inboxId] ?? 0
 
     // A delta rather than an absolute: the tests above share this database and
     // have left their own reopened conversations lying about in it.

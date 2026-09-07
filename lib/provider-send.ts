@@ -1,9 +1,16 @@
 import {
   getThreadDetail,
   insertProviderMessage,
+  recordLink,
   recountProviderThread,
   setThreadRead,
+  threadHasLink,
 } from './db'
+import { htmlToText } from './html'
+import { resolveProducts } from './products'
+import { renderProductText } from './products/render'
+import { flattenWithProducts, refKey, slotRefs } from './products/slots'
+import type { ProductRef } from './products/types'
 import { pushProviderRead } from './provider-read'
 import { providerForKey } from './provider-registry'
 import { buildSnippet } from './threading'
@@ -19,16 +26,64 @@ import { buildSnippet } from './threading'
 //
 // Which means this file sends nothing itself. It asks, it records what was
 // sent, and it turns a failure into a sentence somebody can act on.
+//
+// WHAT A CHANNEL GETS IS WORDS. The seam hands the owning module one string, so
+// the catalogue table an email would carry becomes the same list written out -
+// the name, the options, the price and the address to look at it. Which is not a
+// consolation prize: it is exactly what renderProductText already writes for the
+// text half of every email this module sends, so a chair quoted in an enquiry
+// and the same chair quoted in a reply say the same thing.
 
 export type ProviderSendResult =
   | { ok: true; messageId: string | null }
   | { ok: false; reason: string }
+
+/**
+ * The words to send a channel, with the products where they were put.
+ *
+ * The writing comes in as markup carrying a slot per product (see
+ * lib/products/slots.ts). Each slot becomes that product's own lines; anything
+ * picked with no slot to sit in - a draft written before the catalogue went into
+ * the writing box - runs on at the end, which is where it used to print.
+ *
+ * Read fresh, like every other send path: what was stored is a reference, and
+ * the name and the price are the shop's at the moment the message leaves.
+ */
+export async function replyWords(
+  bodyHtml: string,
+  refs: readonly ProductRef[] = [],
+): Promise<string> {
+  if (refs.length === 0) return htmlToText(bodyHtml)
+
+  const resolved = await resolveProducts(refs)
+  const byKey = new Map(resolved.map((one) => [refKey(one.choice), one.choice]))
+  const slotted = new Set(slotRefs(bodyHtml).map(refKey))
+
+  const words = flattenWithProducts(
+    bodyHtml,
+    (ref) => {
+      const choice = byKey.get(refKey(ref))
+      return choice ? renderProductText([choice]) : null
+    },
+    htmlToText,
+  )
+
+  const trailing = resolved
+    .map((one) => one.choice)
+    .filter((choice) => !slotted.has(refKey(choice)))
+  if (trailing.length === 0) return words
+  return [words, renderProductText(trailing)].filter(Boolean).join('\n\n')
+}
 
 export async function sendProviderReply(input: {
   threadId: string
   text: string
   authorUserId: string
   authorName: string | null
+  /** What was quoted, so the conversation ends up carrying it - the same row a
+   *  purchase order or an order sits on. Already in `text`; this is only about
+   *  what the thread is ABOUT. */
+  products?: readonly ProductRef[]
 }): Promise<ProviderSendResult> {
   const body = input.text.trim()
   if (!body) return { ok: false, reason: 'There is nothing to send.' }
@@ -90,6 +145,25 @@ export async function sendProviderReply(input: {
     sentAt,
   })
   await recountProviderThread(thread.id)
+
+  // Everything that was quoted, now attached to the conversation - exactly as it
+  // is when the same products go out on an email. Checked first rather than left
+  // to the insert: two messages quoting the same chair are one chair on the
+  // conversation, not two rows of the same name.
+  for (const { link } of await resolveProducts(input.products ?? [])) {
+    if (await threadHasLink(thread.id, link.moduleName, link.recordType, link.recordId)) continue
+    await recordLink({
+      threadId: thread.id,
+      personId: null,
+      moduleName: link.moduleName,
+      recordType: link.recordType,
+      recordId: link.recordId,
+      label: link.label,
+      confidence: 100,
+      linkedBy: 'user',
+    })
+  }
+
   // Answering something is the clearest possible statement that it has been
   // read, here and at the far end both.
   if (thread.unread) {

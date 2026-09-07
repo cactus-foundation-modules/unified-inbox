@@ -1,0 +1,50 @@
+-- Unified Inbox - Migration 039: sleeping behind a message that has not gone yet.
+--
+-- A NEW numbered file rather than an edit to an earlier one: a module migration
+-- is recorded once per install and never runs again, so editing 022 would reach
+-- a fresh install and nobody else. Everything below is idempotent, and there is
+-- no dollar-quoting anywhere - comments included - because the backup
+-- round-trip harness skips a whole module whose migration files carry a pair of
+-- them, which buys a green gate that proved nothing.
+--
+-- TIMESTAMP(3), which the backup serialiser already has a branch for, so the
+-- schema-coverage backstop needs no new one.
+--
+-- ---------------------------------------------------------------------------
+-- "This goes out on Monday morning, and I do not want to see it again until
+-- Friday" is one instruction, and until now the module could only keep half of
+-- it.
+--
+-- The reply box could put the conversation to sleep on the spot and hope the
+-- sleep survived the send - it does, because the queue reads where the
+-- conversation stood before it posts and puts that back afterwards. But a
+-- message STARTING a conversation has no conversation to put to sleep: the
+-- thread does not exist until the queue sends the thing, minutes or days later,
+-- with nobody there to say what should happen to it. The instruction was given,
+-- accepted, and then quietly dropped.
+--
+-- So the instruction is stored where it was given - on the draft - and carried
+-- out at the far end, by the same code that already puts back a sleep the
+-- conversation was having:
+--
+--   snooze_until  the moment the conversation should stay asleep until once
+--                 this message has actually gone. NULL is every draft that
+--                 exists today, and every one nobody asks this of.
+--
+-- Deliberately a moment rather than a length of time, which is the opposite of
+-- follow_up_minutes beside it, and for the opposite reason. A chase is measured
+-- from when the message leaves - a message that goes out late is chased late.
+-- A sleep is a date in somebody's week: Friday is Friday whether the message
+-- went out on Monday morning or Monday teatime.
+--
+-- It rides with send_at, exactly as the chase does: taking the departure time
+-- off takes the sleep off with it, because a conversation waiting to go quiet
+-- behind a message that is no longer going anywhere is a conversation that
+-- goes quiet for no reason.
+--
+-- One that has already passed by the time the message leaves is ignored rather
+-- than applied - see plannedSleepAfterSend in lib/follow-up.ts. A sleep that
+-- ran out on Tuesday must not hide a conversation on Wednesday.
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE "uin_drafts" ADD COLUMN IF NOT EXISTS "snooze_until" TIMESTAMP(3);

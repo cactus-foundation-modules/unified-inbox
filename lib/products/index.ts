@@ -86,6 +86,47 @@ export async function listVariations(
 }
 
 /**
+ * Where the customer would see each of these, keyed `moduleName:kind:id`.
+ *
+ * Not gated on anybody's permissions, for the plainer of the two reasons
+ * resolveProducts is not: every address it hands back is a page anybody on the
+ * internet may open, and whoever is asking is already looking at the product's
+ * name on their own screen.
+ */
+export async function productPageUrls(
+  refs: readonly ProductRef[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  if (refs.length === 0) return out
+  const wantedTables = [...new Set(PRODUCT_SOURCES.flatMap((s) => s.tables))]
+  const [installed, tables] = await Promise.all([
+    installedModuleNames(),
+    wantedTables.length > 0 ? existingTables(wantedTables) : Promise.resolve(new Set<string>()),
+  ])
+
+  const settled = await Promise.all(
+    PRODUCT_SOURCES.map(async (source) => {
+      const mine = refs.filter((r) => r.moduleName === source.moduleName)
+      if (mine.length === 0) return null
+      if (!installed.has(source.moduleName)) return null
+      if (!source.tables.every((t) => tables.has(t))) return null
+      try {
+        return { source, found: await source.pageUrls(mine) }
+      } catch (err) {
+        console.error(`[unified-inbox] could not address the ${source.moduleName} products on a conversation:`, err)
+        return null
+      }
+    }),
+  )
+
+  for (const answer of settled) {
+    if (!answer) continue
+    for (const [key, url] of answer.found) out.set(`${answer.source.moduleName}:${key}`, url)
+  }
+  return out
+}
+
+/**
  * The chosen products, as they stand at the moment the message goes.
  *
  * Deliberately NOT gated on anybody's permissions, and for the same reason the

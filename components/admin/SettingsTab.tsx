@@ -181,6 +181,8 @@ export function UnifiedInboxSettingsTab() {
             settings={data.settings}
             inboxes={data.inboxes}
             retention={data.retention ?? null}
+            blockedSenders={data.blockedSenders ?? []}
+            users={data.users}
             busy={busy}
             call={call}
           />
