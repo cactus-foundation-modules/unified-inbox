@@ -136,12 +136,18 @@ export function ThreadListView({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [merging, setMerging] = useState(false)
-  // Who the "block them as well?" question is about, once the junk has already
-  // been moved. Held here rather than read off the picked rows because by the
-  // time it is asked the picking has been cleared - the move happened, so the
-  // selection it was made from is gone, exactly as it is after every other
-  // button in this bar. Empty means no question is on the screen.
-  const [blocking, setBlocking] = useState<string[]>([])
+  // Who the "block them as well?" question is about, and whether it is up at
+  // all. Null when the question is not on the screen. An EMPTY LIST is a question
+  // with nothing to block in it - a pile of internal discussions, senders
+  // already turned away, or a reader who may not shut the front door - which is
+  // still a question worth asking, because it is the only way back from a press
+  // nobody meant. So "is it open" and "is there anybody to block" are two
+  // different readings of this and cannot share one empty array.
+  const [blocking, setBlocking] = useState<string[] | null>(null)
+  /** The same thing with the null folded away, for the dialog to read. Whether
+   *  this is empty is what decides which of the two questions is on the screen -
+   *  the one with a front door in it, or the plain "are you sure". */
+  const askedAbout = blocking ?? []
   // Where a shift-clicked run is measured from: the row picked last on its own.
   // A ref rather than state - nothing on the screen draws it, so changing it
   // has no business redrawing forty rows.
@@ -349,21 +355,21 @@ export function ThreadListView({
    *  opinion about their own screen; blocking the senders is a fact about the
    *  site, covers every address it has, and is asked rather than assumed.
    *
-   *  NOTHING IS SENT ON THE PRESS where there is a question to ask. Six
-   *  conversations into somebody's spam folder because a finger landed on the
-   *  wrong button in a toolbar is six things to go and find again, so the press
-   *  opens the question and every answer is still available - including "I did
-   *  not mean that", which is the cross in the corner and leaves the pile
-   *  exactly where it is. Where there is nobody to block there is nothing to
-   *  ask, and the press is the answer. */
+   *  NOTHING IS SENT ON THE PRESS. Six conversations into somebody's spam
+   *  folder because a finger landed on the wrong button in a toolbar is six
+   *  things to go and find again, so the press opens the question and every
+   *  answer is still available - including "I did not mean that", which is the
+   *  cross in the corner and leaves the pile exactly where it is. The question
+   *  is asked even when there is nobody in the pile to block: that case has no
+   *  door to offer, but it wants the way out just as much. */
   const markPickedSpam = useCallback(() => {
-    if (canBlock && blockable.length > 0) { setBlocking(blockable); return }
-    void spamPicked()
-  }, [blockable, canBlock, spamPicked])
+    setBlocking(canBlock ? blockable : [])
+  }, [blockable, canBlock])
 
-  /** The middle answer: junk the pile and leave the front door alone. */
+  /** The middle answer: junk the pile and leave the front door alone. Also the
+   *  only answer on a question with nobody to block in it. */
   const movePickedOnly = useCallback(() => {
-    setBlocking([])
+    setBlocking(null)
     void spamPicked()
   }, [spamPicked])
 
@@ -372,14 +378,14 @@ export function ThreadListView({
    *  for the same reason again - the error names how many of them did not take,
    *  and the ones that did are still blocked. */
   const moveAndBlockAll = useCallback(async () => {
-    const addresses = blocking
+    const addresses = blocking ?? []
     if (addresses.length === 0) return
     // No redraw while the dialog is still up: it pulls this whole panel through
     // a fresh server render and takes the dialog with it (see runOnPicked).
     const moved = await spamPicked({ refresh: false })
     // Nothing moved, so there is nothing to shut a door behind. The run has
     // already said so on the screen.
-    if (!moved) { setBlocking([]); router.refresh(); return }
+    if (!moved) { setBlocking(null); router.refresh(); return }
     setBusy(true)
     try {
       const results = await Promise.allSettled(addresses.map((address) =>
@@ -401,7 +407,7 @@ export function ThreadListView({
       }
     } finally {
       setBusy(false)
-      setBlocking([])
+      setBlocking(null)
       // The redraw the move itself was not allowed to do, now that the dialog
       // it would have swept away is on its way out.
       router.refresh()
@@ -742,41 +748,57 @@ export function ThreadListView({
           middle answer is the ordinary one - junk them and leave the front door
           where it was - and Cancel means the press was a mistake. */}
       <ConfirmDialog
-        open={blocking.length > 0}
-        title={blocking.length > 1 ? `Block all ${blocking.length} of them as well?` : 'Block them as well?'}
+        open={blocking !== null}
+        title={askedAbout.length > 0
+          ? (askedAbout.length > 1 ? `Block all ${askedAbout.length} of them as well?` : 'Block them as well?')
+          : (picked.length > 1 ? `Move ${picked.length} conversations to spam?` : 'Move it to the spam folder?')}
         body={<>
-          {/* Whose bin each one landed in is worked out per conversation on the
+          {/* Whose bin each one lands in is worked out per conversation on the
               server, and a pile picked off one list can span several addresses -
-              so this says which rule was applied rather than naming a folder it
+              so this says which rule is applied rather than naming a folder it
               cannot know. "Moved to your spam" would be a plain untruth over a
               colleague's own post. */}
           <p>
-            They will go into a spam folder: your own, or the colleague&rsquo;s where the address
-            is theirs rather than the team&rsquo;s. Nothing is deleted, and nobody else&rsquo;s
-            view of them changes.
+            {picked.length > 1 ? 'They will go' : 'It will go'} into a spam folder: your own, or
+            the colleague&rsquo;s where the address is theirs rather than the team&rsquo;s.
+            Nothing is deleted, and nobody else&rsquo;s view of
+            {picked.length > 1 ? ' them changes.' : ' it changes.'}
           </p>
-          <p>
-            Would you also like to turn {blocking.length > 1 ? 'these senders' : <strong>{blocking[0]}</strong>} away
-            in future? Nothing further from them would reach an inbox on this site - shared or
-            personal. It would be dropped straight in here instead, marked as dealt with and left
-            unread, so you can still see what they sent. Nothing already here would be touched,
-            anybody already turned away simply stays that way, and you can let them back in from
-            the Spam folder or from the inbox settings.
-          </p>
-          {blocking.length > 1 && (
+          {askedAbout.length > 0 ? (
+            <p>
+              Would you also like to turn {askedAbout.length > 1 ? 'these senders' : <strong>{askedAbout[0]}</strong>} away
+              in future? Nothing further from them would reach an inbox on this site - shared or
+              personal. It would be dropped straight in here instead, marked as dealt with and left
+              unread, so you can still see what they sent. Nothing already here would be touched,
+              anybody already turned away simply stays that way, and you can let them back in from
+              the Spam folder or from the inbox settings.
+            </p>
+          ) : (
+            /* Nobody in this pile to turn away: internal discussions, senders
+               already blocked, or a reader who may not shut the front door. The
+               question is still worth putting - it is the way back. */
+            <p>Open the Spam folder and press the same button to bring anything straight back.</p>
+          )}
+          {askedAbout.length > 1 && (
             <ul>
-              {blocking.map((address) => <li key={address}><strong>{address}</strong></li>)}
+              {askedAbout.map((address) => <li key={address}><strong>{address}</strong></li>)}
             </ul>
           )}
         </>}
-        confirmLabel={blocking.length > 1 ? 'Block them all' : 'Block them'}
-        other={{ label: 'No, just move them', onClick: movePickedOnly }}
+        confirmLabel={askedAbout.length > 0
+          ? (askedAbout.length > 1 ? 'Block them all' : 'Block them')
+          : (picked.length > 1 ? 'Move them' : 'Move it')}
+        other={askedAbout.length > 0
+          ? { label: 'No, just move them', onClick: movePickedOnly }
+          : undefined}
         cancelLabel="Cancel"
-        destructive
+        // Only where the yes shuts the front door. A move undoes itself with the
+        // same button, so the keyboard may start on it.
+        destructive={askedAbout.length > 0}
         busy={busy}
         // Nothing has been sent yet, so this really does undo the press.
-        onCancel={() => { if (!busy) setBlocking([]) }}
-        onConfirm={() => void moveAndBlockAll()}
+        onCancel={() => { if (!busy) setBlocking(null) }}
+        onConfirm={() => void (askedAbout.length > 0 ? moveAndBlockAll() : movePickedOnly())}
       />
     </>
   )

@@ -1,7 +1,6 @@
 import { prisma } from '@/lib/db/prisma'
 import { hasPermission } from '@/lib/permissions/check'
 import { INSTALLED_MODULE_WHERE } from '@/lib/modules/live-status'
-import { moduleExtensionPointComponents } from '@/lib/modules/extension-points'
 import { CONVERSATION_PROVIDER_POINT } from '@/lib/conversations/providers'
 import type {
   ConversationProvider,
@@ -87,6 +86,13 @@ async function providerEntries(): Promise<ProviderEntry[]> {
  * it will be here next time.
  */
 export async function allConversationProviders(): Promise<ResolvedConversationProvider[]> {
+  // Dynamic on purpose: this module's own InboxPanel is imported BY the
+  // generated registry and reaches this file, so a static import back to the
+  // registry closes a cycle. Turbopack merges a cycle into one scope and can
+  // fail a production build with "Cannot access 'x' before initialization",
+  // on some module sets and not others. See scripts/check-import-cycles.mjs.
+  const { moduleExtensionPointComponents } =
+    await import('@/lib/modules/extension-points')
   const components = moduleExtensionPointComponents[CONVERSATION_PROVIDER_POINT] ?? {}
   if (Object.keys(components).length === 0) return []
 
@@ -171,6 +177,8 @@ export type ProviderChannel = {
 export async function visibleProviderChannels(user: SessionUser): Promise<ProviderChannel[]> {
   const entries = await providerEntries()
   if (entries.length === 0) return []
+  const { moduleExtensionPointComponents } =
+    await import('@/lib/modules/extension-points')
   const components = moduleExtensionPointComponents[CONVERSATION_PROVIDER_POINT] ?? {}
 
   const channels: ProviderChannel[] = []
@@ -210,6 +218,8 @@ export async function visibleProviderChannels(user: SessionUser): Promise<Provid
 export async function allProviderChannels(): Promise<Array<{ key: string; label: string }>> {
   const entries = await providerEntries()
   if (entries.length === 0) return []
+  const { moduleExtensionPointComponents } =
+    await import('@/lib/modules/extension-points')
   const components = moduleExtensionPointComponents[CONVERSATION_PROVIDER_POINT] ?? {}
 
   const channels: Array<{ key: string; label: string }> = []

@@ -41,11 +41,13 @@ import { SpamIcon } from './icons'
 // the mail server for somebody to go and look for: "did they ever actually
 // write?" is a question this site can now answer. See migration 044.
 //
-// NOTHING HAPPENS ON THE PRESS. The press opens the question and that is all -
-// three answers come out of it, and one of them is "I did not mean to press
-// that": the cross in the corner, Escape, the background, and Cancel all leave
-// the conversation exactly where it was. The other two both move it, and differ
-// only in whether the front door shuts behind it.
+// NOTHING HAPPENS ON THE PRESS. The press opens the question and that is all,
+// and one of its answers is always "I did not mean to press that": the cross in
+// the corner, Escape, the background and Cancel all leave the conversation
+// exactly where it was. Where there is a sender to turn away there are two more
+// - move it, or move it and shut the door - and where there is not there is one,
+// which is the move. That last case used to skip the question entirely, so the
+// one press with nothing to offer was also the one press with no way back.
 //
 // This is the second design. The first one moved the conversation on the press
 // and asked about the door afterwards, on the grounds that somebody who cannot
@@ -107,9 +109,14 @@ export function SpamButton({
   const [asking, setAsking] = useState(false)
   const [error, setError] = useState('')
 
-  /** Whether there is a second decision to put to anybody once the first one is
-   *  done. Worked out here rather than in the handler so the two places that
-   *  need the answer cannot drift apart. */
+  /** Whether there is a SECOND decision to put alongside the first one - a
+   *  sender who could be turned away, and somebody entitled to turn them away.
+   *
+   *  It decides which question is asked, not whether one is. The press always
+   *  asks: this used to be the gate on the dialog itself, which meant the one
+   *  case with nothing to offer - a sender already blocked, a conversation
+   *  between colleagues, a caller with no number - was also the one case where
+   *  a mis-press went straight through with no way back. */
   const worthAsking = canBlock && !!senderAddress && !senderBlocked
 
   const setSpam = useCallback(async (next: boolean): Promise<boolean> => {
@@ -171,12 +178,9 @@ export function SpamButton({
     if (await setSpam(true)) router.push(closeHref)
   }, [closeHref, router, setSpam])
 
-  const mark = useCallback(async () => {
-    // Nothing has moved yet. Where there is a second question, ask it first and
-    // let the answer do the moving; where there is not, the press is the answer.
-    if (worthAsking) { setAsking(true); return }
-    if (await setSpam(true)) router.push(closeHref)
-  }, [closeHref, router, setSpam, worthAsking])
+  // Nothing moves on the press. It puts the question up and the answer does the
+  // moving - every time, whether or not there is a sender to block.
+  const mark = useCallback(() => setAsking(true), [])
 
   // Out of the bin is the same kind of move as into it: the conversation leaves
   // the folder it is being read in, so the reader goes back to the list rather
@@ -204,7 +208,7 @@ export function SpamButton({
           className="uin-icon-btn uin-icon-btn-framed"
           disabled={busy || disabled}
           aria-pressed={spam}
-          onClick={() => void (spam ? unmark() : mark())}
+          onClick={() => { if (spam) void unmark(); else mark() }}
         >
           {SpamIcon}
           <span className="sr-only">
@@ -217,7 +221,7 @@ export function SpamButton({
 
       <ConfirmDialog
         open={asking}
-        title="Block them as well?"
+        title={worthAsking ? 'Block them as well?' : 'Move it to the spam folder?'}
         body={<>
           {ownerName
             ? <>It will go into {ownerName}&rsquo;s spam folder - this is their own post, so it
@@ -226,21 +230,30 @@ export function SpamButton({
             : <>It will go into your spam folder. Nobody else&rsquo;s view of it changes, and
                 nothing is deleted.</>}
           {' '}
-          Would you also like to turn <strong>{senderAddress}</strong> away in future? Nothing
-          further from them would reach an inbox on this site - shared or personal. It would be
-          dropped straight in here instead, marked as dealt with and left unread, so you can
-          still see what they sent. Nothing already here would be touched, and you can let them
-          back in from the Spam folder or from the inbox settings.
+          {worthAsking ? <>
+            Would you also like to turn <strong>{senderAddress}</strong> away in future? Nothing
+            further from them would reach an inbox on this site - shared or personal. It would be
+            dropped straight in here instead, marked as dealt with and left unread, so you can
+            still see what they sent. Nothing already here would be touched, and you can let them
+            back in from the Spam folder or from the inbox settings.
+          </> : <>
+            {/* No door to offer: nobody to block, already blocked, or a reader
+                who may not shut it. The question is worth asking anyway - it is
+                the only way back from a press nobody meant. */}
+            Press the same button in the Spam folder to bring it straight back.
+          </>}
         </>}
-        confirmLabel="Block them"
-        other={{ label: 'No, just move it', onClick: () => void moveOnly() }}
+        confirmLabel={worthAsking ? 'Block them' : 'Move it to spam'}
+        other={worthAsking ? { label: 'No, just move it', onClick: () => void moveOnly() } : undefined}
         cancelLabel="Cancel"
-        destructive
+        // Only where something is genuinely lost if the answer is yes. A move
+        // undoes itself with the same button, so the keyboard may start on it.
+        destructive={worthAsking}
         busy={busy}
         // The cross, Escape, the background and Cancel all mean the same thing
         // now: the press was a mistake, and nothing has happened yet.
         onCancel={() => { if (!busy) setAsking(false) }}
-        onConfirm={() => void moveAndBlock()}
+        onConfirm={() => void (worthAsking ? moveAndBlock() : moveOnly())}
       />
 
       {error && (
