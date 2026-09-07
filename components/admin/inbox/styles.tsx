@@ -2041,13 +2041,21 @@ const CSS = `
   border: 1px solid transparent;
   color: var(--color-text-secondary);
   text-decoration: none;
+  /* Worn by a link in some modals and by a button in others (the cross on a
+     confirm dialog answers in place rather than going anywhere), so it carries
+     the reset a button needs and a link ignores. */
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
 }
-.uin-modal-close:hover {
+.uin-modal-close:hover:not(:disabled) {
   background: var(--color-surface-raised);
   border-color: var(--color-border);
   color: var(--color-text);
   text-decoration: none;
 }
+.uin-modal-close:disabled { opacity: 0.5; cursor: default; }
 .uin-modal-body {
   flex: 1 1 auto;
   padding: 0.875rem;
@@ -3668,6 +3676,11 @@ const CSS = `
 /* A time picked off the alarm clock and not yet committed, on the line above
    the buttons that commit it. */
 .uin-pending-send { border-top: 0; padding-top: 0; }
+/* The way back out of a departure time already committed, on the notice that
+   says it is going. On a line of its own under the sentence rather than beside
+   it: the sentence is three lines long on a narrow reading pane, and a button
+   trailing off the end of it is a button nobody finds. */
+.uin-notice-actions { margin-top: 0.5rem; }
 /* The box that narrows a long list of colleagues, on the same line as the names
    rather than above them - it is a filter, not a field. */
 .uin-mention-search { flex: 0 1 14rem; min-width: 8rem; display: flex; }

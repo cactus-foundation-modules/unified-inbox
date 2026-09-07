@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { CloseIcon } from './icons'
 
 // The one place in the inbox that asks "are you sure".
 //
@@ -45,10 +46,17 @@ import { createPortal } from 'react-dom'
 //                 written down because it is not obvious.
 //   onConfirm     They said yes. Closing is the caller's job - set open to
 //                 false, either straight away or once the work is done.
-//   onCancel      They said no. Cancel, Escape, and a click on the background
-//                 all land here. It is called while busy is true as well, since
-//                 Escape still works: if a cancelled request would leave things
-//                 half done, ignore it while your own request is in flight.
+//   onCancel      They said no. Cancel, the cross in the corner, Escape, and a
+//                 click on the background all land here. It is called while busy
+//                 is true as well, since Escape still works: if a cancelled
+//                 request would leave things half done, ignore it while your own
+//                 request is in flight.
+//
+// THE CROSS IN THE CORNER is on every one of these and always means onCancel.
+// A dialog somebody opened by mistake wants a way out that is not "read three
+// buttons and work out which one undoes this" - and on a question with a third
+// answer, "Cancel" and "No, just move it" sit next to each other and neither of
+// them looks like "I did not mean to press that at all". The cross does.
 //
 // HOW TO USE IT
 //   const [asking, setAsking] = useState(false)
@@ -221,6 +229,18 @@ export function ConfirmDialog({
       >
         <div className="uin-modal-head">
           <h2 className="uin-modal-title" id={titleId}>{title}</h2>
+          {/* Greyed out with the answers while the work is in flight, for the
+              same reason they are: a second press on a request already on its
+              way is not a way out of anything. Escape still works. */}
+          <button
+            type="button"
+            className="uin-modal-close"
+            aria-label="Close without doing anything"
+            disabled={busy}
+            onClick={onCancel}
+          >
+            {CloseIcon}
+          </button>
         </div>
         <div className="uin-modal-body">
           <div className="uin-confirm-body" id={bodyId}>{body}</div>

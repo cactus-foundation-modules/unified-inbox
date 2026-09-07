@@ -735,6 +735,8 @@ export function ComposeView({
               snoozeUntil={draftSnoozeUntil}
               held={held}
               timezone={timezone}
+              onCancelTimer={() => { setPendingSendAt(null); void save(null) }}
+              busy={busy}
             />
 
             {/* Drawn on a message already waiting for a time as well as on one

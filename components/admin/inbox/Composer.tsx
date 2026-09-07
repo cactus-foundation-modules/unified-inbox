@@ -1206,6 +1206,8 @@ export function Composer({
           snoozeUntil={draftSnoozeUntil}
           held={held}
           timezone={timezone}
+          onCancelTimer={() => { setPendingSendAt(null); void save(null) }}
+          busy={busy}
         />
       )}
 

@@ -291,8 +291,19 @@ export function ThreadListView({
    *
    *  Answers whether ANY of them went through, which the junk button needs: a
    *  question about blocking senders, put after a move that was refused
-   *  outright, is a question about nothing. */
-  const runOnPicked = useCallback(async (send: (id: string) => Promise<Response>): Promise<boolean> => {
+   *  outright, is a question about nothing.
+   *
+   *  `refresh` is there for the one caller that asks a question afterwards.
+   *  Redrawing the page pulls this whole panel through a fresh server render,
+   *  and a dialog put up in the same breath goes with it - it flashes on and is
+   *  gone before anybody can read it, then turns up again on the next render as
+   *  a dialog about something that happened a folder ago. So the junk button
+   *  holds the redraw until the question has been answered, exactly as the
+   *  single-conversation SpamButton holds its own leaving. */
+  const runOnPicked = useCallback(async (
+    send: (id: string) => Promise<Response>,
+    { refresh = true }: { refresh?: boolean } = {},
+  ): Promise<boolean> => {
     if (picked.length === 0) return false
     const count = picked.length
     setBusy(true)
@@ -308,7 +319,7 @@ export function ThreadListView({
           : `${failed} of ${count} could not be changed. The rest were.`)
       }
       clearPicked()
-      router.refresh()
+      if (refresh) router.refresh()
       return failed < count
     } finally {
       setBusy(false)
@@ -323,36 +334,53 @@ export function ThreadListView({
     })
   ), [runOnPicked])
 
-  /** The whole picked pile into the bin, and then - and only then - the second
-   *  question.
-   *
-   *  Two decisions, kept apart exactly as they are on a single conversation
-   *  (see SpamButton, which explains why at length). The move is one person's
-   *  opinion about their own screen and happens on the press; blocking the
-   *  senders is a fact about the site, covers every address it has, and is
-   *  asked rather than assumed. The order matters: somebody who reads the
-   *  question, decides they cannot be bothered and presses Escape has still
-   *  done the thing they pressed the button for. */
-  const markPickedSpam = useCallback(async () => {
-    // Read before the run, because the run clears the picking it comes off.
-    const addresses = blockable
-    const moved = await runOnPicked((id) => fetch(`/api/m/unified-inbox/threads/${id}/spam`, {
+  /** The whole picked pile into the bin. Sent by three different presses now -
+   *  the button itself where there is nothing to ask, and both of the answers
+   *  that are not Cancel - so it lives here rather than three times over. */
+  const spamPicked = useCallback((opts?: { refresh?: boolean }) => runOnPicked((id) =>
+    fetch(`/api/m/unified-inbox/threads/${id}/spam`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ spam: true }),
-    }))
-    if (moved && canBlock && addresses.length > 0) setBlocking(addresses)
-  }, [blockable, canBlock, runOnPicked])
+    }), opts), [runOnPicked])
 
-  /** Shut the door on all of them. One request per address rather than a list,
-   *  for the same reason as above, and settled for the same reason again - the
-   *  error names how many of them did not take, and the ones that did are still
-   *  blocked. */
-  const blockAll = useCallback(async () => {
+  /** Two decisions, kept apart exactly as they are on a single conversation (see
+   *  SpamButton, which explains why at length). Moving the pile is one person's
+   *  opinion about their own screen; blocking the senders is a fact about the
+   *  site, covers every address it has, and is asked rather than assumed.
+   *
+   *  NOTHING IS SENT ON THE PRESS where there is a question to ask. Six
+   *  conversations into somebody's spam folder because a finger landed on the
+   *  wrong button in a toolbar is six things to go and find again, so the press
+   *  opens the question and every answer is still available - including "I did
+   *  not mean that", which is the cross in the corner and leaves the pile
+   *  exactly where it is. Where there is nobody to block there is nothing to
+   *  ask, and the press is the answer. */
+  const markPickedSpam = useCallback(() => {
+    if (canBlock && blockable.length > 0) { setBlocking(blockable); return }
+    void spamPicked()
+  }, [blockable, canBlock, spamPicked])
+
+  /** The middle answer: junk the pile and leave the front door alone. */
+  const movePickedOnly = useCallback(() => {
+    setBlocking([])
+    void spamPicked()
+  }, [spamPicked])
+
+  /** The yes: move them, then shut the door on all of them. One request per
+   *  address rather than a list, for the same reason as the move, and settled
+   *  for the same reason again - the error names how many of them did not take,
+   *  and the ones that did are still blocked. */
+  const moveAndBlockAll = useCallback(async () => {
     const addresses = blocking
     if (addresses.length === 0) return
+    // No redraw while the dialog is still up: it pulls this whole panel through
+    // a fresh server render and takes the dialog with it (see runOnPicked).
+    const moved = await spamPicked({ refresh: false })
+    // Nothing moved, so there is nothing to shut a door behind. The run has
+    // already said so on the screen.
+    if (!moved) { setBlocking([]); router.refresh(); return }
     setBusy(true)
-    setError('')
     try {
       const results = await Promise.allSettled(addresses.map((address) =>
         fetch('/api/m/unified-inbox/blocked-senders', {
@@ -363,17 +391,22 @@ export function ThreadListView({
       ))
       const failed = results.filter((r) => r.status === 'rejected').length
       if (failed > 0) {
-        // Kept on the screen after the dialog shuts. The move already happened
-        // and did not fail; what failed is the door.
-        setError(failed === addresses.length
+        const message = failed === addresses.length
           ? 'Nobody was blocked. The junk was still moved.'
-          : `${failed} of ${addresses.length} could not be blocked. The rest were.`)
+          : `${failed} of ${addresses.length} could not be blocked. The rest were.`
+        // Added to whatever the move had to say rather than replacing it: one
+        // press can now go wrong in two different places, and the half that
+        // worked is worth knowing about either way.
+        setError((previous) => [previous, message].filter(Boolean).join(' '))
       }
     } finally {
       setBusy(false)
       setBlocking([])
+      // The redraw the move itself was not allowed to do, now that the dialog
+      // it would have swept away is on its way out.
+      router.refresh()
     }
-  }, [blocking])
+  }, [blocking, router, spamPicked])
 
   /** What merging the picked rows would do, worked out before anybody is asked
    *  to agree to it: which conversation the rest fold into, and whether doing it
@@ -504,7 +537,7 @@ export function ThreadListView({
               in the bin and the button would be an offer to do it again. */}
           {!spam && (
             <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                    onClick={() => void markPickedSpam()}>
+                    onClick={markPickedSpam}>
               Mark as spam
             </button>
           )}
@@ -705,9 +738,9 @@ export function ThreadListView({
         onConfirm={() => { setMerging(false); void merge() }}
       />
 
-      {/* The second decision, once the junk is already out of the way. Cancel is
-          the ordinary answer and leaves the front door where it was - the move
-          happened whichever way this is answered. */}
+      {/* Both decisions, put together, before either of them has happened. The
+          middle answer is the ordinary one - junk them and leave the front door
+          where it was - and Cancel means the press was a mistake. */}
       <ConfirmDialog
         open={blocking.length > 0}
         title={blocking.length > 1 ? `Block all ${blocking.length} of them as well?` : 'Block them as well?'}
@@ -718,9 +751,9 @@ export function ThreadListView({
               cannot know. "Moved to your spam" would be a plain untruth over a
               colleague's own post. */}
           <p>
-            They are in a spam folder now: your own, or the colleague&rsquo;s where the address is
-            theirs rather than the team&rsquo;s. Nothing is deleted, and nobody else&rsquo;s view
-            of them has changed.
+            They will go into a spam folder: your own, or the colleague&rsquo;s where the address
+            is theirs rather than the team&rsquo;s. Nothing is deleted, and nobody else&rsquo;s
+            view of them changes.
           </p>
           <p>
             Would you also like to turn {blocking.length > 1 ? 'these senders' : <strong>{blocking[0]}</strong>} away
@@ -737,11 +770,13 @@ export function ThreadListView({
           )}
         </>}
         confirmLabel={blocking.length > 1 ? 'Block them all' : 'Block them'}
-        cancelLabel="No, just move them"
+        other={{ label: 'No, just move them', onClick: movePickedOnly }}
+        cancelLabel="Cancel"
         destructive
         busy={busy}
+        // Nothing has been sent yet, so this really does undo the press.
         onCancel={() => { if (!busy) setBlocking([]) }}
-        onConfirm={() => void blockAll()}
+        onConfirm={() => void moveAndBlockAll()}
       />
     </>
   )

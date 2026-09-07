@@ -30,10 +30,21 @@ type Props = {
   held: boolean
   /** The site's zone, which is the one every time on the screen is stamped in. */
   timezone: string
+  /** Take the departure time back off and leave an ordinary draft. Drawn as a
+   *  button on the notice itself, because that is where the screen says the
+   *  message is going out: the same way back out used to live only inside the
+   *  alarm clock's menu, so committing a time made the visible "Cancel send
+   *  later" button vanish and left nothing on the screen that said it could be
+   *  stood down at all. */
+  onCancelTimer?: () => void
+  /** Whether something is already in flight, so the button does not start a
+   *  second request on top of it. */
+  busy?: boolean
 }
 
 export function ScheduleNotice({
   sendAt, sendState, sendError, followUpMinutes, snoozeUntil, held, timezone,
+  onCancelTimer, busy,
 }: Props) {
   const scheduled = sendState === 'scheduled' || sendState === 'sending'
 
@@ -76,6 +87,15 @@ export function ScheduleNotice({
             <> This conversation stays asleep until{' '}
               {describeSendAt(snoozeUntil, new Date(), timezone)}, unless they write back first.</>
           ) : null}
+          {/* Not offered while it is going out: by then the queue has it, and a
+              button that cannot do what it says is worse than no button. */}
+          {sendState === 'scheduled' && onCancelTimer && (
+            <div className="uin-notice-actions">
+              <button type="button" className="uin-chip" disabled={busy} onClick={onCancelTimer}>
+                Cancel send later
+              </button>
+            </div>
+          )}
         </div>
       )}
     </>

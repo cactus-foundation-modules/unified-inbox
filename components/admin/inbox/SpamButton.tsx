@@ -12,9 +12,9 @@ import { SpamIcon } from './icons'
 // One press, two decisions, and keeping them apart is the whole design of this
 // button.
 //
-// THE FIRST DECISION IS ONE PERSON'S and it happens on the press. The
-// conversation goes into a Spam folder: off that person's lists, out of their
-// counts, and nobody else's screen changes. The supplier newsletter one
+// THE FIRST DECISION IS ONE PERSON'S. The conversation goes into a Spam folder:
+// off that person's lists, out of their counts, and nobody else's screen
+// changes. The supplier newsletter one
 // colleague files as junk is the one another reads every Tuesday, so it is an
 // opinion rather than a fact about the mail. Nothing is deleted - press it
 // again and it comes straight back.
@@ -41,10 +41,18 @@ import { SpamIcon } from './icons'
 // the mail server for somebody to go and look for: "did they ever actually
 // write?" is a question this site can now answer. See migration 044.
 //
-// The order matters. The move happens FIRST and does not wait for an answer, so
-// somebody who reads the question, decides they cannot be bothered and presses
-// Escape has still done the thing they pressed the button for. A dialog that
-// gated both decisions on one Yes would mean cancelling put the junk back.
+// NOTHING HAPPENS ON THE PRESS. The press opens the question and that is all -
+// three answers come out of it, and one of them is "I did not mean to press
+// that": the cross in the corner, Escape, the background, and Cancel all leave
+// the conversation exactly where it was. The other two both move it, and differ
+// only in whether the front door shuts behind it.
+//
+// This is the second design. The first one moved the conversation on the press
+// and asked about the door afterwards, on the grounds that somebody who cannot
+// be bothered to read the question has still done the thing they pressed the
+// button for. True, and no help at all to somebody whose finger slipped: the
+// junk was already gone, and the only way back was to go and find it. A junk
+// button is pressed next to a reply button all day long. It gets an undo.
 //
 // It is drawn as a "no entry" sign rather than as a waste basket. A basket is
 // what mail programs draw for junk, but it is also what everything else in the
@@ -127,8 +135,12 @@ export function SpamButton({
     }
   }, [threadId])
 
-  const block = useCallback(async () => {
+  /** Move it, then shut the door, and only shut the door if the move took -
+   *  blocking somebody whose message is still sitting in the inbox is a
+   *  half-done job nobody asked for. */
+  const moveAndBlock = useCallback(async () => {
     if (!senderAddress) return
+    if (!(await setSpam(true))) { setAsking(false); return }
     setBusy(true)
     setError('')
     try {
@@ -139,10 +151,9 @@ export function SpamButton({
       })
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as { error?: string } | null
-        // Kept on the screen after the dialog shuts. The move already happened
-        // and did not fail; what failed is the door, and saying so where the
-        // button is means it is still readable once the dialog is gone.
-        setError(body?.error ?? 'They were not blocked.')
+        // The move went through; what failed is the door. Said here rather than
+        // in the dialog, which is on its way out.
+        setError(body?.error ?? 'It was moved, but they were not blocked.')
         return
       }
     } catch {
@@ -152,15 +163,19 @@ export function SpamButton({
       setAsking(false)
       router.push(closeHref)
     }
-  }, [closeHref, router, senderAddress])
+  }, [closeHref, router, senderAddress, setSpam])
+
+  /** The middle answer: junk it and leave the front door alone. */
+  const moveOnly = useCallback(async () => {
+    setAsking(false)
+    if (await setSpam(true)) router.push(closeHref)
+  }, [closeHref, router, setSpam])
 
   const mark = useCallback(async () => {
-    if (!(await setSpam(true))) return
-    // The move is done. Ask about the door only where there is a door to ask
-    // about - and hold the leaving until the question is answered, since going
-    // back to the list mid-dialog would take the dialog with it.
-    if (worthAsking) setAsking(true)
-    else router.push(closeHref)
+    // Nothing has moved yet. Where there is a second question, ask it first and
+    // let the answer do the moving; where there is not, the press is the answer.
+    if (worthAsking) { setAsking(true); return }
+    if (await setSpam(true)) router.push(closeHref)
   }, [closeHref, router, setSpam, worthAsking])
 
   // Out of the bin is the same kind of move as into it: the conversation leaves
@@ -205,9 +220,11 @@ export function SpamButton({
         title="Block them as well?"
         body={<>
           {ownerName
-            ? <>It is in {ownerName}&rsquo;s spam folder now - this is their own post, so it goes
-                in their bin rather than yours. Nobody else&rsquo;s view of it has changed.</>
-            : <>It is in your spam folder now, and nobody else&rsquo;s view of it has changed.</>}
+            ? <>It will go into {ownerName}&rsquo;s spam folder - this is their own post, so it
+                goes in their bin rather than yours. Nobody else&rsquo;s view of it changes, and
+                nothing is deleted.</>
+            : <>It will go into your spam folder. Nobody else&rsquo;s view of it changes, and
+                nothing is deleted.</>}
           {' '}
           Would you also like to turn <strong>{senderAddress}</strong> away in future? Nothing
           further from them would reach an inbox on this site - shared or personal. It would be
@@ -216,16 +233,14 @@ export function SpamButton({
           back in from the Spam folder or from the inbox settings.
         </>}
         confirmLabel="Block them"
-        cancelLabel="No, just move it"
+        other={{ label: 'No, just move it', onClick: () => void moveOnly() }}
+        cancelLabel="Cancel"
         destructive
         busy={busy}
-        onCancel={() => {
-          if (busy) return
-          setAsking(false)
-          // Still leaves: the move happened whichever way this was answered.
-          router.push(closeHref)
-        }}
-        onConfirm={() => void block()}
+        // The cross, Escape, the background and Cancel all mean the same thing
+        // now: the press was a mistake, and nothing has happened yet.
+        onCancel={() => { if (!busy) setAsking(false) }}
+        onConfirm={() => void moveAndBlock()}
       />
 
       {error && (
