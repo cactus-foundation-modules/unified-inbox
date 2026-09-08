@@ -246,7 +246,7 @@ export function ContactImport({ base, params }: Props) {
         <div className="uin-thread-top">
           <h2 className="uin-thread-subject">Import contacts</h2>
           <Link className="uin-thread-close" href={inboxHref(base, params, { import: null })}>
-            <span className="uin-back-phone" aria-hidden="true">{BackIcon} Back to the list</span>
+            <span className="uin-back-phone" aria-hidden="true">{BackIcon}<span className="uin-back-words">Back</span></span>
             <span className="uin-back-wide" aria-hidden="true">{CloseIcon}</span>
             <span className="sr-only">Close the importer and go back to the list</span>
           </Link>

@@ -63,6 +63,10 @@ the same human collapse into one story.
   of the rail turns them on and off after that. The answer is kept in their own
   browser, because the permission is; nothing is sent while they are looking at
   the list, and nothing at all once every tab is shut.
+- **On a phone or a tablet.** The same mail program, one pane at a time: the
+  rail becomes a bar along the top that says where you are, and pressing it
+  slides the whole list of places in from the left. Dialogs and menus come up
+  from the bottom edge, and everything is sized for a finger.
 - **Reading and replying.** One screen: your addresses along the top as tabs,
   where each conversation stands underneath them - open, snoozed, done or the
   lot - the conversations below, and whichever one you have open beside them.

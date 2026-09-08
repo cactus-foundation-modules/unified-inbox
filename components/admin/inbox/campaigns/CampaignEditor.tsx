@@ -8,6 +8,7 @@ import {
   type CampaignDetail,
   type Readiness,
 } from './api'
+import { BackIcon } from '../icons'
 import { CampaignWatch } from './CampaignWatch'
 import { WhoSection } from './sections/WhoSection'
 import { WhatSection } from './sections/WhatSection'
@@ -49,10 +50,13 @@ type Props = {
   /** Told whenever the campaign might have started or stopped, so the list
    *  beside this screen - and the ticker that rides on it - keeps up. */
   onStatusChanged: () => void
+  /** Back to the list of campaigns. Only drawn on a phone, where the list is
+   *  not on the screen beside this. */
+  onBack: () => void
 }
 
 export function CampaignEditor({
-  campaignId, inboxes, categories, tickUrl, onStatusChanged,
+  campaignId, inboxes, categories, tickUrl, onStatusChanged, onBack,
 }: Props) {
   const [detail, setDetail] = useState<CampaignDetail | null>(null)
   const [error, setError] = useState('')
@@ -79,13 +83,14 @@ export function CampaignEditor({
       categories={categories}
       tickUrl={tickUrl}
       onStatusChanged={onStatusChanged}
+      onBack={onBack}
       onReload={load}
     />
   )
 }
 
 function Campaign({
-  detail, inboxes, categories, tickUrl, onStatusChanged, onReload,
+  detail, inboxes, categories, tickUrl, onStatusChanged, onReload, onBack,
 }: {
   detail: CampaignDetail
   inboxes: CampaignInbox[]
@@ -93,6 +98,7 @@ function Campaign({
   tickUrl: string | null
   onStatusChanged: () => void
   onReload: () => Promise<void>
+  onBack: () => void
 }) {
   const { campaign, readiness, timezone, tally } = detail
   const saved = useMemo(() => draftFrom(detail), [detail])
@@ -244,6 +250,14 @@ function Campaign({
   return (
     <>
       <div className="uin-camp-head">
+        {/* The way back to the list, on a phone only: there the list is not on
+            the screen beside this, and the rail's Campaigns link is behind a
+            drawer. Beside an open list the button is not drawn at all - it
+            would repeat a column already on screen. */}
+        <button type="button" className="uin-thread-close uin-camp-back" onClick={onBack}>
+          <span className="uin-back-phone" aria-hidden="true">{BackIcon}<span className="uin-back-words">Back</span></span>
+          <span className="sr-only">Back to the list of campaigns</span>
+        </button>
         <div className="uin-camp-head-main">
           {/* The name, typed where it is read, rather than in a bordered
               section of its own further down the page. It is one box; it did
@@ -262,10 +276,6 @@ function Campaign({
             {detail.finishesAbout && <span>Finishes about {when(detail.finishesAbout, timezone)}</span>}
           </div>
         </div>
-        {/* No way-back button of its own. The list this came from is the column
-            beside it, and on a phone the rail's Campaigns link goes back to it -
-            a button that repeats a link already on screen is one more thing to
-            read past. */}
       </div>
 
       {campaign.pauseReason && campaign.status !== 'running' && (

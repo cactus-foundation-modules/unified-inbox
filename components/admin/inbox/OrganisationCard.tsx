@@ -130,7 +130,7 @@ export function OrganisationCard({
         <div className="uin-thread-top">
           <h2 className="uin-thread-subject">{organisationId ? draft.name || 'This organisation' : 'New organisation'}</h2>
           <Link className="uin-thread-close" href={inboxHref(base, params, { org: null })}>
-            <span className="uin-back-phone" aria-hidden="true">{BackIcon} Back to the list</span>
+            <span className="uin-back-phone" aria-hidden="true">{BackIcon}<span className="uin-back-words">Back</span></span>
             <span className="uin-back-wide" aria-hidden="true">{CloseIcon}</span>
             <span className="sr-only">Close this organisation and go back to the list</span>
           </Link>

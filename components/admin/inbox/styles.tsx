@@ -67,79 +67,104 @@ const CSS = `
    nobody could see the edge of on half the sites running this. */
 .uin-app {
   display: grid;
-  grid-template-areas: "rail" "list" "read" "ctx";
   grid-template-columns: minmax(0, 1fr);
   min-width: 0;
-  /* The drag handles are laid over the hairlines between the columns, so the
-     frame has to be what they are positioned against. From 900px up it is
-     sticky, which is positioned too, so this only does any work on a phone -
-     where the handles are not drawn at all. */
-  position: relative;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg, 0.75rem);
   background: var(--color-bg);
   overflow: hidden;
+  /* THE FRAME IS THE HEIGHT OF THE SCREEN AT EVERY WIDTH, and every pane
+     scrolls its own contents inside it. It used to be so only from 900px up;
+     below that it was a stack of blocks on a page that scrolled as one, which
+     on a phone put the rail, the head of the list and the way back off the
+     top of the screen the moment anybody scrolled a conversation, and left the
+     note bar stuck to the bottom of a page rather than of the pane it belongs
+     to. A mail program on a phone is still a mail program.
+
+     Stuck to the top of the window until whatever core has put above has
+     scrolled away. Nothing inside is stuck to the page itself, so no pane can
+     be painted over another. The drag handles are laid over the hairlines
+     between the columns, so the frame has to be what they are positioned
+     against - sticky is positioned, so that is covered.
+
+     THE HEIGHT IS THE SCREEN MINUS THE PADDING CORE PUTS ROUND IT, NOT THE
+     SCREEN. A frame a whole screen tall makes the page taller than the window
+     and the whole admin scrolls by an inch - enough to bounce the mail program
+     under a trackpad flick, not enough to reveal anything, which is the worst
+     of both. Take the padding off the height and the document is exactly one
+     screen. AND IT IS --space-4, NOT --space-8: core recognises the inbox as
+     its own kind of screen and pads it --space-4 --space-3
+     (.admin-content--tight in globals.css). The sticky offset matches the same
+     padding for the same reason - stuck at a different inset to where it rests
+     would make the frame jump on the first scroll. */
+  position: sticky;
+  top: var(--space-4, 1rem);
+  height: calc(100vh - var(--space-4, 1rem) * 2);
+  height: calc(100svh - var(--space-4, 1rem) * 2);
+  /* ONE PANE AT A TIME BELOW 900px: the list, or the thing that was opened
+     from it. Both on one column is a list nobody can get past. Said as two
+     row templates rather than by hiding alone, because a hidden grid item
+     still leaves its track behind, and an empty 1fr track is half a screen of
+     nothing. The "find" row is the search's own head, which is only ever in
+     the markup on a search's page; an auto row with nothing in it is no row at
+     all, so the same template serves both states. */
+  grid-template-areas: "rail" "find" "list";
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
-/* THE SEARCH'S OWN HEAD, WHICH IS A ROW OF THE FRAME RATHER THAN A THING INSIDE
-   A PANE. It is asked to lie across the list AND the conversation, which no
-   child of either column can do, so the frame grows a row for it and every one
-   of the four templates below gains a variant with that row in it. Stacked on a
-   phone like everything else here; from a tablet up it spans both columns; from
-   1200px, where the rail stands up as a column of its own, it spans everything
-   to the right of the rail and leaves the rail full height - the search is
-   about what is in the list, not about where you can go. */
-.uin-app[data-find="1"] { grid-template-areas: "rail" "find" "list" "read" "ctx"; }
-/* From a tablet up the frame stops being a stack of blocks on a page that
-   scrolls and becomes the height of the screen, stuck to the top of it until
-   whatever core has put above has scrolled away. Nothing inside is stuck to the
-   page itself, so no pane can be painted over another.
-
-   THE HEIGHT IS THE SCREEN MINUS THE PADDING CORE PUTS ROUND IT, NOT THE SCREEN.
-   A frame a whole screen tall makes the page taller than the window and the
-   whole admin scrolls by an inch - enough to bounce the mail program under a
-   trackpad flick, not enough to reveal anything, which is the worst of both.
-   Take the padding off the height and the document is exactly one screen: the
-   frame rests where it is drawn, nothing scrolls, and the sticky below only
-   comes into play on a site where core has put a tab strip above us.
-
-   AND IT IS --space-4, NOT --space-8. An ordinary admin page is padded
-   --space-8 (32px), and this rule was written against that number - but core
-   recognises the inbox as its own kind of screen and pads it
-   --space-4 --space-3 instead (.admin-content--tight in globals.css: a mail
-   reader fills what it is given, so half the air, top and sides). Subtracting
-   32px twice from a column only inset 16px left a 32px band of empty ground
-   below the frame that nothing could be dragged into and nothing explained.
-   The sticky offset matches the same padding for the same reason - stuck at a
-   different inset to where it rests would make the frame jump on the first
-   scroll. Below 769px core drops to --space-2, but so does this rule: it never
-   applies there. */
-@media (min-width: 900px) {
+.uin-app[data-open="1"] {
+  grid-template-areas: "rail" "find" "read" "ctx";
+  grid-template-rows: auto auto minmax(0, 1fr) fit-content(40%);
+}
+/* A grid item will not scroll its own overflow unless it is allowed to be
+   shorter than its contents, which is what the two minimums are for. */
+.uin-app > * { min-width: 0; min-height: 0; }
+@media (max-width: 899px) {
+  .uin-app[data-open="1"] > .uin-col { display: none; }
+  .uin-app[data-open="0"] > .uin-read,
+  .uin-app[data-open="0"] > .uin-ctx { display: none; }
+}
+/* ON A PHONE THE FRAME GOES EDGE TO EDGE. At 768px core folds its own sidebar
+   into a bar along the top of the window and pads the page --space-2. The
+   frame cancels that padding, drops its rounded corners and its side edges,
+   and takes whatever height is left under core's bar: a framed box inset by
+   half a rem on a 360px screen is a rem of nothing that somebody's thumb
+   keeps landing on, and a mail program on a phone owns the screen.
+   --admin-mobile-topbar-height is core's own token for the bar; the fallback
+   is what the bar has always measured, for a core that predates the token. */
+@media (max-width: 768px) {
   .uin-app {
-    position: sticky;
-    top: var(--space-4, 1rem);
-    height: calc(100vh - var(--space-4, 1rem) * 2);
-    height: calc(100svh - var(--space-4, 1rem) * 2);
+    top: var(--admin-mobile-topbar-height, 52px);
+    height: calc(100vh - var(--admin-mobile-topbar-height, 52px));
+    height: calc(100svh - var(--admin-mobile-topbar-height, 52px));
+    margin: calc(-1 * var(--space-2, 0.5rem));
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 0;
+  }
+}
+/* From a tablet up there is room for the list beside what is open. The rail is
+   still the bar along the top - see the rail below - and the search's head
+   lies across both columns: the search is about what is in the list, not
+   about where you can go. */
+@media (min-width: 900px) {
+  .uin-app,
+  .uin-app[data-open="1"] {
     min-height: 30rem;
-    grid-template-areas: "rail rail" "list read" "list ctx";
+    grid-template-areas: "rail rail" "find find" "list read" "list ctx";
     grid-template-columns: minmax(17rem, 26rem) minmax(0, 1.7fr);
     /* The context panel's row collapses to nothing when there is no panel in
        it, so the same template serves both states. */
-    grid-template-rows: auto minmax(0, 1fr) fit-content(40%);
-  }
-  .uin-app[data-find="1"] {
-    grid-template-areas: "rail rail" "find find" "list read" "list ctx";
     grid-template-rows: auto auto minmax(0, 1fr) fit-content(40%);
   }
-  /* A grid item will not scroll its own overflow unless it is allowed to be
-     shorter than its contents, which is what the two minimums are for. */
-  .uin-app > * { min-width: 0; min-height: 0; }
 }
-/* Room for the rail to stand up as a column of its own. Below this it is a
-   strip along the top: fifteen rems taken off a 1100px window leaves the
+/* Room for the rail to stand up as a column of its own. Below this it is a bar
+   along the top: fifteen rems taken off a 1100px window leaves the
    conversation too narrow to read, and the conversation is what somebody came
    here for. */
 @media (min-width: 1200px) {
-  .uin-app {
+  .uin-app,
+  .uin-app[data-open="1"] {
     /* THE TWO WIDTHS SOMEBODY CAN DRAG. Both are read through a fallback, so a
        reader who has never touched a handle gets exactly the layout this file
        shipped with - 15rem of rail, and a list at the 24rem it always settled
@@ -152,12 +177,8 @@ const CSS = `
        not minmax(). */
     --uin-rail: var(--uin-w-rail, 15rem);
     --uin-list: var(--uin-w-list, 24rem);
-    grid-template-areas: "rail list read" "rail list ctx";
-    grid-template-columns: var(--uin-rail) var(--uin-list) minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) fit-content(40%);
-  }
-  .uin-app[data-find="1"] {
     grid-template-areas: "rail find find" "rail list read" "rail list ctx";
+    grid-template-columns: var(--uin-rail) var(--uin-list) minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr) fit-content(40%);
   }
 }
@@ -165,22 +186,12 @@ const CSS = `
    there. Without the guard, a conversation with nothing attached to anybody
    left a twenty-rem column of empty ground at the end of the frame. */
 @media (min-width: 1500px) {
-  .uin-app[data-context="on"] {
-    grid-template-areas: "rail list read ctx";
-    grid-template-columns: var(--uin-rail) var(--uin-list) minmax(0, 1fr) minmax(16rem, 20rem);
-    grid-template-rows: minmax(0, 1fr);
-  }
-  .uin-app[data-find="1"][data-context="on"] {
+  .uin-app[data-context="on"],
+  .uin-app[data-context="on"][data-open="1"] {
     grid-template-areas: "rail find find find" "rail list read ctx";
+    grid-template-columns: var(--uin-rail) var(--uin-list) minmax(0, 1fr) minmax(16rem, 20rem);
     grid-template-rows: auto minmax(0, 1fr);
   }
-}
-/* Only one pane at a time on a phone: the list, or the thing that was opened
-   from it. Both on one column is a list nobody can get past. */
-@media (max-width: 899px) {
-  .uin-app[data-open="1"] > .uin-col { display: none; }
-  .uin-app[data-open="0"] > .uin-read,
-  .uin-app[data-open="0"] > .uin-ctx { display: none; }
 }
 
 /* ---- the handles between the columns ------------------------------------ */
@@ -293,7 +304,8 @@ const CSS = `
    The addresses can still be dragged into the order somebody wants. Dropping
    saves straight away and the rail moves first: the gesture is over in half a
    second and a list that snaps back while a request finishes reads as a bug. A
-   refused save puts the order back and says so. */
+   refused save puts the order back and says so.
+   Below 1200px the column becomes a bar and a drawer - see further down. */
 .uin-rail {
   grid-area: rail;
   display: flex;
@@ -325,50 +337,133 @@ const CSS = `
     border-right: 1px solid var(--color-border);
   }
 }
-/* Below the width where it can stand up, the rail lies down: one scrolling
-   strip with the group headings taken out and a hairline between the groups
-   instead. Same markup, same order, a quarter of the height. */
+/* BELOW 1200px THE RAIL IS A BAR AND A DRAWER. It used to lie down into one
+   strip that scrolled sideways - a dozen names with the headings taken out,
+   half of them off the edge of a phone with nothing to say so, and the one
+   that was ON somewhere in the middle of it. Nobody could see where they were
+   or what else there was.
+
+   The bar is what stays: where you are, in words, with what is new beside it,
+   and the two buttons that are acts rather than places - find, write. Press
+   the name and the whole rail slides in from the left as a drawer, headings
+   and all, the same markup as the column and in the same order, so the two
+   are one thing at two widths rather than two things to learn. It is fixed
+   to the window and drawn above everything core puts on an admin page, for
+   the same reason the dialogs are - the bell's dropdown sits at 9999 - and
+   it takes the foot with it, so when the post last arrived is still beside
+   the button that fetches it. */
 @media (max-width: 1199px) {
   .uin-rail-scroll {
-    flex-direction: row;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.45rem 0.5rem;
-    overflow-x: auto;
-    overflow-y: hidden;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(20rem, 86vw);
+    z-index: 10000;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+    border-right: 1px solid var(--color-border);
+    background: var(--color-bg);
+    box-shadow: var(--shadow-xl);
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 0.2s ease-out, visibility 0.2s;
   }
-  .uin-rail-heading { display: none; }
-  .uin-rail-group { flex: none; display: flex; align-items: center; }
-  .uin-rail-group + .uin-rail-group {
-    border-left: 1px solid var(--color-border);
-    padding-left: 0.4rem;
-    margin-left: 0.1rem;
+  .uin-rail[data-drawer="open"] .uin-rail-scroll {
+    transform: none;
+    visibility: visible;
   }
-  .uin-rail-list { flex-direction: row; gap: 0.15rem; }
-  .uin-rail-foot {
-    /* Lying down there is nothing to stick to: the strip scrolls sideways and
-       the box is simply the last thing along it. */
-    position: static;
-    flex-direction: row;
-    align-items: center;
-    margin: 0;
-    padding: 0 0 0 0.4rem;
-    border-top: 0;
-    border-left: 1px solid var(--color-border);
+  .uin-rail-backdrop { display: block; }
+  .uin-rail-places { display: inline-flex; }
+  .uin-rail-drawer-head { display: flex; }
+  /* Who is reading moves into the drawer's head; the bar is about where you
+     are, not who you are. */
+  .uin-rail-me > .uin-avatar-wrap,
+  .uin-rail-me > .uin-rail-me-name { display: none; }
+  /* Two classes deep on purpose: the row's own rule is written further down
+     this file at the same weight, and a later rule of equal weight wins. */
+  .uin-rail > .uin-rail-me {
+    gap: 0.35rem;
+    padding: 0.4rem 0.5rem;
+    border-bottom: 0;
   }
-  .uin-rail-updated { flex: none; }
-  .uin-rail-foot .uin-rail-notice { max-width: 18rem; }
-  .uin-rail-item { padding-block: 0.3rem; }
-  .uin-rail-notice { padding: 0 0.5rem 0.45rem; }
-  /* Lying down there is no room for a tree, so a colleague's folders run along
-     after their name with the same hairline turned on its side. */
-  .uin-rail-sub {
-    margin-left: 0;
-    padding-left: 0.35rem;
-    border-left: 1px solid var(--color-border);
-  }
-  .uin-rail-branch { gap: 0; padding-left: 0; }
 }
+@media (prefers-reduced-motion: reduce) {
+  .uin-rail-scroll { transition: none; }
+}
+/* The dimmed page behind the open drawer. A button, so pressing it is a press
+   and a screen reader is told what it does; drawn only while the drawer is
+   open and only where there is a drawer. */
+.uin-rail-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: var(--color-overlay);
+  cursor: default;
+}
+/* Where you are, as the one button on the bar. The same dot or icon the rail
+   gives the place, its name in the weight of a title, what is new beside it,
+   and the arrow that says it opens. Only ever drawn below 1200px. */
+.uin-rail-places {
+  display: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.25rem;
+  padding: 0.3rem 0.55rem 0.3rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius, 0.375rem);
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.9375rem;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+.uin-rail-places:hover,
+.uin-rail-places[aria-expanded="true"] {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+}
+.uin-rail-places-lines { flex: none; display: grid; place-items: center; color: var(--color-text-secondary); }
+.uin-rail-places-lines svg { display: block; width: 18px; height: 18px; }
+.uin-rail-places .uin-rail-dot { margin: 0; width: 0.6rem; height: 0.6rem; }
+.uin-rail-places .uin-rail-icon { color: var(--color-text-secondary); }
+.uin-rail-places-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.uin-rail-places-chevron { flex: none; display: grid; place-items: center; color: var(--color-text-muted); }
+.uin-rail-places-chevron svg { display: block; width: 14px; height: 14px; }
+/* The drawer's own head: who is reading, and the way out. Stuck to the top of
+   the drawer as the list scrolls under it, the same as the head of the column
+   was; pulled out to the drawer's edges by the margin it cancels, because a
+   stuck band with a stripe of ground either side is a band things scroll
+   past rather than under. */
+.uin-rail-drawer-head {
+  display: none;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  flex: none;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0 -0.625rem;
+  padding: 0.725rem 0.625rem 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg);
+}
+.uin-rail-drawer-head .uin-rail-me-name { display: block; }
+.uin-rail-drawer-close { margin-left: auto; }
 .uin-rail-group { display: grid; gap: 0.2rem; min-width: 0; }
 .uin-rail-heading {
   margin: 0.2rem 0 0.1rem 0.5rem;
@@ -526,25 +621,24 @@ const CSS = `
   .uin-rail-item[data-uin-dragging] { opacity: 0.7; }
 }
 
-/* Who is reading, and the one button up here that is not a place to go, on one
-   line - which is where every mail program puts the pair of them. */
-/* Stuck to the head of the rail the same way the mail check is stuck to its
-   foot, and for the same reason: who is reading, the search and the pen are
-   three things wanted while somebody is halfway down a long list of addresses,
-   and three things they should not have to scroll back up to reach. Its own
-   ground so the list passes behind it, and the foot's hairline the other way
-   up so both ends of the rail are closed off rather than one. No z-index: it
-   is a positioned box and already paints over the list, and giving it one
-   would trap the compose menu's own layer inside it. */
+/* Who is reading, and the two buttons up here that are not places to go, on
+   one line - which is where every mail program puts them. It is the head of
+   the rail rather than the first thing in the scrolling list, so it stays put
+   while somebody is halfway down a long list of addresses without being told
+   to: who is reading, the search and the pen are three things wanted then and
+   three things they should not have to scroll back up to reach. Its own
+   ground and the foot's hairline the other way up, so both ends of the rail
+   are closed off rather than one. No z-index: it is not positioned, and
+   giving it one would trap the compose menu's own layer inside it.
+   Below 1200px the same row is the bar along the top of the frame - see the
+   drawer above for what it holds there. */
 .uin-rail-me {
-  position: sticky;
-  top: 0;
   flex: none;
   display: flex;
   align-items: center;
   gap: 0.5rem;
   min-width: 0;
-  padding: 0.725rem 0.15rem 0.5rem;
+  padding: 0.725rem 0.775rem 0.5rem;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-bg);
 }
@@ -557,20 +651,6 @@ const CSS = `
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-/* Lying down, the rail is a strip of places and the name is the one thing in it
-   that is not one. The picture and the pen stay. */
-@media (max-width: 1199px) {
-  /* Nothing to stick to: the strip scrolls sideways and this is simply the
-     first thing along it, so the hairline under it would be a line across
-     nothing. */
-  .uin-rail-me {
-    position: static;
-    padding: 0;
-    border-bottom: 0;
-    background: transparent;
-  }
-  .uin-rail-me-name { display: none; }
 }
 
 /* Which colour an address wears, beside its name. Five, and every one of them a
@@ -1364,36 +1444,24 @@ const CSS = `
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
 }
-/* Pinned only where the conversation scrolls its own contents. Below that
-   breakpoint the whole page scrolls, and a band this tall pinned to a phone's
-   viewport would take a third of the screen away from the thing being read.
-   Opaque on purpose either way: messages passing behind a translucent header
-   are unreadable twice over. */
-@media (min-width: 900px) {
-  .uin-thread-head {
-    position: sticky;
-    top: 0;
-    /* Over the messages, and over anything inside the writing box that has a
-       stacking context of its own. */
-    z-index: 3;
-  }
+/* Pinned at every width, because the pane scrolls its own contents at every
+   width. It was unpinned on a phone when the whole page scrolled there and a
+   band this tall would have taken a third of the screen; the pane is the
+   screen now, so the band is kept short instead - see the phone rules under
+   the subject line. Opaque on purpose: messages passing behind a translucent
+   header are unreadable twice over. */
+.uin-thread-head {
+  position: sticky;
+  top: 0;
+  /* Over the messages, and over anything inside the writing box that has a
+     stacking context of its own. */
+  z-index: 3;
 }
 /* The subject and the way out of it on one line, the way every mail program
    has put them: the thing you are reading on the left, the cross that shuts it
    hard against the far edge. It was a chip stacked above the subject, which put
    a button where the title should be and pushed the title down a line. */
 .uin-thread-top { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.4rem 0.75rem; min-width: 0; }
-/* On a phone the way out is a sentence rather than a cross, and a sentence does
-   not belong on the end of a subject line - so it takes the line above it. */
-@media (max-width: 899px) {
-  .uin-thread-close { order: -1; flex: 1 1 100%; justify-content: flex-start; padding-left: 0; }
-}
-/* On a narrow window the three controls take their own line under the subject.
-   They are about thirteen ems wide together, which on a phone leaves the
-   subject four - and four ems of subject is not a subject. */
-@media (max-width: 639px) {
-  .uin-thread-actions { flex: 1 1 100%; margin-left: 0; }
-}
 /* Two lines of it, then an ellipsis. The three controls and the way out share
    this line, so a subject that used to run the width of the pane gives up
    whatever they need - but a supplier's "Sales Order 0000966554 - PO-00012" is
@@ -1635,11 +1703,12 @@ const CSS = `
   min-width: 0;
   container: uin-body / inline-size;
 }
-/* Two words for one link. On a phone the list is not on the screen at all, so
-   this is "Back to the list". Beside an open list that would be a button saying
-   "look left" - but it still has a job there, because the list is a column
-   while a conversation is open and there was no way at all to shut one and have
-   the list back whole. So it becomes a cross. */
+/* Two faces for one link. Where the list is not on the screen this is the way
+   back to it - a chevron, and the word Back while there is room. Beside an
+   open list that would be a button saying "look left" - but it still has a job
+   there, because the list is a column while a conversation is open and there
+   was no way at all to shut one and have the list back whole. So it becomes a
+   cross. */
 .uin-back-wide { display: none; }
 @media (min-width: 900px) {
   .uin-back-phone { display: none; }
@@ -2095,6 +2164,7 @@ const CSS = `
    screenful, so the card is as tall as what is in it instead of reserving half
    the window for a box nobody is going to fill. */
 .uin-modal-card-short { width: min(32rem, 100%); }
+
 
 /* ---- who the site turns away -------------------------------------------- */
 /* One address a line, with what is known about the block under it and the way
@@ -2777,10 +2847,17 @@ const CSS = `
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
 }
-/* Pinned only where the pane scrolls its own contents. Below that the whole
-   page scrolls and a pinned band would take a third of a phone's screen. */
-@media (min-width: 900px) {
-  .uin-camp-head { position: sticky; top: 0; z-index: 3; }
+/* Pinned at every width: the pane scrolls its own contents at every width. */
+.uin-camp-head { position: sticky; top: 0; z-index: 3; }
+/* The way back to the list of campaigns, which on a phone is not on the screen.
+   The same chip the conversation uses; drawn only where the list is hidden. */
+.uin-camp-back { display: none; }
+@media (max-width: 899px) {
+  .uin-camp-back { display: inline-flex; align-self: flex-start; }
+  /* Stacked: the way back, then the name and its line, then the buttons, each
+     the full width - except the chip, which is as wide as its word. */
+  .uin-camp-head { flex-direction: column; align-items: stretch; gap: 0.5rem; }
+  .uin-camp-head-main { flex: 1 1 auto; }
 }
 .uin-camp-head-main { display: grid; gap: 0.3rem; min-width: 0; flex: 1 1 16rem; }
 /* The name, typed where it is read. Borderless until it is hovered or focused,
@@ -3094,11 +3171,6 @@ const CSS = `
   color: var(--color-text);
 }
 .uin-rail-search svg { display: block; }
-/* Lying down, the rail is a strip and the name goes; both buttons stay, so the
-   pair keeps a gap between them rather than sitting flush. */
-@media (max-width: 1199px) {
-  .uin-rail-me { gap: 0.35rem; }
-}
 
 /* The dialog itself. Wider than the short composers because it is a form of two
    columns rather than one, and the head of it is one big box that reads as a
@@ -3226,6 +3298,7 @@ const CSS = `
    columns. */
 .uin-find-filters .uin-field-wide { flex: 2 1 14rem; }
 .uin-find-filters .uin-search-ticks { flex: 0 1 auto; align-self: center; }
+
 
 /* ---- a button that opens a panel ---------------------------------------- */
 /* Five of these on one conversation - the dots on a message, who it is with,
@@ -3911,6 +3984,185 @@ const CSS = `
   cursor: pointer;
 }
 .uin-richtext-off:hover { color: var(--color-text); border-color: var(--color-border-strong); }
+
+
+/* ======================================================================== */
+/* ---- A PHONE, A TABLET, A FINGER. LAST ON PURPOSE. ---------------------- */
+/* Everything below overrules something above it at the same weight - the
+   padding on the way out of a conversation, the size of an icon button, the
+   height of a dialog card - and a rule of equal weight wins by coming later.
+   Add a phone or touch rule here, at the end, not beside the thing it
+   changes, or it will quietly lose to the desktop rule underneath it. */
+/* ======================================================================== */
+
+/* Where the list is not on the screen, the way out is the way BACK, and it
+   stands at the START of the subject line where every phone puts it: a
+   chevron, and the word Back beside it while there is room for a word. It
+   used to be a whole sentence on a line of its own above the subject, which
+   on a phone spent the first row of a pinned header saying "Back to the list"
+   to somebody who could see there was no list. */
+@media (max-width: 899px) {
+  .uin-thread-close {
+    order: -1;
+    flex: none;
+    margin-left: -0.25rem;
+    padding: 0.2rem 0.45rem 0.2rem 0.3rem;
+  }
+}
+@media (max-width: 599px) {
+  .uin-back-words { display: none; }
+  .uin-thread-close { width: 2rem; padding: 0.2rem; }
+}
+/* Inside the same breakpoint, not bare: the rule up in the conversation
+   section hides this face from 900px, and a bare rule down here would beat it. */
+@media (max-width: 899px) {
+  .uin-back-phone { display: inline-flex; align-items: center; gap: 0.3rem; }
+  .uin-back-phone svg { display: block; }
+}
+/* On a narrow window the controls take their own line under the subject: they
+   are about thirteen ems wide together, which on a phone leaves the subject
+   four, and four ems of subject is not a subject. On that line they run
+   sideways under the thumb rather than wrapping into a second and third row of
+   chrome - a header on a phone is measured in rows, and every row it takes is
+   a row off the message. */
+@media (max-width: 639px) {
+  .uin-thread-actions {
+    flex: 1 1 100%;
+    margin-left: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    /* Room for the focus ring, which the clip would otherwise take the bottom
+       off. */
+    padding-block: 2px;
+  }
+  .uin-thread-actions::-webkit-scrollbar { display: none; }
+  .uin-thread-actions > * { flex: none; }
+}
+
+@media (max-width: 599px) {
+  .uin-thread-head { gap: 0.35rem; padding: 0.55rem 0.75rem 0.6rem; }
+  .uin-thread-body { padding: 0.75rem 0.75rem 1rem; }
+  .uin-read-pad { padding: 0.75rem; }
+  .uin-col-head { padding: 0.5rem 0.625rem; }
+  .uin-msg-head { padding-inline: 0.625rem; }
+  .uin-msg-body { padding-inline: 0.625rem; }
+  .uin-notebar { padding-inline: 0.75rem; }
+  .uin-notebar-names { left: 0.75rem; }
+}
+
+/* ON A PHONE A DIALOG IS A SHEET, NOT A CARD. A card floating in a rem of
+   dimmed page on a 360px screen is a card with its edges an inch from where
+   the thumb is and its writing box three lines tall once the keyboard is up.
+   So every dialog comes up from the bottom edge, the full width of the
+   screen, with only its top corners rounded - the shape every phone gives a
+   sheet, and one nobody needs told how to dismiss. The ones somebody WRITES
+   in - a new message, a popped-out reply, the search, the file and catalogue
+   pickers - take the whole screen, so the box you write in is the screen and
+   the keyboard eats the bottom of it rather than the middle. Dynamic viewport
+   units, because the keyboard changes the height of the window on a phone and
+   a sheet that does not follow it leaves its Send button under the keys. */
+@media (max-width: 599px) {
+  .uin-modal { padding: 0; align-items: flex-end; }
+  .uin-modal-card {
+    width: 100%;
+    max-height: 92dvh;
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 0;
+    border-radius: var(--radius-lg, 0.75rem) var(--radius-lg, 0.75rem) 0 0;
+  }
+  .uin-modal-card-compose,
+  .uin-modal-card-attach,
+  .uin-modal-card-picker,
+  .uin-search-card {
+    height: 100dvh;
+    max-height: 100dvh;
+    border-top: 0;
+    border-radius: 0;
+  }
+  .uin-modal-foot,
+  .uin-search-foot {
+    padding-bottom: calc(0.7rem + env(safe-area-inset-bottom, 0));
+  }
+}
+
+/* ON A PHONE EVERY MENU IS A SHEET ALONG THE BOTTOM. Dropdown, ComposeMenu and
+   ContextRecords each write top/left (and Dropdown a width) as an inline style
+   worked out from the button that opened them, which is the right answer on a
+   desktop and the wrong one on a phone: a 280px panel pinned to a button's
+   corner is a panel a thumb has to aim at, and one that opens upwards off a
+   button near the foot of the screen is half under the keyboard. The
+   !importants are what beat those inline styles - there is no other way to
+   overrule an inline style from a stylesheet, and the alternative was three
+   components each asking the window how wide it is. Nothing else in this
+   file uses one. */
+@media (max-width: 599px) {
+  .uin-menu,
+  .uin-compose-menu,
+  .uin-ctxbar-menu {
+    top: auto !important;
+    left: 0 !important;
+    right: 0;
+    bottom: 0;
+    width: auto !important;
+    max-width: none;
+    max-height: 70dvh;
+    padding: 0.5rem 0.5rem calc(0.5rem + env(safe-area-inset-bottom, 0));
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 0;
+    border-radius: var(--radius-lg, 0.75rem) var(--radius-lg, 0.75rem) 0 0;
+  }
+  .uin-menu-item,
+  .uin-compose-menu-item { min-height: 2.75rem; }
+  .uin-menu-title { font-size: 0.875rem; padding-block: 0.5rem; }
+}
+
+/* ---- targets, where the pointer is a finger ----------------------------- */
+/* Keyed on the pointer rather than on the width: a laptop with a touchscreen
+   wants this at 1400px and a phone with a mouse plugged in does not. The rows
+   in the list already stand well over what a thumb needs; everything here is
+   the small chrome round them - icon buttons at 28px, tabs at 26px, a cross at
+   18px - lifted to something between 40 and 44px without changing what it
+   looks like at rest. Nothing is made wider than it has to be, because a
+   toolbar of fat buttons is a toolbar that wraps. */
+@media (pointer: coarse) {
+  .uin-rail-item { min-height: 2.6rem; padding-block: 0.5rem; }
+  .uin-rail-sub .uin-rail-item { min-height: 2.4rem; }
+  .uin-rail-twist { width: 1.75rem; height: 1.75rem; }
+  .uin-rail-branch { padding-left: 0.125rem; }
+  .uin-rail-sub { margin-left: 1.5rem; }
+  .uin-rail-compose,
+  .uin-rail-search,
+  .uin-modal-close,
+  .uin-icon-btn,
+  .uin-icon-btn-framed { width: 2.5rem; height: 2.5rem; }
+  .uin-rail-compose-more { width: 1.6rem; }
+  .uin-tab { min-height: 2.25rem; padding: 0.35rem 0.75rem; }
+  .uin-chip { min-height: 2rem; padding: 0.3rem 0.65rem; }
+  .uin-thread-close { min-height: 2.5rem; }
+  .uin-menu-item,
+  .uin-compose-menu-item,
+  .uin-notebar-name,
+  .uin-suggestion { min-height: 2.75rem; }
+  .uin-cal-day { min-height: 2.5rem; }
+  .uin-ctx-x { width: 1.75rem; height: 1.75rem; }
+  .uin-attach-list-x { padding: 0.55rem 0.65rem; }
+  .uin-ctxbar-more { width: 2rem; height: 2rem; }
+  .uin-refresh,
+  .uin-notify-toggle { min-width: 2.5rem; min-height: 2.5rem; }
+  .uin-rt-btn { width: 2.25rem; height: 2.25rem; }
+  .uin-rt-swatch { width: 1.4rem; height: 1.4rem; }
+  .uin-composer-tool { width: 2rem; height: 2rem; }
+  .uin-field-add,
+  .uin-ctx-remove { padding: 0.5rem 0.4rem; }
+  .uin-row { padding-block: 0.7rem; }
+  .uin-toast-undo { padding: 0.5rem 0.65rem; }
+  /* A finger cannot hover, so the row wears its arrow all the time - the
+     (hover: none) rule above already says so; this is the size of it. */
+  .uin-rail-twist-icon svg { width: 15px; height: 15px; }
+}
 
 
 `

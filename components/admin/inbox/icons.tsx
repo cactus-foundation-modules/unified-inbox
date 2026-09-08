@@ -24,6 +24,8 @@ export const TagIcon = <svg {...ICON}><path d="M11 3H4v7l10 10 7-7L11 3Z" /><cir
 export const ClockIcon = <svg {...ICON}><circle cx="12" cy="12" r="8" /><path d="M12 7.5V12l3 2" /></svg>
 export const TickIcon = <svg {...ICON}><path d="m5 12.5 4.5 4.5L19 7" /></svg>
 export const SearchIcon = <svg {...ICON}><circle cx="11" cy="11" r="6" /><path d="m20 20-4.5-4.5" /></svg>
+// Three lines: the places to go, folded away behind one button on a phone.
+export const MenuIcon = <svg {...ICON}><path d="M4 7h16" /><path d="M4 12h16" /><path d="M4 17h16" /></svg>
 export const BackIcon = <svg {...ICON}><path d="M15 5 8 12l7 7" /></svg>
 export const PenIcon = <svg {...ICON}><path d="M4 20h4l10-10a2.8 2.8 0 0 0-4-4L4 16z" /><path d="m13.5 6.5 4 4" /></svg>
 export const MailIcon = <svg {...ICON}><path d="M3 6.5h18v11H3z" /><path d="m3 7 9 6 9-6" /></svg>

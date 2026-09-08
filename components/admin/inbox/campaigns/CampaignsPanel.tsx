@@ -202,6 +202,7 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
             categories={categories}
             tickUrl={tickUrl}
             onStatusChanged={load}
+            onBack={() => go({ campaign: null, view: null })}
           />
         </div>
       ) : (

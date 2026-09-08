@@ -729,7 +729,7 @@ export function ThreadPane({
             closeHref={inboxHref(base, params, { id: null })}
           />
           <Link className="uin-thread-close" href={inboxHref(base, params, { id: null })}>
-            <span className="uin-back-phone" aria-hidden="true">{BackIcon} Back to the list</span>
+            <span className="uin-back-phone" aria-hidden="true">{BackIcon}<span className="uin-back-words">Back</span></span>
             <span className="uin-back-wide" aria-hidden="true">{CloseIcon}</span>
             {/* One name for it whichever of the two is showing, so the link is
                 not announced twice on a phone. */}

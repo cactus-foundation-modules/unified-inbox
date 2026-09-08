@@ -5,8 +5,8 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { avatarHref, inboxHref, initialsFor, moveInOrder, sortByStoredOrder, splitInboxes } from '@/modules/unified-inbox/lib/list'
 import {
-  AlarmIcon, AssignedIcon, AtIcon, ChevronRightIcon, FileIcon, FolderIcon, InboxIcon, MegaphoneIcon,
-  PeopleIcon, SendIcon, SpamIcon,
+  AlarmIcon, AssignedIcon, AtIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, FileIcon, FolderIcon,
+  InboxIcon, MegaphoneIcon, MenuIcon, PeopleIcon, SendIcon, SpamIcon,
 } from './icons'
 import { Avatar } from './Avatar'
 import { CheckNowButton, type CheckNowNotice } from './CheckNowButton'
@@ -21,9 +21,11 @@ import { ComposeMenu, type ComposeMenuEntry } from './ComposeMenu'
 // a dozen tabs is a horizontal scrollbar with half of them behind it. A rail is
 // what every mail program in the world uses for the same list, it reads down in
 // one go, and it leaves the width of the screen to the thing somebody came here
-// to read. Below 1200px there is not room for a column of it, and it lies down
-// into one scrolling strip again - same markup, same order, no second
-// component.
+// to read. Below 1200px there is not room for a column of it, and it becomes a
+// bar along the top saying where you are, with the whole column folded behind
+// it as a drawer - same markup, same order, no second component. It was a
+// strip that scrolled sideways there, which on a phone was a dozen names with
+// half of them off the edge and nothing to say so.
 //
 // FIVE GROUPS, and the split is the useful one rather than the tidy one.
 // "Yours" is the handful of places one person opens all day - their own
@@ -532,6 +534,38 @@ export function NavRail({
   const [ownCheckedAt, setOwnCheckedAt] = useState<number | null>(null)
   const checkedAt = Math.max(lastCheckedAt ?? 0, ownCheckedAt ?? 0) || null
 
+  // Whether the drawer is out, below 1200px. Above that the same box is a
+  // column that is always showing and this is simply never read. Never open on
+  // a first render, so the server and the browser agree about the markup.
+  const [placesOpen, setPlacesOpen] = useState(false)
+  const placesButton = useRef<HTMLButtonElement>(null)
+  const drawerClose = useRef<HTMLButtonElement>(null)
+  const openPlaces = useCallback(() => setPlacesOpen(true), [])
+  const closePlaces = useCallback(() => {
+    setPlacesOpen(false)
+    // Back to the button that opened it, so the keyboard is not left standing
+    // in a box that has just slid off the screen.
+    placesButton.current?.focus()
+  }, [])
+  // The keyboard lands on the way out as the drawer opens, which is the first
+  // thing in it. Escape shuts it from anywhere inside.
+  useEffect(() => {
+    if (placesOpen) drawerClose.current?.focus()
+  }, [placesOpen])
+  useEffect(() => {
+    if (!placesOpen) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closePlaces()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [closePlaces, placesOpen])
+  // Picking a place shuts the drawer. Read off the click rather than wired into
+  // every Entry: a link is a link, and the drawer is the one that cares.
+  const onDrawerClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement | null)?.closest('a')) setPlacesOpen(false)
+  }, [])
+
   // The answer to a press, gone by itself three seconds later. Only the good
   // one: an error has to stay until the next press, because somebody has to be
   // able to read why nothing was collected, and a red box that disappears while
@@ -1025,38 +1059,118 @@ export function NavRail({
     }] : []),
   ]
 
+  // Where the reader is standing, for the bar below 1200px, where the list of
+  // places is folded away and something has to say which one is open. A folder
+  // under a colleague's name says whose it is, because "Sent" on its own is
+  // three people's Sent on a site with three colleagues. All has no entry of
+  // its own to be active - it is `current === null` - so the fallback is what
+  // the All row says.
+  const here = (() => {
+    const own = mine.find((item) => item.active)
+    if (own) return own
+    for (const inbox of shared) {
+      const row = inboxEntry(inbox, null)
+      if (row.active) return row
+      const sent = sentFolderFor(inbox)
+      if (sent.active) return { ...sent, name: `${inbox.name} · Sent` }
+    }
+    for (const inbox of team) {
+      const label = inbox.ownerName ?? inbox.name
+      const row = inboxEntry(inbox, null)
+      if (row.active) return { ...row, name: label }
+      const folder = foldersFor(inbox).find((item) => item.active)
+      if (folder) return { ...folder, name: `${label} · ${folder.name}` }
+    }
+    return channelEntries.find((item) => item.active)
+      ?? elsewhere.find((item) => item.active)
+      ?? null
+  })()
+
   return (
-    <nav className="uin-rail" aria-label="Inboxes and views">
+    <nav className="uin-rail" aria-label="Inboxes and views" data-drawer={placesOpen ? 'open' : 'closed'}>
+      {/* Who is reading, and the two buttons up here that are not places to
+          go. The same arrangement every mail program uses, for the same
+          reason: finding something and writing something are acts, and an act
+          does not belong in a list of places. Search on the left of the pen,
+          because it is the one people reach for oftenest and the one they
+          reach for without looking.
+          Below 1200px this same row is the bar along the top of the frame, and
+          the first thing on it is where you are - press it and the places
+          slide in. */}
+      <div className="uin-rail-me">
+        <button
+          type="button"
+          className="uin-rail-places"
+          ref={placesButton}
+          aria-expanded={placesOpen}
+          aria-controls="uin-rail-places"
+          onClick={placesOpen ? closePlaces : openPlaces}
+        >
+          <span className="uin-rail-places-lines" aria-hidden="true">{MenuIcon}</span>
+          {here?.tone
+            ? <span className="uin-rail-dot" data-tone={here.tone} aria-hidden="true" />
+            : here?.icon
+              ? <span className="uin-rail-icon" aria-hidden="true">{here.icon}</span>
+              : null}
+          <span className="uin-rail-places-name">{here?.name ?? 'Inbox'}</span>
+          {here?.count}
+          <span className="uin-rail-places-chevron" aria-hidden="true">{ChevronDownIcon}</span>
+          <span className="sr-only">. Choose an inbox or a view</span>
+        </button>
+        <Avatar src={showAvatars ? avatarHref('user', me.id) : null} title={me.name}>
+          {initialsFor(me.name)}
+        </Avatar>
+        <span className="uin-rail-me-name">{me.name}</span>
+        <InboxSearch
+          base={base}
+          params={params}
+          inboxes={inboxes.map((inbox) => ({ id: inbox.id, name: inbox.name }))}
+          channels={channelOrder.map((channel) => ({
+            key: channel.key,
+            label: channel.label,
+          }))}
+          showUnrouted={showUnrouted}
+        />
+        {composeHref && (
+          <ComposeMenu composeHref={composeHref} entries={composeEntries} />
+        )}
+      </div>
+
+      {/* The dimmed page behind the open drawer, and the press that shuts it.
+          Only in the markup while the drawer is out, so a screen reader never
+          meets a button that does nothing. */}
+      {placesOpen && (
+        <button
+          type="button"
+          className="uin-rail-backdrop"
+          aria-label="Close the list of inboxes"
+          tabIndex={-1}
+          onClick={closePlaces}
+        />
+      )}
+
       {/* Everything that is a place to go, in one box. It is a column on a wide
-          window and one scrolling strip on anything narrower. The box at the
-          foot of it is stuck there rather than sitting at the end of the list,
-          so when the post last arrived - and whatever the last press had to say
-          - is on screen without anybody scrolling for it. */}
-      <div className="uin-rail-scroll">
-        {/* Who is reading, and the two buttons up here that are not places to
-            go. The same arrangement every mail program uses, for the same
-            reason: finding something and writing something are acts, and an act
-            does not belong in a list of places. Search on the left of the pen,
-            because it is the one people reach for oftenest and the one they
-            reach for without looking. */}
-        <div className="uin-rail-me">
+          window and a drawer that slides in from the left on anything narrower.
+          The box at the foot of it is stuck there rather than sitting at the
+          end of the list, so when the post last arrived - and whatever the last
+          press had to say - is on screen without anybody scrolling for it. */}
+      <div className="uin-rail-scroll" id="uin-rail-places" onClick={onDrawerClick}>
+        {/* The drawer's own head. Who is reading, which the bar outside has no
+            room to say, and the way out. Not drawn as anything above 1200px. */}
+        <div className="uin-rail-drawer-head">
           <Avatar src={showAvatars ? avatarHref('user', me.id) : null} title={me.name}>
             {initialsFor(me.name)}
           </Avatar>
           <span className="uin-rail-me-name">{me.name}</span>
-          <InboxSearch
-            base={base}
-            params={params}
-            inboxes={inboxes.map((inbox) => ({ id: inbox.id, name: inbox.name }))}
-            channels={channelOrder.map((channel) => ({
-              key: channel.key,
-              label: channel.label,
-            }))}
-            showUnrouted={showUnrouted}
-          />
-          {composeHref && (
-            <ComposeMenu composeHref={composeHref} entries={composeEntries} />
-          )}
+          <button
+            type="button"
+            className="uin-modal-close uin-rail-drawer-close"
+            ref={drawerClose}
+            aria-label="Close the list of inboxes"
+            onClick={closePlaces}
+          >
+            {CloseIcon}
+          </button>
         </div>
 
         <div className="uin-rail-group">
