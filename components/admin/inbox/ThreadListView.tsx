@@ -30,7 +30,7 @@ import { ConfirmDialog } from './ConfirmDialog'
 // happen rather than an answer.
 //
 // A row lays itself out by how much room the list has been given rather than by
-// how wide the window is (see the container query in styles.tsx): across in one
+// how wide the window is (see the container query in inbox.css): across in one
 // line when the list is the whole screen, stacked when it is a column beside an
 // open conversation. Same markup either way.
 //
@@ -136,6 +136,18 @@ export function ThreadListView({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [merging, setMerging] = useState(false)
+  // Which conversation has been CLICKED but whose pane has not arrived yet, and
+  // what the address said at the moment of the press. Both halves, because the
+  // second is how this knows when it has stopped being true: once the address
+  // no longer says what it said when the row was pressed, the server has
+  // answered and the row's own guess can be dropped. Worked out in the render
+  // rather than reset by an effect - an effect would redraw the list a second
+  // time to say something the render already knew.
+  const [opening, setOpening] = useState<{ id: string; from: string | null } | null>(null)
+  const openingId = opening && opening.from === openThreadId ? opening.id : null
+  // What the list should draw as the open one: the row that was pressed if one
+  // was and the server has not answered yet, otherwise what the address says.
+  const shownOpenId = openingId ?? openThreadId
   // Who the "block them as well?" question is about, and whether it is up at
   // all. Null when the question is not on the screen. An EMPTY LIST is a question
   // with nothing to block in it - a pile of internal discussions, senders
@@ -279,7 +291,17 @@ export function ThreadListView({
     // measures its run from.
     anchorRef.current = index
     setSelected([])
-  }, [extendTo, toggle])
+    // And say so on the row IMMEDIATELY.
+    //
+    // Which conversation is open lives in the address, so the highlight moving
+    // used to wait on the server drawing the whole hub again - and in the
+    // meantime a click on a conversation looked, to the person who made it,
+    // exactly like a click that had missed. They clicked again. The row knows
+    // perfectly well that it was the one pressed, so it says so at once and the
+    // server confirms it a moment later, by which time the highlight is already
+    // where the confirmation would have put it.
+    setOpening({ id, from: openThreadId })
+  }, [extendTo, openThreadId, toggle])
 
   const onRowKeyDown = useCallback((e: React.KeyboardEvent, id: string, index: number) => {
     // Space on a link does nothing at all by default, so it is free to mean
@@ -583,7 +605,7 @@ export function ThreadListView({
           // reader's own initials in the circle rather than an M.
           const named = discussionFrom(row, staffById)
             ?? ((row.participantName ?? row.participantAddress ?? '').trim() || null)
-          const open = row.id === openThreadId
+          const open = row.id === shownOpenId
           const assignee = row.assigneeUserId ? endNames[row.assigneeUserId] : null
           // Whose desk it is on. A name once somebody has taken it, and the
           // address it arrived at until then - which on a shared inbox is the
@@ -607,6 +629,7 @@ export function ThreadListView({
                 className={`uin-row${row.unread ? ' uin-row-unread' : ''}`}
                 href={inboxHref(base, params, { id: row.id })}
                 aria-current={open ? 'true' : undefined}
+                data-opening={openingId === row.id ? 'true' : undefined}
                 onClick={(e) => onRowClick(e, row.id, index)}
                 onKeyDown={(e) => onRowKeyDown(e, row.id, index)}
               >

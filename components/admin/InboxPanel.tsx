@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { headers } from 'next/headers'
+import { after } from 'next/server'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { prisma } from '@/lib/db/prisma'
@@ -133,48 +134,117 @@ export async function UnifiedInboxPanel({
 }) {
   const user = await getSessionFromCookie()
   if (!user) return null
-  if (!await hasPermission(user, 'unifiedinbox.view')) {
+
+  // EVERYTHING THIS SCREEN CAN ASK BEFORE IT KNOWS ANYTHING, ASKED AT ONCE.
+  //
+  // The panel is one server render and the database is at the other end of a
+  // wire, so what decides how long a click takes is not how hard the queries
+  // are - they are all indexed and none of them is slow - but how many times in
+  // a row this function stops and waits. Written one `await` under another, the
+  // block below was fourteen return trips nose to tail before a single row of
+  // the list had been fetched, and every one of them was waiting on a question
+  // that had nothing to do with the answer above it. The four grants, the site
+  // clock, the folders, the settings, the channels, the colleague list: none of
+  // them needs any of the others.
+  //
+  // So they go together and the wait is the slowest one rather than the sum of
+  // all of them. Anything that genuinely does depend on something here waits in
+  // the second round below, and the two snooze sweeps ride along in this one
+  // because they must have finished before the counts are taken.
+  //
+  // The rule for adding to this list: it may go in the first round only if it
+  // needs nothing from it. If it needs the folders, or who this person is
+  // allowed to read, it belongs in the second.
+  const [
+    canView, canManage, canSendOut, canCampaign,
+    timezone,
+    allInboxes,
+    settings,
+    allChannels,
+    ownInboxId,
+    railOrder,
+    staffRows,
+    hubRolePermissions,
+  ] = await Promise.all([
+    hasPermission(user, 'unifiedinbox.view'),
+    hasPermission(user, 'unifiedinbox.manage'),
+    // Whether this person may put anything OUT of the building at all - a
+    // reply, a text, a call. Asked once and reused: it decides three different
+    // things further down, and three copies of the same question is three
+    // round trips.
+    hasPermission(user, 'unifiedinbox.reply'),
+    // Its own grant. Renaming a folder and emailing five thousand customers are
+    // not the same act, and a site that gives somebody the first has not thereby
+    // given them the second.
+    hasPermission(user, 'unifiedinbox.campaigns'),
+    // Read once and handed to every view below. This panel and everything under
+    // it are server-rendered, so a clock time left to the machine's own zone
+    // comes out in UTC - an hour behind the site for most of the year.
+    getSiteTimezone(),
+    listInboxes(),
+    // The module's own settings, fetched once for the whole screen: which
+    // channels the owner wants to see, whether to keep checking for mail while
+    // somebody is watching, and which end a conversation opens at.
+    getSettings(),
+    // The channels another module owns - chat, enquiries, the phone. They sit
+    // in no inbox and are not governed by the inbox guest lists: the module
+    // that owns each one says who may read it, and this hub honours that answer.
+    visibleProviderChannels(user),
+    // The address this person calls their own, if it is still one they may
+    // read. Resolved against the visible list below rather than trusted: an
+    // address can be taken off somebody's guest list, or deleted, long after it
+    // was made theirs, and a tab that opens on "that inbox is not here" is
+    // worse than no tab.
+    defaultInboxIdFor(user.id),
+    // The order this person keeps the top of their own rail in. Theirs alone,
+    // and saved without anybody's permission - see app/api/rail-order.
+    railOrderFor(user.id),
+    prisma.user.findMany({
+      where: { suspendedAt: null },
+      select: {
+        id: true,
+        displayName: true,
+        username: true,
+        // Only ever read to recognise a colleague's own address as one of ours -
+        // it is never put on the page.
+        email: true,
+        roleId: true,
+        role: { select: { isProtected: true } },
+      },
+      orderBy: { username: 'asc' },
+    }),
+    // Who can be ASKED to look at something, which is not everybody with an
+    // account. A tag lands on somebody's own list inside this hub, so tagging a
+    // colleague who has never been given the hub tells them nothing at all - and
+    // a picker offering a name that quietly does nothing is worse than one that
+    // does not offer it. One query for every role that holds the grant, rather
+    // than one question per colleague.
+    prisma.rolePermission.findMany({
+      where: { permissionKey: { in: ['unifiedinbox.view', 'unifiedinbox.manage'] } },
+      select: { roleId: true },
+    }),
+    // Anything whose snooze has elapsed is open again by the time the list is
+    // drawn. Doing it here rather than on a tick means a conversation is back
+    // the moment somebody looks, which is the only moment it matters. The same
+    // is true of something a colleague was asked to look at and put off until
+    // Thursday, so the two sweeps run together - and both are finished before
+    // the second round below takes any count that would otherwise miss them.
+    wakeDueThreads(),
+    wakeDueMentions(),
+  ])
+
+  if (!canView) {
     return <div className="alert alert-danger">You do not have permission to read the inbox.</div>
   }
 
   const adminPath = (await headers()).get('x-cactus-admin-path') ?? ''
   const base = `/${adminPath}/inbox`
-  // Read once and handed to every view below. This panel and everything under
-  // it are server-rendered, so a clock time left to the machine's own zone comes
-  // out in UTC - an hour behind the site for most of the year.
-  const timezone = await getSiteTimezone()
-  const canManage = await hasPermission(user, 'unifiedinbox.manage')
-  // Whether this person may put anything OUT of the building at all - a reply,
-  // a text, a call. Asked once and reused: it decides three different things
-  // further down, and three copies of the same question is three round trips.
-  const canSendOut = await hasPermission(user, 'unifiedinbox.reply')
   const canEditLinks = canManage || canSendOut
-  // Its own grant. Renaming a folder and emailing five thousand customers are
-  // not the same act, and a site that gives somebody the first has not thereby
-  // given them the second.
-  const canCampaign = await hasPermission(user, 'unifiedinbox.campaigns')
 
-  // Anything whose snooze has elapsed is open again by the time the list is
-  // drawn. Doing it here rather than on a tick means a conversation is back the
-  // moment somebody looks, which is the only moment it matters. The same is
-  // true of something a colleague was asked to look at and put off until
-  // Thursday, so the two sweeps run together.
-  await Promise.all([wakeDueThreads(), wakeDueMentions()])
-
-  const allInboxes = await listInboxes()
   const visibleIds = await visibleInboxIds(user, allInboxes.map((i) => i.id))
   const visible = new Set(visibleIds)
   const inboxes = allInboxes.filter((i) => visible.has(i.id))
 
-  // The module's own settings, fetched once for the whole screen: which channels
-  // the owner wants to see, whether to keep checking for mail while somebody is
-  // watching, and which end a conversation opens at.
-  const settings = await getSettings()
-
-  // The channels another module owns - chat, enquiries, the phone. They sit in
-  // no inbox and are not governed by the inbox guest lists: the module that owns
-  // each one says who may read it, and this hub honours that answer.
-  //
   // Minus the ones the owner has switched off in Settings. A site that points
   // every form at a real inbox does not want a Contact form entry listing the
   // same enquiries a second time. It is a decision about what is on the screen
@@ -194,7 +264,6 @@ export async function UnifiedInboxPanel({
   // rail in exactly the way hiding one is - so it is applied here, to the list
   // that goes on the screen, and `allChannels` stays the full list anything
   // asked about an open conversation is asked of.
-  const allChannels = await visibleProviderChannels(user)
   const channels = sortByChannelOrder(
     allChannels.filter((channel) => !hiddenChannels.has(channel.key)),
     settings.channelOrder,
@@ -216,11 +285,6 @@ export async function UnifiedInboxPanel({
     )
   }
 
-  // The address this person calls their own, if it is still one they may read.
-  // Resolved against the visible list rather than trusted: an address can be
-  // taken off somebody's guest list, or deleted, long after it was made theirs,
-  // and a tab that opens on "that inbox is not here" is worse than no tab.
-  const ownInboxId = await defaultInboxIdFor(user.id)
   // Falling back to an address that IS theirs, when nobody has pinned one.
   // Saving an individual inbox writes its owner a default row (see
   // audienceForSave), so this is usually the same answer twice - but an address
@@ -284,125 +348,111 @@ export async function UnifiedInboxPanel({
   // word the panel has already decided to ignore.
   if (carried.status === 'unassigned' && !sharedInbox) delete carried.status
 
-  const staffRows = await prisma.user.findMany({
-    where: { suspendedAt: null },
-    select: {
-      id: true,
-      displayName: true,
-      username: true,
-      // Only ever read to recognise a colleague's own address as one of ours -
-      // it is never put on the page.
-      email: true,
-      roleId: true,
-      role: { select: { isProtected: true } },
-    },
-    orderBy: { username: 'asc' },
-  })
   const staff = staffRows.map((s) => ({ id: s.id, name: s.displayName || s.username }))
   const staffById = Object.fromEntries(staff.map((s) => [s.id, s.name]))
 
-  // Who can be ASKED to look at something, which is not everybody with an
-  // account. A tag lands on somebody's own list inside this hub, so tagging a
-  // colleague who has never been given the hub tells them nothing at all - and
-  // a picker offering a name that quietly does nothing is worse than one that
-  // does not offer it. One query for every role that holds the grant, rather
-  // than one question per colleague.
-  const hubRoleIds = new Set(
-    (await prisma.rolePermission.findMany({
-      where: { permissionKey: { in: ['unifiedinbox.view', 'unifiedinbox.manage'] } },
-      select: { roleId: true },
-    })).map((row) => row.roleId),
-  )
+  const hubRoleIds = new Set(hubRolePermissions.map((row) => row.roleId))
   const taggable = staffRows
     .filter((person) => person.role.isProtected || hubRoleIds.has(person.roleId))
     .map((person) => ({ id: person.id, name: person.displayName || person.username }))
 
-  const counts = await unreadCounts(user.id, visibleIds, canManage, channelModules)
+  // THE SECOND ROUND. Everything that needed to know which folders this person
+  // may read, and which channels are on their rail, and could therefore not go
+  // in the first - and, like the first, nothing here needs anything else here.
+  // Five numbers for the rail, the sendable addresses and the two cheap "can
+  // this site do it at all" questions, in one wait rather than seven.
+  const [
+    counts,
+    assignedElsewhere,
+    askedCount,
+    spamCount,
+    sendableIds,
+    smsAndDialler,
+  ] = await Promise.all([
+    unreadCounts(user.id, visibleIds, canManage, channelModules),
+    // What has been handed to whoever is reading and is filed somewhere other
+    // than their own address. It goes onto their own address's number, because
+    // standing in that address is now where they read it - there is no
+    // "Assigned to me" screen to go and look at, and having to remember to look
+    // at one was the whole complaint.
+    pinnedInboxId
+      ? unreadAssignedElsewhere(user.id, visibleIds, canManage, channelModules, pinnedInboxId)
+      : Promise.resolve(0),
+    // What colleagues have asked this person to look at and they have not dealt
+    // with yet. One cheap COUNT on every draw, because it rides on the rail; the
+    // list itself is only fetched when that is the tab open, the same as Drafts,
+    // Sent and Contacts.
+    openMentionCount(user.id),
+    // What this person has thrown away, for the number beside the folder. Theirs
+    // alone: junk is one reader's opinion rather than a fact about the mail (see
+    // lib/spam.ts), so unlike every other count on this rail there is no version
+    // of it that belongs to an address or to the team.
+    //
+    // UNREAD junk only, like every other number on this rail. It counted the
+    // whole folder once, on the reasoning that "how much is in there" is the
+    // question a spam folder answers - but a bin nobody empties fills up, and a
+    // permanent 47 beside a folder is a number that has stopped meaning anything.
+    // A number that appears when something new has been thrown away and goes back
+    // to nothing when it has been looked at is one worth reading.
+    //
+    // Status 'all' still: junk that was already marked done is still junk that
+    // arrived, and a folder ignoring its own contents because of a tab that is no
+    // longer drawn above it would be a folder saying nothing while holding
+    // something.
+    //
+    // Through countThreads rather than a tally of its own, so it carries the same
+    // visibility clause the folder's own list carries: what this reader may open,
+    // which channels they may see, whether unfiled post is theirs. A count that
+    // worked it out separately would drift, and a folder saying 4 with three
+    // things in it is the one place that matters - somebody would go looking for
+    // a message they had thrown away and could not find.
+    countThreads({
+      viewerUserId: user.id,
+      spamOnly: true,
+      // Their own, explicitly. The number under Yours counts your bin; a
+      // colleague's folder carries its own total in the head of the list.
+      spamOwnerUserId: user.id,
+      inboxIds: visibleIds,
+      includeUnrouted: canManage,
+      providerModules: channelModules,
+      status: 'all',
+      unreadOnly: true,
+      page: 1,
+      perPage: PER_PAGE,
+    }),
+    // Writing a new one is a different grant from reading (D16), so the From
+    // menu and the button that opens it are both built from the inboxes this
+    // person may SEND from. No sendable address means no button: an invitation
+    // to write that ends in "you do not have permission to send from that
+    // inbox" is worse than no invitation.
+    replyableInboxIds(user, inboxes.map((i) => i.id)),
+    // The two other things the compose button can start, narrowed to the ones
+    // this site can actually do. Both questions are asked the CHEAP way here -
+    // is there a module that sends texts, is there a module that places calls -
+    // rather than by reaching a telephony API to ask whether it is configured,
+    // because this runs on every draw of every list. The expensive question is
+    // asked by the screen that opens, where somebody is waiting for an answer
+    // anyway.
+    canSendOut
+      ? Promise.all([isSmsAvailable(), firstDialler(user)])
+      : Promise.resolve([false, null] as const),
+  ])
+
   // Before the desk is added below: All is the sum of the addresses, and a
   // conversation counted twice would make it larger than the list it stands for.
   const allUnread = Object.values(counts).reduce((a, b) => a + b, 0)
-
-  // What has been handed to whoever is reading and is filed somewhere other
-  // than their own address. It goes onto their own address's number, because
-  // standing in that address is now where they read it - there is no "Assigned
-  // to me" screen to go and look at, and having to remember to look at one was
-  // the whole complaint.
-  const assignedElsewhere = pinnedInboxId
-    ? await unreadAssignedElsewhere(user.id, visibleIds, canManage, channelModules, pinnedInboxId)
-    : 0
-
-  // The order this person keeps the top of their own rail in. Theirs alone, and
-  // saved without anybody's permission - see app/api/rail-order.
-  const railOrder = await railOrderFor(user.id)
-
-  // What colleagues have asked this person to look at and they have not dealt
-  // with yet. One cheap COUNT on every draw, because it rides on the rail; the
-  // list itself is only fetched when that is the tab open, the same as Drafts,
-  // Sent and Contacts.
-  const askedCount = await openMentionCount(user.id)
-
-  // What this person has thrown away, for the number beside the folder. Theirs
-  // alone: junk is one reader's opinion rather than a fact about the mail (see
-  // lib/spam.ts), so unlike every other count on this rail there is no version
-  // of it that belongs to an address or to the team.
-  //
-  // UNREAD junk only, like every other number on this rail. It counted the
-  // whole folder once, on the reasoning that "how much is in there" is the
-  // question a spam folder answers - but a bin nobody empties fills up, and a
-  // permanent 47 beside a folder is a number that has stopped meaning anything.
-  // A number that appears when something new has been thrown away and goes back
-  // to nothing when it has been looked at is one worth reading.
-  //
-  // Status 'all' still: junk that was already marked done is still junk that
-  // arrived, and a folder ignoring its own contents because of a tab that is no
-  // longer drawn above it would be a folder saying nothing while holding
-  // something.
-  //
-  // Through countThreads rather than a tally of its own, so it carries the same
-  // visibility clause the folder's own list carries: what this reader may open,
-  // which channels they may see, whether unfiled post is theirs. A count that
-  // worked it out separately would drift, and a folder saying 4 with three
-  // things in it is the one place that matters - somebody would go looking for
-  // a message they had thrown away and could not find.
-  const spamCount = await countThreads({
-    viewerUserId: user.id,
-    spamOnly: true,
-    // Their own, explicitly. The number under Yours counts your bin; a
-    // colleague's folder carries its own total in the head of the list.
-    spamOwnerUserId: user.id,
-    inboxIds: visibleIds,
-    includeUnrouted: canManage,
-    providerModules: channelModules,
-    status: 'all',
-    unreadOnly: true,
-    page: 1,
-    perPage: PER_PAGE,
-  })
-
-  // Writing a new one is a different grant from reading (D16), so the From menu
-  // and the button that opens it are both built from the inboxes this person may
-  // SEND from. No sendable address means no button: an invitation to write that
-  // ends in "you do not have permission to send from that inbox" is worse than
-  // no invitation.
-  const sendableIds = await replyableInboxIds(user, inboxes.map((i) => i.id))
+  const [smsReady, dialler] = smsAndDialler
   const sendable = inboxes.filter((i) => sendableIds.includes(i.id))
   const composeHref = sendable.length > 0
     ? inboxHref(base, carried, { compose: '1', draft: null, id: null, person: null })
     : null
 
   // The three other things the button can start, narrowed to the ones this site
-  // can actually do. Both questions are asked the CHEAP way here - is there a
-  // module that sends texts, is there a module that places calls - rather than
-  // by reaching a telephony API to ask whether it is configured, because this
-  // runs on every draw of every list. The expensive question is asked by the
-  // screen that opens, where somebody is waiting for an answer anyway.
+  // can actually do - the two paid-for ones settled in the round above.
   //
   // A discussion needs nothing switched on: it is an internal note, and this
   // module has always been able to write one. It does need somewhere to put it,
   // which on a site where this person can read nothing is nowhere.
-  const [smsReady, dialler] = canSendOut
-    ? await Promise.all([isSmsAvailable(), firstDialler(user)])
-    : [false, null]
   const composeEntries = composeHref === null ? [] : [
     ...(visibleIds.length > 0 ? [{
       key: 'discussion',
@@ -872,7 +922,16 @@ export async function UnifiedInboxPanel({
         await setThreadRead(thread.id, false)
         // And the channel that owns it is told, so the next collection does not
         // arrive still calling it new and mark it unread all over again.
-        await pushProviderRead(thread)
+        //
+        // AFTER the reply has gone out, not before it. Telling a channel is a
+        // call to somebody else's server - Chatwoot's, on a chat - and awaiting
+        // it here put a whole network round trip, to a machine this site does
+        // not own, between somebody clicking a conversation and seeing it. Which
+        // was a strange price to pay for a housekeeping note nobody is waiting
+        // on: the conversation is already read as far as this site is concerned,
+        // written down one line above, and the pane does not read the answer.
+        // A channel that is slow, or down, now costs the reader nothing.
+        after(() => pushProviderRead(thread))
       }
 
       const [messages, files, events, ownDraft, heldDrafts, sellsAnything] = await Promise.all([

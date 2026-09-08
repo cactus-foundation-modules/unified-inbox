@@ -1,3 +1,4 @@
+import { cache } from 'react'
 import { prisma } from '@/lib/db/prisma'
 import { hasPermission } from '@/lib/permissions/check'
 import { INSTALLED_MODULE_WHERE } from '@/lib/modules/live-status'
@@ -59,7 +60,20 @@ function isProvider(value: unknown): value is ConversationProvider {
   return typeof p.list === 'function' && typeof p.thread === 'function' && typeof p.channel === 'string'
 }
 
-async function providerEntries(): Promise<ProviderEntry[]> {
+// Wrapped in React's cache(), which holds the answer for the length of ONE
+// request and no longer. Every reader of this file asks the same question, and
+// the inbox screen alone asks it three or four times in a single draw - the
+// channels for the rail, the channel an open conversation belongs to, the one
+// being told that something has been read. Each ask was pulling the whole
+// manifest of every installed module out of the database again, which on a site
+// with thirty of them is a fat JSON column thirty times over for a list that
+// cannot have changed between one line of the render and the next.
+//
+// Per-request is the right length. A module installed or removed mid-render is
+// not a thing that happens; a module installed and the next page load still
+// showing the old channels very much is, which is why this is cache() and not
+// anything that outlives the request.
+const providerEntries = cache(async (): Promise<ProviderEntry[]> => {
   const modules = await prisma.module.findMany({
     where: { ...INSTALLED_MODULE_WHERE },
     select: { name: true, manifest: true },
@@ -75,7 +89,7 @@ async function providerEntries(): Promise<ProviderEntry[]> {
     }
   }
   return entries
-}
+})
 
 /**
  * Every provider on the site, whoever is asking.
@@ -85,7 +99,7 @@ async function providerEntries(): Promise<ProviderEntry[]> {
  * silently - that is a module installed one build before its code shipped, and
  * it will be here next time.
  */
-export async function allConversationProviders(): Promise<ResolvedConversationProvider[]> {
+export const allConversationProviders = cache(async (): Promise<ResolvedConversationProvider[]> => {
   // Dynamic on purpose: this module's own InboxPanel is imported BY the
   // generated registry and reaches this file, so a static import back to the
   // registry closes a cycle. Turbopack merges a cycle into one scope and can
@@ -103,7 +117,7 @@ export async function allConversationProviders(): Promise<ResolvedConversationPr
     resolved.push({ moduleName: entry.moduleName, id: entry.key, provider })
   }
   return resolved
-}
+})
 
 /** One provider by the channel key its conversations are stored under, for
  *  replying to something it owns. Null when the module has gone, which is an
@@ -174,7 +188,11 @@ export type ProviderChannel = {
  * than from a list kept here, so a channel is called whatever its own module
  * calls it.
  */
-export async function visibleProviderChannels(user: SessionUser): Promise<ProviderChannel[]> {
+// Also per-request cached, and keyed on the session object - which core hands
+// out through a cache() of its own, so every asker inside one request holds the
+// same one and they share the answer rather than each resolving the registry
+// and re-asking every channel's permission.
+export const visibleProviderChannels = cache(async (user: SessionUser): Promise<ProviderChannel[]> => {
   const entries = await providerEntries()
   if (entries.length === 0) return []
   const { moduleExtensionPointComponents } =
@@ -204,7 +222,7 @@ export async function visibleProviderChannels(user: SessionUser): Promise<Provid
     })
   }
   return channels
-}
+})
 
 /**
  * Every channel on the site and what it is called, whoever is asking.

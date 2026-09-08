@@ -74,7 +74,7 @@ type Props = {
 }
 
 /** How wide the menu is drawn, in pixels, so the maths below can keep it on
- *  screen. Kept in step with .uin-ctxbar-menu in styles.tsx. */
+ *  screen. Kept in step with .uin-ctxbar-menu in inbox.css. */
 const MENU_WIDTH = 300
 /** Roughly what a couple of records and the add form come to. Only used to
  *  decide whether to open downwards or up - being a little out costs an early

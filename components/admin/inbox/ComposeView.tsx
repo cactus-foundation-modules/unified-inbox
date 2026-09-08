@@ -223,7 +223,22 @@ export function ComposeView({
     || products.length > 0
   )
 
-  const leave = useCallback(() => { router.push(closeHref) }, [closeHref, router])
+  // Shut, as far as the person who shut it is concerned.
+  //
+  // Closing this dialog means going back to a screen without it in the address,
+  // which means the server draws the whole hub again - the rail, the list, the
+  // conversation - and until that came back the dialog just SAT there, several
+  // hundred milliseconds after somebody had clicked the cross and moved on.
+  // Nothing about it was still wanted by then. So the dialog takes itself off
+  // the screen the moment it is dismissed and lets the navigation catch up
+  // behind it; when the new screen lands the address no longer says compose, so
+  // there is nothing to put back and nothing flickers.
+  const [gone, setGone] = useState(false)
+
+  const leave = useCallback(() => {
+    setGone(true)
+    router.push(closeHref)
+  }, [closeHref, router])
 
   /** Every way out that is not Send: Escape and the cross. Half a written
    *  message is not something to lose to one keystroke, so when there is
@@ -514,6 +529,7 @@ export function ComposeView({
   const discard = useCallback(async () => {
     if (!draftId) {
       setDirty(false)
+      setGone(true)
       router.push(closeHref)
       return
     }
@@ -524,6 +540,10 @@ export function ComposeView({
     try {
       await fetch(`/api/m/unified-inbox/drafts/${draftId}`, { method: 'DELETE' })
       setDirty(false)
+      // Only once the deletion has actually happened. Unlike the plain close
+      // above, there is a failure to report here, and a dialog that had already
+      // taken itself off the screen would have nowhere to report it.
+      setGone(true)
       router.push(closeHref)
       router.refresh()
     } catch {
@@ -533,6 +553,10 @@ export function ComposeView({
       setBusyWith(null)
     }
   }, [closeHref, draftId, router])
+
+  // Nothing at all once it has been dismissed - see setGone above. The screen
+  // behind it is already correct; it is only the address that has yet to say so.
+  if (gone) return null
 
   return (
     <div className="uin-modal">
@@ -554,9 +578,16 @@ export function ComposeView({
             href={closeHref}
             aria-label="Close without sending"
             onClick={(event) => {
-              if ((!hasUnsaved && !pendingSendAt) || opensElsewhere(event)) return
-              event.preventDefault()
-              setAsking('leave')
+              // A new tab or window keeps this one exactly as it was.
+              if (opensElsewhere(event)) return
+              if (hasUnsaved || pendingSendAt) {
+                event.preventDefault()
+                setAsking('leave')
+                return
+              }
+              // Off the screen now; the navigation the Link is about to start
+              // catches up in its own time.
+              setGone(true)
             }}
           >
             {CloseIcon}
@@ -782,7 +813,7 @@ export function ComposeView({
 
                 Narrow, the send buttons wrap as a group and stay hard right, and
                 if only one of them fits it is the primary that keeps the first
-                line. See uin-send-group in styles.tsx. */}
+                line. See uin-send-group in inbox.css. */}
             <div className="uin-composer-row uin-composer-actions">
               <button
                 type="button"

@@ -41,7 +41,7 @@ const ICONS: Record<string, React.ReactNode> = {
 }
 
 /** How wide the menu is drawn, in pixels, so the maths below can keep it on
- *  screen. Kept in step with .uin-compose-menu in styles.tsx. */
+ *  screen. Kept in step with .uin-compose-menu in inbox.css. */
 const MENU_WIDTH = 240
 /** Roughly what three entries come to. Only used to decide whether there is
  *  room below the button or whether it should open upwards - being a little out

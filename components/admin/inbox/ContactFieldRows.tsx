@@ -5,7 +5,7 @@ import { useId } from 'react'
 // The rows a contact card is made of, shared by the person's card and the
 // organisation's so the two cannot drift into looking like different screens.
 //
-// Same markup as the composer's To and Cc lines (see .uin-fields in styles.tsx):
+// Same markup as the composer's To and Cc lines (see .uin-fields in inbox.css):
 // a bordered block with borderless lines inside it, because a box drawn round
 // every line would be fourteen boxes inside a box and the row itself already
 // says where to type.

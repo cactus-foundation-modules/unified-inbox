@@ -13,7 +13,7 @@ import { ConfirmDialog } from './ConfirmDialog'
 
 /** Small text that has to be read as a failure. The plain danger colour is
  *  under AA at this size on a subtle ground, which is why the failed-send tag
- *  in styles.tsx uses the darker end of the ramp; the same applies here. */
+ *  in inbox.css uses the darker end of the ramp; the same applies here. */
 const ERROR_TEXT = { color: 'var(--color-destructive-hover)' } as const
 
 export function LinkActions({

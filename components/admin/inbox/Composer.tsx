@@ -1258,7 +1258,7 @@ export function Composer({
           When the column is too narrow for one line, the send buttons wrap as a
           group and stay hard right - and if only one of them fits, it is the
           primary that keeps the first line, because that is the one somebody
-          came to press. See uin-send-group in styles.tsx for how. */}
+          came to press. See uin-send-group in inbox.css for how. */}
       <div className="uin-composer-row uin-composer-actions">
         {/* The paperclip only where a file would actually arrive. A reply on a
             channel another module owns is handed to it as one string, so an
