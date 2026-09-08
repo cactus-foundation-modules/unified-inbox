@@ -97,6 +97,7 @@ import { StatusTabs } from './inbox/StatusTabs'
 import { SearchBar } from './inbox/SearchBar'
 import { Filters } from './inbox/Filters'
 import { ThreadListView } from './inbox/ThreadListView'
+import { NavProgress } from './inbox/NavProgress'
 import { MentionListView } from './inbox/MentionListView'
 import { DraftListView } from './inbox/DraftListView'
 import { SentListView } from './inbox/SentListView'
@@ -165,6 +166,9 @@ export async function UnifiedInboxPanel({
     railOrder,
     staffRows,
     hubRolePermissions,
+    draftTallies,
+    connections,
+    peopleTally,
   ] = await Promise.all([
     hasPermission(user, 'unifiedinbox.view'),
     hasPermission(user, 'unifiedinbox.manage'),
@@ -223,6 +227,22 @@ export async function UnifiedInboxPanel({
       where: { permissionKey: { in: ['unifiedinbox.view', 'unifiedinbox.manage'] } },
       select: { roleId: true },
     }),
+    // A draft is its author's and nobody else's, and the query says so rather
+    // than the caller (see lib/db.ts), so neither the list nor the number on the
+    // tab can be talked into counting a colleague's. Null is every one of this
+    // person's, wherever it is filed; a colleague's folder narrows it to the
+    // address that folder names, which is this person's own writing on it. The
+    // list itself is only fetched when that tab is the one open.
+    //
+    // The per-address numbers are the same question asked once per colleague, in
+    // one grouped query: the folder under somebody's name is only offered where
+    // this reader has left something on that address, so the rail cannot be drawn
+    // without them.
+    Promise.all([countDrafts(user.id), countDraftsByInbox(user.id), countScheduledDrafts(user.id)]),
+    listConnections(),
+    // Both counts in one query - one of them rides on the hub's own tab row, so
+    // it is asked for on every render either way and there is no sense in two.
+    peopleCount(),
     // Anything whose snooze has elapsed is open again by the time the list is
     // drawn. Doing it here rather than on a tick means a conversation is back
     // the moment somebody looks, which is the only moment it matters. The same
@@ -232,6 +252,8 @@ export async function UnifiedInboxPanel({
     wakeDueThreads(),
     wakeDueMentions(),
   ])
+  const [draftCount, draftCounts, scheduledCount] = draftTallies
+  const { people: contactCount, organisations: organisationCount } = peopleTally
 
   if (!canView) {
     return <div className="alert alert-danger">You do not have permission to read the inbox.</div>
@@ -502,22 +524,6 @@ export async function UnifiedInboxPanel({
     ? (folderInbox.ownerUserId ? staffById[folderInbox.ownerUserId] ?? null : null) ?? folderInbox.name
     : null
 
-  // A draft is its author's and nobody else's, and the query says so rather
-  // than the caller (see lib/db.ts), so neither the list nor the number on the
-  // tab can be talked into counting a colleague's. Null is every one of this
-  // person's, wherever it is filed; a colleague's folder narrows it to the
-  // address that folder names, which is this person's own writing on it. The
-  // list itself is only fetched when that tab is the one open.
-  //
-  // The per-address numbers are the same question asked once per colleague, in
-  // one grouped query: the folder under somebody's name is only offered where
-  // this reader has left something on that address, so the rail cannot be drawn
-  // without them.
-  const [draftCount, draftCounts, scheduledCount] = await Promise.all([
-    countDrafts(user.id),
-    countDraftsByInbox(user.id),
-    countScheduledDrafts(user.id),
-  ])
   const drafts = params.draftsOnly
     ? await listDrafts(user.id, folderAsked ? folderIds : null)
     : []
@@ -626,9 +632,6 @@ export async function UnifiedInboxPanel({
     perPage: PER_PAGE,
   }
 
-  // Drafts take the list pane's place, so the conversation queries are not run
-  // at all rather than run and thrown away.
-  const connections = await listConnections()
   // The status tabs count what is behind them given everything else already
   // chosen, so they come from the same filters with the status left out.
   const listing = params.draftsOnly || params.scheduledOnly || params.sentOnly || params.contactsOnly
@@ -671,9 +674,6 @@ export async function UnifiedInboxPanel({
   // The count rides on the tab row and is asked for on every render, which is
   // one cheap COUNT; the lists themselves are only fetched when the Contacts tab
   // is the one open, the same as Drafts and Sent above.
-  // Both counts in one query - one of them rides on the hub's own tab row, so
-  // it is asked for on every render either way and there is no sense in two.
-  const { people: contactCount, organisations: organisationCount } = await peopleCount()
   const showingOrganisations = params.contactsOnly && params.contactsView === 'organisations'
   const [contacts, contactsTotal] = params.contactsOnly && !showingOrganisations
     ? await listPeople({
@@ -1048,36 +1048,41 @@ export async function UnifiedInboxPanel({
       // a discussion is made of anyway - so the composer arrives on the one mode
       // that applies rather than on a Reply that would refuse.
       const isDiscussion = thread.channel === 'discussion'
-      const canReply = isDiscussion
-        ? false
+      // canSendOut rather than a fresh hasPermission: it is the same grant, and
+      // round one already holds the answer. Asking again here, and twice more
+      // below, was three extra round trips for anybody who is not an admin -
+      // exactly the waste the note beside canSendOut warns about.
+      const canReplyHere = isDiscussion
+        ? Promise.resolve(false)
         : thread.providerModule
-          ? (channel?.canReply ?? false) && await hasPermission(user, 'unifiedinbox.reply')
+          ? Promise.resolve((channel?.canReply ?? false) && canSendOut)
           : thread.inboxId
-            ? await canReplyToInbox(user, thread.inboxId)
-            : false
+            ? canReplyToInbox(user, thread.inboxId)
+            : Promise.resolve(false)
       // Deleting takes the same two halves as replying: the channel has to offer
       // it, and this reader has to be allowed on that channel. Note it is the
       // channel's OWN permission that was already checked to build `channels`,
       // so a channel this person cannot see never gets this far.
       const canDeleteMessages = thread.providerModule ? (channel?.canDelete ?? false) : false
 
-      // Blocking asks the channel who it is dealing with, which is a round trip,
-      // so it is only asked where the channel can actually refuse somebody and
-      // this reader may act on it.
-      let blockState: { blocked: boolean; channelLabel: string } | null = null
-      if (thread.providerModule && channel?.canBlock && (await hasPermission(user, 'unifiedinbox.reply'))) {
+      // Blocking asks the channel who it is dealing with, which is a round trip
+      // to somebody else's server, so it is only asked where the channel can
+      // actually refuse somebody and this reader may act on it - and it is
+      // asked ALONGSIDE everything else this pane needs rather than in front of
+      // it, because a slow channel was holding up the whole conversation.
+      const blockStateAsked = (async (): Promise<{ blocked: boolean; channelLabel: string } | null> => {
+        if (!thread.providerModule || !channel?.canBlock || !canSendOut) return null
         const resolved = await providerForKey(thread.providerModule)
-        const ask = resolved?.provider.isParticipantBlocked
-        if (ask && thread.externalId) {
-          try {
-            blockState = { blocked: await ask(thread.externalId), channelLabel: channel.label }
-          } catch {
-            // A channel that cannot say is not a reason to take the conversation
-            // off somebody. Offer the block and let the press be the answer.
-            blockState = { blocked: false, channelLabel: channel.label }
-          }
+        const askBlocked = resolved?.provider.isParticipantBlocked
+        if (!askBlocked || !thread.externalId) return null
+        try {
+          return { blocked: await askBlocked(thread.externalId), channelLabel: channel.label }
+        } catch {
+          // A channel that cannot say is not a reason to take the conversation
+          // off somebody. Offer the block and let the press be the answer.
+          return { blocked: false, channelLabel: channel.label }
         }
-      }
+      })()
 
       // Junk, as this reader sees it, and whether the sender is already refused.
       //
@@ -1115,9 +1120,37 @@ export async function UnifiedInboxPanel({
           ? allInboxes.find((i) => i.id === thread.inboxId) ?? null
           : null,
       })
-      const [isSpam, senderBlocked] = await Promise.all([
+      //
+      // EVERYTHING LEFT THAT THIS PANE NEEDS, IN ONE WAIT.
+      //
+      // Whether this reader may answer, what the channel says about the sender,
+      // whose junk this is, what a colleague asked, and the records attached to
+      // it. Five separate waits once, one after another, and not one of them
+      // needed an answer from any of the others - so opening a conversation
+      // spent five return trips settling questions that could all have been
+      // asked at the same moment. The one genuine dependency is further down:
+      // the hints and the public links are asked of what comes back here.
+      const [
+        canReply, blockState, isSpam, senderBlocked, ask,
+        links, kindOptions, senderModules, merges, contextQuery,
+      ] = await Promise.all([
+        canReplyHere,
+        blockStateAsked,
         threadIsSpamFor(thread.id, spamOwnerId),
         senderAddress ? isSenderBlocked(senderAddress) : Promise.resolve(false),
+        // This reader's own ask on this conversation, when a colleague put
+        // their name on it. Nobody else's: what somebody was asked and whether
+        // they have got to it is between them and whoever asked them.
+        mentionForThread(user.id, thread.id),
+        linksForThread(thread.id),
+        canEditLinks ? attachableKinds(user) : Promise.resolve([]),
+        canEditLinks && thread.inboxId ? modulesForInbox(thread.inboxId) : Promise.resolve([]),
+        // Only asked for when there is somebody who could act on the answer.
+        canManage ? undoableThreadMerges(thread.id) : Promise.resolve([]),
+        // Who we are dealing with, in the form the adapters match on. Only
+        // worth building once the conversation has been matched to somebody -
+        // a first message from a stranger has nobody to look up.
+        thread.personId ? buildContextQuery(thread.personId) : Promise.resolve(null),
       ])
 
       // HOW this one is answered, as against whether it may be. An email is
@@ -1185,22 +1218,6 @@ export async function UnifiedInboxPanel({
       // used for. An address purchasing sends from is an address suppliers
       // answer purchase orders at, and that is worth one less choice made by
       // hand on every conversation in it.
-      // This reader's own ask on this conversation, when a colleague put their
-      // name on it. Nobody else's: what somebody was asked and whether they
-      // have got to it is between them and whoever asked them.
-      const ask = await mentionForThread(user.id, thread.id)
-
-      const [links, kindOptions, senderModules, merges, contextQuery] = await Promise.all([
-        linksForThread(thread.id),
-        canEditLinks ? attachableKinds(user) : Promise.resolve([]),
-        canEditLinks && thread.inboxId ? modulesForInbox(thread.inboxId) : Promise.resolve([]),
-        // Only asked for when there is somebody who could act on the answer.
-        canManage ? undoableThreadMerges(thread.id) : Promise.resolve([]),
-        // Who we are dealing with, in the form the adapters match on. Only
-        // worth building once the conversation has been matched to somebody -
-        // a first message from a stranger has nobody to look up.
-        thread.personId ? buildContextQuery(thread.personId) : Promise.resolve(null),
-      ])
 
       // What the rest of the site already knows about them: "Existing
       // customer", and nothing longer. Asked after the records rather than
@@ -1271,7 +1288,7 @@ export async function UnifiedInboxPanel({
             /* Blocking changes what everybody on the site receives, so it takes
                the grant for acting on the outside world rather than the one for
                reading it - the same line the channel block next door draws. */
-            canBlock: await hasPermission(user, 'unifiedinbox.reply'),
+            canBlock: canSendOut,
           }}
           now={new Date()}
           timezone={timezone}
@@ -1432,6 +1449,12 @@ export async function UnifiedInboxPanel({
     }
   }
 
+  // What this render IS, as one string, for the "we heard you" bar to measure
+  // against - see NavProgress. Built from the address the panel actually drew
+  // rather than from the address bar, because those two are only the same once
+  // the navigation has finished, which is precisely the thing being reported.
+  const routeKey = JSON.stringify(carried)
+
   // A folder under a colleague's name says which folder AND whose, in one
   // value, because the rail highlights one entry and there are three of them
   // under every colleague.
@@ -1590,6 +1613,7 @@ export async function UnifiedInboxPanel({
       return (
         <div className="uin-page">
           <InboxStyles />
+          <NavProgress routeKey={routeKey} />
           <ColumnResizer handles={false} />
           <div className="uin-app uin-app-wide">
             {rail}
@@ -1605,6 +1629,7 @@ export async function UnifiedInboxPanel({
     return (
       <div className="uin-page">
         <InboxStyles />
+        <NavProgress routeKey={routeKey} />
         {/* The same frame as the inbox, so the rail, the list and the pane are
             the same widths and the same edges on both screens - and so the
             handles between them are the ones somebody has already dragged. On a
@@ -1760,6 +1785,7 @@ export async function UnifiedInboxPanel({
     // scroll container and kill the sticky frame inside it.
     <div className="uin-page">
       <InboxStyles />
+      <NavProgress routeKey={routeKey} />
 
       {/* Never a fourth column beside a conversation.
           There used to be one - what the rest of the site knows about whoever

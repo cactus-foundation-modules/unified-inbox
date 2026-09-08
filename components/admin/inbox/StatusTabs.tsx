@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { LinkBusy } from './NavProgress'
 import { inboxHref, type StatusFilter } from '@/modules/unified-inbox/lib/list'
 
 // Where a conversation stands, at the head of the list it narrows: waiting, set
@@ -98,6 +99,7 @@ export function StatusTabs({
                 <span className="sr-only"> {unit}</span>
               </span>
             )}
+            <LinkBusy />
           </Link>
         )
       })}

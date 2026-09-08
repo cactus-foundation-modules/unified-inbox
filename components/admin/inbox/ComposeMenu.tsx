@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { ChevronDownIcon, NoteIcon, PenIcon, PhoneIcon, SmsIcon } from './icons'
+import { LinkBusy } from './NavProgress'
 
 // Write a message, and the three other things you might have meant.
 //
@@ -134,6 +135,7 @@ export function ComposeMenu({ composeHref, entries }: Props) {
     return (
       <Link className="uin-rail-compose" href={composeHref} aria-label="Write a message">
         {PenIcon}
+        <LinkBusy />
       </Link>
     )
   }
@@ -142,6 +144,7 @@ export function ComposeMenu({ composeHref, entries }: Props) {
     <div className="uin-compose-split" ref={wrap}>
       <Link className="uin-rail-compose uin-rail-compose-main" href={composeHref} aria-label="Write a message">
         {PenIcon}
+        <LinkBusy />
       </Link>
       <button
         type="button"

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import { LinkBusy } from './NavProgress'
 import { useRouter } from 'next/navigation'
 import { avatarHref, inboxHref, initialsFor, moveInOrder, sortByStoredOrder, splitInboxes } from '@/modules/unified-inbox/lib/list'
 import {
@@ -301,6 +302,7 @@ function Entry({ item }: { item: RailItem }) {
         <span className="uin-rail-name">{item.name}</span>
         {item.count}
         {item.hint && <span className="sr-only">. {item.hint}</span>}
+        <LinkBusy />
       </Link>
     </li>
   )
@@ -363,6 +365,7 @@ function Branch({ id, item, opens, folders, open, onToggle }: {
           <span className="uin-rail-name">{item.name}</span>
           {item.count}
           {item.hint && <span className="sr-only">. {item.hint}</span>}
+          <LinkBusy />
         </Link>
       </div>
       <ul
