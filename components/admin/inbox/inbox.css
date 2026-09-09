@@ -374,9 +374,14 @@
     transform: none;
     visibility: visible;
   }
-  .uin-rail-backdrop { display: block; }
-  .uin-rail-places { display: inline-flex; }
-  .uin-rail-drawer-head { display: flex; }
+  /* Two classes deep on purpose, all three of them: each of these has a
+     `display: none` of its own further down this file, written at one class,
+     and a later rule of equal weight wins however narrow the window is. Said
+     at one class here, the bar's own button never appeared on a phone at all
+     and the drawer had no way to be opened. */
+  .uin-rail .uin-rail-backdrop { display: block; }
+  .uin-rail .uin-rail-places { display: inline-flex; }
+  .uin-rail .uin-rail-drawer-head { display: flex; }
   /* Who is reading moves into the drawer's head; the bar is about where you
      are, not who you are. */
   .uin-rail-me > .uin-avatar-wrap,
