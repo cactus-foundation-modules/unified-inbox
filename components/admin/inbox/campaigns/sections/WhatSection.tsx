@@ -36,21 +36,38 @@ export function WhatSection({
     onChange({ steps: draft.steps.map((s) => s.stepIndex === index ? { ...s, ...patch } : s) })
   }
 
+  // Reduce rather than Math.max(...[]), which is -Infinity and would make the
+  // new step NaN. A campaign always has a step 0, so this never comes up -
+  // until the day something deletes one and every box on the section reads
+  // "NaN" with no way back.
+  const nextIndex = draft.steps.reduce((highest, s) => Math.max(highest, s.stepIndex), -1) + 1
+
   const addChase = () => {
-    const next = Math.max(...draft.steps.map((s) => s.stepIndex)) + 1
+    const next = nextIndex
     if (next > 3) return
     onChange({
       steps: [...draft.steps, { id: `new-${next}`, stepIndex: next, waitDays: 3, subject: null, body: '' }],
     })
   }
 
+  /**
+   * Take a chase out.
+   *
+   * On a DRAFT the rest are renumbered, so the steps stay 0, 1, 2, 3 and the
+   * screen reads the way somebody wrote it.
+   *
+   * Once it has started they are NOT, and that is the whole of this comment.
+   * Everybody waiting is held against a step NUMBER: pull chase 1 out from under
+   * a campaign in flight and renumber, and the four hundred people queued for
+   * chase 2 are now queued for what used to be chase 3 - they get the wrong
+   * email, and nothing anywhere says so. A gap costs nothing: the runner looks
+   * for the next step with a HIGHER number, and anybody left waiting on the one
+   * that has gone is quietly finished rather than written to.
+   */
   const removeChase = (index: number) => {
+    const left = draft.steps.filter((s) => s.stepIndex !== index)
     onChange({
-      steps: draft.steps
-        .filter((s) => s.stepIndex !== index)
-        // Renumbered so the steps stay 0, 1, 2, 3 with no gap - a chase numbered
-        // 3 with no 2 in front of it is a chase that never goes.
-        .map((s, position) => ({ ...s, stepIndex: position })),
+      steps: firstLocked ? left : left.map((s, position) => ({ ...s, stepIndex: position })),
     })
   }
 
@@ -98,7 +115,13 @@ export function WhatSection({
                   min={1}
                   max={90}
                   value={entry.waitDays ?? 3}
-                  onChange={(event) => update(entry.stepIndex, { waitDays: Number(event.target.value) })}
+                  // Clearing the box gives '', and Number('') is 0 - which the
+                  // server refuses and the column refuses, so the whole page
+                  // then would not save because of a box somebody was halfway
+                  // through retyping. An empty box means the standing three.
+                  onChange={(event) => update(entry.stepIndex, {
+                    waitDays: event.target.value.trim() === '' ? 3 : Math.round(Number(event.target.value)),
+                  })}
                 />
               </div>
               <span className="uin-camp-hint" style={{ flex: '1 1 12rem' }}>
@@ -142,7 +165,11 @@ export function WhatSection({
               readOnly={entry.stepIndex === 0 && firstLocked}
               onChange={(event) => update(entry.stepIndex, { body: event.target.value })}
             />
-            <div className="uin-camp-tags">
+            {/* Not offered on a message that has gone out. The box beside them
+                is read-only, but the buttons wrote to it anyway - one press
+                added a tag nobody could see or take out again, and the save
+                after it was refused for changing a message people have had. */}
+            <div className="uin-camp-tags" hidden={entry.stepIndex === 0 && firstLocked}>
               {MERGE_TAGS.map((tag) => (
                 <button
                   key={tag}
@@ -163,7 +190,10 @@ export function WhatSection({
         </div>
       ))}
 
-      {draft.steps.length < 4 && (
+      {/* On the highest number left, not on how many there are: a started
+          campaign that has had chase 1 taken out keeps the gap, so 0, 2, 3 is
+          three steps with nowhere left to put a fourth. */}
+      {nextIndex <= 3 && (
         <div>
           <button type="button" className="btn btn-secondary btn-sm" onClick={addChase}>
             Add a follow-up

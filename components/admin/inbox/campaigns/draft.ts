@@ -146,6 +146,20 @@ export function faultIn(draft: CampaignDraft): string | null {
     return 'The finishing time has to be after the starting time.'
   }
 
+  // Said here rather than left to the server, because the server's answer is
+  // one sentence about a form with four messages on it and this one can name
+  // the chase.
+  const indexes = new Set<number>()
+  for (const step of draft.steps) {
+    if (indexes.has(step.stepIndex)) return 'Two of the messages are numbered the same. Remove one and add it again.'
+    indexes.add(step.stepIndex)
+    if (step.stepIndex === 0) continue
+    const wait = step.waitDays ?? 3
+    if (!Number.isInteger(wait) || wait < 1 || wait > 90) {
+      return `Follow-up ${step.stepIndex} has to wait between 1 and 90 days.`
+    }
+  }
+
   const badDate = draft.skipDates.split(',').map((d) => d.trim()).filter(Boolean)
     .find((d) => !/^\d{4}-\d{2}-\d{2}$/.test(d))
   if (badDate) return `"${badDate}" is not a date this understands. Write them as 2026-12-25.`

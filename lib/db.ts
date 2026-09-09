@@ -1189,11 +1189,25 @@ export async function candidateThreads(
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT t."id", t."inbox_id", t."subject_normalised", t."last_message_at",
            ${ABSORBED_INBOX_IDS} AS absorbed_inbox_ids,
+           -- Who wrote AND who was written to. From alone is not enough: a
+           -- conversation nobody has answered yet carries only our own address,
+           -- and matching on that puts every unanswered email this mailbox has
+           -- ever sent on one thread - which is exactly what a campaign's
+           -- copies in the Sent folder used to do.
            COALESCE(
              ARRAY(
-               SELECT DISTINCT m."from_address" FROM "uin_messages" m
-                WHERE m."thread_id" = t."id" AND m."from_address" IS NOT NULL
-                LIMIT 50
+               SELECT DISTINCT a FROM (
+                 SELECT m."from_address" AS a FROM "uin_messages" m
+                  WHERE m."thread_id" = t."id"
+                 UNION ALL
+                 SELECT unnest(m."to_addresses") FROM "uin_messages" m
+                  WHERE m."thread_id" = t."id"
+                 UNION ALL
+                 SELECT unnest(m."cc_addresses") FROM "uin_messages" m
+                  WHERE m."thread_id" = t."id"
+               ) s
+                WHERE a IS NOT NULL AND a <> ''
+                LIMIT 100
              ),
              ARRAY[]::text[]
            ) AS participants

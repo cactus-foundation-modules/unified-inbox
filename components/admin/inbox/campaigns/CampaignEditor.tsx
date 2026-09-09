@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   campaignApi,
   when,
@@ -53,35 +53,103 @@ type Props = {
   /** Back to the list of campaigns. Only drawn on a phone, where the list is
    *  not on the screen beside this. */
   onBack: () => void
+  /** Told whenever there is, or is no longer, something unsaved in the boxes -
+   *  so the column beside this can ask before it navigates away and takes the
+   *  half-written follow-up with it. */
+  onUnsavedChange: (unsaved: boolean) => void
+}
+
+/**
+ * The campaign, the version of it the server last handed over, and what is in
+ * the boxes. All three in ONE piece of state, because the only interesting
+ * question about them is asked across all three at once - has the server moved
+ * since these boxes were filled from it, and was anything typed in the
+ * meantime - and two separate useStates cannot answer it without a race.
+ */
+type Editing = {
+  detail: CampaignDetail
+  /** The form as the server's copy would fill it in. What "unsaved" is measured
+   *  against, and what a clean reload adopts. */
+  baseline: CampaignDraft
+  draft: CampaignDraft
+  /** True when a reload brought back a different campaign while something was
+   *  unsaved, so the screen can say the numbers moved under it. */
+  moved: boolean
 }
 
 export function CampaignEditor({
-  campaignId, inboxes, categories, tickUrl, onStatusChanged, onBack,
+  campaignId, inboxes, categories, tickUrl, onStatusChanged, onBack, onUnsavedChange,
 }: Props) {
-  const [detail, setDetail] = useState<CampaignDetail | null>(null)
+  const [editing, setEditing] = useState<Editing | null>(null)
   const [error, setError] = useState('')
 
+  /**
+   * Read the campaign again, WITHOUT throwing away what somebody has typed.
+   *
+   * This used to remount the whole form on every reload - the inner component
+   * was keyed on the campaign's updated_at - so topping up the list, pausing
+   * it, or a colleague saving from another tab silently emptied every box back
+   * to the server's copy. Half-written follow-ups went that way.
+   *
+   * So: a reload with nothing unsaved puts the server's answer in the boxes, as
+   * before. A reload with something unsaved keeps what was typed, moves the
+   * baseline underneath it so Save still knows what changed, and says out loud
+   * that the campaign moved.
+   */
   const load = useCallback(async () => {
     const result = await campaignApi.get(campaignId)
     if (!result.ok) { setError(result.error); return }
-    setDetail(result.data)
+    const detail = result.data
+    const baseline = draftFrom(detail)
+    setEditing((current) => {
+      if (!current || current.detail.campaign.id !== detail.campaign.id) {
+        return { detail, baseline, draft: baseline, moved: false }
+      }
+      if (sameDraft(current.baseline, current.draft)) {
+        return { detail, baseline, draft: baseline, moved: false }
+      }
+      return {
+        detail,
+        baseline,
+        draft: stillSaveable(current.draft, baseline, detail),
+        moved: true,
+      }
+    })
     setError('')
   }, [campaignId])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- delegating to an async loader; every setState runs after an await
   useEffect(() => { void load() }, [load])
 
-  if (!detail) return <div className="uin-empty">{error || 'Looking…'}</div>
+  const change = useCallback((patch: Partial<CampaignDraft>) => {
+    setEditing((current) => (
+      current ? { ...current, draft: { ...current.draft, ...patch }, moved: false } : current
+    ))
+  }, [])
+
+  const unsaved = editing ? !sameDraft(editing.baseline, editing.draft) : false
+  // Reported upwards rather than kept to ourselves: the list column is where
+  // somebody clicks away from a half-written campaign, and it cannot ask about
+  // work it does not know exists. Cleared on the way out, or a screen that has
+  // gone stays "unsaved" for ever.
+  useEffect(() => {
+    onUnsavedChange(unsaved)
+    return () => onUnsavedChange(false)
+  }, [onUnsavedChange, unsaved])
+
+  if (!editing) return <div className="uin-empty">{error || 'Looking…'}</div>
 
   return (
     <Campaign
-      // Keyed on what the server last said, so a save puts the server's answer
-      // in the boxes rather than an effect copying it there afterwards.
-      key={detail.campaign.updatedAt}
-      detail={detail}
+      // Keyed on WHICH campaign, never on its version: a key that changes when
+      // the campaign is saved, paused or topped up is a form that empties
+      // itself whenever anything happens to the thing it is editing.
+      key={editing.detail.campaign.id}
+      editing={editing}
       inboxes={inboxes}
       categories={categories}
       tickUrl={tickUrl}
+      onChange={change}
       onStatusChanged={onStatusChanged}
       onBack={onBack}
       onReload={load}
@@ -89,20 +157,50 @@ export function CampaignEditor({
   )
 }
 
+/**
+ * What is kept of somebody's unsaved typing when the campaign changed underneath
+ * them.
+ *
+ * Everything, except the parts the server would now refuse. A campaign that
+ * started while the screen was open has its list and its first message fixed
+ * from that moment; keeping an edit to either would leave a form that cannot be
+ * saved at all, with the offending box greyed out so nobody could put it back.
+ * Those snap to the server's copy; everything else is left exactly as typed.
+ */
+function stillSaveable(
+  typed: CampaignDraft,
+  server: CampaignDraft,
+  detail: CampaignDetail,
+): CampaignDraft {
+  if (detail.campaign.status === 'draft') return typed
+  const firstFromServer = server.steps.find((s) => s.stepIndex === 0)
+  return {
+    ...typed,
+    inboxId: server.inboxId,
+    categoryIds: [...server.categoryIds],
+    excludeColleagues: server.excludeColleagues,
+    steps: typed.steps.map((step) => (
+      step.stepIndex === 0 && firstFromServer
+        ? { ...step, subject: firstFromServer.subject, body: firstFromServer.body }
+        : step
+    )),
+  }
+}
+
 function Campaign({
-  detail, inboxes, categories, tickUrl, onStatusChanged, onReload, onBack,
+  editing, inboxes, categories, tickUrl, onChange, onStatusChanged, onReload, onBack,
 }: {
-  detail: CampaignDetail
+  editing: Editing
   inboxes: CampaignInbox[]
   categories: CampaignCategory[]
   tickUrl: string | null
+  onChange: (patch: Partial<CampaignDraft>) => void
   onStatusChanged: () => void
   onReload: () => Promise<void>
   onBack: () => void
 }) {
+  const { detail, baseline: saved, draft } = editing
   const { campaign, readiness, timezone, tally } = detail
-  const saved = useMemo(() => draftFrom(detail), [detail])
-  const [draft, setDraft] = useState<CampaignDraft>(saved)
   const [preview, setPreview] = useState<AudienceSummaryView | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -142,8 +240,18 @@ function Campaign({
 
   const change = useCallback((patch: Partial<CampaignDraft>) => {
     setNotice('')
-    setDraft((current) => ({ ...current, ...patch }))
-  }, [])
+    onChange(patch)
+  }, [onChange])
+
+  // Closing the tab on a half-written mailshot. The browser's own "leave site?"
+  // is the only thing that can stop that, and it costs one listener - hung on
+  // only while there is actually something to lose.
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault() }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
 
   /**
    * The one save.
@@ -285,6 +393,16 @@ function Campaign({
       )}
       {error && <div className="alert alert-danger" role="alert">{error}</div>}
       {notice && <div className="alert alert-info" role="status">{notice}</div>}
+      {/* The campaign moved while somebody was typing - it was topped up, it
+          started, a colleague saved it from another tab. What was typed is
+          still in the boxes; this is only so nobody presses Save wondering
+          which of the two versions they are about to keep. */}
+      {editing.moved && (
+        <div className="alert alert-info" role="status">
+          This campaign has changed since you started typing - the counts and the state above are the new
+          ones. What you had written is still here, and Save keeps it.
+        </div>
+      )}
 
       {confirming && (
         <div className="uin-camp-section" data-tone="warning">

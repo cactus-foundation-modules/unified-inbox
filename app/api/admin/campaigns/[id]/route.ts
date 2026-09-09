@@ -174,6 +174,33 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
   }
 
+  // EVERYTHING REFUSABLE IS REFUSED BEFORE ANYTHING IS WRITTEN. The steps used
+  // to be checked after the campaign row had already been updated, so a save
+  // that changed the name AND the first message of a running campaign came back
+  // "the message cannot be changed" with the new name quietly saved anyway -
+  // and the screen, having been told the save failed, went on showing the old
+  // one.
+  const steps = data.steps
+  if (steps !== undefined) {
+    const seen = new Set<number>()
+    for (const step of steps) {
+      if (seen.has(step.stepIndex)) {
+        return errorResponse('Two of the messages are numbered the same, so it is not clear which order they go in.')
+      }
+      seen.add(step.stepIndex)
+    }
+    const existing = await listSteps(id)
+    const firstChanged = steps.find((s) => s.stepIndex === 0)
+    const currentFirst = existing.find((s) => s.stepIndex === 0)
+    if (!isDraft && firstChanged && currentFirst
+      && (firstChanged.body !== currentFirst.body || (firstChanged.subject ?? null) !== currentFirst.subject)) {
+      return errorResponse(
+        'The message itself cannot be changed once it has started sending - some people have had the old one. '
+        + 'The follow-ups can still be edited.',
+      )
+    }
+  }
+
   await updateCampaign(id, {
     ...(data.name !== undefined ? { name: data.name } : {}),
     ...(data.inboxId !== undefined ? { inboxId: data.inboxId } : {}),
@@ -187,18 +214,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
   if (data.categoryIds !== undefined) await setCampaignCategories(id, data.categoryIds)
 
-  if (data.steps !== undefined) {
-    const existing = await listSteps(id)
-    const firstChanged = data.steps.find((s) => s.stepIndex === 0)
-    const currentFirst = existing.find((s) => s.stepIndex === 0)
-    if (!isDraft && firstChanged && currentFirst
-      && (firstChanged.body !== currentFirst.body || (firstChanged.subject ?? null) !== currentFirst.subject)) {
-      return errorResponse(
-        'The message itself cannot be changed once it has started sending - some people have had the old one. '
-        + 'The follow-ups can still be edited.',
-      )
-    }
-    await replaceSteps(id, data.steps.map((step) => ({
+  if (steps !== undefined) {
+    await replaceSteps(id, steps.map((step) => ({
       stepIndex: step.stepIndex,
       waitDays: step.stepIndex === 0 ? null : (step.waitDays ?? 3),
       subject: step.subject ?? null,

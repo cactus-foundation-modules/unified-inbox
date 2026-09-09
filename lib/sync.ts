@@ -828,6 +828,11 @@ async function fileMessage(
     inboxId,
     candidates,
     restrictToInbox,
+    // So that "we both have emma@ on us" is not mistaken for a shared
+    // participant. Without it, a campaign's copies in the Sent folder - same
+    // subject, same sender, two hundred different customers - all land on one
+    // conversation.
+    ownAddresses: ctx.ownAddresses,
   })
 
   const match = chooseFor(routed.inboxId, false)

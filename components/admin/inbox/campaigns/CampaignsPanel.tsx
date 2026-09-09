@@ -58,6 +58,11 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
   const [error, setError] = useState('')
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
+  /** Whether the campaign open beside this has something unsaved in it. Told to
+   *  us by the editor, because this column is where somebody clicks away from a
+   *  half-written mailshot and it cannot ask about work it does not know
+   *  about. */
+  const [unsaved, setUnsaved] = useState(false)
 
   const load = useCallback(async () => {
     const result = await campaignApi.list()
@@ -77,9 +82,28 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
     router.push(inboxHref(base, params, { id: null, person: null, ...changes }))
   }, [base, params, router])
 
+  /**
+   * Leave whatever is open, asking first if that would throw work away.
+   *
+   * One line, so `window.confirm` is the right size of dialog for it - unlike
+   * the four-line warning in front of sending a campaign all over again, which
+   * has its own panel. Every way OUT of an open campaign goes through here:
+   * another campaign, the do-not-email list, the back button on a phone.
+   */
+  const mayLeave = useCallback(() => !unsaved || window.confirm(
+    'There are unsaved changes to the campaign you have open. Leave them behind?',
+  ), [unsaved])
+
+  const leave = useCallback((changes: Record<string, string | null>) => {
+    if (mayLeave()) go(changes)
+  }, [go, mayLeave])
+
   const create = useCallback(async () => {
     const name = newName.trim()
     if (!name) return
+    // Asked BEFORE the campaign is made: a refusal after it exists leaves an
+    // empty campaign in the list that nobody asked for.
+    if (!mayLeave()) return
     // The address is chosen on the Who step. Starting with the first one the
     // person may send from is a sensible guess and saves a click on the site
     // where there is only one.
@@ -91,7 +115,7 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
     setCreating(false)
     setNewName('')
     go({ campaign: result.data.id, view: null })
-  }, [go, inboxes, newName])
+  }, [go, inboxes, mayLeave, newName])
 
   // Anything running keeps the screen honest: the counts move while somebody
   // watches, and the ticker below is what actually moves them.
@@ -118,7 +142,7 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
             <button
               type="button"
               className={`btn btn-sm ${suppressing ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => go({ campaign: null, view: suppressing ? null : 'suppressions' })}
+              onClick={() => leave({ campaign: null, view: suppressing ? null : 'suppressions' })}
             >
               Do-not-email list
             </button>
@@ -181,7 +205,7 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
                     timezone={timezone}
                     inbox={inboxes.find((i) => i.id === row.inboxId) ?? null}
                     open={row.id === campaignId}
-                    onOpen={() => go({ campaign: row.id, view: null })}
+                    onOpen={() => leave({ campaign: row.id, view: null })}
                   />
                 </li>
               ))}
@@ -202,7 +226,8 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
             categories={categories}
             tickUrl={tickUrl}
             onStatusChanged={load}
-            onBack={() => go({ campaign: null, view: null })}
+            onBack={() => leave({ campaign: null, view: null })}
+            onUnsavedChange={setUnsaved}
           />
         </div>
       ) : (

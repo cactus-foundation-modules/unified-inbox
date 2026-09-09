@@ -184,6 +184,48 @@ describe('chooseThread', () => {
     })).toEqual({ threadId: null, matchedOn: 'new' })
   })
 
+  // A mailshot: same wording, same sender, a different customer every time,
+  // read back out of the Sent folder one at a time. Sharing emma@ is not
+  // sharing a correspondent, and counting it made two hundred emails into one
+  // conversation on the live site.
+  it('will not join two mailshots that share only our own address', () => {
+    expect(chooseThread({
+      ...base,
+      participants: ['emma@deskwell.co.uk', 'bob@elsewhere.com'],
+      ownAddresses: ['emma@deskwell.co.uk'],
+      candidates: [{ ...candidate, participants: ['emma@deskwell.co.uk', 'alice@somewhere.com'] }],
+    })).toEqual({ threadId: null, matchedOn: 'new' })
+  })
+
+  it('still joins the customer who was written to, once they answer', () => {
+    expect(chooseThread({
+      ...base,
+      participants: ['alice@somewhere.com', 'emma@deskwell.co.uk'],
+      ownAddresses: ['emma@deskwell.co.uk'],
+      candidates: [{ ...candidate, participants: ['emma@deskwell.co.uk', 'alice@somewhere.com'] }],
+    })).toEqual({ threadId: 'thread-1', matchedOn: 'heuristic' })
+  })
+
+  // Nobody outside the building is on either side of it, so there is no
+  // counterparty to match on and our own addresses are all there is.
+  it('threads colleague mail, where every address on it is one of ours', () => {
+    expect(chooseThread({
+      ...base,
+      participants: ['emma@deskwell.co.uk', 'chris@deskwell.co.uk'],
+      ownAddresses: ['emma@deskwell.co.uk', 'chris@deskwell.co.uk'],
+      candidates: [{ ...candidate, participants: ['chris@deskwell.co.uk', 'emma@deskwell.co.uk'] }],
+    })).toEqual({ threadId: 'thread-1', matchedOn: 'heuristic' })
+  })
+
+  it('keeps colleague mail out of a customer conversation with the same subject', () => {
+    expect(chooseThread({
+      ...base,
+      participants: ['emma@deskwell.co.uk', 'chris@deskwell.co.uk'],
+      ownAddresses: ['emma@deskwell.co.uk', 'chris@deskwell.co.uk'],
+      candidates: [{ ...candidate, participants: ['emma@deskwell.co.uk', 'alice@somewhere.com'] }],
+    })).toEqual({ threadId: null, matchedOn: 'new' })
+  })
+
   it('will not join a conversation from last year', () => {
     expect(chooseThread({
       ...base,

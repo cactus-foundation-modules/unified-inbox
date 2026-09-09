@@ -182,7 +182,11 @@ export type ThreadCandidate = {
   absorbedInboxIds?: string[]
   subjectNormalised: string | null
   lastMessageAt: Date | null
-  /** Addresses already seen on that thread, normalised. */
+  /** Every address already seen on that thread, normalised - who wrote, and
+   *  who was written to. The recipients matter as much as the senders: a
+   *  conversation we started and nobody has answered yet has only our own
+   *  address in the From line, and judging it on that alone makes every
+   *  unanswered email we have ever sent one conversation. */
   participants: string[]
 }
 
@@ -229,6 +233,25 @@ function pickThread(refs: ThreadRef[] | undefined, inboxId: string | null, restr
 export const HEURISTIC_WINDOW_DAYS = 30
 
 /**
+ * The people on a message who are not us.
+ *
+ * The heuristic below matches on a shared participant, and OUR OWN ADDRESS IS
+ * NOT A SHARED PARTICIPANT - it is on every single thing this mailbox has ever
+ * sent. Counting it made two unrelated mailshots one conversation: a campaign
+ * of two hundred "The chair everyone avoids", each to a different company, came
+ * back out of the Sent folder as one thread with two hundred messages on it,
+ * because every one of them had emma@ in common with the last.
+ */
+function counterparties(addresses: string[], own: Set<string>): string[] {
+  const out: string[] = []
+  for (const address of addresses) {
+    const lowered = address.toLowerCase()
+    if (lowered && !own.has(lowered) && !out.includes(lowered)) out.push(lowered)
+  }
+  return out
+}
+
+/**
  * Which conversation a message joins. Header threading first: the id in
  * In-Reply-To, then anything in References, matched against messages we already
  * hold. Only when neither says anything does the fallback run, and it wants all
@@ -248,6 +271,10 @@ export function chooseThread(input: {
   /** Only join a conversation that belongs to `inboxId`. Set for mail between
    *  two of our own addresses, where each side keeps its own conversation. */
   restrictToInbox?: boolean
+  /** Every address this account sends and receives as. Left out, nothing is
+   *  treated as ours and the heuristic behaves exactly as it did before this
+   *  argument existed - which is what the pure tests below rely on. */
+  ownAddresses?: Iterable<string>
 }): ThreadMatch {
   const restrict = input.restrictToInbox === true
 
@@ -265,7 +292,9 @@ export function chooseThread(input: {
   if (!input.subjectNormalised) return { threadId: null, matchedOn: 'new' }
 
   const windowMs = HEURISTIC_WINDOW_DAYS * 24 * 60 * 60 * 1000
+  const own = new Set(Array.from(input.ownAddresses ?? [], (a) => a.toLowerCase()))
   const participants = new Set(input.participants.map((p) => p.toLowerCase()))
+  const theirs = new Set(counterparties(input.participants, own))
   let best: { id: string; at: number } | null = null
   for (const candidate of input.candidates) {
     if (candidate.subjectNormalised !== input.subjectNormalised) continue
@@ -282,7 +311,14 @@ export function chooseThread(input: {
     ) continue
     const at = candidate.lastMessageAt ? candidate.lastMessageAt.getTime() : 0
     if (!at || Math.abs(input.sentAt.getTime() - at) > windowMs) continue
-    if (!candidate.participants.some((p) => participants.has(p.toLowerCase()))) continue
+    // Somebody in common who is not us. Mail between two of our own addresses
+    // has nobody else on it at all, and only THAT falls back to counting our
+    // own addresses - otherwise a colleague's note would never thread.
+    const candidateTheirs = counterparties(candidate.participants, own)
+    const shared = theirs.size > 0 || candidateTheirs.length > 0
+      ? candidateTheirs.some((p) => theirs.has(p))
+      : candidate.participants.some((p) => participants.has(p.toLowerCase()))
+    if (!shared) continue
     if (!best || at > best.at) best = { id: candidate.id, at }
   }
   return best ? { threadId: best.id, matchedOn: 'heuristic' } : { threadId: null, matchedOn: 'new' }

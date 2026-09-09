@@ -52,13 +52,21 @@ export function CampaignWatch({
    *  produce one send and one confusing refusal. */
   const [sending, setSending] = useState<string | null>(null)
 
+  // What the campaign looked like when the page above last read it. In the
+  // dependencies below so that topping the list up, pausing or resuming reloads
+  // this table too - the page no longer remounts on a reload, which is what used
+  // to refresh it, and a progress table that disagrees with the counts directly
+  // above it is worse than no progress table.
+  const stamp = `${detail.campaign.updatedAt}|${detail.tally.total}|${detail.tally.done}`
+
   const load = useCallback(async () => {
     const result = await campaignApi.recipients(campaignId, { state, q: search || null, page })
     if (!result.ok) { setError(result.error); return }
     setRows(result.data.rows)
     setTotal(result.data.total)
     setError('')
-  }, [campaignId, page, search, state])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `stamp` is a reload trigger, not something the query reads
+  }, [campaignId, page, search, state, stamp])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- delegating to an async loader; every setState runs after an await
   useEffect(() => { void load() }, [load])
