@@ -258,6 +258,44 @@ describe.runIf(shouldRun)('what happens when somebody follows a link', () => {
     expect(Number(row.open_count)).toBe(0)
   })
 
+  it('finds a sent message by the name the mail service gave it', async () => {
+    // The order-confirmation case. That copy was filed here AFTER the shop sent
+    // it, so it never carried our tag and never could - the only handle on it
+    // is the id Brevo gave the message, which comes back on every event.
+    // Migration 051 puts an index under this; a query that reads the whole
+    // table is the same answer at a cost nobody notices until the table is big.
+    const providerId = '202609091254.15483442510@smtp-relay.mailin.fr'
+    const messageId = await sentMessage()
+    await db.$executeRawUnsafe(
+      `UPDATE "uin_messages" SET "provider_message_id" = '${providerId}' WHERE "id" = '${messageId}'`,
+    )
+
+    // Our own copy of the same message, landing back in the Sent folder with
+    // the identical id on it. Ordinary, not a freak, and it must not be the row
+    // that answers - hence the query is scoped to sent mail.
+    await db.$executeRawUnsafe(
+      `INSERT INTO "uin_messages" ("thread_id", "direction", "source", "provider_message_id", "subject")
+       VALUES ('${threadId}', 'in', 'imap', '${providerId}', 'Your quote')`,
+    )
+
+    const found = await inbox.outboundIdsByProviderMessageId([providerId, 'nothing@example.co.uk'])
+    expect(found.get(providerId)).toBe(messageId)
+    expect(found.has('nothing@example.co.uk')).toBe(false)
+
+    // Asked about nothing, it goes nowhere near the database.
+    expect((await inbox.outboundIdsByProviderMessageId([])).size).toBe(0)
+
+    // And the event that arrives on the back of it files as any other would.
+    expect(await inbox.recordDeliveryEvent(found.get(providerId)!, {
+      kind: 'clicked',
+      occurredAt: new Date('2026-09-09T12:58:00.000Z'),
+      detail: 'https://example.co.uk/orders/DW000182',
+      bounceKind: null,
+      source: 'brevo',
+    })).toBe(true)
+    expect((await messageRow(messageId)).clicked_at).not.toBeNull()
+  })
+
   it('refuses an event about a message that is not one of ours', async () => {
     expect(await inbox.recordDeliveryEvent('made-up-id', {
       kind: 'clicked',

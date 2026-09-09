@@ -5895,22 +5895,64 @@ export async function insertProviderMessage(data: ProviderMessageInput): Promise
       DO NOTHING
     RETURNING "id"
   `
-  const messageId = rows[0]?.id
+  // Already held. The channel may still have revised it since - a voicemail
+  // typed up after it was filed, a recording that only became available later -
+  // so the row is brought up to date and the attachments topped up, but null
+  // still comes back: this is not a new message, and nothing downstream should
+  // count it or raise a webhook for it a second time.
+  const messageId = rows[0]?.id ?? (await refreshProviderMessage(data))
   if (!messageId) return null
-  
-  // Insert attachments if provided
-  if (data.attachments && data.attachments.length > 0) {
-    for (const att of data.attachments) {
-      await prisma.$executeRaw`
-        INSERT INTO "uin_attachments"
-          ("message_id", "filename", "content_type", "external_url")
-        VALUES (${messageId}, ${att.filename}, ${att.contentType}, ${att.url})
-        ON CONFLICT DO NOTHING
-      `
-    }
+
+  await attachToMessage(messageId, data.attachments)
+
+  return rows[0]?.id ?? null
+}
+
+/** Brings a provider message we already hold up to the channel's current words,
+ *  and hands back its id either way so late attachments can still be filed.
+ *
+ *  Only ever the body. Who it was from, when it was sent and which conversation
+ *  it belongs to are what the message IS; a channel that changed its mind about
+ *  those is describing a different message and should give it a different id.
+ *
+ *  The text is only written when it has actually changed, so an unchanged
+ *  message costs one comparison in Postgres rather than a write and a row
+ *  version on every tick. */
+async function refreshProviderMessage(data: ProviderMessageInput): Promise<string | null> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    UPDATE "uin_messages"
+       SET "body_text" = ${data.bodyText},
+           "body_html" = ${data.bodyHtml},
+           "snippet"   = ${data.snippet}
+     WHERE "thread_id" = ${data.threadId}
+       AND "provider_message_id" = ${data.providerMessageId}
+       AND "source" = 'provider'
+    RETURNING "id"
+  `
+  return rows[0]?.id ?? null
+}
+
+/** Files a message's attachments, skipping any it already has.
+ *
+ *  Matched on the external URL rather than the filename: the URL is the thing
+ *  that identifies one recording, and two recordings of the same call would
+ *  otherwise collapse into one. There is no unique index behind this on
+ *  purpose - adding one to a live site would have to survive whatever rows it
+ *  already holds, and the guard belongs in the one place that writes here. */
+async function attachToMessage(
+  messageId: string,
+  attachments: ProviderMessageInput['attachments'],
+): Promise<void> {
+  for (const att of attachments ?? []) {
+    await prisma.$executeRaw`
+      INSERT INTO "uin_attachments" ("message_id", "filename", "content_type", "external_url")
+      SELECT ${messageId}, ${att.filename}, ${att.contentType}, ${att.url}
+       WHERE NOT EXISTS (
+         SELECT 1 FROM "uin_attachments"
+          WHERE "message_id" = ${messageId} AND "external_url" = ${att.url}
+       )
+    `
   }
-  
-  return messageId
 }
 
 /** Rolls a provider conversation's counters forward after messages land. */
@@ -5943,7 +5985,14 @@ export async function providerWatermarks(): Promise<Record<string, Date>> {
 export async function providerThreadState(
   providerModule: string,
   externalId: string,
-): Promise<{ id: string; lastMessageAt: Date | null; messageCount: number } | null> {
+): Promise<{
+  id: string
+  lastMessageAt: Date | null
+  messageCount: number
+  /** How far this conversation has been read for revisions. Null on anything
+   *  collected before that was recorded, which reads as "not caught up". */
+  contentAt: Date | null
+} | null> {
   // Follows a merge. The module's own id for a conversation stays on the side
   // that lost one - it is that side's identity, and the winner has its own - so
   // reading the row straight would hand the next chat message to a conversation
@@ -5953,7 +6002,13 @@ export async function providerThreadState(
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT CASE WHEN w."id" IS NULL THEN t."id"            ELSE w."id" END            AS "id",
            CASE WHEN w."id" IS NULL THEN t."last_message_at" ELSE w."last_message_at" END AS "last_message_at",
-           CASE WHEN w."id" IS NULL THEN t."message_count"   ELSE w."message_count"   END AS "message_count"
+           CASE WHEN w."id" IS NULL THEN t."message_count"   ELSE w."message_count"   END AS "message_count",
+           -- Deliberately NOT followed through the merge. This says how far the
+           -- CHANNEL has been read for its own conversation, and the channel's
+           -- identity stays on the row that carries the external id - which is
+           -- the losing side of a merge, and the row upsertProviderThread
+           -- conflicts on.
+           t."provider_content_at" AS "provider_content_at"
       FROM "uin_threads" t
       LEFT JOIN "uin_threads" w ON w."id" = t."merged_into_id"
      WHERE t."provider_module" = ${providerModule} AND t."external_id" = ${externalId}
@@ -5965,7 +6020,31 @@ export async function providerThreadState(
     id: r.id as string,
     lastMessageAt: (r.last_message_at as Date | null) ?? null,
     messageCount: Number(r.message_count ?? 0),
+    contentAt: (r.provider_content_at as Date | null) ?? null,
   }
+}
+
+/** Marks how far a copied conversation has been read for CHANGES, as opposed to
+ *  for new messages.
+ *
+ *  Written only after its messages have actually been read, and never as part
+ *  of filing the conversation itself: a pass that ran out of time before it
+ *  opened this one would otherwise record that it had caught up with a revision
+ *  it never fetched, and those words would be lost for good.
+ *
+ *  Keyed on the channel's own identity rather than on a thread id, so a merged
+ *  conversation marks the row that carries the external id - the same row the
+ *  watermark is read back from. */
+export async function markProviderContentRead(
+  providerModule: string,
+  externalId: string,
+  contentAt: Date,
+): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "uin_threads"
+       SET "provider_content_at" = GREATEST(COALESCE("provider_content_at", ${contentAt}), ${contentAt})
+     WHERE "provider_module" = ${providerModule} AND "external_id" = ${externalId}
+  `
 }
 
 /** The conversations from one provider that have not been given a person yet.
@@ -6476,6 +6555,49 @@ export type DeliveryUpdate = {
   detail: string | null
   bounceKind: string | null
   source: 'brevo' | 'receipt'
+}
+
+/**
+ * Our own ids for sent messages the mail service knows by these names.
+ *
+ * The way home for an event carrying no tag of ours. A reply written in this
+ * module leaves with the tag on it and needs none of this; an order
+ * confirmation does not, because the shop sent it and this module was only
+ * handed a copy once it had gone (outbound-record.ts) - too late to add a
+ * header to. What that copy does hold is the id the sending service gave the
+ * message, and that id comes back on every event about it.
+ *
+ * One query for a whole batch of events rather than one each, because most of
+ * what arrives is about mail this module never filed - password resets, the
+ * site writing to itself - and those all miss together for the price of one
+ * round trip.
+ *
+ * Scoped to sent mail, so an inbound message that happens to carry the same
+ * Message-ID as something we sent (our own copy landing back in Sent, which is
+ * the ordinary case, not a freak one) cannot be the row that answers.
+ */
+export async function outboundIdsByProviderMessageId(
+  providerMessageIds: string[],
+): Promise<Map<string, string>> {
+  const wanted = [...new Set(providerMessageIds.filter((id) => id.length > 0))]
+  if (wanted.length === 0) return new Map()
+
+  const rows = await prisma.$queryRaw<{ id: string; provider_message_id: string }[]>`
+    SELECT "id", "provider_message_id"
+      FROM "uin_messages"
+     WHERE "direction" = 'out'
+       AND "provider_message_id" = ANY(${wanted}::text[])
+     ORDER BY "created_at" ASC
+  `
+
+  // Oldest wins where two rows somehow share an id. Nothing should, and the
+  // alternative is filing an open against whichever row the planner happened to
+  // return second.
+  const found = new Map<string, string>()
+  for (const row of rows) {
+    if (!found.has(row.provider_message_id)) found.set(row.provider_message_id, row.id)
+  }
+  return found
 }
 
 /**

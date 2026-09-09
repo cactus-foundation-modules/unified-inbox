@@ -10,6 +10,7 @@ import {
   getSettings,
   insertProviderMessage,
   listInboxes,
+  markProviderContentRead,
   providerThreadState,
   providerWatermarks,
   recordEvent,
@@ -59,6 +60,22 @@ export const PROVIDER_BUDGET_MS = 6_000
  *  copy the lot in one tick. With no watermark yet, only conversations touched
  *  in this window are collected, and the rest arrive as they are used. */
 const FIRST_PASS_DAYS = 90
+
+/**
+ * How far back of already-collected ground each pass re-lists.
+ *
+ * A minute of it used to be enough, and only had to cover one thing: a
+ * conversation touched in the same second as the last pass falling down the
+ * gap between two ticks. It now has a second job. Some channels revise what
+ * they have already said - the telephony one types up a voicemail minutes after
+ * it was left - and a revision does not make the conversation newer, so asking
+ * only for what has happened since the newest message would never fetch it.
+ *
+ * Half an hour comfortably covers a transcription. Re-listing is close to free:
+ * a conversation that comes back with nothing changed fails no test and is
+ * skipped without being opened, which is the expensive half.
+ */
+const REVISION_GRACE_MS = 30 * 60_000
 
 export type ProviderOutcome = {
   /** The channel's key - the manifest entry id, which is what its conversations
@@ -116,6 +133,16 @@ function partyOf(summary: ConversationSummary): { name: string | null; email: st
 
 function messageDirection(message: ConversationMessage): 'in' | 'out' | 'note' {
   return message.direction === 'out' || message.direction === 'note' ? message.direction : 'in'
+}
+
+/** When a conversation last changed, as its channel tells it. Another module's
+ *  value, so an absent, unparseable or backwards one falls back to the newest
+ *  message rather than being believed. */
+function contentAtOf(summary: ConversationSummary, lastMessageAt: Date): Date {
+  if (summary.contentAt === undefined || summary.contentAt === null) return lastMessageAt
+  const at = whenOf(summary.contentAt)
+  if (Number.isNaN(at.getTime())) return lastMessageAt
+  return at.getTime() > lastMessageAt.getTime() ? at : lastMessageAt
 }
 
 /** What on the site a conversation came from, when its channel says. Trimmed
@@ -215,6 +242,11 @@ export async function syncProvider(
     if (outOfTime() || opened >= PROVIDER_THREAD_LIMIT) break
 
     const lastMessageAt = whenOf(summary.lastMessageAt)
+    // When the conversation last CHANGED, which a channel that revises what it
+    // has already said reports separately. Never earlier than its newest
+    // message: a channel getting that backwards must not be able to convince us
+    // we are caught up on something we are not.
+    const contentAt = contentAtOf(summary, lastMessageAt)
     const channel = channelOf(summary.channel, provider.channel)
     const subject = typeof summary.subject === 'string' && summary.subject.trim() ? summary.subject.trim() : null
 
@@ -255,16 +287,29 @@ export async function syncProvider(
     // module, over the network for the telephony one. Skip it when we already
     // hold messages and nothing has happened since, which on a settled channel
     // is every conversation on the list.
+    //
+    // The second half is what catches a revision. A voicemail typed up after it
+    // was filed has the same newest-message time it always had, so the first
+    // three tests all pass and the words would never be fetched. A conversation
+    // collected before any of this was recorded has no content watermark at
+    // all, which counts as not caught up: it is read once more and then settles.
     const settled =
       existing !== null &&
       existing.messageCount > 0 &&
       existing.lastMessageAt !== null &&
-      existing.lastMessageAt.getTime() >= lastMessageAt.getTime()
+      existing.lastMessageAt.getTime() >= lastMessageAt.getTime() &&
+      existing.contentAt !== null &&
+      existing.contentAt.getTime() >= contentAt.getTime()
     if (settled) continue
 
     const messages = await messagesFor(provider, summary.id, channelKey)
     if (messages === null) continue
     opened += 1
+
+    // Recorded only now, and only because the messages are in hand. A pass that
+    // gave up before opening this conversation must not leave behind a note
+    // saying it had caught up with a revision it never read.
+    await markProviderContentRead(channelKey, summary.id, contentAt)
 
     let stored = 0
     for (const message of messages) {
@@ -368,11 +413,10 @@ export async function syncAllProviders(opts: { deadline?: number } = {}): Promis
     if (opts.deadline !== undefined && Date.now() >= opts.deadline) break
     outcomes.push(
       await syncProvider(resolved, {
-        // The newest thing we hold from them, less a minute of slack: a
-        // conversation touched in the same second as the last pass would
-        // otherwise fall down the gap between two ticks.
+        // The newest thing we hold from them, less the grace window - see
+        // REVISION_GRACE_MS for what that is covering and why it is cheap.
         since: watermarks[resolved.id]
-          ? new Date(watermarks[resolved.id]!.getTime() - 60_000)
+          ? new Date(watermarks[resolved.id]!.getTime() - REVISION_GRACE_MS)
           : firstPassSince,
         deadline: opts.deadline,
       }),

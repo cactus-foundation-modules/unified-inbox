@@ -1,7 +1,13 @@
 import { timingSafeEqual } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
-import { getBrevoWebhookSecret, getSettings, recordDeliveryEvent } from '@/modules/unified-inbox/lib/db'
+import {
+  getBrevoWebhookSecret,
+  getSettings,
+  outboundIdsByProviderMessageId,
+  recordDeliveryEvent,
+} from '@/modules/unified-inbox/lib/db'
 import { normaliseBrevoEvent } from '@/modules/unified-inbox/lib/receipts'
+import type { NormalisedBrevoEvent } from '@/modules/unified-inbox/lib/receipts'
 import { applyCampaignEvent } from '@/modules/unified-inbox/lib/campaigns/events'
 import { sendIdFromTag } from '@/modules/unified-inbox/lib/campaigns/message'
 
@@ -14,10 +20,17 @@ import { sendIdFromTag } from '@/modules/unified-inbox/lib/campaigns/message'
 //
 // Everything else answers 200, including the events this module has no opinion
 // about and the ones about messages it has never heard of. Most of what arrives
-// is the second kind: the site's Brevo account also carries order
-// confirmations, purchase orders and password resets, and none of those are
-// conversations. Answering anything other than 200 to those would have Brevo
-// retrying them for hours.
+// is the second kind: the site's Brevo account also carries password resets and
+// the site writing to itself, and none of those are conversations. Answering
+// anything other than 200 to those would have Brevo retrying them for hours.
+//
+// An order confirmation, though, IS one - or rather, a copy of it is sitting on
+// a conversation in the inbox, because the shop was told to file one there. It
+// left without our tag on it, since the shop sent it and this module was handed
+// the copy afterwards, so until the batch below started asking, every event
+// about one was thrown away: no delivery, no open, and no sign that the
+// customer had followed the link to their order. The row does hold the name the
+// service gave the message, and that is what the events are matched on instead.
 // ---------------------------------------------------------------------------
 
 export const dynamic = 'force-dynamic'
@@ -51,24 +64,38 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null)
   const events = Array.isArray(body) ? body : [body]
 
+  const normalised = events
+    .slice(0, 100)
+    .map((entry) => normaliseBrevoEvent(entry))
+    .filter((one): one is NormalisedBrevoEvent => one !== null)
+
+  // The untagged ones, looked up together. Brevo batches its events, so this is
+  // one query where it was going to be one per event - and on a busy site most
+  // of them will find nothing, which is the answer arriving for free rather
+  // than a miss costing a round trip each. Skipped entirely when the site is
+  // not watching, since nothing would be filed with the answer anyway.
+  const untagged = settings.trackOpens
+    ? normalised.flatMap((one) => (!one.messageId && one.providerMessageId ? [one.providerMessageId] : []))
+    : []
+  const byProviderId = await outboundIdsByProviderMessageId(untagged)
+
   let filed = 0
-  for (const entry of events.slice(0, 100)) {
-    const normalised = normaliseBrevoEvent(entry)
-    if (!normalised) continue
+  for (const one of normalised) {
     try {
       // A campaign send carries its own tag, so one is told from an ordinary
       // reply without looking anything up.
-      const campaignSendId = sendIdFromTag(normalised.messageId)
+      const campaignSendId = one.messageId ? sendIdFromTag(one.messageId) : null
       if (campaignSendId) {
-        if (normalised.event.kind !== 'bounced' && !settings.trackOpens) continue
-        if (await applyCampaignEvent(campaignSendId, normalised.event)) filed += 1
+        if (one.event.kind !== 'bounced' && !settings.trackOpens) continue
+        if (await applyCampaignEvent(campaignSendId, one.event)) filed += 1
         continue
       }
       if (!settings.trackOpens) continue
-      const recorded = await recordDeliveryEvent(normalised.messageId, {
-        ...normalised.event,
-        source: 'brevo',
-      })
+      const messageId = one.messageId
+        ?? (one.providerMessageId ? byProviderId.get(one.providerMessageId) ?? null : null)
+      // Somebody else's mail, which is most of it.
+      if (!messageId) continue
+      const recorded = await recordDeliveryEvent(messageId, { ...one.event, source: 'brevo' })
       if (recorded) filed += 1
     } catch (err) {
       // One bad event must not cost the rest of the batch, and must not turn

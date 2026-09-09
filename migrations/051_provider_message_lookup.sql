@@ -1,0 +1,41 @@
+-- Unified Inbox - Migration 051: finding a sent message by the name the mail
+-- service gave it.
+--
+-- A NEW numbered file, as every schema change in this module is: a migration is
+-- recorded once per install and never runs again, so editing an earlier one
+-- reaches a fresh install and nobody else. Idempotent, and no dollar-quoting
+-- anywhere - comments included - because the backup round-trip harness skips a
+-- whole module whose migration files carry a pair of them, and a gate that
+-- skips is a gate that proved nothing.
+--
+-- No new column, so the schema-coverage backstop is unaffected.
+--
+-- ---------------------------------------------------------------------------
+-- What this is for.
+--
+-- A delivery event from Brevo used to be matched on the tag we send out with a
+-- reply, and on nothing else. Which meant an order confirmation - sent by the
+-- shop, and merely COPIED here afterwards, too late to put a header on - could
+-- never be matched at all: no delivery, no open, and no sign that the customer
+-- had followed the link to their order. The events had been arriving all along
+-- and were being thrown away.
+--
+-- What such a copy does hold is the id the sending service gave the message,
+-- and that id comes back on every event about it. So the webhook now looks a
+-- batch of untagged events up by it.
+--
+-- The one index already on this column is UNIQUE (thread_id, provider_message_id)
+-- and partial on inbound provider mail, which answers a different question
+-- entirely - it leads on the thread. Looking a message up the other way round
+-- would read the whole table, on a route the mail service calls every time
+-- anything at all happens to any email the site sends.
+--
+-- Partial on the sent half, because that is the only half ever asked for: a
+-- message we did not send is not one anybody can report a delivery of, and our
+-- own copy of a reply landing back in the Sent folder carries the same
+-- Message-ID as the reply itself.
+-- ---------------------------------------------------------------------------
+
+CREATE INDEX IF NOT EXISTS "uin_messages_outbound_provider_id_idx"
+    ON "uin_messages" ("provider_message_id")
+ WHERE "direction" = 'out' AND "provider_message_id" IS NOT NULL;

@@ -187,6 +187,11 @@ CREATE TABLE IF NOT EXISTS "uin_threads" (
     "person_id"          TEXT,
     "organisation_id"    TEXT,
     "last_message_at"    TIMESTAMP(3),
+    -- How far a copied conversation has been read up to for CHANGES, as opposed
+    -- to for new messages: a channel may revise what it already said (a
+    -- voicemail typed up after the fact), and that must be re-read without
+    -- reordering the list. NULL = never been told. See migration 050.
+    "provider_content_at" TIMESTAMP(3),
     -- 'in' | 'out' | 'note'
     "last_direction"     TEXT,
     "unread"             BOOLEAN      NOT NULL DEFAULT true,

@@ -19,6 +19,7 @@ const allConversationProviders = vi.hoisted(() => vi.fn())
 // tests that care about reopening say so themselves.
 const reopenOnReply = vi.hoisted(() => vi.fn(async (): Promise<'snoozed' | 'done' | null> => null))
 const recordEvent = vi.hoisted(() => vi.fn())
+const markProviderContentRead = vi.hoisted(() => vi.fn())
 // Nobody is blocked unless a test says so. Mocked rather than left to reach the
 // database, because collecting a channel now asks the site's block list once per
 // pass and this suite has no database at all.
@@ -33,6 +34,7 @@ vi.mock('./db', () => ({
   providerWatermarks,
   reopenOnReply,
   recordEvent,
+  markProviderContentRead,
 }))
 vi.mock('./provider-registry', () => ({ allConversationProviders }))
 vi.mock('./blocked-senders', () => ({ blockedSenderSet }))
@@ -91,6 +93,7 @@ beforeEach(() => {
   providerWatermarks.mockReset().mockResolvedValue({})
   reopenOnReply.mockReset().mockResolvedValue(null)
   recordEvent.mockReset().mockResolvedValue(undefined)
+  markProviderContentRead.mockReset().mockResolvedValue(undefined)
   allConversationProviders.mockReset().mockResolvedValue([])
   blockedSenderSet.mockReset().mockResolvedValue(new Set())
   vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -222,6 +225,7 @@ describe('syncProvider', () => {
       id: 't1',
       lastMessageAt: new Date('2026-08-28T10:00:00Z'),
       messageCount: 3,
+      contentAt: new Date('2026-08-28T10:00:00Z'),
     })
     const thread = vi.fn()
     const outcome = await syncProvider(
@@ -236,10 +240,96 @@ describe('syncProvider', () => {
       id: 't1',
       lastMessageAt: new Date('2026-08-28T09:00:00Z'),
       messageCount: 3,
+      contentAt: new Date('2026-08-28T09:00:00Z'),
     })
     const thread = vi.fn().mockResolvedValue({ summary: summary(), messages: [message()] })
     await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }))
     expect(thread).toHaveBeenCalledWith('c1')
+  })
+
+  // A channel may revise what it has already said - the telephony one types a
+  // voicemail up minutes after the message was left. The conversation is no
+  // newer for it, so every test above passes and the words would never arrive.
+  describe('a conversation that changed without gaining a message', () => {
+    const lastMessageAt = new Date('2026-08-28T10:00:00Z')
+    const typedUpAt = new Date('2026-08-28T10:04:00Z')
+
+    it('is opened again when the channel says its content moved on', async () => {
+      providerThreadState.mockResolvedValue({
+        id: 't1',
+        lastMessageAt,
+        messageCount: 3,
+        contentAt: lastMessageAt,
+      })
+      const revised = summary({ contentAt: typedUpAt })
+      const thread = vi.fn().mockResolvedValue({ summary: revised, messages: [message()] })
+      await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [revised] }), thread }))
+      expect(thread).toHaveBeenCalledWith('c1')
+      expect(markProviderContentRead).toHaveBeenCalledWith('live-chat', 'c1', typedUpAt)
+    })
+
+    it('settles once that revision has been read', async () => {
+      providerThreadState.mockResolvedValue({
+        id: 't1',
+        lastMessageAt,
+        messageCount: 3,
+        contentAt: typedUpAt,
+      })
+      const thread = vi.fn()
+      await syncProvider(
+        resolved({
+          list: vi.fn().mockResolvedValue({ items: [summary({ contentAt: typedUpAt })] }),
+          thread,
+        }),
+      )
+      expect(thread).not.toHaveBeenCalled()
+    })
+
+    // Every conversation collected before any of this was recorded has no
+    // content watermark, and must be read once more rather than assumed current.
+    it('reads a conversation that has never had a content watermark', async () => {
+      providerThreadState.mockResolvedValue({
+        id: 't1',
+        lastMessageAt,
+        messageCount: 3,
+        contentAt: null,
+      })
+      const thread = vi.fn().mockResolvedValue({ summary: summary(), messages: [message()] })
+      await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }))
+      expect(thread).toHaveBeenCalledWith('c1')
+    })
+
+    // A channel getting it backwards must not be able to convince us we are
+    // caught up on something we are not.
+    it('never believes a content time earlier than the newest message', async () => {
+      providerThreadState.mockResolvedValue({
+        id: 't1',
+        lastMessageAt: new Date('2026-08-28T09:00:00Z'),
+        messageCount: 3,
+        contentAt: new Date('2026-08-28T09:00:00Z'),
+      })
+      const backwards = summary({ contentAt: new Date('2026-01-01T00:00:00Z') })
+      const thread = vi.fn().mockResolvedValue({ summary: backwards, messages: [message()] })
+      await syncProvider(
+        resolved({ list: vi.fn().mockResolvedValue({ items: [backwards] }), thread }),
+      )
+      expect(markProviderContentRead).toHaveBeenCalledWith('live-chat', 'c1', lastMessageAt)
+    })
+
+    // The watermark is a promise that the words were fetched. A pass that gave
+    // up before opening the conversation has made no such promise.
+    it('does not record a revision it never opened', async () => {
+      providerThreadState.mockResolvedValue({
+        id: 't1',
+        lastMessageAt,
+        messageCount: 3,
+        contentAt: lastMessageAt,
+      })
+      const revised = summary({ contentAt: typedUpAt })
+      const thread = vi.fn().mockRejectedValue(new Error('the phone company said no'))
+      await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [revised] }), thread }))
+      expect(markProviderContentRead).not.toHaveBeenCalled()
+    })
   })
 
   it('claims our own reply rather than filing a second copy of it', async () => {
@@ -298,9 +388,11 @@ describe('syncAllProviders', () => {
     await syncAllProviders()
 
     const since = list.mock.calls[0]![0]!.since as Date
-    // A minute of slack, so a conversation touched in the same second as the
-    // last pass does not fall down the gap between two ticks.
-    expect(since.toISOString()).toBe('2026-08-28T09:59:00.000Z')
+    // Half an hour of slack. It covers a conversation touched in the same
+    // second as the last pass falling down the gap between two ticks, and a
+    // channel revising something it already said - a voicemail typed up minutes
+    // after it was left, which makes the conversation no newer at all.
+    expect(since.toISOString()).toBe('2026-08-28T09:30:00.000Z')
   })
 
   it('lets one broken channel cost only itself', async () => {

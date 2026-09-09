@@ -98,15 +98,39 @@ describe('normaliseBrevoEvent', () => {
     expect(normaliseBrevoEvent(tagged('invalid_email'))?.event.bounceKind).toBe('invalid')
   })
 
-  it('ignores everything that is not about a message of ours', () => {
-    // The site’s Brevo account also carries order confirmations and password
-    // resets. None of those are conversations, and filing them would be worse
-    // than useless.
+  it('ignores everything that names no message and everything we have no opinion on', () => {
+    // An event carrying neither our tag nor the service’s own id cannot be
+    // about anything, and a kind we do not file is not worth a lookup.
     expect(normaliseBrevoEvent({ event: 'delivered', email: 'a@b.com' })).toBeNull()
     expect(normaliseBrevoEvent(tagged('unsubscribed'))).toBeNull()
     expect(normaliseBrevoEvent(tagged('request'))).toBeNull()
     expect(normaliseBrevoEvent(null)).toBeNull()
     expect(normaliseBrevoEvent('delivered')).toBeNull()
+  })
+
+  it('hands back the service’s own id when our tag never went out', () => {
+    // An order confirmation. The shop sent it and this module was given a copy
+    // afterwards, so there was no tag to put on it - and until this, every
+    // event about one was dropped here and the conversation showed nothing.
+    const result = normaliseBrevoEvent({
+      event: 'click',
+      email: 'customer@example.com',
+      ts_event: 1_756_000_000,
+      'message-id': '<202609091254.15483442510@smtp-relay.mailin.fr>',
+      link: 'https://example.com/orders/DW000182',
+    })
+    expect(result?.messageId).toBeNull()
+    // Brackets off, because that is how the id is stored on the row and the two
+    // have to compare equal.
+    expect(result?.providerMessageId).toBe('202609091254.15483442510@smtp-relay.mailin.fr')
+    expect(result?.event.kind).toBe('clicked')
+    expect(result?.event.detail).toBe('https://example.com/orders/DW000182')
+  })
+
+  it('keeps both handles when both arrived', () => {
+    const result = normaliseBrevoEvent(tagged('delivered', { 'message-id': '<abc@smtp-relay.mailin.fr>' }))
+    expect(result?.messageId).toBe('msg-1')
+    expect(result?.providerMessageId).toBe('abc@smtp-relay.mailin.fr')
   })
 
   it('falls back to the written date when there is no stamp', () => {

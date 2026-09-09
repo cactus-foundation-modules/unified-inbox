@@ -1,3 +1,5 @@
+import { cleanMessageId } from './threading'
+
 // ---------------------------------------------------------------------------
 // What became of a reply after it left.
 //
@@ -33,6 +35,16 @@
 //   it does them all at once. Which is why the WHICH LINK is kept rather than
 //   only a count, and why several links inside the same second are filed as
 //   several clicks rather than collapsing into one.
+//
+//   Half the sent mail on the screen never carried our tag. A reply somebody
+//   typed goes out through this module and leaves with the tag on it; an order
+//   confirmation does not, because the shop sent that one and this module was
+//   handed a copy afterwards, by which time the email was already with the
+//   customer (see outbound-record.ts). There is no header to add at that point
+//   and never will be - so the only handle those have is the name the sending
+//   service gave the message, which is stored on the row and comes back on
+//   every event about it. Hence two identifiers out of here rather than one:
+//   the tag where there is one, the service's own id where there is not.
 // ---------------------------------------------------------------------------
 
 /** The strongest thing we know about a message, in the order it is worth. */
@@ -161,58 +173,80 @@ function clickedLink(payload: Record<string, unknown>): string | null {
   return raw.slice(0, 500)
 }
 
+/** Which of our sent messages an event is about, and what happened to it.
+ *
+ * One of the two identifiers is always present and either may be missing. The
+ * tag is the better of them - it names our row directly, and it survives a
+ * service that stamps its own Message-ID over the one we set - but only mail
+ * this module sent itself carries it. The service's own id is what is left for
+ * everything else, and is exactly what the row for a filed copy stores. */
+export type NormalisedBrevoEvent = {
+  /** Our own message id, out of the tag that travelled with it. */
+  messageId: string | null
+  /** What the sending service called the message, brackets already off, so it
+   *  compares equal to the `provider_message_id` stored on the row. */
+  providerMessageId: string | null
+  event: NormalisedDeliveryEvent
+}
+
+/** What Brevo calls the message in an event it pushes. `message-id` is the one
+ *  it actually sends; the other two are taken because a field name is a cheap
+ *  thing to be wrong about and an expensive thing to discover. */
+function providerMessageIdOf(payload: Record<string, unknown>): string | null {
+  return cleanMessageId(firstString(payload, ['message-id', 'messageId', 'message_id']))
+}
+
 /**
  * One pushed Brevo event, turned into something this module can file.
  *
- * Returns null for anything that is not about a message of ours - which is most
- * of what arrives, because the site's Brevo account also carries order
- * confirmations, purchase orders and password resets, and none of those are
- * conversations.
+ * Returns null for anything this module has no opinion about, and for anything
+ * carrying no way of naming a message at all. It does NOT return null merely
+ * because our tag is missing: most of what arrives has no tag, and while most
+ * of THAT is a password reset nobody wants filed, some of it is the order
+ * confirmation sitting on a conversation in the inbox. Which of the two it is
+ * cannot be decided here - it is a question about what is in the database, and
+ * everything in this file is pure - so both go back to the caller and the
+ * lookup settles it.
  */
-export function normaliseBrevoEvent(
-  body: unknown,
-): { messageId: string; event: NormalisedDeliveryEvent } | null {
+export function normaliseBrevoEvent(body: unknown): NormalisedBrevoEvent | null {
   if (!body || typeof body !== 'object') return null
   const payload = body as Record<string, unknown>
 
   const messageId = readCustomTag(payload[CUSTOM_TAG_HEADER] ?? payload['x-mailin-custom'])
-  if (!messageId) return null
+  const providerMessageId = providerMessageIdOf(payload)
+  if (!messageId && !providerMessageId) return null
 
   const name = typeof payload.event === 'string' ? payload.event.trim().toLowerCase() : ''
   if (!name) return null
 
   const occurredAt = eventMoment(payload)
   const reason = firstString(payload, ['reason', 'error', 'message'])
+  const about = (event: NormalisedDeliveryEvent): NormalisedBrevoEvent =>
+    ({ messageId, providerMessageId, event })
 
   if (name === 'delivered') {
-    return { messageId, event: { kind: 'delivered', occurredAt, detail: null, bounceKind: null } }
+    return about({ kind: 'delivered', occurredAt, detail: null, bounceKind: null })
   }
   // Every flavour of open Brevo has: first open, every open, and the two proxy
   // ones that mean a mail app fetched the picture rather than a person.
   if (name.includes('open')) {
     const proxied = name.includes('proxy')
-    return {
-      messageId,
-      event: {
-        kind: proxied ? 'proxy_open' : 'opened',
-        occurredAt,
-        detail: null,
-        bounceKind: null,
-      },
-    }
+    return about({
+      kind: proxied ? 'proxy_open' : 'opened',
+      occurredAt,
+      detail: null,
+      bounceKind: null,
+    })
   }
   // Brevo calls it `click` when it pushes one, and `clicks` on some older
   // accounts. Both, for the same reason both spellings of a bounce are taken:
   // finding out in production means a fortnight of filing nothing.
   if (name === 'click' || name === 'clicks') {
-    return {
-      messageId,
-      event: { kind: 'clicked', occurredAt, detail: clickedLink(payload), bounceKind: null },
-    }
+    return about({ kind: 'clicked', occurredAt, detail: clickedLink(payload), bounceKind: null })
   }
   const bounceKind = BOUNCE_KINDS[name]
   if (bounceKind) {
-    return { messageId, event: { kind: 'bounced', occurredAt, detail: reason, bounceKind } }
+    return about({ kind: 'bounced', occurredAt, detail: reason, bounceKind })
   }
   // Sent, request, unsubscribed and anything Brevo adds later. Not an error -
   // just not something this module has an opinion about.
