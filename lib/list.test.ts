@@ -435,6 +435,38 @@ describe('quotedHtmlIndex', () => {
   it('says there is none when nothing is quoted', () => {
     expect(quotedHtmlIndex('<p>hello</p>')).toBe(-1)
   })
+
+  // Outlook on Windows writes no blockquote, no class and no id - just a bold
+  // header under a hairline - so every reply from it used to arrive with the
+  // whole original still showing underneath.
+  it('finds the header block Outlook marks nothing else with', () => {
+    const html =
+      '<div class="WordSection1"><p class="MsoNormal">Yes, that is me.</p>' +
+      '<div><div style="border:none;border-top:solid #E1E1E1 1.0pt;padding:3.0pt 0cm 0cm 0cm">' +
+      '<p class="MsoNormal"><b><span lang="EN-US">From:</span></b><span> Emma &lt;emma@example.com&gt;<br>' +
+      '<b>Sent:</b> 09 September 2026 17:12<br><b>Subject:</b> The chair</span></p></div></div>' +
+      '<p class="MsoNormal">Hi David,</p></div>'
+    expect(quotedHtmlIndex(html)).toBe(html.indexOf('<div><div style="border'))
+  })
+
+  it('leaves a signature above the header out of the fold', () => {
+    const html =
+      '<p>Yes, that is me.</p>' +
+      '<div><p>David Abbott</p><p>Facilities Manager</p></div>' +
+      '<div style="border-top:solid #E1E1E1 1.0pt">' +
+      '<p><b>From:</b> Emma<br><b>Sent:</b> Tuesday<br><b>Subject:</b> Chairs</p></div>'
+    expect(quotedHtmlIndex(html)).toBe(html.indexOf('<div style="border-top'))
+  })
+
+  it('ignores a bold From: that is not a quoted header', () => {
+    expect(quotedHtmlIndex('<p>Ordered <b>From:</b> the catalogue, thanks.</p>')).toBe(-1)
+  })
+
+  it('prefers the blockquote when a client writes both', () => {
+    const html =
+      '<p>Yes.</p><blockquote><p><b>From:</b> Emma<br><b>Subject:</b> Chairs</p></blockquote>'
+    expect(quotedHtmlIndex(html)).toBe(html.indexOf('<blockquote'))
+  })
 })
 
 describe('the search dialog', () => {

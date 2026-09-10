@@ -836,9 +836,90 @@ export function quotedHtmlIndex(html: string): number {
     const match = marker.exec(html)
     if (match && (found === -1 || match.index < found)) found = match.index
   }
+  const outlook = outlookHeaderIndex(html)
+  if (outlook > -1 && (found === -1 || outlook < found)) found = outlook
   // Right at the top means the whole message is a quote, which is a forward
   // with no covering note rather than a reply with history under it.
   return found <= 0 ? -1 : found
+}
+
+/** The bold "From:" that opens the header block Outlook writes above a quoted
+ *  reply. Optionally wrapped in a span, because Word's HTML puts the language
+ *  and the font on one. */
+const OUTLOOK_FROM_RE = /<(?:b|strong)\b[^>]*>\s*(?:<span\b[^>]*>\s*)?From:/gi
+
+/** The rest of that header, which has to be there before the "From:" above it
+ *  counts. Read out of the markup with the tags left in, so the check is on the
+ *  words being present and in order rather than on how they are marked up. */
+const OUTLOOK_HEADER_TAIL_RE = /<(?:b|strong)\b[^>]*>\s*(?:<span\b[^>]*>\s*)?Subject:/i
+
+/** How far past the "From:" the rest of the header is allowed to be. Generous:
+ *  Word writes a great deal of markup around four short lines. */
+const OUTLOOK_HEADER_WINDOW = 2000
+
+/** How far back from the "From:" to look for the div that block sits in. The
+ *  divider Outlook draws above it belongs to the quote, not to the reply, so
+ *  folding from the header itself would leave a stray hairline under the new
+ *  writing. */
+const OUTLOOK_WRAPPER_WINDOW = 600
+
+/**
+ * The start of the divs the header block is wrapped in, given the markup that
+ * runs from the end of those divs' opening tags to the header itself.
+ *
+ * Walked outwards from the header rather than inwards from the window's edge,
+ * and stopped the moment a div fails, because the only divs wanted here are the
+ * ones that contain the header and NOTHING else. A div that closes again before
+ * the header, or that has any of the sender's own words in it before the header
+ * starts, is a div that holds part of the reply - Word wraps a signature in one
+ * - and folding from there would hide what was actually written this time.
+ */
+function outlookWrapperStart(before: string): number {
+  let start = -1
+  for (let at = before.length; at >= 0; at--) {
+    const found = before.toLowerCase().lastIndexOf('<div', at)
+    if (found === -1) break
+    const between = before.slice(found)
+    if (/<\/div>/i.test(between)) break
+    if (visibleText(between) !== '') break
+    start = found
+    at = found
+  }
+  return start
+}
+
+/** What is left of a fragment of markup once the tags and the spacing entities
+ *  are gone: the words a reader would actually see. */
+function visibleText(html: string): string {
+  return html
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .trim()
+}
+
+/**
+ * Where an Outlook-written quote starts, or -1.
+ *
+ * Outlook on Windows marks its quoted history with nothing whatsoever - no
+ * blockquote, no class, no id, just a div with a hairline along the top and a
+ * bold "From:" inside it - so every reply from it arrived with the whole
+ * original still showing. It is found by its words instead, which is why the
+ * Subject line has to be there too: a bold "From:" on its own is a thing
+ * somebody could reasonably have typed, and hiding half of what they wrote is
+ * worse than showing a quote.
+ */
+function outlookHeaderIndex(html: string): number {
+  OUTLOOK_FROM_RE.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = OUTLOOK_FROM_RE.exec(html))) {
+    const at = match.index
+    const window = html.slice(at, at + OUTLOOK_HEADER_WINDOW)
+    if (!OUTLOOK_HEADER_TAIL_RE.test(window)) continue
+    const from = Math.max(0, at - OUTLOOK_WRAPPER_WINDOW)
+    const wrapper = outlookWrapperStart(html.slice(from, at))
+    return wrapper === -1 ? at : from + wrapper
+  }
+  return -1
 }
 
 /**
