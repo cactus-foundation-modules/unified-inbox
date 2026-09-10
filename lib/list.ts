@@ -669,6 +669,59 @@ export function channelLabel(channel: string): string {
   return CHANNEL_LABELS[channel] ?? 'Message'
 }
 
+/** The drawings a channel row can wear in the rail. Names rather than the icons
+ *  themselves, because this file is read by the browser AND by the server and
+ *  has no business importing JSX. */
+export type ChannelGlyph = 'phone' | 'mobile' | 'sms' | 'chat' | 'form' | 'mail'
+
+/** Longest first, so "text message" is a text before it is a message and
+ *  "video call" is a call rather than nothing. Matched against the channel's own
+ *  label and then its key, both lowercased. */
+const CHANNEL_GLYPH_WORDS: Array<[string, ChannelGlyph]> = [
+  ['whatsapp', 'mobile'],
+  ['telegram', 'mobile'],
+  ['imessage', 'mobile'],
+  ['signal', 'mobile'],
+  ['mobile', 'mobile'],
+  ['sms', 'sms'],
+  ['text', 'sms'],
+  ['telephone', 'phone'],
+  ['phone', 'phone'],
+  ['call', 'phone'],
+  ['voice', 'phone'],
+  ['dial', 'phone'],
+  ['messenger', 'chat'],
+  ['chat', 'chat'],
+  ['message', 'chat'],
+  ['enquir', 'form'],
+  ['form', 'form'],
+  ['email', 'mail'],
+  ['mail', 'mail'],
+]
+
+/**
+ * Which drawing a channel wears in the rail, or null for one nobody has a
+ * picture for.
+ *
+ * Read off the channel's OWN name rather than from a list of module ids kept
+ * here, and that is the whole design. A channel is published by some other
+ * module - the phone by one, live chat by another, whatever a site installs
+ * next by a third - and a lookup table of their ids in this module would be a
+ * table that is wrong the day somebody writes a fourth. A channel that calls
+ * itself WhatsApp gets the handset with a screen on it whoever wrote it.
+ *
+ * Null is a real answer: a channel nothing here recognises keeps the coloured
+ * dot it has always worn, which is a mark that tells one row from another
+ * without pretending to say what the row IS.
+ */
+export function channelGlyph(key: string, label: string): ChannelGlyph | null {
+  const said = `${label} ${key}`.toLowerCase()
+  for (const [word, glyph] of CHANNEL_GLYPH_WORDS) {
+    if (said.includes(word)) return glyph
+  }
+  return null
+}
+
 /**
  * Where somebody's own picture is served from, or null when there is nobody to
  * look up.

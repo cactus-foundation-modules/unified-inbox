@@ -2,52 +2,57 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ConfirmDialog } from './ConfirmDialog'
 
-// Refuse whoever is on the other end of this conversation, from here on.
+// The way back in for somebody a channel has been asked to refuse.
 //
-// It sits in the thread head rather than beside the messages, because it is
-// about the conversation rather than about any one thing said in it. What
-// already happened stays exactly where it is: blocking somebody and clearing
-// their history are different decisions, and the second one has its own button.
+// This used to be both halves - a red "Block them" button in the conversation
+// header, and this one once the press had landed. The red half is gone. It was
+// the only control up there that changed what a stranger gets when they next
+// try to reach you, it sat in front of everybody all day beside the ordinary
+// business of reading a conversation, and it was pressed by mistake. Refusing a
+// caller happens for the same reason refusing an address does - because what
+// they sent was junk - so it is now asked as the second half of marking the
+// conversation as junk, where the same question is already put about email
+// senders and where Cancel is the ordinary answer. See SpamButton.
 //
-// The channel decides what blocking means. On the phone it drops the call
+// Letting somebody back in is the harmless half of that decision: it gives
+// nothing away, it undoes itself, and somebody looking for it is looking for it
+// on the conversation they blocked. So it stays here, drawn only when they are
+// actually blocked - which is to say this is nowhere on the screen until
+// somebody has been shut out, and unmissable afterwards.
+//
+// The channel decides what any of it means. On the phone it drops the call
 // before anything rings; another channel might turn a sender away at the door.
 // This only asks.
 
 type Props = {
   threadId: string
-  /** Whether they are blocked right now, so the button offers the right one of
-   *  the two rather than making somebody press it to find out. */
-  blocked: boolean
-  /** What the channel calls itself, for a question that names it. */
+  /** What the channel calls itself, for a line that names it. */
   channelLabel: string
 }
 
-export function BlockParticipant({ threadId, blocked, channelLabel }: Props) {
+export function BlockParticipant({ threadId, channelLabel }: Props) {
   const router = useRouter()
-  const [asking, setAsking] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  async function set(next: boolean) {
+  async function letThemBackIn() {
     setBusy(true)
     setError('')
     try {
       const response = await fetch(`/api/m/unified-inbox/threads/${threadId}/block`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ blocked: next }),
+        body: JSON.stringify({ blocked: false }),
       })
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as { error?: string } | null
         // The channel's own words when it has any: only it knows why there is
-        // nobody to block - a withheld number, most often - and a generic
-        // sentence here would throw that explanation away.
+        // nobody to unblock, and a generic sentence here would throw that
+        // explanation away.
         setError(body?.error ?? 'That did not work.')
         return
       }
-      setAsking(false)
       router.refresh()
     } catch {
       setError('The site could not be reached.')
@@ -56,48 +61,21 @@ export function BlockParticipant({ threadId, blocked, channelLabel }: Props) {
     }
   }
 
-  // Unblocking gives nothing away and undoes itself, so it just happens.
-  // Blocking is the one that changes what the next caller hears, so it asks.
   // Wrapped in the same row the other thread buttons sit in. Bare, it was a
   // direct child of a one-column grid and came out stretched across the whole
-  // head - a full-width button for the one action on the screen nobody presses
-  // by accident twice.
-  if (blocked) {
-    return (
-      <div className="uin-thread-actions">
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          disabled={busy}
-          onClick={() => void set(false)}
-        >
-          {busy ? 'Unblocking...' : 'Unblock them'}
-        </button>
-        {error && <span style={{ color: 'var(--color-destructive-hover)' }} role="alert">{error}</span>}
-      </div>
-    )
-  }
-
+  // head.
   return (
     <div className="uin-thread-actions">
-      {/* Red, because it is the one button here that changes what a stranger
-          gets when they next try to reach you. Same size and shape as the rest
-          of them, so it reads as one of the row rather than as a warning
-          banner. */}
-      <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={() => setAsking(true)}>
-        Block them
+      <span className="uin-thread-blocked">Blocked on {channelLabel}.</span>
+      <button
+        type="button"
+        className="btn btn-secondary btn-sm"
+        disabled={busy}
+        onClick={() => void letThemBackIn()}
+      >
+        {busy ? 'Unblocking...' : 'Unblock them'}
       </button>
       {error && <span style={{ color: 'var(--color-destructive-hover)' }} role="alert">{error}</span>}
-      <ConfirmDialog
-        open={asking}
-        title="Block them?"
-        body={`They will not get through on ${channelLabel} again until you say so. Nothing here is deleted - this conversation and everything in it stays exactly as it is.`}
-        confirmLabel="Block them"
-        destructive
-        busy={busy}
-        onCancel={() => { if (!busy) { setAsking(false); setError('') } }}
-        onConfirm={() => void set(true)}
-      />
     </div>
   )
 }

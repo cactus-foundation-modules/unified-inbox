@@ -5,6 +5,9 @@ import { useRouter } from 'next/navigation'
 import { AdminTooltip } from '@/components/admin/Tooltip'
 import { BinButton } from './BinButton'
 import { Dropdown, MenuItem } from './Dropdown'
+import {
+  refusalMessage, runOnMany, them, useBulkTargets, useSelection,
+} from './Selection'
 import { SnoozePanel } from './SnoozePanel'
 import { SpamButton } from './SpamButton'
 import { useOfferUndo } from './UndoProvider'
@@ -22,6 +25,15 @@ import { AlarmIcon, ChevronDownIcon } from './icons'
 // button that SAYS where it stands and opens the other answers, the reminder is
 // the clock beside it, and marking something read again went where it belongs:
 // on a message, behind its own dots.
+//
+// Everything in this row that ENDS a conversation - the bin, the junk sign, the
+// clock, and Done - acts on whatever is ticked in the list beside it as well as
+// on the conversation being read. Picking six, opening one of them to check it
+// is the right pile and pressing Done used to file exactly one, with the other
+// five still ticked behind and nothing on the screen admitting it. See
+// Selection. Handing it to somebody is deliberately NOT one of them: whose desk
+// a conversation lands on is a decision per conversation, and the bar over the
+// list has never offered it either.
 
 type Props = {
   threadId: string
@@ -50,6 +62,11 @@ type Props = {
   senderBlocked: boolean
   /** Whether this reader may do the refusing. */
   canBlock: boolean
+  /** The other kind of door, where the channel itself can refuse the party on
+   *  this conversation - the phone dropping a caller before it rings. Handed
+   *  straight to the junk button, which is where refusing anybody is asked
+   *  about now. Null where the channel cannot refuse anybody. */
+  channelBlock: { label: string; blocked: boolean } | null
   /** Whether the conversation is in the relevant bin - the OWNER's, which on a
    *  colleague's own address is not the reader's. Rides here beside `spam` and
    *  for the same reason: it is one person's decision about a conversation
@@ -75,7 +92,7 @@ const STATUS_WORDS: Record<string, string> = {
 
 export function ThreadActions({
   threadId, status, assigneeUserId, snoozeUntil, staff, timezone,
-  spam, spamOwnerName, senderAddress, senderBlocked, canBlock, closeHref,
+  spam, spamOwnerName, senderAddress, senderBlocked, canBlock, channelBlock, closeHref,
   binned, binOwnerName,
 }: Props) {
   const router = useRouter()
@@ -83,6 +100,10 @@ export function ThreadActions({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const assignedTo = staff.find((person) => person.id === assigneeUserId)?.name ?? null
+  // This conversation, and everything else ticked in the list beside it.
+  const targets = useBulkTargets(threadId)
+  const many = targets.length > 1
+  const { pickedRows, clear: dropSelection } = useSelection()
 
   /** Where this conversation stood before the press, as the change that would
    *  put it back. The whole change rather than a status, because a snooze
@@ -97,34 +118,58 @@ export function ThreadActions({
       : { status: status === 'done' ? 'done' : 'open' }
   ), [snoozeUntil, status])
 
+  /** Where EVERY conversation about to change stood, as the changes that would
+   *  put each of them back there.
+   *
+   *  One change per conversation rather than one for the pile: a pile picked off
+   *  an All list is rarely all in the same state, and a snooze needs the date it
+   *  was due back or the API refuses it. The other conversations' states come
+   *  from the list beside this one, which is the only thing that knows them -
+   *  and this conversation's own comes from its props, because it may not be
+   *  ticked in the list at all. */
+  const whereTheyStood = useCallback((): Array<{ id: string; to: Record<string, unknown> }> => {
+    const stood = new Map<string, Record<string, unknown>>(pickedRows.map((row) => [row.id, (
+      row.status === 'snoozed' && row.snoozeUntil
+        ? { status: 'snoozed', snoozeUntil: row.snoozeUntil }
+        : { status: row.status === 'done' ? 'done' : 'open' }
+    )]))
+    stood.set(threadId, wasAt())
+    return targets.map((id) => ({ id, to: stood.get(id) ?? { status: 'open' } }))
+  }, [pickedRows, targets, threadId, wasAt])
+
   /** Put it back, from a screen that no longer exists. A bare request, for the
    *  reason given at the top of UndoProvider - the redraw is that component's
    *  job, not this one's. */
-  const restore = useCallback(async (to: Record<string, unknown>) => {
-    await fetch(`/api/m/unified-inbox/threads/${threadId}`, {
+  const restore = useCallback(async (back: Array<{ id: string; to: Record<string, unknown> }>) => {
+    await Promise.allSettled(back.map(({ id, to }) => fetch(`/api/m/unified-inbox/threads/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(to),
-    })
-  }, [threadId])
+    })))
+  }, [])
 
   /** Says whether it saved, because marking done only offers to undo itself
    *  once the site has agreed that it happened. */
   const patch = useCallback(async (
     body: Record<string, unknown>,
-    { refresh = true }: { refresh?: boolean } = {},
+    { refresh = true, all = true }: { refresh?: boolean; all?: boolean } = {},
   ) => {
     setBusy(true)
     setError('')
     try {
-      const response = await fetch(`/api/m/unified-inbox/threads/${threadId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      if (!response.ok) {
-        setError((await response.json().catch(() => null))?.error ?? 'That did not save.')
-        return false
+      // `all: false` is how the one control here that is per-conversation - who
+      // it is with - stays that way.
+      const ids = all ? targets : [threadId]
+      const { failed, count } = await runOnMany(ids, (id) =>
+        fetch(`/api/m/unified-inbox/threads/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }))
+      const refused = refusalMessage(failed, count)
+      if (refused) {
+        setError(refused)
+        if (failed === count) return false
       }
       // Held back where the caller is about to leave anyway: a redraw of the
       // screen being walked away from is a second server render for a pane
@@ -137,7 +182,7 @@ export function ThreadActions({
     } finally {
       setBusy(false)
     }
-  }, [router, threadId])
+  }, [router, targets, threadId])
 
   /** Marking it done, and putting it to sleep, both take the conversation off
    *  the list it was found on - so both do the same two things afterwards.
@@ -152,11 +197,19 @@ export function ThreadActions({
    *  asleep until Monday that was filed by accident wants to be asleep until
    *  Monday again, not open on this morning's list. */
   const closeWith = useCallback(async (change: Record<string, unknown>, said: string) => {
-    const back = wasAt()
+    const back = whereTheyStood()
     if (!(await patch(change, { refresh: false }))) return
+    dropSelection()
     offerUndo({ message: said, undo: () => restore(back) })
     router.push(closeHref)
-  }, [closeHref, offerUndo, patch, restore, router, wasAt])
+  }, [closeHref, dropSelection, offerUndo, patch, restore, router, whereTheyStood])
+
+  /** What the toast says, which depends on how many went with the press.
+   *  "Marked as done." over six conversations is a sentence that leaves five of
+   *  them unaccounted for. */
+  const said = useCallback((one: string, verb: string) => (
+    many ? `${targets.length} ${them(targets.length)} ${verb}.` : one
+  ), [many, targets.length])
 
   return (
     <>
@@ -189,13 +242,16 @@ export function ThreadActions({
           senderAddress={senderAddress}
           senderBlocked={senderBlocked}
           canBlock={canBlock}
+          channelBlock={channelBlock}
           closeHref={closeHref}
           disabled={busy}
         />
         {/* The other wordless one, and given the same tooltip as the junk sign
             for the same reason: a clock on its own is a guess until something
             says which of the four things a clock could mean this one is. */}
-        <AdminTooltip body="Snooze - set when this comes back">
+        <AdminTooltip body={many
+          ? `Snooze - set when all ${targets.length} come back`
+          : 'Snooze - set when this comes back'}>
           <Dropdown
             className="uin-icon-btn uin-icon-btn-framed"
             label={AlarmIcon}
@@ -209,9 +265,10 @@ export function ThreadActions({
               status={status}
               timezone={timezone}
               busy={busy}
+              title={many ? `Snooze these ${targets.length}` : undefined}
               onSnooze={(until) => void closeWith(
                 { status: 'snoozed', snoozeUntil: until.toISOString() },
-                'Snoozed.',
+                said('Snoozed.', 'snoozed'),
               )}
               onWake={() => void patch({ status: 'open' })}
             />
@@ -232,7 +289,7 @@ export function ThreadActions({
           <MenuItem
             disabled={busy}
             hint={assigneeUserId ? undefined : 'Now'}
-            onClick={() => void patch({ assigneeUserId: null })}
+            onClick={() => void patch({ assigneeUserId: null }, { all: false })}
           >
             Nobody
           </MenuItem>
@@ -241,7 +298,7 @@ export function ThreadActions({
               key={person.id}
               disabled={busy}
               hint={person.id === assigneeUserId ? 'Now' : undefined}
-              onClick={() => void patch({ assigneeUserId: person.id })}
+              onClick={() => void patch({ assigneeUserId: person.id }, { all: false })}
             >
               {person.name}
             </MenuItem>
@@ -259,11 +316,16 @@ export function ThreadActions({
         >
           {status !== 'open' && (
             <MenuItem disabled={busy} onClick={() => void patch({ status: 'open' })}>
-              Open
+              {many ? `Open - all ${targets.length}` : 'Open'}
             </MenuItem>
           )}
           {status !== 'done' && (
-            <MenuItem disabled={busy} onClick={() => void closeWith({ status: 'done' }, 'Marked as done.')}>Done</MenuItem>
+            <MenuItem
+              disabled={busy}
+              onClick={() => void closeWith({ status: 'done' }, said('Marked as done.', 'marked as done'))}
+            >
+              {many ? `Done - all ${targets.length}` : 'Done'}
+            </MenuItem>
           )}
         </Dropdown>
       </div>

@@ -4,10 +4,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { LinkBusy } from './NavProgress'
 import { useRouter } from 'next/navigation'
-import { avatarHref, inboxHref, initialsFor, moveInOrder, sortByStoredOrder, splitInboxes } from '@/modules/unified-inbox/lib/list'
 import {
-  AlarmIcon, AssignedIcon, AtIcon, BinIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, FileIcon,
-  FolderIcon, InboxIcon, MegaphoneIcon, MenuIcon, PeopleIcon, SendIcon, SpamIcon,
+  avatarHref, channelGlyph, inboxHref, initialsFor, moveInOrder, sortByStoredOrder, splitInboxes,
+  type ChannelGlyph,
+} from '@/modules/unified-inbox/lib/list'
+import {
+  AlarmIcon, AssignedIcon, AtIcon, BinIcon, ChatIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon,
+  FileIcon, FolderIcon, FormIcon, InboxIcon, MailIcon, MegaphoneIcon, MenuIcon, PeopleIcon,
+  PhoneIcon, SendIcon, SmartphoneIcon, SmsIcon, SpamIcon,
 } from './icons'
 import { Avatar } from './Avatar'
 import { CheckNowButton, type CheckNowNotice } from './CheckNowButton'
@@ -234,6 +238,18 @@ type Props = {
  * stylesheet, and a hex value is a colour that is wrong in one of the two
  * themes.
  */
+/** The drawing that goes with each glyph name. Split from `channelGlyph` in
+ *  lib/list.ts so the deciding is done somewhere both the server and the
+ *  browser can read, and the pictures live where the pictures live. */
+const CHANNEL_ICONS: Record<ChannelGlyph, React.ReactNode> = {
+  phone: PhoneIcon,
+  mobile: SmartphoneIcon,
+  sms: SmsIcon,
+  chat: ChatIcon,
+  form: FormIcon,
+  mail: MailIcon,
+}
+
 export function toneFor(id: string): number {
   let hash = 0
   for (let i = 0; i < id.length; i += 1) hash = (hash * 31 + id.charCodeAt(i)) >>> 0
@@ -1146,11 +1162,21 @@ export function NavRail({
   // The channels another module owns, in whatever order the site has put them
   // in. Keyed by the channel's own key rather than by an inbox id: a channel
   // sits in no inbox, which is rather the point of it.
-  const channelEntries: RailItem[] = channelOrder.map((channel) => ({
+  // A drawing where the channel's own name says what it is - a handset for the
+  // phone, a handset with a screen for WhatsApp, a speech bubble for a live
+  // chat - and the coloured dot it has always worn for anything else. The dot
+  // told one row from another and nothing more, which on a group of three or
+  // four rows that are each a genuinely different KIND of thing was a mark
+  // doing half a job. See channelGlyph: the deciding is done off the label the
+  // channel gives itself, never off a list of module ids kept in here.
+  const channelEntries: RailItem[] = channelOrder.map((channel) => {
+    const glyph = channelGlyph(channel.key, channel.label)
+    return {
     key: `m:${channel.key}`,
     href: link(`m:${channel.key}`),
     active: current === `m:${channel.key}`,
-    tone: toneFor(channel.key),
+    icon: glyph ? CHANNEL_ICONS[glyph] : undefined,
+    tone: glyph ? undefined : toneFor(channel.key),
     name: channel.label,
     count: <Count value={channel.count} />,
     hint: channelsDraggable ? REORDER_HINT : undefined,
@@ -1159,7 +1185,8 @@ export function NavRail({
     over: channelsDraggable
       && channelDrag.state.overId === channel.key
       && channelDrag.state.dragId !== channel.key,
-  }))
+    }
+  })
 
   const elsewhere: RailItem[] = [
     {

@@ -100,6 +100,7 @@ import { StatusTabs } from './inbox/StatusTabs'
 import { SearchBar } from './inbox/SearchBar'
 import { Filters } from './inbox/Filters'
 import { ThreadListView } from './inbox/ThreadListView'
+import { SelectionProvider } from './inbox/Selection'
 import { UndoProvider } from './inbox/UndoProvider'
 import { NavProgress } from './inbox/NavProgress'
 import { MentionListView } from './inbox/MentionListView'
@@ -1941,6 +1942,13 @@ export async function UnifiedInboxPanel({
           pile empties the bar the press came from. See UndoProvider. */}
       <UndoProvider>
 
+      {/* And inside it, what is ticked in the list. Above both columns for the
+          same reason the undo offer is: the buttons in the header of an open
+          conversation act on the pile picked in the list beside it, and a pick
+          held inside the list is a pick those buttons cannot see. See
+          Selection. */}
+      <SelectionProvider>
+
       {/* Never a fourth column beside a conversation.
           There used to be one - what the rest of the site knows about whoever
           this is - and on any window narrower than 1500px it stacked UNDERNEATH
@@ -2125,6 +2133,7 @@ export async function UnifiedInboxPanel({
           something somebody does while looking at the list, and the list is
           still there underneath when it closes. */}
       {composePane}
+      </SelectionProvider>
       </UndoProvider>
     </div>
   )

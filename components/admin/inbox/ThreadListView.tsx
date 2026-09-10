@@ -19,10 +19,16 @@ import {
   PER_PAGE,
 } from '@/modules/unified-inbox/lib/list'
 import { pickWinner, widenedAccessWarning } from '@/modules/unified-inbox/lib/thread-merge'
-import { ChatIcon, ChevronDownIcon, FormIcon, InboundIcon, NoteIcon, PaperclipIcon, PhoneIcon, ReplyIcon, TickIcon } from './icons'
+import {
+  AlarmIcon, BinIcon, ChatIcon, ChevronDownIcon, FormIcon, InboundIcon, MailOpenIcon,
+  MailSealedIcon, MergeIcon, NoteIcon, PaperclipIcon, PhoneIcon, ReplyIcon, RestoreIcon,
+  SpamIcon, TickIcon,
+} from './icons'
+import { AdminTooltip } from '@/components/admin/Tooltip'
 import { Avatar } from './Avatar'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Dropdown } from './Dropdown'
+import { useRegisterRows, useSelection, type PickedRow } from './Selection'
 import { SnoozePanel } from './SnoozePanel'
 import { useOfferUndo } from './UndoProvider'
 
@@ -144,7 +150,12 @@ export function ThreadListView({
 }: Props) {
   const router = useRouter()
   const offerUndo = useOfferUndo()
-  const [selected, setSelected] = useState<string[]>([])
+  // What is ticked lives above this component now, so that the buttons in the
+  // header of the open conversation act on the same pile these ones do - see
+  // Selection. The working out below is unchanged and stays here: this list is
+  // the only thing that knows which rows are on the screen at the moment of a
+  // press, and it knows it synchronously.
+  const { selected, setSelected, clear: dropSelection } = useSelection()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [merging, setMerging] = useState(false)
@@ -187,6 +198,17 @@ export function ThreadListView({
     () => (meId ? { ...staffById, [meId]: 'Me' } : staffById),
     [staffById, meId],
   )
+
+  // The same rows, in the shape the pick keeps them in, handed up so that a
+  // button pressed in the open conversation can put the whole pile back the way
+  // it stood. Only the list knows this; the pane beside it never sees a row.
+  const shape = useMemo<PickedRow[]>(() => rows.map((row) => ({
+    id: row.id,
+    status: row.status,
+    snoozeUntil: row.snoozeUntil ? row.snoozeUntil.toISOString() : null,
+    unread: row.unread,
+  })), [rows])
+  useRegisterRows(shape)
 
   const onScreen = useMemo(() => new Set(rows.map((r) => r.id)), [rows])
   const picked = useMemo(() => selected.filter((id) => onScreen.has(id)), [selected, onScreen])
@@ -244,8 +266,8 @@ export function ThreadListView({
 
   const clearPicked = useCallback(() => {
     anchorRef.current = null
-    setSelected([])
-  }, [])
+    dropSelection()
+  }, [dropSelection])
 
   /** Whether the conversation open beside the list is one of the picked ones.
    *  Asked before a run rather than after it: the bar empties itself on the way
@@ -280,7 +302,7 @@ export function ThreadListView({
       const alsoOpen = nothingPicked && openThreadId && openThreadId !== id && onScreen.has(openThreadId)
       return alsoOpen ? [...current, openThreadId, id] : [...current, id]
     })
-  }, [onScreen, openThreadId])
+  }, [onScreen, openThreadId, setSelected])
 
   /** Everything from the last row picked to this one, added to whatever was
    *  already picked. Added rather than replacing: picking three at the top,
@@ -295,7 +317,7 @@ export function ThreadListView({
     const [lo, hi] = from <= index ? [from, index] : [index, from]
     const run = rows.slice(lo, hi + 1).map((r) => r.id)
     setSelected((current) => [...new Set([...current, ...run])])
-  }, [rows, openThreadId])
+  }, [rows, openThreadId, setSelected])
 
   const onRowClick = useCallback((e: React.MouseEvent, id: string, index: number) => {
     if (e.shiftKey) {
@@ -327,7 +349,7 @@ export function ThreadListView({
     // server confirms it a moment later, by which time the highlight is already
     // where the confirmation would have put it.
     setOpening({ id, from: openThreadId })
-  }, [extendTo, openThreadId, toggle])
+  }, [extendTo, openThreadId, setSelected, toggle])
 
   const onRowKeyDown = useCallback((e: React.KeyboardEvent, id: string, index: number) => {
     // Space on a link does nothing at all by default, so it is free to mean
@@ -658,7 +680,7 @@ export function ThreadListView({
     } finally {
       setBusy(false)
     }
-  }, [mergePlan, router])
+  }, [mergePlan, router, setSelected])
 
   if (rows.length === 0) {
     return (
@@ -738,7 +760,25 @@ export function ThreadListView({
           <span className="uin-bulk-count">
             {picked.length} selected
           </span>
-          {/* Each of these only where it would actually do something - see
+          {/* Nearly all of this bar is drawings now. It used to be eight
+              buttons with whole instructions written on them - "Mark as read",
+              "Mark as unread", "Mark as spam" - which at eleven characters a
+              word wrapped onto three lines inside a list column and pushed the
+              rows down the screen every time anybody picked one. The same eight
+              acts are the same eight icons the conversation beside the list
+              already uses for them, so there is one drawing per act on the
+              whole screen rather than a picture in one place and a sentence in
+              the other. Each one carries the admin's own tooltip and a line for
+              a screen reader - see BinButton, which draws its bin exactly this
+              way and for exactly these reasons.
+
+              The two that are still words are the two that say where a
+              conversation STANDS rather than what is about to happen to it.
+              "Done" and "Reopen" have no drawing anybody would recognise
+              without being taught it, and a tick in a bar that also holds a bin
+              and a no-entry sign reads as "confirm" rather than as "filed".
+
+              Each of them only where it would actually do something - see
               `offer` above for why a button that changes nothing is worse than
               no button at all. */}
           {offer.done && (
@@ -747,19 +787,7 @@ export function ThreadListView({
                       { status: 'done' },
                       `${picked.length} ${them(picked.length)} marked as done.`,
                     )}>
-              Mark as done
-            </button>
-          )}
-          {offer.read && (
-            <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                    onClick={() => void applyToPicked({ unread: false })}>
-              Mark as read
-            </button>
-          )}
-          {offer.unread && (
-            <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                    onClick={() => void applyToPicked({ unread: true })}>
-              Mark as unread
+              Done
             </button>
           )}
           {offer.open && (
@@ -768,8 +796,26 @@ export function ThreadListView({
                       { status: 'open' },
                       `${picked.length} ${them(picked.length)} opened again.`,
                     )}>
-              Open again
+              Reopen
             </button>
+          )}
+          {offer.read && (
+            <AdminTooltip body="Mark as read">
+              <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
+                      onClick={() => void applyToPicked({ unread: false })}>
+                {MailOpenIcon}
+                <span className="sr-only">Mark the {picked.length} picked {them(picked.length)} as read</span>
+              </button>
+            </AdminTooltip>
+          )}
+          {offer.unread && (
+            <AdminTooltip body="Mark as unread">
+              <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
+                      onClick={() => void applyToPicked({ unread: true })}>
+                {MailSealedIcon}
+                <span className="sr-only">Mark the {picked.length} picked {them(picked.length)} as unread</span>
+              </button>
+            </AdminTooltip>
           )}
           {/* The one button in this bar that asks a question rather than doing a
               thing, so it is a menu rather than a press: "when" has no sensible
@@ -779,40 +825,47 @@ export function ThreadListView({
               The same panel the clock on a single conversation opens, which is
               deliberate - one vocabulary for one idea, and the times underneath
               each answer are the SITE's, worked out once when the menu opens.
+              The same clock face too, now that this bar is drawings: a control
+              that opens the identical menu ought to look identical.
 
               Offered whatever is picked, including a pile that is already
               asleep: unlike Mark as read, choosing a new time for something that
               already has one is a real change rather than writing down what was
-              already written. Bringing them back is not in here - "Open again"
+              already written. Bringing them back is not in here - "Reopen"
               beside it already does that for the whole pile. */}
-          <Dropdown
-            className="btn btn-secondary btn-sm uin-status-btn"
-            label={<>Snooze{ChevronDownIcon}</>}
-            ariaLabel="Set when these come back"
-            align="start"
-            width={280}
-            disabled={busy}
-            panelClassName="uin-menu-snooze"
-          >
-            <SnoozePanel
-              timezone={timezone}
-              busy={busy}
-              title={picked.length === 1 ? 'Snooze this one' : `Snooze these ${picked.length}`}
-              onSnooze={(until) => void closePicked(
-                { status: 'snoozed', snoozeUntil: until.toISOString() },
-                `${picked.length} ${them(picked.length)} snoozed.`,
-              )}
-            />
-          </Dropdown>
+          <AdminTooltip body="Snooze - set when these come back">
+            <Dropdown
+              className="uin-icon-btn uin-icon-btn-framed"
+              label={AlarmIcon}
+              ariaLabel="Set when these come back"
+              align="start"
+              width={280}
+              disabled={busy}
+              panelClassName="uin-menu-snooze"
+            >
+              <SnoozePanel
+                timezone={timezone}
+                busy={busy}
+                title={picked.length === 1 ? 'Snooze this one' : `Snooze these ${picked.length}`}
+                onSnooze={(until) => void closePicked(
+                  { status: 'snoozed', snoozeUntil: until.toISOString() },
+                  `${picked.length} ${them(picked.length)} snoozed.`,
+                )}
+              />
+            </Dropdown>
+          </AdminTooltip>
           {/* Not in the Spam folder, where everything on the screen is already
               marked and the button would be an offer to do it again - and not
               in the Bin, where marking something as junk would move it between
               two folders it stays hidden in either way. */}
           {!spam && !bin && (
-            <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                    onClick={markPickedSpam}>
-              Mark as spam
-            </button>
+            <AdminTooltip body="Junk - moves them to the spam folder">
+              <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
+                      onClick={markPickedSpam}>
+                {SpamIcon}
+                <span className="sr-only">Move the {picked.length} picked {them(picked.length)} to the spam folder</span>
+              </button>
+            </AdminTooltip>
           )}
           {/* The bin, offered everywhere except the Bin folder itself - where
               the same button turns round and puts the pile back, because a bin
@@ -820,26 +873,42 @@ export function ThreadListView({
               people stop using. Neither press destroys anything: that is the
               "Empty bin" button in the head of the folder, and it asks. */}
           {bin ? (
-            <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                    onClick={() => void restorePicked()}>
-              Put back
-            </button>
+            <AdminTooltip body="Put them back">
+              <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
+                      onClick={() => void restorePicked()}>
+                {RestoreIcon}
+                <span className="sr-only">Take the {picked.length} picked {them(picked.length)} out of the bin</span>
+              </button>
+            </AdminTooltip>
           ) : (
-            <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                    onClick={() => void deletePicked()}>
-              Delete
-            </button>
+            <AdminTooltip body="Delete - moves them to the bin">
+              <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
+                      onClick={() => void deletePicked()}>
+                {BinIcon}
+                <span className="sr-only">
+                  Move the {picked.length} picked {them(picked.length)} to the bin. Nothing is
+                  destroyed until the bin is emptied.
+                </span>
+              </button>
+            </AdminTooltip>
           )}
           {/* Two or more, because merging one conversation into itself is not a
               thing - and only for whoever set the addresses up, since a merge
               across two of them changes who can read what. */}
           {canManage && picked.length > 1 && (
-            <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                    onClick={() => setMerging(true)}>
-              Merge
-            </button>
+            <AdminTooltip body="Merge them into one conversation">
+              <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
+                      onClick={() => setMerging(true)}>
+                {MergeIcon}
+                <span className="sr-only">Fold the {picked.length} picked conversations into one</span>
+              </button>
+            </AdminTooltip>
           )}
-          <button type="button" className="uin-chip" disabled={busy} onClick={clearPicked}>
+          {/* Still a word, and pushed to the far end of the bar. It is the one
+              control here that acts on the PICK rather than on the post, and a
+              ninth drawing in the row would be a ninth thing to work out before
+              pressing anything. */}
+          <button type="button" className="uin-chip uin-bulk-clear" disabled={busy} onClick={clearPicked}>
             Clear
           </button>
         </div>

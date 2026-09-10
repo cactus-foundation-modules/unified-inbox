@@ -108,3 +108,27 @@ export const PaletteIcon = <svg {...ICON}><path d="M12 4a8 8 0 1 0 0 16 2 2 0 0 
  *  buttons. */
 export const BellIcon = <svg {...ICON}><path d="M6 9a6 6 0 0 1 12 0c0 4 1.5 5.5 1.5 5.5h-15S6 13 6 9Z" /><path d="M10 18a2 2 0 0 0 4 0" /></svg>
 export const BellOffIcon = <svg {...ICON}><path d="M6 9a6 6 0 0 1 8.4-5.5" /><path d="M18 9c0 4 1.5 5.5 1.5 5.5h-12" /><path d="M10 18a2 2 0 0 0 4 0" /><path d="m4 4 16 16" /></svg>
+/** The two halves of read and unread, for the bar over a picked pile. A sealed
+ *  envelope has meant "not read yet" for as long as there have been mail
+ *  programs, so the open one is the press that marks a pile read and the sealed
+ *  one with the dot is the press that puts them back. Drawn as a pair on
+ *  purpose: side by side in a bar, the difference has to be legible at 16px,
+ *  and a flap up against a flap down is the only difference small enough to
+ *  read at a glance. */
+export const MailOpenIcon = <svg {...ICON}><path d="M3 10.5 12 4l9 6.5v9H3z" /><path d="m3 10.5 9 6 9-6" /></svg>
+export const MailSealedIcon = <svg {...ICON}><path d="M3 6.5h18v11H3z" /><path d="m3 7 9 6 9-6" /><circle cx="18.5" cy="6" r="2.5" fill="currentColor" stroke="none" /></svg>
+/** Out of the bin again, for the one bulk press the Bin folder offers. An arrow
+ *  coming back out of the basket rather than a plain undo curl: the curl is
+ *  what the toast already uses for "take that press back", and these are two
+ *  different acts - one is regret, this one is a decision. */
+export const RestoreIcon = <svg {...ICON}><path d="M4.5 7h15" /><path d="M6.6 7l.9 12.5h9L17.4 7" /><path d="M12 17V9.5" /><path d="m8.8 12.7 3.2-3.2 3.2 3.2" /></svg>
+/** Several conversations folded into one. Two lines running into a third,
+ *  which is what a merge does and what every version-control program in the
+ *  world draws for it. */
+export const MergeIcon = <svg {...ICON}><path d="M6 4v4.5c0 2 1.6 3.5 3.5 3.5H18" /><path d="M6 20v-4.5c0-2 1.6-3.5 3.5-3.5" /><path d="m14.5 8.5 3.5 3.5-3.5 3.5" /></svg>
+/** A handset with a screen, for the channels that live on somebody's phone
+ *  rather than on the telephone network - WhatsApp and its like. Deliberately
+ *  not a brand mark: the rail draws whatever channels a site has installed, and
+ *  a green speech bubble in one row and a plain stroke in the next reads as two
+ *  different kinds of thing. */
+export const SmartphoneIcon = <svg {...ICON}><rect x="7" y="3" width="10" height="18" rx="2" /><path d="M10.5 6.2h3" /><path d="M11 18h2" /></svg>

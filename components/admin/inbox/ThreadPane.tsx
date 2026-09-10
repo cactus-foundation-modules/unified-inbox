@@ -738,6 +738,10 @@ export function ThreadPane({
             senderAddress={spamState.senderAddress}
             senderBlocked={spamState.senderBlocked}
             canBlock={spamState.canBlock}
+            /* Refusing a caller is asked where refusing a sender is asked:
+               after the junk has been moved. It used to be a red button
+               standing on its own in this header - see SpamButton. */
+            channelBlock={blockState && { label: blockState.channelLabel, blocked: blockState.blocked }}
             binned={binState.binned}
             binOwnerName={binState.ownerName}
             closeHref={inboxHref(base, params, { id: null })}
@@ -781,12 +785,16 @@ export function ThreadPane({
         {!canReply && cannotReplyReason && (
           <p className="uin-thread-cannot">{cannotReplyReason}</p>
         )}
-        {/* Beside what is done TO the conversation, because that is what this
-            is: it changes what happens next, not what is in the thread. */}
-        {blockState && (
+        {/* The way back in, and only once somebody is actually shut out.
+            Shutting them out is not up here any more: it was the one control in
+            this header that changed what a stranger gets when they next try to
+            reach you, it was in front of everybody all day, and it was pressed
+            by mistake. It is asked after the junk has been moved instead - see
+            SpamButton. Letting somebody back in is the harmless half, so it
+            stays where it is easy to find. */}
+        {blockState?.blocked && (
           <BlockParticipant
             threadId={thread.id}
-            blocked={blockState.blocked}
             channelLabel={blockState.channelLabel}
           />
         )}

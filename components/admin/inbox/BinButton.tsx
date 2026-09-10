@@ -3,6 +3,7 @@
 import { useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AdminTooltip } from '@/components/admin/Tooltip'
+import { refusalMessage, runOnMany, them, useBulkTargets, useSelection } from './Selection'
 import { useOfferUndo } from './UndoProvider'
 import { BinIcon } from './icons'
 
@@ -36,6 +37,13 @@ import { BinIcon } from './icons'
 // And nothing here touches a mail server, ever. Deleting a conversation on this
 // site deletes it on this site; the message stays where it is in whatever
 // mailbox it came from.
+//
+// ONE PRESS, HOWEVER MANY CONVERSATIONS ARE TICKED. Somebody who has picked six
+// in the list, opened one of them to check it is the right pile, and pressed
+// this means the six - so this button acts on the pick beside it (see
+// Selection) exactly as the bar over the list does, and says how many it moved.
+// With nothing ticked it is the one conversation on the screen, which is what
+// it has always been.
 // ---------------------------------------------------------------------------
 
 type Props = {
@@ -66,28 +74,33 @@ export function BinButton({ threadId, binned, ownerName, closeHref, disabled = f
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
+  // This conversation, and everything else ticked in the list beside it.
+  const targets = useBulkTargets(threadId)
+  const { clear: dropSelection } = useSelection()
+
+  /** Says whether ANY of them moved. One request per conversation and settled
+   *  rather than raced, so a single refusal does not hide five that went
+   *  through - and the sentence on the screen names how many did not. */
   const setBinned = useCallback(async (next: boolean): Promise<boolean> => {
     setBusy(true)
     setError('')
     try {
-      const response = await fetch(`/api/m/unified-inbox/threads/${threadId}/bin`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bin: next }),
-      })
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as { error?: string } | null
-        setError(body?.error ?? 'That did not save.')
-        return false
-      }
-      return true
+      const { failed, count } = await runOnMany(targets, (id) =>
+        fetch(`/api/m/unified-inbox/threads/${id}/bin`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bin: next }),
+        }))
+      const refused = refusalMessage(failed, count)
+      if (refused) setError(refused)
+      return failed < count
     } catch {
       setError('The site could not be reached, so nothing changed.')
       return false
     } finally {
       setBusy(false)
     }
-  }, [threadId])
+  }, [targets])
 
   /** Into the bin, and the five seconds in which that was still a mistake.
    *
@@ -96,32 +109,52 @@ export function BinButton({ threadId, binned, ownerName, closeHref, disabled = f
    *  it. A bare request in the undo for the same reason: the redraw is the
    *  provider's job. */
   const remove = useCallback(async () => {
+    // Read before the run: the pick is emptied on the way out, and the toast
+    // has to offer back exactly what went.
+    const ids = [...targets]
     if (!(await setBinned(true))) return
+    dropSelection()
     offerUndo({
-      message: ownerName ? `Moved to ${ownerName}'s bin.` : 'Moved to the bin.',
+      // Whose bin it was is only said of a single conversation. A pile picked
+      // off a list can span two colleagues' post, and "moved to Sam's bin" over
+      // six conversations that went to three different bins is a sentence that
+      // is not true.
+      message: ids.length > 1
+        ? `${ids.length} ${them(ids.length)} moved to the bin.`
+        : ownerName ? `Moved to ${ownerName}'s bin.` : 'Moved to the bin.',
       undo: async () => {
-        await fetch(`/api/m/unified-inbox/threads/${threadId}/bin`, {
+        await Promise.allSettled(ids.map((id) => fetch(`/api/m/unified-inbox/threads/${id}/bin`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ bin: false }),
-        })
+        })))
       },
     })
     router.push(closeHref)
-  }, [closeHref, offerUndo, ownerName, router, setBinned, threadId])
+  }, [closeHref, dropSelection, offerUndo, ownerName, router, setBinned, targets])
 
   // Out of the bin is the same kind of move as into it: the conversation leaves
   // the folder it is being read in, so the reader goes back to the list rather
   // than sitting in front of something that is no longer on it.
   const restore = useCallback(async () => {
-    if (await setBinned(false)) router.push(closeHref)
-  }, [closeHref, router, setBinned])
+    if (!(await setBinned(false))) return
+    dropSelection()
+    router.push(closeHref)
+  }, [closeHref, dropSelection, router, setBinned])
 
   // The word, for the tooltip and for nothing else - the button is a drawing
   // with no writing on it, and a drawing nobody can read is one nobody presses.
+  // How many this press would take with it, said on the tooltip rather than
+  // left to be discovered afterwards: a button that quietly deletes six when it
+  // looks like it deletes one is the worst button on the screen.
+  const many = targets.length > 1
   const word = binned
-    ? (ownerName ? `Put it back into ${ownerName}'s post` : 'Put it back')
-    : (ownerName ? `Delete - goes to ${ownerName}'s bin` : 'Delete')
+    ? many
+      ? `Put all ${targets.length} back`
+      : (ownerName ? `Put it back into ${ownerName}'s post` : 'Put it back')
+    : many
+      ? `Delete all ${targets.length} - they go to the bin`
+      : (ownerName ? `Delete - goes to ${ownerName}'s bin` : 'Delete')
 
   return (
     <>
@@ -137,9 +170,13 @@ export function BinButton({ threadId, binned, ownerName, closeHref, disabled = f
         >
           {BinIcon}
           <span className="sr-only">
-            {binned
-              ? `Take this out of ${ownerName ? `${ownerName}'s` : 'your'} bin`
-              : `Move this to ${ownerName ? `${ownerName}'s` : 'your'} bin. Nothing is destroyed until the bin is emptied.`}
+            {many
+              ? binned
+                ? `Take all ${targets.length} picked conversations out of the bin`
+                : `Move all ${targets.length} picked conversations to the bin. Nothing is destroyed until the bin is emptied.`
+              : binned
+                ? `Take this out of ${ownerName ? `${ownerName}'s` : 'your'} bin`
+                : `Move this to ${ownerName ? `${ownerName}'s` : 'your'} bin. Nothing is destroyed until the bin is emptied.`}
           </span>
         </button>
       </AdminTooltip>

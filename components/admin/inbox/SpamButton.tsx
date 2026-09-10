@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AdminTooltip } from '@/components/admin/Tooltip'
 import { ConfirmDialog } from './ConfirmDialog'
+import { refusalMessage, runOnMany, them, useBulkTargets, useSelection } from './Selection'
 import { useOfferUndo } from './UndoProvider'
 import { SpamIcon } from './icons'
 
@@ -57,6 +58,28 @@ import { SpamIcon } from './icons'
 // junk was already gone, and the only way back was to go and find it. A junk
 // button is pressed next to a reply button all day long. It gets an undo.
 //
+// ONE PRESS, HOWEVER MANY CONVERSATIONS ARE TICKED, exactly as the bin beside
+// it: somebody who has picked six in the list and opened one of them to check
+// means the six (see Selection). The door is the exception - it is only ever
+// offered on the sender of the conversation actually being read, because that
+// is the only address this button has been told about, and a dialog that
+// offered to block "them" over a pile of six different senders would be a
+// dialog nobody could answer honestly.
+//
+// THE DOOR HAS TWO SHAPES, and this button asks about whichever one the
+// conversation has. Email is the site's own list of refused addresses and
+// covers every inbox on it. A channel that can refuse people itself - the phone
+// dropping a caller before it rings - is the other, and it used to be a red
+// "Block them" button standing in the conversation header on its own. It was
+// the one control up there that changed what a stranger gets when they next try
+// to reach you, it sat in front of people all day, and it was pressed by
+// mistake. A caller is refused for the same reason an address is - because what
+// they sent was junk - so it is asked the same way: after the junk has been
+// moved, as the second half of one question, with Cancel as the ordinary
+// answer. Letting somebody back in is where it always was: the Spam folder, the
+// inbox settings, and for a channel the "Unblock them" button that now appears
+// in the header only once somebody is actually blocked.
+//
 // It is drawn as a "no entry" sign rather than as a waste basket. A basket is
 // what mail programs draw for junk, but it is also what everything else in the
 // world draws for Delete, and a control that looks like it destroys the message
@@ -90,6 +113,12 @@ type Props = {
    *  to their own screen; blocking a sender changes what happens to everybody,
    *  so it takes the same grant as answering one. */
   canBlock: boolean
+  /** The other door: a channel that can refuse the party on this conversation
+   *  itself, which for the phone means the caller's own number. Null where the
+   *  channel cannot refuse anybody, which is most of them, or where this reader
+   *  may not ask it to. `blocked` says they are refused already, in which case
+   *  there is nothing to offer and the header carries the way back instead. */
+  channelBlock: { label: string; blocked: boolean } | null
   /** Where the list is without this conversation open on it - the same address
    *  the close cross points at. Junking something takes it out of every list
    *  the reader could have been standing in, so the conversation under their
@@ -102,7 +131,7 @@ type Props = {
 }
 
 export function SpamButton({
-  threadId, spam, ownerName, senderAddress, senderBlocked, canBlock, closeHref,
+  threadId, spam, ownerName, senderAddress, senderBlocked, canBlock, channelBlock, closeHref,
   disabled = false,
 }: Props) {
   const router = useRouter()
@@ -122,18 +151,19 @@ export function SpamButton({
    *  reopened the door could quietly let somebody back in who had been turned
    *  away weeks ago. Blocked senders are managed where blocked senders are
    *  managed, in the Spam folder and in the inbox settings. */
-  const offerToPutBack = useCallback((blocked: boolean) => {
+  const offerToPutBack = useCallback((stillRefused: string | null, ids: string[]) => {
+    const moved = ids.length > 1 ? `${ids.length} ${them(ids.length)} moved to spam.` : 'Moved to spam.'
     offerUndo({
-      message: blocked ? 'Moved to spam. The sender stays blocked.' : 'Moved to spam.',
+      message: stillRefused ? `${moved} ${stillRefused}` : moved,
       undo: async () => {
-        await fetch(`/api/m/unified-inbox/threads/${threadId}/spam`, {
+        await Promise.allSettled(ids.map((id) => fetch(`/api/m/unified-inbox/threads/${id}/spam`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ spam: false }),
-        })
+        })))
       },
     })
-  }, [offerUndo, threadId])
+  }, [offerUndo])
 
   /** Whether there is a SECOND decision to put alongside the first one - a
    *  sender who could be turned away, and somebody entitled to turn them away.
@@ -143,74 +173,107 @@ export function SpamButton({
    *  case with nothing to offer - a sender already blocked, a conversation
    *  between colleagues, a caller with no number - was also the one case where
    *  a mis-press went straight through with no way back. */
-  const worthAsking = canBlock && !!senderAddress && !senderBlocked
+  /** The two doors, and which of them this conversation has. An address that is
+   *  not refused yet is the site's own list; a channel that can refuse people
+   *  and has not refused this one is the channel's. Never both: a conversation
+   *  arrives on one channel, and the one it arrived on is the one to shut. */
+  const shutTheList = canBlock && !!senderAddress && !senderBlocked
+  const shutTheChannel = canBlock && !!channelBlock && !channelBlock.blocked && !shutTheList
+  const worthAsking = shutTheList || shutTheChannel
 
+  // This conversation, and everything else ticked in the list beside it.
+  const targets = useBulkTargets(threadId)
+  const many = targets.length > 1
+  const { clear: dropSelection } = useSelection()
+
+  /** Says whether ANY of them moved, which is what the second half of this
+   *  press needs to know: a door shut behind post that is still sitting in the
+   *  inbox is a half-done job nobody asked for. */
   const setSpam = useCallback(async (next: boolean): Promise<boolean> => {
     setBusy(true)
     setError('')
     try {
-      const response = await fetch(`/api/m/unified-inbox/threads/${threadId}/spam`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ spam: next }),
-      })
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as { error?: string } | null
-        setError(body?.error ?? 'That did not save.')
-        return false
-      }
-      return true
+      const { failed, count } = await runOnMany(targets, (id) =>
+        fetch(`/api/m/unified-inbox/threads/${id}/spam`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ spam: next }),
+        }))
+      const refused = refusalMessage(failed, count)
+      if (refused) setError(refused)
+      return failed < count
     } catch {
       setError('The site could not be reached, so nothing changed.')
       return false
     } finally {
       setBusy(false)
     }
-  }, [threadId])
+  }, [targets])
 
   /** Move it, then shut the door, and only shut the door if the move took -
    *  blocking somebody whose message is still sitting in the inbox is a
    *  half-done job nobody asked for. */
   const moveAndBlock = useCallback(async () => {
-    if (!senderAddress) return
+    if (!worthAsking) return
+    const ids = [...targets]
     if (!(await setSpam(true))) { setAsking(false); return }
+    dropSelection()
     setBusy(true)
     setError('')
-    // Whether the door actually shut, which is not the same question as whether
-    // the move took: the toast says one sentence when the sender is now blocked
-    // and a different one when they are not, and only one of them is true.
-    let blocked = false
+    // What the toast should add about the door, which is not the same question
+    // as whether the move took: it says one sentence when they are now refused
+    // and nothing at all when they are not, and only one of those is true.
+    let refused: string | null = null
     try {
-      const response = await fetch('/api/m/unified-inbox/blocked-senders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address: senderAddress, blocked: true }),
-      })
+      // Whichever door this conversation has. The channel's own route asks the
+      // channel to refuse the party on this conversation - for the phone that
+      // IS the caller's number - and the site's list refuses an address across
+      // every inbox on the site.
+      const response = shutTheChannel
+        ? await fetch(`/api/m/unified-inbox/threads/${threadId}/block`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ blocked: true }),
+          })
+        : await fetch('/api/m/unified-inbox/blocked-senders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ address: senderAddress, blocked: true }),
+          })
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as { error?: string } | null
         // The move went through; what failed is the door. Said here rather than
-        // in the dialog, which is on its way out.
+        // in the dialog, which is on its way out - and in the channel's own
+        // words where it has any, because only it knows why there was nobody to
+        // refuse (a withheld number, most often).
         setError(body?.error ?? 'It was moved, but they were not blocked.')
         return
       }
-      blocked = true
+      refused = shutTheChannel
+        ? `They will not get through on ${channelBlock?.label ?? 'that channel'} again.`
+        : 'The sender stays blocked.'
     } catch {
       setError('The site could not be reached, so nobody was blocked.')
     } finally {
       setBusy(false)
       setAsking(false)
-      offerToPutBack(blocked)
+      offerToPutBack(refused, ids)
       router.push(closeHref)
     }
-  }, [closeHref, offerToPutBack, router, senderAddress, setSpam])
+  }, [
+    channelBlock, closeHref, dropSelection, offerToPutBack, router, senderAddress, setSpam,
+    shutTheChannel, targets, threadId, worthAsking,
+  ])
 
   /** The middle answer: junk it and leave the front door alone. */
   const moveOnly = useCallback(async () => {
+    const ids = [...targets]
     setAsking(false)
     if (!(await setSpam(true))) return
-    offerToPutBack(false)
+    dropSelection()
+    offerToPutBack(null, ids)
     router.push(closeHref)
-  }, [closeHref, offerToPutBack, router, setSpam])
+  }, [closeHref, dropSelection, offerToPutBack, router, setSpam, targets])
 
   // Nothing moves on the press. It puts the question up and the answer does the
   // moving - every time, whether or not there is a sender to block.
@@ -220,16 +283,22 @@ export function SpamButton({
   // the folder it is being read in, so the reader goes back to the list rather
   // than sitting in front of something that is no longer on it.
   const unmark = useCallback(async () => {
-    if (await setSpam(false)) router.push(closeHref)
-  }, [closeHref, router, setSpam])
+    if (!(await setSpam(false))) return
+    dropSelection()
+    router.push(closeHref)
+  }, [closeHref, dropSelection, router, setSpam])
 
   // Taking something back out gives nothing away and undoes itself, so it just
   // happens. Putting it in is the press that asks the second question.
   // The word, for the tooltip and for nothing else - the button is a sign with
   // no writing on it, and a sign nobody can read is a sign nobody presses.
   const word = spam
-    ? (ownerName ? `Not junk - take it out of ${ownerName}'s spam` : 'Not junk')
-    : (ownerName ? `Junk - goes to ${ownerName}'s spam` : 'Junk')
+    ? many
+      ? `Not junk - take all ${targets.length} out of spam`
+      : (ownerName ? `Not junk - take it out of ${ownerName}'s spam` : 'Not junk')
+    : many
+      ? `Junk - moves all ${targets.length} to the spam folder`
+      : (ownerName ? `Junk - goes to ${ownerName}'s spam` : 'Junk')
 
   return (
     <>
@@ -246,26 +315,56 @@ export function SpamButton({
         >
           {SpamIcon}
           <span className="sr-only">
-            {spam
-              ? `Take this out of ${ownerName ? `${ownerName}'s` : 'your'} spam folder`
-              : `Move this to ${ownerName ? `${ownerName}'s` : 'your'} spam folder`}
+            {many
+              ? spam
+                ? `Take all ${targets.length} picked conversations out of the spam folder`
+                : `Move all ${targets.length} picked conversations to the spam folder`
+              : spam
+                ? `Take this out of ${ownerName ? `${ownerName}'s` : 'your'} spam folder`
+                : `Move this to ${ownerName ? `${ownerName}'s` : 'your'} spam folder`}
           </span>
         </button>
       </AdminTooltip>
 
       <ConfirmDialog
         open={asking}
-        title={worthAsking ? 'Block them as well?' : 'Move it to the spam folder?'}
+        title={worthAsking
+          ? 'Block them as well?'
+          : many
+            ? `Move ${targets.length} ${them(targets.length)} to the spam folder?`
+            : 'Move it to the spam folder?'}
         body={<>
-          {ownerName
-            ? <>It will go into {ownerName}&rsquo;s spam folder - this is their own post, so it
-                goes in their bin rather than yours. Nobody else&rsquo;s view of it changes, and
-                nothing is deleted.</>
-            : <>It will go into your spam folder. Nobody else&rsquo;s view of it changes, and
-                nothing is deleted.</>}
+          {many
+            ? <>All {targets.length} picked conversations go into the spam folder - the one you
+                are reading and the {targets.length - 1} ticked in the list beside it. Nobody
+                else&rsquo;s view of them changes, and nothing is deleted.</>
+            : ownerName
+              ? <>It will go into {ownerName}&rsquo;s spam folder - this is their own post, so it
+                  goes in their bin rather than yours. Nobody else&rsquo;s view of it changes, and
+                  nothing is deleted.</>
+              : <>It will go into your spam folder. Nobody else&rsquo;s view of it changes, and
+                  nothing is deleted.</>}
           {' '}
-          {worthAsking ? <>
-            Would you also like to turn <strong>{senderAddress}</strong> away in future? Nothing
+          {shutTheChannel ? <>
+            {/* The channel's own door, asked here rather than from a red button
+                standing in the conversation header - see the top of this file.
+                Same shape as the address question beside it: the junk moves
+                either way, and refusing whoever sent it is the second half of
+                the same decision. */}
+            Would you also like to stop them getting through on{' '}
+            <strong>{channelBlock?.label ?? 'this channel'}</strong> in future?
+            {many ? <> That is the other end of the conversation you are reading; the other{' '}
+              {targets.length - 1} still move, and whoever sent those is left alone.</> : null}{' '}
+            Nothing already here is deleted - this conversation and everything in it stays exactly
+            as it is - and you can let them back in from the button at the top of it.
+          </> : shutTheList ? <>
+            {/* The door is about the sender of the conversation being READ,
+                even when a pile is on the move: it is the only address this
+                button has been told about, and offering to block "them" over
+                six different senders would be an offer nobody could answer. */}
+            Would you also like to turn <strong>{senderAddress}</strong> away in future?
+            {many ? <> That is the sender of the conversation you are reading; the other{' '}
+              {targets.length - 1} still move, and their senders are left alone.</> : null} Nothing
             further from them would reach an inbox on this site - shared or personal. It would be
             dropped straight in here instead, marked as dealt with and left unread, so you can
             still see what they sent. Nothing already here would be touched, and you can let them
@@ -277,8 +376,12 @@ export function SpamButton({
             Press the same button in the Spam folder to bring it straight back.
           </>}
         </>}
-        confirmLabel={worthAsking ? 'Block them' : 'Move it to spam'}
-        other={worthAsking ? { label: 'No, just move it', onClick: () => void moveOnly() } : undefined}
+        confirmLabel={worthAsking
+          ? 'Block them'
+          : many ? `Move all ${targets.length} to spam` : 'Move it to spam'}
+        other={worthAsking
+          ? { label: many ? 'No, just move them' : 'No, just move it', onClick: () => void moveOnly() }
+          : undefined}
         cancelLabel="Cancel"
         // Only where something is genuinely lost if the answer is yes. A move
         // undoes itself with the same button, so the keyboard may start on it.

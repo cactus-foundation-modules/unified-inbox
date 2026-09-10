@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildSearchHref,
+  channelGlyph,
   channelLabel,
   chooseSendingInbox,
   discussionFrom,
@@ -757,5 +758,36 @@ describe('mergeOrder', () => {
 
   it('keeps a stored key naming a channel nobody can see any more', () => {
     expect(mergeOrder(['whatsapp', 'form'], ['form'])).toEqual(['whatsapp', 'form'])
+  })
+})
+
+describe('channelGlyph', () => {
+  // Off the channel's own name, so a module nobody has written yet gets the
+  // right picture the day it is installed.
+  it('gives the handset to the telephone', () => {
+    expect(channelGlyph('twilio', 'Phone')).toBe('phone')
+    expect(channelGlyph('some-voip', 'Calls')).toBe('phone')
+  })
+
+  it('gives the pocket handset to the channels that live on one', () => {
+    expect(channelGlyph('twilio-whatsapp', 'WhatsApp')).toBe('mobile')
+    expect(channelGlyph('tg', 'Telegram')).toBe('mobile')
+  })
+
+  it('gives the speech bubble to a chat', () => {
+    expect(channelGlyph('live-chat', 'Live chat')).toBe('chat')
+  })
+
+  it('tells a text message from a chat', () => {
+    expect(channelGlyph('twilio-sms', 'Text')).toBe('sms')
+  })
+
+  it('gives the form to a form and the envelope to email', () => {
+    expect(channelGlyph('contact-form', 'Contact form')).toBe('form')
+    expect(channelGlyph('imap', 'Email')).toBe('mail')
+  })
+
+  it('says nothing for a channel it does not recognise, which keeps its dot', () => {
+    expect(channelGlyph('pigeon', 'Carrier pigeon')).toBeNull()
   })
 })
