@@ -6,7 +6,7 @@ import { AdminTooltip } from '@/components/admin/Tooltip'
 import { Dropdown, MenuItem } from './Dropdown'
 import { SnoozePanel } from './SnoozePanel'
 import { SpamButton } from './SpamButton'
-import { UndoToast } from './UndoToast'
+import { useOfferUndo } from './UndoProvider'
 import { AlarmIcon, ChevronDownIcon } from './icons'
 
 // What is done TO a conversation: whose desk it is on, where it stands, and
@@ -69,18 +69,41 @@ export function ThreadActions({
   spam, spamOwnerName, senderAddress, senderBlocked, canBlock, closeHref,
 }: Props) {
   const router = useRouter()
+  const offerUndo = useOfferUndo()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  /** What putting it back would mean, while the offer to do so is still on the
-   *  screen. Null the rest of the time, which is also what says there is no
-   *  toast. Held as the whole change rather than a status, because a snooze
-   *  without the date it is due back is a change the API refuses. */
-  const [undoTo, setUndoTo] = useState<Record<string, unknown> | null>(null)
   const assignedTo = staff.find((person) => person.id === assigneeUserId)?.name ?? null
+
+  /** Where this conversation stood before the press, as the change that would
+   *  put it back. The whole change rather than a status, because a snooze
+   *  without the date it is due back is a change the API refuses.
+   *
+   *  Read at the moment the button is pressed rather than when the offer is
+   *  taken: by then this component is very probably unmounted, because closing
+   *  a conversation shuts the pane it was drawn in. */
+  const wasAt = useCallback((): Record<string, unknown> => (
+    status === 'snoozed' && snoozeUntil
+      ? { status: 'snoozed', snoozeUntil }
+      : { status: status === 'done' ? 'done' : 'open' }
+  ), [snoozeUntil, status])
+
+  /** Put it back, from a screen that no longer exists. A bare request, for the
+   *  reason given at the top of UndoProvider - the redraw is that component's
+   *  job, not this one's. */
+  const restore = useCallback(async (to: Record<string, unknown>) => {
+    await fetch(`/api/m/unified-inbox/threads/${threadId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(to),
+    })
+  }, [threadId])
 
   /** Says whether it saved, because marking done only offers to undo itself
    *  once the site has agreed that it happened. */
-  const patch = useCallback(async (body: Record<string, unknown>) => {
+  const patch = useCallback(async (
+    body: Record<string, unknown>,
+    { refresh = true }: { refresh?: boolean } = {},
+  ) => {
     setBusy(true)
     setError('')
     try {
@@ -93,7 +116,10 @@ export function ThreadActions({
         setError((await response.json().catch(() => null))?.error ?? 'That did not save.')
         return false
       }
-      router.refresh()
+      // Held back where the caller is about to leave anyway: a redraw of the
+      // screen being walked away from is a second server render for a pane
+      // nobody will see, and it flashes on the way out.
+      if (refresh) router.refresh()
       return true
     } catch {
       setError('The site could not be reached, so nothing changed.')
@@ -103,16 +129,24 @@ export function ThreadActions({
     }
   }, [router, threadId])
 
-  /** Done is the one change that hides the conversation from the view it was
-   *  found in, so it is the one that offers to take itself back - to where it
-   *  actually stood, which for something asleep until Monday is asleep until
-   *  Monday rather than open on the list this morning. */
-  const markDone = useCallback(async () => {
-    const back = status === 'snoozed' && snoozeUntil
-      ? { status: 'snoozed', snoozeUntil }
-      : { status: 'open' }
-    if (await patch({ status: 'done' })) setUndoTo(back)
-  }, [patch, snoozeUntil, status])
+  /** Marking it done, and putting it to sleep, both take the conversation off
+   *  the list it was found on - so both do the same two things afterwards.
+   *
+   *  The pane goes back to "Nothing open". Somebody who has just filed a
+   *  conversation is done with it, and leaving it sitting there under their eyes
+   *  while the list beside it has dropped the row is a screen that disagrees
+   *  with itself - which is exactly what junking one has always done (see
+   *  SpamButton and its closeHref).
+   *
+   *  And the offer to take it back goes up, to where it actually stood: something
+   *  asleep until Monday that was filed by accident wants to be asleep until
+   *  Monday again, not open on this morning's list. */
+  const closeWith = useCallback(async (change: Record<string, unknown>, said: string) => {
+    const back = wasAt()
+    if (!(await patch(change, { refresh: false }))) return
+    offerUndo({ message: said, undo: () => restore(back) })
+    router.push(closeHref)
+  }, [closeHref, offerUndo, patch, restore, router, wasAt])
 
   return (
     <>
@@ -153,7 +187,10 @@ export function ThreadActions({
               status={status}
               timezone={timezone}
               busy={busy}
-              onSnooze={(until) => void patch({ status: 'snoozed', snoozeUntil: until.toISOString() })}
+              onSnooze={(until) => void closeWith(
+                { status: 'snoozed', snoozeUntil: until.toISOString() },
+                'Snoozed.',
+              )}
               onWake={() => void patch({ status: 'open' })}
             />
           </Dropdown>
@@ -199,31 +236,15 @@ export function ThreadActions({
           disabled={busy}
         >
           {status !== 'open' && (
-            <MenuItem
-              disabled={busy}
-              onClick={() => {
-                setUndoTo(null)
-                void patch({ status: 'open' })
-              }}
-            >
+            <MenuItem disabled={busy} onClick={() => void patch({ status: 'open' })}>
               Open
             </MenuItem>
           )}
           {status !== 'done' && (
-            <MenuItem disabled={busy} onClick={() => void markDone()}>Done</MenuItem>
+            <MenuItem disabled={busy} onClick={() => void closeWith({ status: 'done' }, 'Marked as done.')}>Done</MenuItem>
           )}
         </Dropdown>
       </div>
-
-      {/* The five seconds in which marking something done is still a mistake
-          you can take back. It puts it back where it was rather than simply
-          opening it: something snoozed until Monday that was closed by
-          accident wants to be snoozed until Monday again. */}
-      {undoTo && (
-        <UndoToast onUndo={() => void patch(undoTo)} onDone={() => setUndoTo(null)}>
-          Marked as done.
-        </UndoToast>
-      )}
 
       {/* Its own line under the subject rather than squeezed onto the end of
           it: the row above is three controls on one line by design and a whole

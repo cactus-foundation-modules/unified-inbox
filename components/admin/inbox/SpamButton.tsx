@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AdminTooltip } from '@/components/admin/Tooltip'
 import { ConfirmDialog } from './ConfirmDialog'
+import { useOfferUndo } from './UndoProvider'
 import { SpamIcon } from './icons'
 
 // ---------------------------------------------------------------------------
@@ -105,9 +106,34 @@ export function SpamButton({
   disabled = false,
 }: Props) {
   const router = useRouter()
+  const offerUndo = useOfferUndo()
   const [busy, setBusy] = useState(false)
   const [asking, setAsking] = useState(false)
   const [error, setError] = useState('')
+
+  /** The five seconds in which junking this was still a mistake you can take
+   *  back. Raised through the provider rather than drawn here, because this
+   *  button is inside the pane the press has just shut - a toast left in it
+   *  would go with it. A bare request for the same reason.
+   *
+   *  It brings the conversation back and stops there. Where the door was shut
+   *  as well, it stays shut and the toast says so: this button is not told
+   *  whether the sender was ALREADY blocked before the press, so an undo that
+   *  reopened the door could quietly let somebody back in who had been turned
+   *  away weeks ago. Blocked senders are managed where blocked senders are
+   *  managed, in the Spam folder and in the inbox settings. */
+  const offerToPutBack = useCallback((blocked: boolean) => {
+    offerUndo({
+      message: blocked ? 'Moved to spam. The sender stays blocked.' : 'Moved to spam.',
+      undo: async () => {
+        await fetch(`/api/m/unified-inbox/threads/${threadId}/spam`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ spam: false }),
+        })
+      },
+    })
+  }, [offerUndo, threadId])
 
   /** Whether there is a SECOND decision to put alongside the first one - a
    *  sender who could be turned away, and somebody entitled to turn them away.
@@ -150,6 +176,10 @@ export function SpamButton({
     if (!(await setSpam(true))) { setAsking(false); return }
     setBusy(true)
     setError('')
+    // Whether the door actually shut, which is not the same question as whether
+    // the move took: the toast says one sentence when the sender is now blocked
+    // and a different one when they are not, and only one of them is true.
+    let blocked = false
     try {
       const response = await fetch('/api/m/unified-inbox/blocked-senders', {
         method: 'POST',
@@ -163,20 +193,24 @@ export function SpamButton({
         setError(body?.error ?? 'It was moved, but they were not blocked.')
         return
       }
+      blocked = true
     } catch {
       setError('The site could not be reached, so nobody was blocked.')
     } finally {
       setBusy(false)
       setAsking(false)
+      offerToPutBack(blocked)
       router.push(closeHref)
     }
-  }, [closeHref, router, senderAddress, setSpam])
+  }, [closeHref, offerToPutBack, router, senderAddress, setSpam])
 
   /** The middle answer: junk it and leave the front door alone. */
   const moveOnly = useCallback(async () => {
     setAsking(false)
-    if (await setSpam(true)) router.push(closeHref)
-  }, [closeHref, router, setSpam])
+    if (!(await setSpam(true))) return
+    offerToPutBack(false)
+    router.push(closeHref)
+  }, [closeHref, offerToPutBack, router, setSpam])
 
   // Nothing moves on the press. It puts the question up and the answer does the
   // moving - every time, whether or not there is a sender to block.

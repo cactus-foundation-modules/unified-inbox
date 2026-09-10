@@ -87,7 +87,7 @@ import { OrganisationCard, EMPTY_ORGANISATION } from './inbox/OrganisationCard'
 import { ContactImport } from './inbox/ContactImport'
 import { joinCategories, splitName } from '@/modules/unified-inbox/lib/contacts'
 import { forwardSubject, replyRecipients, replySubject } from '@/modules/unified-inbox/lib/compose'
-import { channelLabel, chooseSendingInbox, effectiveInboxParam, formatWhen, inboxHref, isSearching, NEW_CONTACT, parseInboxParams, PER_PAGE, sortByChannelOrder } from '@/modules/unified-inbox/lib/list'
+import { channelLabel, chooseSendingInbox, effectiveInboxParam, formatWhen, inboxHref, isSearching, NEW_CONTACT, parseInboxParams, PER_PAGE, shownCount, sortByChannelOrder } from '@/modules/unified-inbox/lib/list'
 import { replyDestination, replyStyleFor } from '@/modules/unified-inbox/lib/channel-reply'
 import { pushProviderRead } from '@/modules/unified-inbox/lib/provider-read'
 import { providerForKey, visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
@@ -100,6 +100,7 @@ import { StatusTabs } from './inbox/StatusTabs'
 import { SearchBar } from './inbox/SearchBar'
 import { Filters } from './inbox/Filters'
 import { ThreadListView } from './inbox/ThreadListView'
+import { UndoProvider } from './inbox/UndoProvider'
 import { NavProgress } from './inbox/NavProgress'
 import { MentionListView } from './inbox/MentionListView'
 import { DraftListView } from './inbox/DraftListView'
@@ -651,8 +652,13 @@ export async function UnifiedInboxPanel({
     after: params.after ? instantAtWallClock(params.after, '00:00', timezone) : null,
     before: params.before ? instantAtWallClock(params.before, '24:00', timezone) : null,
     oldestFirst: params.oldestFirst,
-    page: params.page,
-    perPage: PER_PAGE,
+    // The conversation list grows rather than turning pages: what the address
+    // calls page 3 is the newest seventy-five in one list, not the third
+    // twenty-five on their own. So it is always the first page of a bigger
+    // helping - see shownCount, and the foot of ThreadListView for the button
+    // that asks for the next one.
+    page: 1,
+    perPage: shownCount(params.page),
   }
 
   // The status tabs count what is behind them given everything else already
@@ -1863,6 +1869,12 @@ export async function UnifiedInboxPanel({
       <InboxStyles />
       <NavProgress routeKey={routeKey} />
 
+      {/* Everything below can raise the five-second offer to take a press back,
+          and it is raised HERE so that it outlives whatever raised it: junking a
+          conversation shuts the pane the button was in, and snoozing a picked
+          pile empties the bar the press came from. See UndoProvider. */}
+      <UndoProvider>
+
       {/* Never a fourth column beside a conversation.
           There used to be one - what the rest of the site knows about whoever
           this is - and on any window narrower than 1500px it stacked UNDERNEATH
@@ -2027,6 +2039,7 @@ export async function UnifiedInboxPanel({
           something somebody does while looking at the list, and the list is
           still there underneath when it closes. */}
       {composePane}
+      </UndoProvider>
     </div>
   )
 }

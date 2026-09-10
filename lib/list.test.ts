@@ -14,7 +14,10 @@ import {
   formatWhen,
   inboxHref,
   initialsFor,
+  MAX_SHOWN,
   pageCount,
+  PER_PAGE,
+  shownCount,
   parseComposeKind,
   parseInboxParams,
   participantLabel,
@@ -250,6 +253,25 @@ describe('pageCount', () => {
     expect(pageCount(0)).toBe(1)
     expect(pageCount(25)).toBe(1)
     expect(pageCount(26)).toBe(2)
+  })
+})
+
+describe('shownCount', () => {
+  it('grows a helping per press rather than turning a page', () => {
+    expect(shownCount(1)).toBe(PER_PAGE)
+    expect(shownCount(2)).toBe(PER_PAGE * 2)
+    expect(shownCount(3)).toBe(PER_PAGE * 3)
+  })
+
+  it('stops somewhere, so a hand-typed address cannot ask for the lot', () => {
+    expect(shownCount(20)).toBe(MAX_SHOWN)
+    expect(shownCount(100000)).toBe(MAX_SHOWN)
+  })
+
+  it('never asks for nothing, whatever the address says', () => {
+    expect(shownCount(0)).toBe(PER_PAGE)
+    expect(shownCount(-4)).toBe(PER_PAGE)
+    expect(shownCount(2.7)).toBe(PER_PAGE * 2)
   })
 })
 

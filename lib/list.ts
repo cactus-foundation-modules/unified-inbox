@@ -620,6 +620,28 @@ export function pageCount(total: number, perPage: number = PER_PAGE): number {
   return Math.ceil(total / perPage)
 }
 
+/** The most rows a growing list will ever hold at once.
+ *
+ *  The conversation list does not turn pages. Pressing "Show more" puts the
+ *  next twenty-five UNDER the ones already there, because a list of post is
+ *  read in runs - "everything since Tuesday" is four rows on this page and
+ *  three on the next one, and a page turn that throws away what was picked in
+ *  the middle of choosing is the reason people give up and do it one at a time.
+ *
+ *  It stops somewhere, though. The address in the bar carries how much to show,
+ *  so a hand-typed or shared ?page=100000 would otherwise ask the database for
+ *  two and a half million conversations and hand the browser the lot. Twenty
+ *  presses is far past what anybody does on purpose, and the foot of the list
+ *  says what to do instead when it is reached. */
+export const MAX_SHOWN = PER_PAGE * 20
+
+/** How many rows a growing list should hold, given what the address asks for.
+ *  One page of them to start with, one more page per press, capped. */
+export function shownCount(page: number, perPage: number = PER_PAGE): number {
+  const asked = Math.max(1, Math.floor(page)) * perPage
+  return Math.min(MAX_SHOWN, asked)
+}
+
 const CHANNEL_LABELS: Record<string, string> = {
   email: 'Email',
   chat: 'Live chat',

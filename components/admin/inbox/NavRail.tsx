@@ -533,6 +533,10 @@ export function NavRail({
   // somewhere to send a colleague a link to, and putting it in the query string
   // would make every list below reload to draw three static rows.
   const [opened, setOpened] = useState<string[]>([])
+  /** The one branch the reader has collapsed by hand while standing inside it,
+   *  and where they were standing when they did. Kept apart from `opened`
+   *  because it means the opposite and because it expires: see toggleOpen. */
+  const [shut, setShut] = useState<{ where: string | null; id: string } | null>(null)
   const [error, setError] = useState('')
   // Whether this browser can be nudged at all, which only the browser knows.
   // See the box at the foot of the rail: on a site with no mail account the
@@ -1011,11 +1015,20 @@ export function NavRail({
     }] : []),
   ]
 
-  // Whichever colleague the address bar is already inside, so a link somebody
-  // followed to Sam's Sent arrives with Sam's folders showing rather than with
-  // the row that would explain where they are collapsed. Worked out from the
-  // current entry rather than kept in step with an effect: there is one right
-  // answer and it is already on the screen.
+  // Whichever address the rail is already standing in, so its folders are
+  // showing rather than collapsed behind a twist arrow.
+  //
+  // Two ways to be standing in one. Inside a FOLDER of it - a link somebody
+  // followed to Sam's Sent - which would otherwise arrive with the row that
+  // explains where they are hidden. And on the ADDRESS itself, which is the
+  // ordinary way anybody gets there: pressing a shared or a team inbox is the
+  // intent to look at that address, and everything that has left sales@ is
+  // readable in exactly one place - the Sent folder hanging under it. That took
+  // a second press on an arrow that only appears once the pointer is on the
+  // row, which is a folder most people never found at all.
+  //
+  // Worked out from the current entry rather than kept in step with an effect:
+  // there is one right answer and it is already on the screen.
   const currentFolderInbox = (() => {
     if (!current) return null
     for (const folder of ['sent', 'drafts', 'mentions', 'spam']) {
@@ -1023,10 +1036,28 @@ export function NavRail({
     }
     return null
   })()
-  const isOpened = (id: string) => opened.includes(id) || currentFolderInbox === id
-  const toggleOpen = (id: string) => setOpened((showing) => (
-    showing.includes(id) ? showing.filter((i) => i !== id) : [...showing, id]
-  ))
+  const standingIn = (id: string) => currentFolderInbox === id || current === id
+  const isOpened = (id: string) => (
+    shut?.where === current && shut.id === id
+      ? false
+      : opened.includes(id) || standingIn(id)
+  )
+  /** The arrow, which has to work on every row - including the one the rail is
+   *  standing in, whose folders are open because of where the reader is rather
+   *  than because they pressed anything. So a press that shuts THAT one is
+   *  remembered against the entry it was made on, and is forgotten the moment
+   *  the reader goes somewhere else: arriving at an address is a fresh intent
+   *  to look at it, and a collapse made twenty minutes ago in a different
+   *  folder is not an answer to it. */
+  const toggleOpen = (id: string) => {
+    if (isOpened(id)) {
+      setShut({ where: current, id })
+      setOpened((showing) => showing.filter((i) => i !== id))
+      return
+    }
+    setShut(null)
+    setOpened((showing) => (showing.includes(id) ? showing : [...showing, id]))
+  }
 
   // The channels another module owns, in whatever order the site has put them
   // in. Keyed by the channel's own key rather than by an inbox id: a channel

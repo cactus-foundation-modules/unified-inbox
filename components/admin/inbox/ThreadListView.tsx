@@ -14,7 +14,7 @@ import {
   formatWhen,
   inboxHref,
   initialsFor,
-  pageCount,
+  MAX_SHOWN,
   participantLabel,
   PER_PAGE,
 } from '@/modules/unified-inbox/lib/list'
@@ -24,6 +24,7 @@ import { Avatar } from './Avatar'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Dropdown } from './Dropdown'
 import { SnoozePanel } from './SnoozePanel'
+import { useOfferUndo } from './UndoProvider'
 
 // The list of conversations. Every state it can be in - filtered to nothing,
 // searched for something that is not there, an inbox that has never collected
@@ -133,7 +134,7 @@ export function ThreadListView({
   neverSynced, spam, spamOwnerName, canManage, canBlock, searching, now, timezone,
 }: Props) {
   const router = useRouter()
-  const pages = pageCount(total, PER_PAGE)
+  const offerUndo = useOfferUndo()
   const [selected, setSelected] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -237,6 +238,20 @@ export function ThreadListView({
     setSelected([])
   }, [])
 
+  /** Whether the conversation open beside the list is one of the picked ones.
+   *  Asked before a run rather than after it: the bar empties itself on the way
+   *  out, and by then nothing is picked. */
+  const openIsPicked = useCallback(
+    () => !!openThreadId && picked.includes(openThreadId),
+    [openThreadId, picked],
+  )
+
+  /** Back to the list with nothing open on it. */
+  const closePane = useCallback(
+    () => router.push(inboxHref(base, params, { id: null })),
+    [base, params, router],
+  )
+
   /** One row on or off, and the point any later run is measured from.
    *
    *  The first row picked while a conversation is open beside the list picks
@@ -332,10 +347,14 @@ export function ThreadListView({
    *  single-conversation SpamButton holds its own leaving. */
   const runOnPicked = useCallback(async (
     send: (id: string) => Promise<Response>,
-    { refresh = true }: { refresh?: boolean } = {},
+    { refresh = true, closes = false }: { refresh?: boolean; closes?: boolean } = {},
   ): Promise<boolean> => {
     if (picked.length === 0) return false
     const count = picked.length
+    // Whether the conversation open beside the list is one of the ones about to
+    // change. Asked BEFORE the run, because the answer decides where the reader
+    // ends up and `picked` is emptied on the way out.
+    const openWasPicked = closes && refresh && !!openThreadId && picked.includes(openThreadId)
     setBusy(true)
     setError('')
     try {
@@ -349,12 +368,61 @@ export function ThreadListView({
           : `${failed} of ${count} could not be changed. The rest were.`)
       }
       clearPicked()
-      if (refresh) router.refresh()
+      // A pile that has just been filed, put to sleep or binned has left the
+      // list, and the conversation open beside it may have been in the pile - in
+      // which case the pane is showing something the list no longer holds. It
+      // goes back to "Nothing open", exactly as it does when the same thing is
+      // done to that one conversation from its own header.
+      if (openWasPicked) closePane()
+      else if (refresh) router.refresh()
       return failed < count
     } finally {
       setBusy(false)
     }
-  }, [picked, router, clearPicked])
+  }, [closePane, picked, openThreadId, router, clearPicked])
+
+  /** Where the picked conversations stand RIGHT NOW, as the changes that would
+   *  put each of them back there.
+   *
+   *  Worked out at the moment of the press rather than when Undo is taken: by
+   *  then the list has been redrawn and the rows are in their new state, so
+   *  asking then would offer to put six conversations back to done when done is
+   *  what the press had just made them. One change per conversation rather than
+   *  one for the pile, because a pile picked off an All list is rarely all in
+   *  the same state - and a snooze needs the date it was due back or the API
+   *  refuses it. */
+  const whereTheyStood = useCallback(() => pickedRows.map((row) => ({
+    id: row.id,
+    to: row.status === 'snoozed' && row.snoozeUntil
+      ? { status: 'snoozed', snoozeUntil: row.snoozeUntil.toISOString() }
+      : { status: row.status === 'done' ? 'done' : 'open' },
+  })), [pickedRows])
+
+  /** Put them all back, from a bar that has emptied itself and a list that has
+   *  been redrawn since. Bare requests, and settled rather than raced: one
+   *  conversation that will not go back is no reason to abandon the other five.
+   *  The redraw afterwards belongs to the provider - see UndoProvider. */
+  const putBack = useCallback((back: Array<{ id: string; to: Record<string, unknown> }>) => async () => {
+    await Promise.allSettled(back.map(({ id, to }) => fetch(`/api/m/unified-inbox/threads/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(to),
+    })))
+  }, [])
+
+  /** The same thing for the bin, which is a different door: junk is one
+   *  person's opinion and is written through its own route rather than through
+   *  the conversation's status. */
+  const takeOutOfSpam = useCallback((ids: string[]) => async () => {
+    await Promise.allSettled(ids.map((id) => fetch(`/api/m/unified-inbox/threads/${id}/spam`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ spam: false }),
+    })))
+  }, [])
+
+  /** "1 conversation", "6 conversations", for the sentence on the toast. */
+  const them = useCallback((n: number) => (n === 1 ? 'conversation' : 'conversations'), [])
 
   const applyToPicked = useCallback((body: Record<string, unknown>) => runOnPicked((id) =>
     fetch(`/api/m/unified-inbox/threads/${id}`, {
@@ -364,6 +432,25 @@ export function ThreadListView({
     })
   ), [runOnPicked])
 
+  /** The three presses that take the pile OFF the list somebody is looking at:
+   *  filing it, waking it, putting it to sleep. All three shut the pane if what
+   *  was open was in the pile, and all three offer the five seconds in which
+   *  the press was still a mistake.
+   *
+   *  Marking read and unread are not among them on purpose. Neither one moves a
+   *  conversation anywhere, both undo themselves with the button sitting next to
+   *  them, and a toast after every press on a bar is a toast people learn to
+   *  ignore before they need one. */
+  const closePicked = useCallback(async (body: Record<string, unknown>, said: string) => {
+    const back = whereTheyStood()
+    if (!(await runOnPicked((id) => fetch(`/api/m/unified-inbox/threads/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }), { closes: true }))) return
+    offerUndo({ message: said, undo: putBack(back) })
+  }, [offerUndo, putBack, runOnPicked, whereTheyStood])
+
   /** The whole picked pile into the bin. Sent by three different presses now -
    *  the button itself where there is nothing to ask, and both of the answers
    *  that are not Cancel - so it lives here rather than three times over. */
@@ -372,7 +459,7 @@ export function ThreadListView({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ spam: true }),
-    }), opts), [runOnPicked])
+    }), { ...opts, closes: true }), [runOnPicked])
 
   /** Two decisions, kept apart exactly as they are on a single conversation (see
    *  SpamButton, which explains why at length). Moving the pile is one person's
@@ -392,10 +479,15 @@ export function ThreadListView({
 
   /** The middle answer: junk the pile and leave the front door alone. Also the
    *  only answer on a question with nobody to block in it. */
-  const movePickedOnly = useCallback(() => {
+  const movePickedOnly = useCallback(async () => {
+    const ids = [...picked]
     setBlocking(null)
-    void spamPicked()
-  }, [spamPicked])
+    if (!(await spamPicked())) return
+    offerUndo({
+      message: `${ids.length} ${them(ids.length)} moved to spam.`,
+      undo: takeOutOfSpam(ids),
+    })
+  }, [offerUndo, picked, spamPicked, takeOutOfSpam, them])
 
   /** The yes: move them, then shut the door on all of them. One request per
    *  address rather than a list, for the same reason as the move, and settled
@@ -404,13 +496,20 @@ export function ThreadListView({
   const moveAndBlockAll = useCallback(async () => {
     const addresses = blocking ?? []
     if (addresses.length === 0) return
+    const ids = [...picked]
+    // Where the reader ends up, decided before the run empties the bar.
+    const wasOpen = openIsPicked()
     // No redraw while the dialog is still up: it pulls this whole panel through
     // a fresh server render and takes the dialog with it (see runOnPicked).
+    // Which is also why the pane is not shut here - the navigation would do the
+    // same thing to the dialog. It happens at the end, with the redraw.
     const moved = await spamPicked({ refresh: false })
     // Nothing moved, so there is nothing to shut a door behind. The run has
     // already said so on the screen.
     if (!moved) { setBlocking(null); router.refresh(); return }
     setBusy(true)
+    // Whether the door actually shut, so the toast says the true sentence.
+    let blocked = false
     try {
       const results = await Promise.allSettled(addresses.map((address) =>
         fetch('/api/m/unified-inbox/blocked-senders', {
@@ -429,14 +528,30 @@ export function ThreadListView({
         // worked is worth knowing about either way.
         setError((previous) => [previous, message].filter(Boolean).join(' '))
       }
+      blocked = failed < addresses.length
     } finally {
       setBusy(false)
       setBlocking(null)
-      // The redraw the move itself was not allowed to do, now that the dialog
-      // it would have swept away is on its way out.
-      router.refresh()
+      // The five seconds, and then the redraw the move itself was not allowed
+      // to do - now that the dialog either would have swept away is going.
+      //
+      // Undo brings the conversations back out of the bin and stops there. The
+      // senders stay turned away, and the toast says so: this list is
+      // deliberately never told which of them were blocked ALREADY (see
+      // `blockable`), so an undo that reopened every door would quietly let
+      // people back in who were turned away weeks ago. Letting somebody back in
+      // is done where blocking is done - the Spam folder, and the inbox
+      // settings.
+      offerUndo({
+        message: blocked
+          ? `${ids.length} ${them(ids.length)} moved to spam. The senders stay blocked.`
+          : `${ids.length} ${them(ids.length)} moved to spam.`,
+        undo: takeOutOfSpam(ids),
+      })
+      if (wasOpen) closePane()
+      else router.refresh()
     }
-  }, [blocking, router, spamPicked])
+  }, [blocking, closePane, offerUndo, openIsPicked, picked, router, spamPicked, takeOutOfSpam, them])
 
   /** What merging the picked rows would do, worked out before anybody is asked
    *  to agree to it: which conversation the rest fold into, and whether doing it
@@ -541,7 +656,10 @@ export function ThreadListView({
               no button at all. */}
           {offer.done && (
             <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                    onClick={() => void applyToPicked({ status: 'done' })}>
+                    onClick={() => void closePicked(
+                      { status: 'done' },
+                      `${picked.length} ${them(picked.length)} marked as done.`,
+                    )}>
               Mark as done
             </button>
           )}
@@ -559,7 +677,10 @@ export function ThreadListView({
           )}
           {offer.open && (
             <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                    onClick={() => void applyToPicked({ status: 'open' })}>
+                    onClick={() => void closePicked(
+                      { status: 'open' },
+                      `${picked.length} ${them(picked.length)} opened again.`,
+                    )}>
               Open again
             </button>
           )}
@@ -590,10 +711,10 @@ export function ThreadListView({
               timezone={timezone}
               busy={busy}
               title={picked.length === 1 ? 'Snooze this one' : `Snooze these ${picked.length}`}
-              onSnooze={(until) => void applyToPicked({
-                status: 'snoozed',
-                snoozeUntil: until.toISOString(),
-              })}
+              onSnooze={(until) => void closePicked(
+                { status: 'snoozed', snoozeUntil: until.toISOString() },
+                `${picked.length} ${them(picked.length)} snoozed.`,
+              )}
             />
           </Dropdown>
           {/* Not in the Spam folder, where everything on the screen is already
@@ -762,19 +883,34 @@ export function ThreadListView({
         })}
       </ul>
 
-      {pages > 1 && (
+      {/* The foot of a list that grows rather than turning pages. Pressing this
+          fetches the same list one helping longer, so the rows already read
+          stay where they were and anything picked among them stays picked - a
+          page turn threw both away halfway through choosing, which is what put
+          people back to doing it one at a time.
+
+          The conversation open beside the list is carried through as well.
+          Turning a page closed it, because the row it belonged to was about to
+          leave the screen; nothing leaves the screen now.
+
+          Nothing at all where everything is already showing, and a sentence
+          rather than a button at the ceiling - see MAX_SHOWN. A list that long
+          is a list to search rather than to scroll. */}
+      {rows.length < total && (
         <div className="uin-pager">
-          {page > 1 ? (
-            <Link className="btn btn-secondary btn-sm" href={inboxHref(base, params, { page: String(page - 1), id: null })}>
-              Newer
+          <span>Showing {rows.length} of {total}</span>
+          {rows.length < MAX_SHOWN ? (
+            /* scroll={false} because the point of this button is that nothing
+               moves: the router's own "go to the top on navigation" would send
+               a reader who has just asked for more back to the first row, which
+               is the page turn this replaced wearing a different hat. */
+            <Link className="btn btn-secondary btn-sm" scroll={false}
+                  href={inboxHref(base, params, { page: String(page + 1) })}>
+              Show {Math.min(PER_PAGE, total - rows.length)} more
             </Link>
-          ) : <span />}
-          <span>Page {page} of {pages}</span>
-          {page < pages ? (
-            <Link className="btn btn-secondary btn-sm" href={inboxHref(base, params, { page: String(page + 1), id: null })}>
-              Older
-            </Link>
-          ) : <span />}
+          ) : (
+            <span>Search, or narrow it down above, to reach the rest.</span>
+          )}
         </div>
       )}
 
