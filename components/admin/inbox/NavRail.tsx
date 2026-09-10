@@ -934,8 +934,11 @@ export function NavRail({
   //
   // Drafts is here too, and it is THEIRS - the replies Sam started on Sam's own
   // address and has not sent. It reads, and it does not write: opening one shows
-  // the words, and nothing on the screen will finish it or send it, because a
-  // draft still belongs to whoever wrote it (see canEditDraft in lib/drafts.ts).
+  // the words, and nothing on the screen will finish it, because a draft still
+  // belongs to whoever wrote it (see canEditDraft in lib/drafts.ts). Somebody
+  // who may send from Sam's address can send one out for him exactly as it
+  // stands, which is the way out of a finished quote waiting on a fortnight's
+  // leave.
   //
   // Reading somebody's unfinished writing is a real thing to hand over, and the
   // gate is the address itself: an individual inbox is only ever visible to its

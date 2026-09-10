@@ -3699,9 +3699,9 @@ export async function wakeDueMentions(): Promise<number> {
 // Drafts.
 //
 // A draft belongs to whoever wrote it, and to nobody else. Reading one, opening
-// one, changing one, discarding one and sending one are all the same single
-// question: is this yours. Sharing the address it is filed on grants none of
-// them - a shared inbox shares what has been SENT and what has ARRIVED, and
+// one, changing one and discarding one are all the same single question: is
+// this yours. Sharing the address it is filed on grants none of them - a shared
+// inbox shares what has been SENT and what has ARRIVED, and
 // half-written text is not either of those. Somebody typing a price they have
 // not checked, or an apology they have not decided to make, is entitled to the
 // same privacy the same words get in every mail program written since the
@@ -3714,10 +3714,15 @@ export async function wakeDueMentions(): Promise<number> {
 // colleague was ever asked to make.
 //
 // The price is the case that widening it was for: a draft whose author is on
-// leave cannot be finished by anybody else, and one whose author is an agent
+// leave cannot be FINISHED by anybody else, and one whose author is an agent
 // waits for that agent. That is the same price every other mail program pays,
 // and the way out of it is to send the message rather than to read somebody's
-// unfinished sentence.
+// unfinished sentence - which is now a button rather than a figure of speech.
+// A draft sitting on somebody's OWN address may be sent, exactly as it stands,
+// by a colleague let into that address with the right to send from it. Nothing
+// widens here to allow it: the same scope fetches the same rows, and what
+// changed is that one narrow thing may be DONE with what comes back. See
+// canSendDraftForOwner in lib/drafts.ts and app/api/drafts/[id]/send.
 //
 // The pure statement of the rule, with the tests, is canReadDraft/canEditDraft
 // in lib/drafts.ts - change one and change the other.
@@ -3877,9 +3882,10 @@ export async function listScheduledDrafts(
  *  Individual addresses only. A shared address has no owner, so there is nobody
  *  whose drafts these could be, and the rail offers no folder there either.
  *
- *  Reading is as far as it goes - see canEditDraft, which still answers "only
- *  the author". This number, and the list it stands over, are the whole of what
- *  a coverer may do with them.
+ *  Changing one is as far as it does NOT go - see canEditDraft, which still
+ *  answers "only the author". A coverer may read these and, where they may send
+ *  from the address, post one out untouched; finishing somebody's sentence is
+ *  the thing that stays theirs.
  *
  *  One grouped query rather than one call per address: the rail is drawn on
  *  every list this hub renders, and a site with nine colleagues on it would
@@ -4154,9 +4160,11 @@ export async function getDraft(id: string, userId: string): Promise<Draft | null
  *  refused - and a draft the colleague left on some OTHER address is not in
  *  this folder and does not come back from it.
  *
- *  Nothing here may be changed or sent. That is canEditDraft's answer, and it is
- *  still "only the author" - see getDraft above, which is what every writing
- *  screen uses and which is scoped to whoever is holding the pen.
+ *  Nothing here may be CHANGED. That is canEditDraft's answer, and it is still
+ *  "only the author" - see getDraft above, which is what every writing screen
+ *  uses and which is scoped to whoever is holding the pen. Sending one out
+ *  untouched is a narrower right with a different answer, and the route that
+ *  does it asks canSendDraftForOwner as well as fetching through here.
  */
 export async function getDraftInInbox(
   id: string,

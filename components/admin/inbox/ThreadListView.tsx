@@ -19,9 +19,11 @@ import {
   PER_PAGE,
 } from '@/modules/unified-inbox/lib/list'
 import { pickWinner, widenedAccessWarning } from '@/modules/unified-inbox/lib/thread-merge'
-import { ChatIcon, FormIcon, InboundIcon, NoteIcon, PaperclipIcon, PhoneIcon, ReplyIcon, TickIcon } from './icons'
+import { ChatIcon, ChevronDownIcon, FormIcon, InboundIcon, NoteIcon, PaperclipIcon, PhoneIcon, ReplyIcon, TickIcon } from './icons'
 import { Avatar } from './Avatar'
 import { ConfirmDialog } from './ConfirmDialog'
+import { Dropdown } from './Dropdown'
+import { SnoozePanel } from './SnoozePanel'
 
 // The list of conversations. Every state it can be in - filtered to nothing,
 // searched for something that is not there, an inbox that has never collected
@@ -561,6 +563,39 @@ export function ThreadListView({
               Open again
             </button>
           )}
+          {/* The one button in this bar that asks a question rather than doing a
+              thing, so it is a menu rather than a press: "when" has no sensible
+              default and a bar button that put six conversations to sleep until
+              some hour nobody chose would be worse than no button.
+
+              The same panel the clock on a single conversation opens, which is
+              deliberate - one vocabulary for one idea, and the times underneath
+              each answer are the SITE's, worked out once when the menu opens.
+
+              Offered whatever is picked, including a pile that is already
+              asleep: unlike Mark as read, choosing a new time for something that
+              already has one is a real change rather than writing down what was
+              already written. Bringing them back is not in here - "Open again"
+              beside it already does that for the whole pile. */}
+          <Dropdown
+            className="btn btn-secondary btn-sm uin-status-btn"
+            label={<>Snooze{ChevronDownIcon}</>}
+            ariaLabel="Set when these come back"
+            align="start"
+            width={280}
+            disabled={busy}
+            panelClassName="uin-menu-snooze"
+          >
+            <SnoozePanel
+              timezone={timezone}
+              busy={busy}
+              title={picked.length === 1 ? 'Snooze this one' : `Snooze these ${picked.length}`}
+              onSnooze={(until) => void applyToPicked({
+                status: 'snoozed',
+                snoozeUntil: until.toISOString(),
+              })}
+            />
+          </Dropdown>
           {/* Not in the Spam folder, where everything on the screen is already
               in the bin and the button would be an offer to do it again. */}
           {!spam && (

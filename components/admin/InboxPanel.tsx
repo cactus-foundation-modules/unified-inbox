@@ -65,6 +65,7 @@ import {
   type AttachmentRow,
   type MentionStatusFilter,
 } from '@/modules/unified-inbox/lib/db'
+import { countRunningCampaigns } from '@/modules/unified-inbox/lib/campaigns/store'
 import { isSmsAvailable } from '@/lib/sms/send'
 import { callerNumbers, firstDialler } from '@/lib/dialler/registry'
 import { siteDiallingCode } from '@/lib/phone.server'
@@ -94,6 +95,7 @@ import { InboxStyles } from './inbox/styles'
 import { InboxIcon } from './inbox/icons'
 import { NavRail } from './inbox/NavRail'
 import { CampaignsPanel } from './inbox/campaigns/CampaignsPanel'
+import { CampaignPulse } from './inbox/campaigns/CampaignPulse'
 import { StatusTabs } from './inbox/StatusTabs'
 import { SearchBar } from './inbox/SearchBar'
 import { Filters } from './inbox/Filters'
@@ -171,6 +173,7 @@ export async function UnifiedInboxPanel({
     draftTallies,
     connections,
     peopleTally,
+    runningCampaigns,
   ] = await Promise.all([
     hasPermission(user, 'unifiedinbox.view'),
     hasPermission(user, 'unifiedinbox.manage'),
@@ -243,6 +246,9 @@ export async function UnifiedInboxPanel({
     // Both counts in one query - one of them rides on the hub's own tab row, so
     // it is asked for on every render either way and there is no sense in two.
     peopleCount(),
+    // Only whether anything is running at all, so the campaign clock is mounted
+    // on a site that has a campaign on the go and left off every other one.
+    countRunningCampaigns(),
     // Anything whose snooze has elapsed is open again by the time the list is
     // drawn. Doing it here rather than on a tick means a conversation is back
     // the moment somebody looks, which is the only moment it matters. The same
@@ -1344,10 +1350,12 @@ export async function UnifiedInboxPanel({
 
   // ---- a colleague's draft, opened to be read -----------------------------
   //
-  // Only ever reached from the Drafts folder under somebody's name, and only
-  // ever read: the row links here with `?draft=` and nothing else, so the
-  // composing branch below is not entered and there is no writing box on the
-  // screen to be refused afterwards.
+  // Only ever reached from the Drafts folder under somebody's name, and never
+  // opened to be WRITTEN in: the row links here with `?draft=` and nothing
+  // else, so the composing branch below is not entered and there is no writing
+  // box on the screen to be refused afterwards. What the pane does offer, to
+  // somebody who may send from that address, is a button that posts it exactly
+  // as it stands - see canSendDraftForOwner in lib/drafts.ts.
   //
   // Both halves of the question go to the database (E17): whose draft, and
   // which address it is filed on. `folderInbox` has already been resolved
@@ -1363,6 +1371,13 @@ export async function UnifiedInboxPanel({
         draft={reading}
         ownerName={folderOwnerName ?? folderInbox.name}
         inboxName={folderInbox.name}
+        inboxId={folderInbox.id}
+        // Whether they may send it out for its author, which is exactly whether
+        // they may send from that address at all (D16) - the same list the
+        // compose button is built from. Reading somebody's post is not sending
+        // as them, so a coverer let in to read and no more gets the read-only
+        // sentence they always got.
+        canSend={sendableIds.includes(folderInbox.id)}
         now={new Date()}
         timezone={timezone}
       />
@@ -1586,7 +1601,16 @@ export async function UnifiedInboxPanel({
   // The rail, built once and used by both shapes this screen takes: the
   // ordinary reading layout, and campaigns, which is one full-width column
   // rather than a list beside a conversation.
+  //
+  // The campaign clock rides with it. It renders nothing and its only job is to
+  // keep a running campaign moving at the pace it was set to rather than the
+  // pace of the site's scheduled round - so it belongs on every inbox screen,
+  // not on the one screen nobody has any reason to sit and watch. Mounted only
+  // where there is something for it to do: somebody allowed to send campaigns,
+  // and a campaign actually running.
   const rail = (
+    <>
+      {canCampaign && runningCampaigns > 0 && <CampaignPulse />}
     <NavRail
       base={base}
       params={carried}
@@ -1646,6 +1670,7 @@ export async function UnifiedInboxPanel({
       lastCheckedAt={lastCheckedAt}
       timezone={timezone}
     />
+    </>
   )
 
   // Campaigns, laid out the way the post is: every campaign down the middle

@@ -1,50 +1,31 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { campaignApi } from './api'
+import { CAMPAIGN_TICK_EVENT, type CampaignTickDetail } from './CampaignPulse'
 
-// The clock, while somebody has the screen open.
+// What the clock has just done, said out loud on the screen that cares.
 //
-// A campaign's pace is the pace of whatever asks it to send the next one, and
-// on most hosting the site's own scheduled round comes past once an hour. That
-// is the right answer for a chase due on Thursday and useless for one message
-// every ninety seconds - so while this tab is open and in front of somebody,
-// this asks every half minute.
-//
-// It is safe to ask as often as it likes. The gap between messages lives in the
-// database on the sending address's own lane, and a tick that arrives before
-// the moment has come sends nothing at all - so this cannot make a campaign go
-// faster than it was set to, only stop it going slower.
-//
-// It stops when the tab goes to the background, because a laptop lid closing
-// should not leave a page quietly poking the server for a fortnight, and
-// because a browser throttles the timer to death anyway.
-
-const EVERY_MS = 30_000
+// The clock itself is CampaignPulse, which rides with the rail on every inbox
+// screen - so a campaign moves while somebody reads their post, not only while
+// somebody watches the Campaigns list. This used to keep its own timer as well,
+// which on this one screen meant two ticks where one would do; it now listens
+// to the one that is already running and reloads the list when something has
+// actually gone out.
 
 export function CampaignTicker({ onTick }: { onTick: () => void }) {
   const [last, setLast] = useState<{ sent: number; failed: number } | null>(null)
 
   useEffect(() => {
-    let stopped = false
-
-    const tick = async () => {
-      if (stopped || document.visibilityState !== 'visible') return
-      const result = await campaignApi.tick()
-      if (stopped || !result.ok) return
-      if (result.data.sent > 0 || result.data.failed > 0 || result.data.replied > 0) {
-        setLast({ sent: result.data.sent, failed: result.data.failed })
-        onTick()
-      }
+    const onCampaignTick = (event: Event) => {
+      const detail = (event as CustomEvent<CampaignTickDetail>).detail
+      if (!detail) return
+      setLast({ sent: detail.sent, failed: detail.failed })
+      onTick()
     }
-
-    // Once straight away, so opening the screen on a campaign that is due does
-    // not sit there for half a minute doing nothing.
-    void tick()
-    const timer = setInterval(() => { void tick() }, EVERY_MS)
-    return () => { stopped = true; clearInterval(timer) }
+    window.addEventListener(CAMPAIGN_TICK_EVENT, onCampaignTick)
+    return () => window.removeEventListener(CAMPAIGN_TICK_EVENT, onCampaignTick)
     // The loader handed in is a useCallback with no changing dependencies, so
-    // this sets the timer up once rather than tearing it down on every render.
+    // this subscribes once rather than tearing down on every render.
   }, [onTick])
 
   if (!last) return null

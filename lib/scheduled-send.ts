@@ -8,11 +8,10 @@ import {
   threadSleep,
 } from './db'
 import { canUserOpenThread, canUserReplyToInbox, userCanReply } from './access'
+import { draftSendingInboxId, postDraft } from './draft-send'
 import { draftBodyText } from './drafts'
 import { applyFollowUpAfterSend } from './follow-up'
-import { plainTextToHtml, STALE_CLAIM_MS } from './scheduled'
-import { sendMessage } from './send'
-import { sendProviderReply } from './provider-send'
+import { STALE_CLAIM_MS } from './scheduled'
 import type { Draft } from './types'
 
 // ---------------------------------------------------------------------------
@@ -34,6 +33,11 @@ import type { Draft } from './types'
 //   past it; and the idempotency key handed to the send route is derived from
 //   the draft's own id, so even two claims that somehow both ran would land on
 //   one message.
+//
+// HOW a draft becomes a message is not here: that is postDraft in
+// lib/draft-send.ts, shared with the colleague who presses Send on one by hand.
+// What is here is the half that road cannot borrow - whether it may still go at
+// all, asked of the person who WROTE it rather than of anybody standing there.
 //
 // Budget rather than a queue: this runs inside the site's cron dispatcher,
 // which gives any one job a slice and then moves on. Whatever is not sent this
@@ -122,7 +126,7 @@ export async function runDueScheduledSends(options?: {
 
 async function sendOneScheduled(
   draft: Draft,
-): Promise<{ ok: true; threadId: string | null } | { ok: false; reason: string }> {
+): Promise<{ ok: true; threadId: string } | { ok: false; reason: string }> {
   if (!draftBodyText(draft).trim()) {
     return { ok: false, reason: 'There was nothing written in it by the time it was due.' }
   }
@@ -132,90 +136,44 @@ async function sendOneScheduled(
     return { ok: false, reason: 'The conversation it answered is no longer here.' }
   }
 
-  // A conversation another module owns - a chat, an enquiry, a text. It goes
-  // back out the way it came in, and its rights are that module's own.
+  // ---- may it still go, this minute --------------------------------------
+  //
+  // Everything below this comment and above the post is the half that is NOT
+  // shared with a colleague pressing Send by hand: this road answers for the
+  // person who wrote it, and that one answers for the person standing there.
   if (thread?.providerModule) {
-    if (draft.mode === 'forward' || draft.mode === 'new') {
-      return { ok: false, reason: 'This kind of conversation can be replied to, but not forwarded.' }
-    }
     // Both halves, as everywhere else this module answers a channel: the
     // channel's own permission, and the right to answer anything at all.
     if (!await canUserOpenThread(draft.authorUserId, thread) || !await userCanReply(draft.authorUserId)) {
       return { ok: false, reason: 'Whoever wrote it can no longer answer this conversation.' }
     }
-    const result = await sendProviderReply({
-      threadId: thread.id,
-      // A body written in the box is markup with the catalogue slotted into it,
-      // and what survives of the markup is the channel's own answer - so it
-      // goes over as it stands and is rendered there. One written before the
-      // box could hold any is words already and has nothing to render.
-      body: draft.bodyFormat === 'html'
-        ? { html: draft.body }
-        : { text: draftBodyText(draft) },
-      authorUserId: draft.authorUserId,
-      authorName: null,
-      products: draft.products,
-    })
-    return result.ok ? { ok: true, threadId: thread.id } : { ok: false, reason: result.reason }
-  }
-
-  const inboxId = draft.inboxId ?? thread?.inboxId ?? null
-  if (!inboxId) {
-    return {
-      ok: false,
-      reason: 'There is no address left to send it from, so it stayed here.',
+  } else {
+    const inboxId = draftSendingInboxId(draft, thread)
+    if (!inboxId) {
+      return {
+        ok: false,
+        reason: 'There is no address left to send it from, so it stayed here.',
+      }
     }
-  }
-  // The rights that matter are the ones held now, not the ones held when the
-  // time was set.
-  if (!await canUserReplyToInbox(draft.authorUserId, inboxId)) {
-    return {
-      ok: false,
-      reason: 'Whoever wrote it can no longer send from that address, so it stayed here.',
+    // The rights that matter are the ones held now, not the ones held when the
+    // time was set.
+    if (!await canUserReplyToInbox(draft.authorUserId, inboxId)) {
+      return {
+        ok: false,
+        reason: 'Whoever wrote it can no longer send from that address, so it stayed here.',
+      }
     }
-  }
-  if (thread && !await canUserOpenThread(draft.authorUserId, thread)) {
-    return {
-      ok: false,
-      reason: 'Whoever wrote it can no longer open that conversation, so it stayed here.',
+    if (thread && !await canUserOpenThread(draft.authorUserId, thread)) {
+      return {
+        ok: false,
+        reason: 'Whoever wrote it can no longer open that conversation, so it stayed here.',
+      }
     }
   }
 
-  const result = await sendMessage({
-    threadId: draft.threadId ?? undefined,
-    inboxId,
-    // Whichever message it was written against, so a reply set for Monday
-    // quotes the message somebody answered rather than whatever arrived over
-    // the weekend. Null is the newest, which is what it always did.
-    inReplyToMessageId: draft.inReplyToMessageId ?? undefined,
-    mode: draft.mode,
-    to: draft.to.length > 0 ? draft.to : undefined,
-    cc: draft.cc.length > 0 ? draft.cc : undefined,
-    bcc: draft.bcc.length > 0 ? draft.bcc : undefined,
-    subject: draft.subject ?? undefined,
-    // Stored as it was typed, which is what makes the box give back what went
-    // into it. A body written in the new box already IS markup and goes as it
-    // stands; one written before the box could hold any is escaped here, at the
-    // last moment, the same way the composer used to do it.
-    bodyHtml: draft.bodyFormat === 'html' ? draft.body : plainTextToHtml(draft.body),
-    attachments: draft.attachments.map((file) => ({
-      key: file.key,
-      url: file.url,
-      filename: file.filename,
-      contentType: file.contentType,
-    })),
-    // Read fresh as it goes out, which is the whole reason a draft stores
-    // references rather than prices: a quotation set for Monday morning quotes
-    // Monday morning's catalogue.
-    products: draft.products,
-    includeOriginalAttachments: draft.mode === 'forward',
+  return postDraft(draft, thread, {
+    sentByUserId: draft.authorUserId,
     // The draft's own id, so a claim that somehow ran twice sends one message.
     idempotencyKey: `scheduled-${draft.id}`,
-    authorUserId: draft.authorUserId,
   })
-
-  // The conversation the message landed on, which for one starting a new
-  // conversation did not exist until a moment ago - and is exactly the one a
-  // follow-up has to be set on.
-  return result.ok ? { ok: true, threadId: result.threadId } : { ok: false, reason: result.reason }
 }

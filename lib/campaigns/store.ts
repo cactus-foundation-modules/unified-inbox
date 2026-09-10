@@ -600,6 +600,19 @@ export async function sendingDayNumber(campaignId: string, timezone: string): Pr
 
 // ---- the queue ------------------------------------------------------------
 
+/**
+ * How many campaigns are running at all. Asked by the inbox before it mounts
+ * the clock that keeps them moving: a site with nothing running should not have
+ * every open inbox tab poking the server every half minute for ever, and this
+ * is one count rather than the whole list.
+ */
+export async function countRunningCampaigns(): Promise<number> {
+  const rows = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(*)::bigint AS count FROM "uin_campaigns" WHERE "status" = 'running'
+  `
+  return Number(rows[0]?.count ?? 0)
+}
+
 export async function listRunnableCampaigns(now: Date): Promise<Campaign[]> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     ${CAMPAIGN_SELECT}

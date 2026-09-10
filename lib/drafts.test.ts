@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   canEditDraft,
   canReadDraft,
+  canSendDraftForOwner,
   draftHref,
   draftBodyText,
   draftPreview,
@@ -199,5 +200,42 @@ describe('canEditDraft', () => {
     // leave waiting for them, which is the price every mail program pays.
     expect(canEditDraft(filed, 'chris')).toBe(false)
     expect(canEditDraft(loose, 'chris')).toBe(false)
+  })
+})
+
+describe('canSendDraftForOwner', () => {
+  const sams = { id: 'sam-inbox', kind: 'individual' as const, ownerUserId: 'sam' }
+  const shared = { id: 'accounts', kind: 'shared' as const, ownerUserId: null }
+  const samsDraft = { authorUserId: 'sam', inboxId: 'sam-inbox' }
+
+  it("lets somebody who may send from Sam's address post Sam's draft for him", () => {
+    // The whole feature: a finished quote sitting on the address of somebody on
+    // leave, and a colleague already reading every word of it.
+    expect(canSendDraftForOwner(samsDraft, sams, true)).toBe(true)
+  })
+
+  it('refuses somebody who may only READ the address', () => {
+    // Reading somebody's post is not posting as them (D16), and this is the
+    // send half of that same grant rather than a new one.
+    expect(canSendDraftForOwner(samsDraft, sams, false)).toBe(false)
+  })
+
+  it('refuses a draft filed on a different address', () => {
+    expect(canSendDraftForOwner({ authorUserId: 'sam', inboxId: 'accounts' }, sams, true)).toBe(false)
+  })
+
+  it('refuses a draft that is not the owner of that address', () => {
+    // Somebody else's writing that happens to sit here is not Sam's draft, and
+    // the folder under Sam's name is not a way to reach it.
+    expect(canSendDraftForOwner({ authorUserId: 'marcus', inboxId: 'sam-inbox' }, sams, true)).toBe(false)
+  })
+
+  it('refuses a shared address, which has no owner to send on behalf of', () => {
+    expect(canSendDraftForOwner({ authorUserId: 'marcus', inboxId: 'accounts' }, shared, true)).toBe(false)
+  })
+
+  it("refuses an individual address whose owner's account has gone", () => {
+    const nobodys = { id: 'sam-inbox', kind: 'individual' as const, ownerUserId: null }
+    expect(canSendDraftForOwner(samsDraft, nobodys, true)).toBe(false)
   })
 })

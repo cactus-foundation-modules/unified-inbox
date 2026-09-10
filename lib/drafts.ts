@@ -1,6 +1,6 @@
 import { inboxHref } from './list'
 import type {
-  Draft, DraftAttachment, DraftBodyFormat, DraftProduct, DraftSendState,
+  Draft, DraftAttachment, DraftBodyFormat, DraftProduct, DraftSendState, InboxKind,
 } from './types'
 
 // ---------------------------------------------------------------------------
@@ -227,8 +227,8 @@ export function forComposer(draft: Draft): DraftForComposer {
 // Who may see a draft, and who may change one.
 //
 // One question, one answer: a draft belongs to whoever wrote it. Reading it,
-// opening it, changing it, discarding it and sending it are all "is this
-// yours", and sharing the address it is filed on grants none of them.
+// opening it, changing it and discarding it are all "is this yours", and
+// sharing the address it is filed on grants none of them.
 //
 // A shared inbox shares what has been sent and what has arrived. Half-written
 // text is neither. Somebody typing a price they have not checked yet, or an
@@ -236,6 +236,15 @@ export function forComposer(draft: Draft): DraftForComposer {
 // every other mail program - which is what migrations/013_drafts.sql set out to
 // build, and what this is back to after a spell of letting colleagues read and
 // finish each other's.
+//
+// SENDING is the one exception, and it is a narrow one: a draft sitting on
+// somebody's OWN address may be sent out, exactly as it stands, by a colleague
+// who has been let into that address with the right to send from it. Nothing is
+// read that they could not already read - an individual inbox's Drafts folder
+// is theirs to open or it is not - and nothing is changed, which is the point.
+// It is the way out of the one case the privacy rule costs: an unsent quote
+// sitting finished on the address of somebody who is on leave. See
+// canSendDraftForOwner.
 //
 // The SQL twin is `draftScope` in lib/db.ts, which is the one that actually
 // keeps anybody out - if you change one, change the other, and the tests below
@@ -250,14 +259,56 @@ export function canReadDraft(
   return draft.authorUserId === userId
 }
 
-/** Whether this person may change, discard or send this draft. The same
- *  question as reading it: a draft nobody else may see is a draft nobody else
- *  may finish. Kept as its own name because the two are separate ideas that
- *  happen to have one answer, and the screens read better saying which they
- *  mean. */
+/** Whether this person may change or discard this draft. The same question as
+ *  reading it: a draft nobody else may see is a draft nobody else may finish.
+ *  Kept as its own name because the two are separate ideas that happen to have
+ *  one answer, and the screens read better saying which they mean.
+ *
+ *  Sending is no longer part of this - see canSendDraftForOwner below, which is
+ *  a narrower right with a different answer. */
 export function canEditDraft(
   draft: { authorUserId: string },
   userId: string,
 ): boolean {
   return draft.authorUserId === userId
+}
+
+/**
+ * Whether this person may send somebody else's draft out for them, untouched.
+ *
+ * The one thing a coverer may DO with a colleague's half-written reply, and it
+ * is deliberately not "finish it". Sending it as it stands is a decision about
+ * a message that already exists, taken by somebody who can read every word of
+ * it before they take it; editing it would be putting words in somebody's mouth
+ * on an address that signs as them. So the button sends, and there is still no
+ * writing box - which is the whole difference between this and canEditDraft.
+ *
+ * The rule, in full:
+ *
+ *   It is somebody's OWN address - an individual inbox with an owner. A shared
+ *   address has no owner, so there is nobody whose draft this could be sent on
+ *   behalf of, and the rail offers no folder there either.
+ *
+ *   The draft is the owner's, and it is filed on that address. Both halves,
+ *   because either on its own is a different draft: somebody else's writing
+ *   that happens to sit here, or the owner's writing that lives somewhere this
+ *   reader was never let into.
+ *
+ *   And the reader may send FROM that address, which is `mayReplyFromInbox` -
+ *   the answer canReplyToInbox already gives. Being able to read somebody's
+ *   post is not being able to post as them (D16), and this is the send half of
+ *   that same grant rather than a new one.
+ *
+ * `mayReplyFromInbox` is handed in rather than worked out, so this stays a pure
+ * statement of the rule with the database question answered by the caller.
+ */
+export function canSendDraftForOwner(
+  draft: { authorUserId: string; inboxId: string | null },
+  inbox: { id: string; kind: InboxKind; ownerUserId: string | null },
+  mayReplyFromInbox: boolean,
+): boolean {
+  if (!mayReplyFromInbox) return false
+  if (inbox.kind !== 'individual' || !inbox.ownerUserId) return false
+  if (draft.inboxId !== inbox.id) return false
+  return draft.authorUserId === inbox.ownerUserId
 }

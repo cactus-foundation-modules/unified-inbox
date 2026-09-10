@@ -186,6 +186,15 @@ export const DraftBody = z.object({
   snoozeUntil: z.string().datetime().nullable().optional(),
 })
 
+/** Sending a colleague's draft out for them, from the Drafts folder under their
+ *  name. The address it is filed on comes over rather than being worked out from
+ *  the draft, so BOTH halves of the question - whose draft, and which address -
+ *  are answered against what the screen was actually looking at, the same way
+ *  the read-only view fetched it (E17). */
+export const SendDraftForBody = z.object({
+  inboxId: z.string().min(1),
+})
+
 /** What the reading screen posts when somebody works through a conversation.
  *  Every field is optional and any combination is legal, because "mark it done
  *  and hand it to Marcus" is one press of one button. */

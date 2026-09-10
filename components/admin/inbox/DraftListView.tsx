@@ -23,9 +23,10 @@ import { PaperclipIcon, PenIcon } from './icons'
 // it. What changes is where a row goes when it is pressed, and that follows
 // from what may be done with it: your own opens the writing box it was left in,
 // theirs opens a read-only view of it beside the list (see DraftReadView). A
-// draft may still only be finished or sent by its author - see canEditDraft in
+// draft may still only be FINISHED by its author - see canEditDraft in
 // lib/drafts.ts - so a colleague's row deliberately does NOT go to a composer
-// that would then refuse to save.
+// that would then refuse to save. What that view offers instead, to somebody
+// who may send from the address, is a button that posts it as it stands.
 //
 // It takes the list pane's place rather than sitting somewhere else on the
 // screen, because it answers the same question the conversation list answers -

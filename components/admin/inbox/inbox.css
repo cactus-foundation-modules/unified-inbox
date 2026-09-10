@@ -1561,14 +1561,31 @@
 .uin-draft-read-fields dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--color-text); }
 .uin-draft-read-body { flex: 1 1 auto; min-height: 0; }
 .uin-draft-read-nothing { margin: 0; color: var(--color-text-secondary); font-size: 0.875rem; }
-/* Why there is no Send. Quiet, and at the foot rather than the head: somebody
-   came here to read the words, not to be told what they cannot do with them. */
-.uin-draft-read-note {
-  margin: 0;
+/* What may be done with it, at the foot rather than the head: somebody came
+   here to read the words first. One rule over the whole foot rather than over
+   the sentence alone, so the sentence and the button it explains sit inside one
+   block instead of looking like two unrelated afterthoughts. */
+.uin-draft-read-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
   padding-top: 0.75rem;
   border-top: 1px solid var(--color-border);
+}
+.uin-draft-read-note {
+  margin: 0;
   font-size: 0.8125rem;
   color: var(--color-text-secondary);
+}
+/* The button, and whatever the server said if it would not go. Wrapping,
+   because a refusal is a whole sentence and a narrow pane is where somebody
+   covering a colleague's post will be reading it. */
+.uin-draft-read-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
 }
 /* Nothing open. Said in the middle of the pane rather than at the top of it:
    it is the state of the whole half, not a note about the first inch of it. */

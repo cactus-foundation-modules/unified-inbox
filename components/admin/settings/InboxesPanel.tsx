@@ -470,9 +470,33 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
           />
         </FieldGroup>
 
+        {/* Whose signature actually goes out is not the same question on the two
+            kinds of address, and saying "whoever sends it" on both was simply
+            wrong on a shared one - see chooseSignatureSource in lib/signature.ts.
+            An address that is somebody's own signs as them outright. A shared
+            address is the fallback: it signs for anybody who has not been given
+            an address of their own, and it is what a campaign sent from here
+            uses whoever set the campaign up. Both of those are worth knowing
+            BEFORE somebody spends ten minutes in the builder and then cannot
+            find their handiwork at the foot of a reply. */}
         <FieldGroup
           title="Signature"
-          hint="Goes below a dividing line at the foot of every reply sent from this address, whoever sends it. Leave it empty and replies go out without one."
+          hint={draft.kind === 'individual' ? (
+            <>
+              Goes below a dividing line at the foot of every reply sent from this address, whoever
+              sends it: a reply leaving here is from whoever it belongs to and signs as them. Leave
+              it empty and replies go out without one.
+            </>
+          ) : (
+            <>
+              Goes below a dividing line at the foot of replies sent from this address by anybody who
+              has not been given an address of their own - it signs as the department rather than as
+              a person. Anybody who <em>has</em> been given one signs with theirs wherever they send
+              from, so on a team where everybody has an address of their own this is what campaigns
+              sent from here use, and the fallback for anybody left without. Leave it empty and
+              replies go out without one.
+            </>
+          )}
         >
           <SignatureEditor draft={draft} setDraft={setDraft} />
         </FieldGroup>
