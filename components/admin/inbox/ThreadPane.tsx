@@ -84,6 +84,11 @@ type Props = {
   canAddProducts: boolean
   /** What the draft was carrying out of it, already looked up on the server. */
   draftProducts: ProductChoice[]
+  /** Whether anything installed on this site can draft a reply, so the writing
+   *  box knows whether to offer the button. Resolved once for the whole screen
+   *  rather than per conversation - see core's
+   *  lib/conversations/reply-suggestions.ts. */
+  canSuggestReplies: boolean
   /** Newest message at the top, with the writing box above the messages to
    *  match. A site setting, not a per-reader one. */
   newestFirst: boolean
@@ -655,7 +660,7 @@ export function ThreadPane({
   base, params, thread, inboxName, messages, events, staff, taggable, staffById,
   canReply, cannotReplyReason, style, destinationLine,
   replyTo, replyAllTo, replySubject, forwardSubject, draft,
-  canAddProducts, draftProducts, newestFirst,
+  canAddProducts, draftProducts, canSuggestReplies, newestFirst,
   canDeleteMessages, blockState, spamState, binState, now, timezone, heldDrafts, showAvatars,
   context, asked, merges, otherInboxNames, scrollToMessageId,
 }: Props) {
@@ -883,6 +888,7 @@ export function ThreadPane({
             canAddProducts={canAddProducts && productsTravel(thread.channel)}
             draftProducts={draftProducts}
             quotedPreviews={quotedPreviews}
+            canSuggestReplies={canSuggestReplies}
             timezone={timezone}
           />
         )}
@@ -945,6 +951,7 @@ export function ThreadPane({
             canAddProducts={canAddProducts && productsTravel(thread.channel)}
             draftProducts={draftProducts}
             quotedPreviews={quotedPreviews}
+            canSuggestReplies={canSuggestReplies}
             timezone={timezone}
           />
         )}

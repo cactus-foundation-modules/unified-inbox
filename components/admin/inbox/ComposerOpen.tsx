@@ -40,6 +40,8 @@ type SlotProps = {
   /** Every message on the conversation that a reply could quote, described
    *  well enough for the box to show the one it is quoting. */
   quotedPreviews: QuotedPreview[]
+  /** Whether anything installed on this site can draft a reply. */
+  canSuggestReplies: boolean
   timezone: string
 }
 

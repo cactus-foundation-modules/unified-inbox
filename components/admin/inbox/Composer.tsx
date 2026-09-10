@@ -27,6 +27,7 @@ import { SendLaterPanel } from './SendLaterPanel'
 import { SnoozePanel } from './SnoozePanel'
 import { AlarmIcon, CloseIcon, CollapseIcon, ExpandIcon, PaperclipIcon, TagIcon } from './icons'
 import { useComposerOpen } from './composer-open'
+import { ReplySuggestions } from '@/components/admin/ReplySuggestions'
 import type { DraftSendState } from '@/modules/unified-inbox/lib/types'
 import type { ReplyStyle } from '@/modules/unified-inbox/lib/channel-reply'
 import { appendSlots, refKey, slotHtml, slotRefs } from '@/modules/unified-inbox/lib/products/slots'
@@ -120,13 +121,18 @@ type Props = {
   /** Every message on the conversation a reply could quote. The box shows the
    *  one it is actually quoting, folded away - see lib/quoted-preview.ts. */
   quotedPreviews: QuotedPreview[]
+  /** Whether anything installed on this site can draft a reply. Decided on the
+   *  server - see core's lib/conversations/reply-suggestions.ts - so a site with
+   *  no such module never draws the button rather than drawing one that answers
+   *  409 the first time it is pressed. */
+  canSuggestReplies: boolean
   timezone: string
 }
 
 export function Composer({
   threadId, inboxId, replyTo, replyAllTo, canReply, canForward, style, destinationLine, staff,
   cannotReplyReason, replySubject, forwardSubject, draft, canAddProducts, draftProducts,
-  requestedMode, requestedAt, requestedReplyToId, quotedPreviews, timezone,
+  requestedMode, requestedAt, requestedReplyToId, quotedPreviews, canSuggestReplies, timezone,
 }: Props) {
   const router = useRouter()
   const { close: closeComposer } = useComposerOpen()
@@ -477,6 +483,52 @@ export function Composer({
   const clearOnceAnswered = useCallback((answered: string) => {
     setError((shown) => (shown === answered ? '' : shown))
   }, [])
+
+  // ---- suggested replies -------------------------------------------------
+  // Offered on a reply and on a reply to everybody, and on nothing else: a
+  // forward is a covering note to a colleague and a note is not sent to anybody
+  // at all, so neither is a thing to draft an answer to a customer for.
+  const offerSuggestions = canSuggestReplies && (mode === 'reply' || mode === 'reply-all')
+
+  /** What was in the box before a suggestion was tried in it. Stashed on the
+   *  FIRST preview and not on any after it, so flicking between three drafts
+   *  still puts back what somebody actually wrote rather than the draft they
+   *  looked at before this one. */
+  const beforeSuggestion = useRef<string | null>(null)
+
+  // A preview left in the box when the panel goes - somebody switched to a
+  // forward, or to a note - keeps the words, which is what anybody would
+  // expect. What it must NOT keep is the stash: the next preview would take it
+  // for "what was here before" and put a five-minute-old draft back.
+  useEffect(() => {
+    if (!offerSuggestions) beforeSuggestion.current = null
+  }, [offerSuggestions])
+
+  /** Show a draft in the box, or put back what was there. Nothing is marked
+   *  dirty on the way: looking at a suggestion and taking it back out again has
+   *  changed nothing, and a draft saved of a suggestion nobody kept would be a
+   *  draft nobody wrote. */
+  const previewSuggestion = useCallback((draft: string | null) => {
+    if (draft === null) {
+      if (beforeSuggestion.current !== null) setText(beforeSuggestion.current)
+      beforeSuggestion.current = null
+      return
+    }
+    if (beforeSuggestion.current === null) beforeSuggestion.current = text
+    setText(plainTextToHtml(draft))
+  }, [text])
+
+  /** Keep one. From here it is the message, and it is treated exactly as
+   *  though it had been typed - saved with the draft, and it takes down the
+   *  "there is nothing to send" complaint the same way a keystroke does. */
+  const acceptSuggestion = useCallback((draft: string) => {
+    beforeSuggestion.current = null
+    const html = plainTextToHtml(draft)
+    setText(html)
+    setDirty(true)
+    setNote('')
+    if (htmlHasWriting(html)) clearOnceAnswered(NOTHING_TO_SEND)
+  }, [clearOnceAnswered])
 
   const submit = useCallback(async (): Promise<boolean> => {
     if (!htmlHasWriting(text)) {
@@ -1086,6 +1138,21 @@ export function Composer({
       <div className="uin-compose-message">
         <RichTextBox />
       </div>
+
+      {/* Under the words, where it belongs: it is about what goes in the box,
+          not about how the message leaves, so it stays off the strip along the
+          bottom where everything that sends things lives. Drawn only where
+          something on this site can actually write one - see the prop. */}
+      {offerSuggestions && (
+        <div className="uin-composer-row">
+          <ReplySuggestions
+            endpoint={`/api/m/unified-inbox/threads/${threadId}/suggest-reply`}
+            disabled={busy}
+            onPreview={previewSuggestion}
+            onAccept={acceptSuggestion}
+          />
+        </div>
+      )}
 
       {/* What goes out underneath the words, and until now the box said nothing
           whatever about it. The quotation itself is built when the message is

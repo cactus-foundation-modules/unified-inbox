@@ -14,6 +14,9 @@ const insertProviderMessage = vi.hoisted(() => vi.fn())
 const claimLocalOutbound = vi.hoisted(() => vi.fn())
 const recountProviderThread = vi.hoisted(() => vi.fn())
 const providerWatermarks = vi.hoisted(() => vi.fn())
+// Nothing has been thrown away unless a test says so. Mocked rather than left
+// to reach the database for blockedSenderSet's reason: this suite has none.
+const providerDeletionFloors = vi.hoisted(() => vi.fn(async (): Promise<Map<string, Date>> => new Map()))
 const allConversationProviders = vi.hoisted(() => vi.fn())
 // Already open by default, so the ordinary case writes no timeline entry. The
 // tests that care about reopening say so themselves.
@@ -32,6 +35,7 @@ vi.mock('./db', () => ({
   claimLocalOutbound,
   recountProviderThread,
   providerWatermarks,
+  providerDeletionFloors,
   reopenOnReply,
   recordEvent,
   markProviderContentRead,
@@ -91,6 +95,7 @@ beforeEach(() => {
   claimLocalOutbound.mockReset().mockResolvedValue(false)
   recountProviderThread.mockReset().mockResolvedValue(undefined)
   providerWatermarks.mockReset().mockResolvedValue({})
+  providerDeletionFloors.mockReset().mockResolvedValue(new Map())
   reopenOnReply.mockReset().mockResolvedValue(null)
   recordEvent.mockReset().mockResolvedValue(undefined)
   markProviderContentRead.mockReset().mockResolvedValue(undefined)
@@ -377,6 +382,66 @@ describe('syncProvider', () => {
     )
     expect(outcome).toMatchObject({ ok: true, conversations: 2, messages: 1 })
   })
+
+  it('does not bring back a conversation somebody has thrown away', async () => {
+    // The whole reason migration 053 exists. The owning module is the source of
+    // truth, never hears about a deletion made in this hub, and offers the
+    // conversation again on the very next pass - so emptying a bin used to undo
+    // itself within the quarter-hour.
+    const thread = vi.fn().mockResolvedValue({ summary: summary(), messages: [message()] })
+    providerDeletionFloors.mockResolvedValue(new Map([['c1', new Date('2026-08-28T10:00:00Z')]]))
+
+    const outcome = await syncProvider(
+      resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }),
+    )
+
+    // Not opened either: asking the owning module for the messages is the
+    // expensive half and there is nothing here worth paying for.
+    expect(thread).not.toHaveBeenCalled()
+    expect(upsertProviderThread).not.toHaveBeenCalled()
+    expect(outcome.conversations).toBe(0)
+    expect(outcome.ok).toBe(true)
+  })
+
+  it('lets a thrown-away conversation back when the party writes again, with the new words only', async () => {
+    // The far end never closed this conversation, so somebody can carry on
+    // typing into a chat this site has stopped listening to. That failure is
+    // worse than a conversation reappearing, and invisible from in here. What
+    // must NOT come back is the history that was destroyed.
+    const later = new Date('2026-08-29T09:00:00Z')
+    providerDeletionFloors.mockResolvedValue(new Map([['c1', new Date('2026-08-28T10:00:00Z')]]))
+    const thread = vi.fn().mockResolvedValue({
+      summary: summary({ lastMessageAt: later }),
+      messages: [
+        message({ id: 'old', text: 'thrown away' }),
+        message({ id: 'new', text: 'still there?', sentAt: later }),
+      ],
+    })
+
+    const outcome = await syncProvider(
+      resolved({ list: vi.fn().mockResolvedValue({ items: [summary({ lastMessageAt: later })] }), thread }),
+    )
+
+    expect(insertProviderMessage).toHaveBeenCalledTimes(1)
+    expect(insertProviderMessage.mock.calls[0]![0].providerMessageId).toBe('new')
+    expect(outcome.messages).toBe(1)
+  })
+
+  it('keeps the line under a conversation destroyed at the same second as its newest message', async () => {
+    // At the line is below it. A conversation whose newest message is exactly
+    // the one that was there when somebody emptied their bin has had nothing
+    // happen on it, and an off-by-one here would bring every deleted
+    // conversation on the site straight back.
+    providerDeletionFloors.mockResolvedValue(new Map([['c1', new Date('2026-08-28T10:00:00Z')]]))
+    const outcome = await syncProvider(
+      resolved({
+        list: vi.fn().mockResolvedValue({ items: [summary()] }),
+        thread: vi.fn().mockResolvedValue({ summary: summary(), messages: [message()] }),
+      }),
+    )
+    expect(outcome.conversations).toBe(0)
+  })
+
 })
 
 describe('syncAllProviders', () => {

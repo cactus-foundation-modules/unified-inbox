@@ -56,6 +56,12 @@ import {
 //   7. AND THE DELETE ACTUALLY CASCADES. deleteThreads removes the
 //      conversations and the bin rows pointing at them, so an emptied bin is
 //      empty rather than full of rows pointing at nothing.
+//   8. A DESTROYED CHANNEL CONVERSATION STAYS DESTROYED. A chat, an enquiry, a
+//      call and a text are copies of something the owning module still holds
+//      and will hand over again on request, so destroying one leaves a
+//      gravestone - and the watermark the next collection asks its question
+//      from counts the gravestone, or emptying a bin winds it backwards and
+//      re-lists weeks of settled ground.
 //
 // A real throwaway database on the Postgres VPS, built from the core schema and
 // this module's own migrations. Named `cactus_rt_*` and dropped afterwards; the
@@ -363,6 +369,60 @@ describe.runIf(shouldRun)('the bin, against a real database', () => {
     )
     expect(Number(orphans[0]!.n)).toBe(0)
     expect(await binOf(marcus, marcus)).not.toContain(id)
+  })
+
+  it('leaves a gravestone when it destroys a conversation another module owns', async () => {
+    // Claim 8, and the reason migration 053 exists at all. The owning module is
+    // the source of truth, never hears about a deletion made in this hub, and
+    // offers the conversation again on the very next pass - so without a mark
+    // saying "this was thrown away" the collection copied it straight back in
+    // and emptying a bin undid itself within the quarter-hour.
+    const newest = new Date('2026-09-02T11:00:00Z')
+    const { id } = await lib.upsertProviderThread({
+      providerModule: 'live-chat',
+      externalId: 'chat-7',
+      channel: 'chat',
+      subject: 'Chat with Ada',
+      subjectNormalised: 'chat with ada',
+      preview: 'hello',
+      lastMessageAt: newest,
+      lastDirection: 'in',
+      unread: true,
+      inboxId: team,
+      sourceLabel: null,
+    })
+    // A second, older conversation on the same channel that is NOT deleted, so
+    // the watermark below has somewhere lower to fall back to. Without the
+    // gravestone counting, that is exactly where it would fall.
+    await lib.upsertProviderThread({
+      providerModule: 'live-chat',
+      externalId: 'chat-6',
+      channel: 'chat',
+      subject: 'Chat with Bo',
+      subjectNormalised: 'chat with bo',
+      preview: 'hello',
+      lastMessageAt: new Date('2026-08-02T11:00:00Z'),
+      lastDirection: 'in',
+      unread: false,
+      inboxId: team,
+      sourceLabel: null,
+    })
+
+    await bin.markThreadBinned(id, marcus)
+    expect(await lib.deleteThreads([id])).toBeGreaterThan(0)
+
+    // The line drawn under it is the newest message it held, which is what both
+    // keeps it out and lets a party who writes again through with the new words
+    // only.
+    const floors = await lib.providerDeletionFloors('live-chat', ['chat-7', 'chat-6'])
+    expect(floors.get('chat-7')?.toISOString()).toBe(newest.toISOString())
+    expect(floors.has('chat-6')).toBe(false)
+
+    // And the question the next collection asks has not wound backwards to the
+    // survivor's date. This is the amplifier: it turned one deleted
+    // conversation into a month of re-listed ones.
+    const marks = await lib.providerWatermarks()
+    expect(marks['live-chat']?.toISOString()).toBe(newest.toISOString())
   })
 
 })

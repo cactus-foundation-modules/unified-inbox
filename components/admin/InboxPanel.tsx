@@ -67,6 +67,7 @@ import {
 } from '@/modules/unified-inbox/lib/db'
 import { countRunningCampaigns } from '@/modules/unified-inbox/lib/campaigns/store'
 import { isSmsAvailable } from '@/lib/sms/send'
+import { canSuggestReplies } from '@/lib/conversations/reply-suggestions'
 import { callerNumbers, firstDialler } from '@/lib/dialler/registry'
 import { siteDiallingCode } from '@/lib/phone.server'
 import { attachableKinds, loadContext, loadHints } from '@/modules/unified-inbox/lib/adapters'
@@ -1204,7 +1205,7 @@ export async function UnifiedInboxPanel({
       // the hints and the public links are asked of what comes back here.
       const [
         canReply, blockState, isSpam, isBinned, senderBlocked, ask,
-        links, kindOptions, senderModules, merges, contextQuery,
+        links, kindOptions, senderModules, merges, contextQuery, canSuggest,
       ] = await Promise.all([
         canReplyHere,
         blockStateAsked,
@@ -1224,6 +1225,12 @@ export async function UnifiedInboxPanel({
         // worth building once the conversation has been matched to somebody -
         // a first message from a stranger has nobody to look up.
         thread.personId ? buildContextQuery(thread.personId) : Promise.resolve(null),
+        // Whether anything installed here could draft a reply, so the writing
+        // box knows whether to offer the button. Costs nothing at all on the
+        // overwhelming majority of sites, where no module publishes one - see
+        // core's lib/conversations/reply-suggestions.ts - and there is no point
+        // asking on a conversation this reader may not answer anyway.
+        canReplyHere.then((allowed) => (allowed ? canSuggestReplies() : false)),
       ])
 
       // HOW this one is answered, as against whether it may be. An email is
@@ -1343,6 +1350,7 @@ export async function UnifiedInboxPanel({
           draft={ownDraft ? forComposer(ownDraft) : null}
           canAddProducts={sellsAnything}
           draftProducts={draftProducts}
+          canSuggestReplies={canSuggest}
           newestFirst={settings.newestFirst}
           scrollToMessageId={openOnMessage?.id ?? null}
           showAvatars={settings.showAvatars}

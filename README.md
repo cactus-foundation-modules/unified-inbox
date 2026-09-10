@@ -129,7 +129,12 @@ the same human collapse into one story.
   permission that looks after the site rather than the one that reads it.
   **Nothing is ever deleted from your mail account.** Whatever arrived by email
   is still sitting in the mailbox it arrived in; this only clears what is held
-  here.
+  here. And an emptied bin stays empty: a chat, an enquiry, a call or a text is
+  a copy of something the module that owns it still holds, so what was thrown
+  away is written down as thrown away and the next collection walks past it
+  rather than fetching it back. If the customer writes on that chat again it
+  comes back with what they have just said, and not with the history that was
+  destroyed.
 - **Merging conversations.** One conversation sometimes arrives as two - a
   different address on Thursday, a subject line somebody edited, a colleague
   forwarding it in. Pick them and press Merge, and everything folds into the one
@@ -337,3 +342,9 @@ over the next twelve hours before it is left alone.
 All prefixed `uin_`. Nothing outside this module is altered, and nothing here
 points at another module's tables with a foreign key, so any module can be
 removed without taking the inbox down with it.
+
+`uin_provider_deleted` is the one worth knowing about: one row per conversation
+from another channel that has been destroyed, holding that channel's own id for
+it and the date of the newest message it held. No name, no address and not a
+word anybody wrote, which is what lets it outlive an erasure without keeping the
+thing that was erased.

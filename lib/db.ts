@@ -6186,15 +6186,56 @@ export async function recountProviderThread(threadId: string): Promise<void> {
 /** The newest thing we hold from each provider, which is what the tick asks it
  *  about. One query for every channel on the site rather than one each. */
 export async function providerWatermarks(): Promise<Record<string, Date>> {
+  // The gravestones count towards this, and they have to.
+  //
+  // Read off the conversations still standing alone, the answer WOUND BACKWARDS
+  // the moment somebody emptied a bin: destroy the newest three chats on a
+  // channel and the question turns into "what has happened since last month",
+  // which re-lists weeks of settled ground and copies all of it in again. That
+  // is the amplifier that turned one deleted conversation into a screenful.
+  //
+  // A line drawn over a destroyed conversation is just as much a statement that
+  // we have seen everything up to it, so the two are taken together and the
+  // watermark only ever moves forwards. See migration 053.
   const rows = await prisma.$queryRaw<{ provider_module: string; newest: Date | null }[]>`
-    SELECT "provider_module", MAX("last_message_at") AS "newest"
-      FROM "uin_threads"
-     WHERE "provider_module" IS NOT NULL AND "merged_into_id" IS NULL
+    SELECT "provider_module", MAX("newest") AS "newest"
+      FROM (
+        SELECT "provider_module", MAX("last_message_at") AS "newest"
+          FROM "uin_threads"
+         WHERE "provider_module" IS NOT NULL AND "merged_into_id" IS NULL
+         GROUP BY "provider_module"
+        UNION ALL
+        SELECT "provider_module", MAX("through") AS "newest"
+          FROM "uin_provider_deleted"
+         GROUP BY "provider_module"
+      ) marks
      GROUP BY "provider_module"
   `
   const out: Record<string, Date> = {}
   for (const row of rows) if (row.newest) out[row.provider_module] = row.newest
   return out
+}
+
+/**
+ * The line drawn under each of these conversations when it was destroyed, for
+ * the handful a channel has just offered us.
+ *
+ * Asked per pass rather than read whole, because the table only ever grows and
+ * a channel hands back forty conversations at a time. Absent from the map is
+ * the ordinary case: nobody has thrown this conversation away.
+ */
+export async function providerDeletionFloors(
+  providerModule: string,
+  externalIds: string[],
+): Promise<Map<string, Date>> {
+  if (externalIds.length === 0) return new Map()
+  const rows = await prisma.$queryRaw<{ external_id: string; through: Date }[]>`
+    SELECT "external_id", "through"
+      FROM "uin_provider_deleted"
+     WHERE "provider_module" = ${providerModule}
+       AND "external_id" = ANY(${externalIds}::text[])
+  `
+  return new Map(rows.map((row) => [row.external_id, row.through]))
 }
 
 /** What we already hold of one provider conversation, for deciding whether it
@@ -6456,6 +6497,41 @@ export async function storedObjectsForThreads(threadIds: string[]): Promise<Stor
  *  very mail the owner has just asked us to stop holding. */
 export async function deleteThreads(threadIds: string[]): Promise<number> {
   if (threadIds.length === 0) return 0
+
+  // A gravestone first, for anything that came from another module's channel.
+  //
+  // Email needs none of this: the location ledger keeps its row when the
+  // conversation goes, so the next collection walks past a mailbox it has
+  // already read. A chat, an enquiry, a call and a text are copies of something
+  // the owning module still holds, and without a mark saying "this was thrown
+  // away" the very next collection asked that module what it had and copied the
+  // lot straight back in. Emptying a bin undid itself within the quarter-hour.
+  //
+  // Written HERE rather than in the button, because there are three ways a
+  // conversation is destroyed - somebody emptying their bin, the retention
+  // sweep, and erasing a person under D17 - and all three come through this
+  // function. An erasure that quietly re-collected what it had just erased
+  // would be the worst of the three by a distance.
+  //
+  // Losers of a merge go with the winner and are marked with it: the module's
+  // own id for a conversation stays on the side that lost, so missing them out
+  // would leave exactly the ids a channel is about to offer us unmarked.
+  //
+  // The stamp is the newest message the conversation held, which is the line
+  // that both keeps it out and lets a customer who writes again through with
+  // the new words only. See migration 053.
+  await prisma.$executeRaw`
+    INSERT INTO "uin_provider_deleted" ("provider_module", "external_id", "through")
+    SELECT t."provider_module", t."external_id",
+           COALESCE(t."last_message_at", t."updated_at", CURRENT_TIMESTAMP)
+      FROM "uin_threads" t
+     WHERE (t."id" IN (${Prisma.join(threadIds)}) OR t."merged_into_id" IN (${Prisma.join(threadIds)}))
+       AND t."provider_module" IS NOT NULL
+       AND t."external_id" IS NOT NULL
+    ON CONFLICT ("provider_module", "external_id") DO UPDATE
+       SET "through"    = GREATEST("uin_provider_deleted"."through", EXCLUDED."through"),
+           "deleted_at" = CURRENT_TIMESTAMP
+  `
 
   // Messages a merge moved off these conversations onto another one. They are
   // still these conversations' messages - moving them was a filing decision,

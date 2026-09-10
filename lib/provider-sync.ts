@@ -11,6 +11,7 @@ import {
   insertProviderMessage,
   listInboxes,
   markProviderContentRead,
+  providerDeletionFloors,
   providerThreadState,
   providerWatermarks,
   recordEvent,
@@ -224,6 +225,18 @@ export async function syncProvider(
   // once per account: it is a handful of strings, and this is the hot loop.
   const blocked = await blockedSenderSet()
 
+  // What this site has already thrown away on this channel.
+  //
+  // The owning module is the source of truth and never hears about a deletion
+  // made in here - quite rightly, since emptying a bin on this site is a fact
+  // about this site - so it offers the conversation again on the very next
+  // pass, and without this it was copied straight back in. See migration 053.
+  //
+  // One read for the whole pass, for the ids actually on offer rather than the
+  // table whole: the table only ever grows and a channel hands back forty
+  // conversations at a time.
+  const buried = await providerDeletionFloors(channelKey, summaries.map((summary) => summary.id))
+
   // One read for the whole pass, and only when a channel has actually addressed
   // something: on every site that has never pointed a form at an inbox this
   // costs nothing at all.
@@ -255,6 +268,21 @@ export async function syncProvider(
     // guess.
     const party = partyOf(summary)
     if (party.email && blocked.has(party.email)) continue
+
+    // Thrown away here, and nothing has happened on it since. Not opened, not
+    // filed, not counted - the bin's promise is that deleted stays deleted, and
+    // a collection that quietly undoes it is the module lying to somebody about
+    // their own screen.
+    //
+    // Strictly above the line lets it back, which is deliberate and is the
+    // other half of the same decision: the far end never closed this
+    // conversation, so a customer can carry on typing into a chat this site has
+    // stopped listening to, and that failure is both worse and invisible from
+    // in here. When they do write again the conversation comes back carrying
+    // what they said and NOT the history that was destroyed - see the floor
+    // applied to the messages below.
+    const floor = buried.get(summary.id) ?? null
+    if (floor && lastMessageAt.getTime() <= floor.getTime()) continue
 
     const existing = await providerThreadState(channelKey, summary.id)
     const inboxId = addressedInbox(summary, ourInboxIds)
@@ -316,6 +344,12 @@ export async function syncProvider(
       if (!message || typeof message.id !== 'string' || message.id.trim() === '') continue
       const sentAt = whenOf(message.sentAt)
       if (Number.isNaN(sentAt.getTime())) continue
+      // Below the line somebody drew when they threw this conversation away.
+      // The channel still holds every word of it and hands the lot over on
+      // request; filing them again would undo an emptied bin, and undo a
+      // retention sweep months after it ran, on the first message a customer
+      // happens to send.
+      if (floor && sentAt.getTime() <= floor.getTime()) continue
       const direction = messageDirection(message)
       const text = typeof message.text === 'string' ? message.text : null
 
