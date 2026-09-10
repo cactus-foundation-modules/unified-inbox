@@ -3,7 +3,7 @@
   "version": "0.1.65",
   "tablePrefix": "uin_",
   "description": "Every conversation with every customer and supplier in one place - email, live chat, contact form, calls, texts and WhatsApp - with your own records beside them.",
-  "requiresCoreVersion": "0.5.1559",
+  "requiresCoreVersion": "0.5.1565",
   "migrationCatchups": {
     "041_spam": "none"
   },
@@ -55,6 +55,12 @@
       "id": "unified-inbox",
       "import": "./lib/media-usage-provider",
       "component": "unifiedInboxMediaUsageProvider"
+    },
+    {
+      "point": "core.media-private-storage",
+      "id": "unified-inbox",
+      "import": "./lib/media-private-storage",
+      "component": "unifiedInboxPrivateStorage"
     },
     {
       "point": "core.outbound-email-identity",
