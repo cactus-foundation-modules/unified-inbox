@@ -2816,9 +2816,20 @@ export async function countThreads(f: ThreadListFilters): Promise<number> {
   return Number(rows[0]?.count ?? 0)
 }
 
-/** Unread conversations per inbox, for the numbers on the tabs. Keyed by
- *  inbox id, with the empty string standing for "landed in no inbox". */
-export async function unreadCounts(
+/** OPEN conversations per inbox, for the numbers on the rail. Keyed by inbox
+ *  id, with the empty string standing for "landed in no inbox".
+ *
+ *  Open rather than unread, and the difference is what the number is FOR. Unread
+ *  answered "has anything arrived since I last looked", which is a question the
+ *  rail is asked once a morning and which reads as nothing at all for the rest
+ *  of the day: a conversation somebody opened, thought about and left is work
+ *  outstanding, and the badge went to zero the moment they glanced at it. Open
+ *  is the pile still to deal with, and it is also EXACTLY the list behind the
+ *  number - clicking an address lands on the Open tab, so the rail and the head
+ *  of the list it opens now agree. Snoozed is deliberately not in it: something
+ *  put aside until Thursday has been decided about, and the tab above the list
+ *  says so too. */
+export async function openCounts(
   /** Who is looking. First rather than last so that no existing call site can
    *  keep compiling without saying - the numbers on the rail are one person's
    *  numbers, and junk this person threw away must not go on counting against
@@ -2845,8 +2856,7 @@ export async function unreadCounts(
       LEFT JOIN "uin_thread_inboxes" ti ON ti."thread_id" = t."id"
      WHERE ${visible}
        AND t."merged_into_id" IS NULL
-       AND t."unread" = true
-       AND t."status" <> 'done'
+       AND t."status" = 'open'
        AND NOT ${spamMatch(viewerUserId)}
        ${restrict}
      GROUP BY COALESCE(ti."inbox_id", t."inbox_id", 'm:' || t."provider_module")
@@ -2871,7 +2881,7 @@ export async function unreadCounts(
  * the sum of that tally - so an inflated row in it would make the number beside
  * All larger than the number of conversations there are.
  */
-export async function unreadAssignedElsewhere(
+export async function openAssignedElsewhere(
   viewerUserId: string,
   inboxIds: string[],
   includeUnrouted: boolean,
@@ -2885,8 +2895,7 @@ export async function unreadAssignedElsewhere(
       FROM "uin_threads" t
      WHERE ${visible}
        AND t."merged_into_id" IS NULL
-       AND t."unread" = true
-       AND t."status" <> 'done'
+       AND t."status" = 'open'
        AND t."assignee_user_id" = ${viewerUserId}
        AND NOT ${inboxMatch([ownInboxId])}
        AND NOT ${spamMatch(viewerUserId)}
@@ -3362,10 +3371,10 @@ export type ReopenedFrom = 'snoozed' | 'done' | null
  *
  * Done is the one that matters more, which is not obvious. A snoozed
  * conversation comes back on its own on Thursday. A done one never does, and
- * the unread badge on the address tabs deliberately skips done conversations
- * (see unreadCounts) - so a customer's reply to something we had finished with
- * used to sit at the top of a tab nobody opens, unread, badgeless, indefinitely.
- * That is the failure this exists to prevent.
+ * the badge on the address tabs counts only OPEN conversations (see openCounts)
+ * - so a customer's reply to something we had finished with used to sit at the
+ * top of a tab nobody opens, badgeless, indefinitely. That is the failure this
+ * exists to prevent.
  *
  * Deliberately narrower than wakeDueThreads: one row, named, and only when it
  * is not already open. `AND "status" <> 'open'` is what makes it safe to call on
@@ -3787,6 +3796,13 @@ function mapDraft(r: Record<string, unknown>): Draft {
  *  is what the Drafts folder on its own shows - including the ones with no
  *  address at all, left on a conversation another module owns.
  *
+ *  `userId` is not always whoever is reading. The folder under a colleague's
+ *  name asks this same question about THEM, narrowed to their own address, and
+ *  the caller has already settled that the reader may open it. The rule the
+ *  scope states has not moved: a draft is its author's, and this says which
+ *  author. What may be CHANGED is a separate question with an unchanged answer
+ *  - see canEditDraft.
+ *
  *  Every query that uses this aliases the table `d`, the UPDATE and the DELETE
  *  included, so there is one spelling of the rule rather than two that have to
  *  be kept level with each other. */
@@ -3846,25 +3862,37 @@ export async function listScheduledDrafts(
   return rows.map(mapDraft)
 }
 
-/** How many of this person's are waiting on each address, for the Drafts folder
- *  under a colleague's name - which is only offered where there is something in
- *  it, so the count has to be known before the rail is drawn rather than after
- *  somebody has opened the folder.
+/** How much half-written writing is sitting on each colleague's own address, for
+ *  the Drafts folder under their name on the rail.
  *
- *  Author-scoped like every other draft query, so the number under Sam's name is
- *  this reader's own writing on Sam's address and could never be Sam's own.
+ *  Whose it is, is the whole point: the OWNER's, matched inside the query
+ *  against the address's own `owner_user_id` rather than handed in by the
+ *  caller. The folder under Sam's name holds Sam's unfinished replies, the same
+ *  way the Mentioned and Spam folders beside it hold Sam's. Somebody covering
+ *  Sam's post reads every message in that address already; a reply Sam started
+ *  and did not finish is the one thing they most need to know about before
+ *  writing their own, and its absence is how the same customer gets answered
+ *  twice.
  *
- *  Drafts filed against no address are left out: there is no folder for them to
- *  appear under, and the Drafts tab itself already counts them.
+ *  Individual addresses only. A shared address has no owner, so there is nobody
+ *  whose drafts these could be, and the rail offers no folder there either.
+ *
+ *  Reading is as far as it goes - see canEditDraft, which still answers "only
+ *  the author". This number, and the list it stands over, are the whole of what
+ *  a coverer may do with them.
  *
  *  One grouped query rather than one call per address: the rail is drawn on
  *  every list this hub renders, and a site with nine colleagues on it would
  *  otherwise ask the same question nine times. */
-export async function countDraftsByInbox(userId: string): Promise<Record<string, number>> {
+export async function countDraftsByInboxOwner(): Promise<Record<string, number>> {
   const rows = await prisma.$queryRaw<{ inbox_id: string; count: bigint }[]>`
     SELECT d."inbox_id" AS "inbox_id", COUNT(*)::bigint AS "count"
       FROM "uin_drafts" d
-     WHERE ${draftScope(userId)} AND ${DRAFT_NOT_WAITING} AND d."inbox_id" IS NOT NULL
+      JOIN "uin_inboxes" i
+        ON i."id" = d."inbox_id"
+       AND i."kind" = 'individual'
+       AND i."owner_user_id" = d."author_user_id"
+     WHERE ${DRAFT_NOT_WAITING}
      GROUP BY d."inbox_id"
   `
   const counts: Record<string, number> = {}
@@ -4111,6 +4139,35 @@ export async function getDraft(id: string, userId: string): Promise<Draft | null
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT d.* FROM "uin_drafts" d
      WHERE d."id" = ${id} AND ${draftScope(userId)}
+     LIMIT 1
+  `
+  return rows[0] ? mapDraft(rows[0]) : null
+}
+
+/** One draft off a colleague's own address, for the read-only view beside their
+ *  Drafts folder.
+ *
+ *  Both halves are in the query rather than checked after it (E17): the author
+ *  asked for AND the address it is filed on. The caller resolves that address
+ *  against the ones this reader may open before it gets here, so an id typed
+ *  into the address bar finds nothing at all rather than something to be
+ *  refused - and a draft the colleague left on some OTHER address is not in
+ *  this folder and does not come back from it.
+ *
+ *  Nothing here may be changed or sent. That is canEditDraft's answer, and it is
+ *  still "only the author" - see getDraft above, which is what every writing
+ *  screen uses and which is scoped to whoever is holding the pen.
+ */
+export async function getDraftInInbox(
+  id: string,
+  authorUserId: string,
+  inboxId: string,
+): Promise<Draft | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT d.* FROM "uin_drafts" d
+     WHERE d."id" = ${id}
+       AND d."author_user_id" = ${authorUserId}
+       AND d."inbox_id" = ${inboxId}
      LIMIT 1
   `
   return rows[0] ? mapDraft(rows[0]) : null

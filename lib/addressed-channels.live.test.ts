@@ -268,7 +268,7 @@ describe.runIf(shouldRun)('a channel that addressed its conversations, against a
     await arrive('c1', { inboxId: salesId, sourceLabel: 'Get in touch' })
     await arrive('c2', { inboxId: null, sourceLabel: 'Get in touch' })
 
-    const counts = await queries.unreadCounts(VIEWER, [salesId, accountsId], false, ['contact-form'])
+    const counts = await queries.openCounts(VIEWER, [salesId, accountsId], false, ['contact-form'])
     // Everything filed at sales@ across this suite, the addressed enquiries
     // among them - asked as "more than none" rather than as an exact number,
     // because the tests above deliberately leave rows behind.

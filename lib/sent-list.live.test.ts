@@ -543,16 +543,55 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
       expect(await lib.countDrafts(chris, [chrisInbox, emmaInbox])).toBe(1)
     })
 
-    it('counts them per address, this person\u2019s own only, unfiled ones left out', async () => {
-      // What the rail asks before it decides whether the folder under a
-      // colleague's name exists at all. Chris has one on chris@ and one filed
-      // nowhere: the second has no folder to appear under, so it is not here.
-      // Emma's, on an address Chris may read, is hers and stays out of his.
-      expect(await lib.countDraftsByInbox(chris)).toEqual({ [chrisInbox]: 1 })
-      expect(await lib.countDraftsByInbox(emma)).toEqual({ [emmaInbox]: 1 })
-      // Nobody's drafts, and a GROUP BY that returns no rows at all - the shape
-      // the rail sees on a site where nothing has been half-written.
-      expect(await lib.countDraftsByInbox('user-nobody')).toEqual({})
+    it('counts each colleague\u2019s own on their own address, unfiled ones left out', async () => {
+      // The number beside the Drafts folder under somebody's name on the rail,
+      // and it is THEIRS. Chris has one on chris@ and one filed nowhere: the
+      // second has no folder to appear under, so it is not here. Emma's is on
+      // emma@ and is counted there, under her name, whoever is looking.
+      //
+      // No reader is passed in at all, which is the point: the query matches a
+      // draft's author against its address's own owner, so it cannot be talked
+      // into counting somebody's writing under a colleague's heading.
+      expect(await lib.countDraftsByInboxOwner()).toEqual({
+        [chrisInbox]: 1,
+        [emmaInbox]: 1,
+      })
+    })
+
+    it('leaves a draft written on somebody ELSE\u2019s address out of their number', async () => {
+      // Chris starts something on Emma's address, which he may read and write
+      // from. It is his writing, so it is not in Emma's folder - a folder under
+      // her name holding his half-finished replies would be the wrong answer to
+      // "what has Emma got on the go".
+      const stray = await lib.saveDraft({
+        authorUserId: chris,
+        inboxId: emmaInbox,
+        threadId: null,
+        mode: 'new',
+        to: ['someone@example.com'],
+        cc: [],
+        subject: 'Chris, writing on Emma\u2019s address',
+        body: 'not hers',
+        attachments: [],
+      })
+      try {
+        expect((await lib.countDraftsByInboxOwner())[emmaInbox]).toBe(1)
+      } finally {
+        await lib.deleteDraft(stray.id, chris)
+      }
+    })
+
+    it('hands a colleague\u2019s draft back for the read-only view, address and all', async () => {
+      // What the folder under Emma's name opens. Both halves are in the query:
+      // whose it is, and which address it is filed on.
+      const hers = (await lib.listDrafts(emma)).find((d) => d.inboxId === emmaInbox)!
+      expect((await lib.getDraftInInbox(hers.id, emma, emmaInbox))?.subject)
+        .toBe('Half-written, from Emma')
+      // The right draft, the wrong address: not in that folder, so not from it.
+      expect(await lib.getDraftInInbox(hers.id, emma, chrisInbox)).toBeNull()
+      // The right address, the wrong author. Chris covering Emma's post reads
+      // Emma's drafts; asking for one of his under her name finds nothing.
+      expect(await lib.getDraftInInbox(hers.id, chris, emmaInbox)).toBeNull()
     })
 
     it('lists nothing at all when the list of addresses is empty', async () => {
@@ -615,7 +654,7 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
         'Half-written, from Chris',
       ])
       expect(await lib.countDrafts(chris)).toBe(2)
-      expect(await lib.countDraftsByInbox(chris)).toEqual({ [chrisInbox]: 1 })
+      expect((await lib.countDraftsByInboxOwner())[chrisInbox]).toBe(1)
     })
 
     it('lists them soonest first, this person\u2019s own and nobody else\u2019s', async () => {

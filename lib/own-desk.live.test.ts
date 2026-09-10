@@ -39,7 +39,7 @@ import {
 //      clause is a separate AND, so a conversation in an inbox this reader may
 //      not open stays invisible even when it carries their name. That is E17,
 //      and it is the claim worth running rather than reading.
-//   3. `unreadAssignedElsewhere` counts exactly what the list above shows and
+//   3. `openAssignedElsewhere` counts exactly what the list above shows and
 //      not the rows already under their own address. A number beside an address
 //      that disagrees with the list under it sends somebody hunting for a
 //      message that was never missing.
@@ -259,16 +259,14 @@ describe.runIf(shouldRun)('one person’s own desk, against a real database', ()
   })
 
   it('counts the desk, and counts only what is filed somewhere else', async () => {
-    const count = () => lib.unreadAssignedElsewhere(emma, visible(), false, [], emmaInbox)
+    const count = () => lib.openAssignedElsewhere(emma, visible(), false, [], emmaInbox)
 
-    // One conversation in accounts@ is hers, unread and open. The one on the
-    // board address carries her name and is not hers to see; the ones in her
-    // own address are already under it.
+    // One conversation in accounts@ is hers and open. The one on the board
+    // address carries her name and is not hers to see; the ones in her own
+    // address are already under it.
     expect(await count()).toBe(1)
 
-    // Read it and it stops counting, exactly as it stops counting for the
-    // address it sits in.
-    await lib.setThreadRead('' + (await lib.listThreads({
+    const hers = '' + (await lib.listThreads({
       viewerUserId: emma,
       inboxIds: visible(),
       includeUnrouted: false,
@@ -277,7 +275,19 @@ describe.runIf(shouldRun)('one person’s own desk, against a real database', ()
       status: 'all',
       page: 1,
       perPage: 25,
-    }))[0]!.id, false)
+    }))[0]!.id
+
+    // Reading it does NOT take it off the number, and that is the whole point of
+    // counting open ones rather than unread ones: a job somebody has looked at
+    // and not finished is still a job on their desk. The old count went to
+    // nothing the moment they glanced at it, which made the rail read as an
+    // empty desk all afternoon.
+    await lib.setThreadRead(hers, false)
+    expect(await count()).toBe(1)
+
+    // Finishing it is what takes it off, exactly as it takes it off the address
+    // it sits in.
+    await lib.setThreadStatus(hers, 'done', null)
     expect(await count()).toBe(0)
   })
 

@@ -301,7 +301,7 @@ describe.runIf(shouldRun)('merging conversations, against a real database', () =
     const loser = await conversation({ inboxId: marcusInbox, subject: 'Unread two', sentAt: LATER })
     await lib.mergeThreads(winner, [loser], null)
 
-    const counts = await lib.unreadCounts(viewer, [chrisInbox, marcusInbox], false, [])
+    const counts = await lib.openCounts(viewer, [chrisInbox, marcusInbox], false, [])
     expect(counts[chrisInbox] ?? 0).toBeGreaterThan(0)
     expect(counts[marcusInbox] ?? 0).toBeGreaterThan(0)
   })

@@ -42,10 +42,12 @@ import { ComposeMenu, type ComposeMenuEntry } from './ComposeMenu'
 // sent on its own - which is the question somebody asks of a shared address and
 // cannot ask of their own folder. "Team inboxes" is colleagues' own post this
 // person has been let in to - covering somebody's mail while they are away,
-// working their diary - and each one opens out into that colleague's Sent,
-// Mentioned and bin, plus whatever this reader has left half-written on the
-// address. Then the channels another module owns, then the three screens that
-// are not a list of post at all.
+// working their diary - and each one opens out into that colleague's Drafts,
+// Sent, Mentioned and bin. All four are THEIRS: covering somebody's post means
+// knowing what they have half-answered as well as what they have answered, and
+// not knowing is how the same customer gets written to twice. Then the channels
+// another module owns, then the three screens that are not a list of post at
+// all.
 //
 // The two groups that open out do it the same way, through Branch below: the
 // coloured dot in front of the name IS the arrow, and it becomes one under the
@@ -104,6 +106,11 @@ export type TabInbox = {
    *  there is a person to name. */
   ownerUserId: string | null
   ownerName: string | null
+  /** How many conversations here are still OPEN - not what has arrived unread.
+   *  It is the same number the list behind it shows, because clicking an
+   *  address lands on the Open tab: a badge that emptied itself the moment
+   *  somebody glanced at the list was a badge that said nothing about the work
+   *  left. See openCounts in lib/db.ts. */
   count: number
 }
 export type TabChannel = { key: string; label: string; count: number }
@@ -113,7 +120,7 @@ type Props = {
   params: Record<string, string>
   inboxes: TabInbox[]
   channels: TabChannel[]
-  /** Every unread conversation this person can see, for the All entry. */
+  /** Every open conversation this person can see, for the All entry. */
   allCount: number
   /** Which entry is on: an inbox id, `m:<module>`, 'none', 'drafts', 'scheduled', 'sent',
    *  'contacts', 'campaigns', 'mentions', one of `sent:<inbox id>` /
@@ -147,10 +154,13 @@ type Props = {
    *  the folder does not take the list they are on out of the rail. */
   showDrafts: boolean
   draftCount: number
-  /** How many this reader has left on each address, keyed by inbox id, for the
-   *  Drafts folder under a colleague's name. Absent or zero means no folder -
-   *  same rule as the tab above. Author-scoped in the query behind it, so a
-   *  number here is always this reader's own writing. */
+  /** How much each colleague has left half-written on their OWN address, keyed
+   *  by inbox id, for the Drafts folder under their name. Matched against the
+   *  address's owner in the query behind it, so a number here is never this
+   *  reader's own writing and never somebody else's address's. The folder is
+   *  offered whether or not there is anything in it, the same as the three
+   *  beside it: a folder that appears only once it has something in it is a
+   *  folder people assume ate their message. */
   draftCounts: Record<string, number>
   /** Whether Scheduled is worth offering, on the same terms as Drafts above:
    *  only once there is something waiting in it, and kept while the reader is
@@ -245,7 +255,7 @@ function updatedLabel(at: number | null, timezone: string): string {
  *  read, the quiet one for totals that are simply how many of a thing there
  *  are. Same ceiling on both - two thresholds on one visual chip is one too
  *  many. */
-function Count({ value, word = 'unread', quiet = false }: { value: number; word?: string; quiet?: boolean }) {
+function Count({ value, word = 'open', quiet = false }: { value: number; word?: string; quiet?: boolean }) {
   if (!value) return null
   return (
     <span className={quiet ? 'uin-rail-count uin-rail-count-quiet' : 'uin-rail-count'}>
@@ -825,9 +835,8 @@ export function NavRail({
       count: <Count value={scheduledCount} word="waiting" quiet />,
     }] : []),
     {
-      // No count beside it, unlike the addresses: the counts are of
-      // conversations nobody has read yet, and nothing you sent yourself is
-      // waiting to be read by you.
+      // No count beside it, unlike the addresses: those count conversations
+      // still open, and something you have sent is not a job waiting on you.
       key: 'sent',
       href: link('sent'),
       active: current === 'sent',
@@ -923,24 +932,26 @@ export function NavRail({
   // "has that quote gone out", "what has anybody asked them about". Everything
   // else about the address is still reachable by standing in it.
   //
-  // Drafts is here too, and it is the reader's OWN writing on that address -
-  // a draft belongs to whoever wrote it (see lib/drafts.ts), so a folder under
-  // somebody else's name could hold nothing else. Which is why it is called
-  // "Your drafts" rather than "Drafts": under Sam's name, the short word would
-  // read as Sam's half-written messages, and those are nobody's to see but
-  // Sam's. It is offered only where there is something in it, so an address
-  // this reader has never written from does not carry the row at all.
+  // Drafts is here too, and it is THEIRS - the replies Sam started on Sam's own
+  // address and has not sent. It reads, and it does not write: opening one shows
+  // the words, and nothing on the screen will finish it or send it, because a
+  // draft still belongs to whoever wrote it (see canEditDraft in lib/drafts.ts).
+  //
+  // Reading somebody's unfinished writing is a real thing to hand over, and the
+  // gate is the address itself: an individual inbox is only ever visible to its
+  // owner and to the people deliberately named on it, who are already reading
+  // every message in it. What they could not see was the answer half-written and
+  // waiting, which is exactly what makes the same customer get answered twice.
   //
   // The folders are scoped to THAT address in the query string, so nothing
   // under a colleague's name is ever this reader's own list wearing the
   // colleague's name - the panel resolves the id against the addresses this
   // person may read before it fetches a row (E17).
 
-  /** The folders under one colleague. Mentioned - and the bin - only where there
-   *  is somebody for them to belong to: an address whose owner's account has gone
-   *  belongs to nobody, and a list of what nobody has been asked about is a
-   *  heading over an empty box for ever. Your drafts only where you have left
-   *  one on that address, for the same reason the tab above comes and goes. */
+  /** The folders under one colleague. Drafts, Mentioned and the bin only where
+   *  there is somebody for them to belong to: an address whose owner's account
+   *  has gone belongs to nobody, and a list of what nobody has been asked about,
+   *  or half-written, is a heading over an empty box for ever. */
   /** The one folder an address always has: everything that has left it, whoever
    *  wrote it. Under a colleague's name it answers "has Sam's quote gone out";
    *  under a shared address it is the address's own post, which is the only
@@ -956,16 +967,16 @@ export function NavRail({
   })
 
   const foldersFor = (inbox: TabInbox): RailItem[] => [
-    // First, and above the colleague's own two folders, because it is the one
-    // thing under their name that is yours: the writing you left on their
-    // address, waiting for you to finish it.
-    ...((draftCounts[inbox.id] ?? 0) > 0 || current === `drafts:${inbox.id}` ? [{
+    // Ahead of Sent, because it is the half that has not happened yet: somebody
+    // covering this address wants to know what is already half-answered before
+    // they go and answer it themselves.
+    ...(inbox.ownerUserId ? [{
       key: `${inbox.id}:drafts`,
       href: link(`drafts:${inbox.id}`),
       active: current === `drafts:${inbox.id}`,
       icon: FileIcon,
-      name: 'Your drafts',
-      title: `Messages you have started on ${inbox.address} and not sent`,
+      name: 'Drafts',
+      title: `Messages ${inbox.ownerName ?? 'they'} have started on ${inbox.address} and not sent`,
       count: <Count value={draftCounts[inbox.id] ?? 0} word="saved" quiet />,
     }] : []),
     sentFolderFor(inbox),

@@ -244,7 +244,7 @@ describe.runIf(shouldRun)('a discussion between colleagues, against a real datab
 
     // The tab badges agree with the lists behind them, which is a second query
     // reading the same table a different way.
-    const counts = await lib.unreadCounts(viewer, [emmaBox, samBox, marcusBox, team], false)
+    const counts = await lib.openCounts(viewer, [emmaBox, samBox, marcusBox, team], false)
     expect(counts[samBox]).toBeGreaterThanOrEqual(1)
     expect(counts[marcusBox]).toBeGreaterThanOrEqual(1)
     expect(counts[team] ?? 0).toBe(0)

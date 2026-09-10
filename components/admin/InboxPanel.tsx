@@ -11,7 +11,7 @@ import { canOpenThread, canReplyToInbox, replyableInboxIds, visibleInboxIds } fr
 import {
   attachmentsForThread,
   countDrafts,
-  countDraftsByInbox,
+  countDraftsByInboxOwner,
   countScheduledDrafts,
   categoriesForPeople,
   categoriesForPerson,
@@ -23,6 +23,7 @@ import {
   draftForThread,
   draftsHeldByThread,
   getDraft,
+  getDraftInInbox,
   getPerson,
   getSettings,
   getThreadDetail,
@@ -57,8 +58,8 @@ import {
   statusCounts,
   threadsForPerson,
   undoableMerges,
-  unreadAssignedElsewhere,
-  unreadCounts,
+  openAssignedElsewhere,
+  openCounts,
   wakeDueThreads,
   wakeDueMentions,
   type AttachmentRow,
@@ -100,6 +101,7 @@ import { ThreadListView } from './inbox/ThreadListView'
 import { NavProgress } from './inbox/NavProgress'
 import { MentionListView } from './inbox/MentionListView'
 import { DraftListView } from './inbox/DraftListView'
+import { DraftReadView } from './inbox/DraftReadView'
 import { SentListView } from './inbox/SentListView'
 import { ThreadPane, type ThreadMessageView } from './inbox/ThreadPane'
 import { spamOwnerFor, threadIsSpamFor } from '@/modules/unified-inbox/lib/spam'
@@ -227,18 +229,16 @@ export async function UnifiedInboxPanel({
       where: { permissionKey: { in: ['unifiedinbox.view', 'unifiedinbox.manage'] } },
       select: { roleId: true },
     }),
-    // A draft is its author's and nobody else's, and the query says so rather
-    // than the caller (see lib/db.ts), so neither the list nor the number on the
-    // tab can be talked into counting a colleague's. Null is every one of this
-    // person's, wherever it is filed; a colleague's folder narrows it to the
-    // address that folder names, which is this person's own writing on it. The
-    // list itself is only fetched when that tab is the one open.
+    // The number on this person's OWN Drafts tab: every draft they have written,
+    // wherever it is filed, and nobody else's - the query says whose rather than
+    // the caller (see lib/db.ts). The list itself is only fetched when that tab
+    // is the one open.
     //
-    // The per-address numbers are the same question asked once per colleague, in
-    // one grouped query: the folder under somebody's name is only offered where
-    // this reader has left something on that address, so the rail cannot be drawn
-    // without them.
-    Promise.all([countDrafts(user.id), countDraftsByInbox(user.id), countScheduledDrafts(user.id)]),
+    // The per-address numbers are a different question with a different owner:
+    // how much each COLLEAGUE has left half-written on their own address, for the
+    // Drafts folder under their name (see countDraftsByInboxOwner). One grouped
+    // query, because the rail is drawn on every list this hub renders.
+    Promise.all([countDrafts(user.id), countDraftsByInboxOwner(), countScheduledDrafts(user.id)]),
     listConnections(),
     // Both counts in one query - one of them rides on the hub's own tab row, so
     // it is asked for on every render either way and there is no sense in two.
@@ -391,14 +391,14 @@ export async function UnifiedInboxPanel({
     sendableIds,
     smsAndDialler,
   ] = await Promise.all([
-    unreadCounts(user.id, visibleIds, canManage, channelModules),
+    openCounts(user.id, visibleIds, canManage, channelModules),
     // What has been handed to whoever is reading and is filed somewhere other
     // than their own address. It goes onto their own address's number, because
     // standing in that address is now where they read it - there is no
     // "Assigned to me" screen to go and look at, and having to remember to look
     // at one was the whole complaint.
     pinnedInboxId
-      ? unreadAssignedElsewhere(user.id, visibleIds, canManage, channelModules, pinnedInboxId)
+      ? openAssignedElsewhere(user.id, visibleIds, canManage, channelModules, pinnedInboxId)
       : Promise.resolve(0),
     // What colleagues have asked this person to look at and they have not dealt
     // with yet. One cheap COUNT on every draw, because it rides on the rail; the
@@ -462,7 +462,7 @@ export async function UnifiedInboxPanel({
 
   // Before the desk is added below: All is the sum of the addresses, and a
   // conversation counted twice would make it larger than the list it stands for.
-  const allUnread = Object.values(counts).reduce((a, b) => a + b, 0)
+  const allOpen = Object.values(counts).reduce((a, b) => a + b, 0)
   const [smsReady, dialler] = smsAndDialler
   const sendable = inboxes.filter((i) => sendableIds.includes(i.id))
   const composeHref = sendable.length > 0
@@ -524,8 +524,25 @@ export async function UnifiedInboxPanel({
     ? (folderInbox.ownerUserId ? staffById[folderInbox.ownerUserId] ?? null : null) ?? folderInbox.name
     : null
 
-  const drafts = params.draftsOnly
-    ? await listDrafts(user.id, folderAsked ? folderIds : null)
+  // Whose half-written writing this list holds. The tab under Yours is this
+  // person's own, wherever it is filed. A folder under a colleague's NAME is
+  // theirs, narrowed to their own address - the same shape the Mentioned and
+  // Spam folders beside it already take, and settled here from the address the
+  // rail asked for rather than from anything in the query string (E17).
+  //
+  // "Own" also covers a reader who has hand-typed the folder for their OWN
+  // address. The rail never links there - their own inbox sits under Yours and
+  // opens no folders - but landing on a read-only view of your own half-written
+  // reply would be a screen refusing to let you finish something nobody is
+  // stopping you finishing.
+  //
+  // A null owner is an address with nobody behind it, or one this reader may not
+  // open. That draws an empty folder rather than quietly falling back to their
+  // own drafts under somebody else's name.
+  const draftsAreOwn = !folderAsked || folderOwnerId === user.id
+  const draftOwnerId = draftsAreOwn ? user.id : folderOwnerId
+  const drafts = params.draftsOnly && draftOwnerId
+    ? await listDrafts(draftOwnerId, folderAsked ? folderIds : null)
     : []
   // The other half of the same table: what has a time on it and has not gone
   // yet. Its own folder rather than a tag in the list above, because the two
@@ -1325,6 +1342,39 @@ export async function UnifiedInboxPanel({
     }
   }
 
+  // ---- a colleague's draft, opened to be read -----------------------------
+  //
+  // Only ever reached from the Drafts folder under somebody's name, and only
+  // ever read: the row links here with `?draft=` and nothing else, so the
+  // composing branch below is not entered and there is no writing box on the
+  // screen to be refused afterwards.
+  //
+  // Both halves of the question go to the database (E17): whose draft, and
+  // which address it is filed on. `folderInbox` has already been resolved
+  // against the addresses this reader may open, so an id typed into the address
+  // bar for an address they may not see finds nothing at all.
+  let draftReadPane: React.ReactNode = null
+  if (params.draftsOnly && !draftsAreOwn && params.draftId && folderInbox && folderOwnerId) {
+    const reading = await getDraftInInbox(params.draftId, folderOwnerId, folderInbox.id)
+    draftReadPane = reading ? (
+      <DraftReadView
+        base={base}
+        params={carried}
+        draft={reading}
+        ownerName={folderOwnerName ?? folderInbox.name}
+        inboxName={folderInbox.name}
+        now={new Date()}
+        timezone={timezone}
+      />
+    ) : (
+      <div className="uin-empty">
+        <strong>That draft is not here any more</strong>
+        It has been sent, thrown away, or moved to another address since this list was drawn.{' '}
+        <Link href={inboxHref(base, carried, { draft: null })}>Back to the folder</Link>
+      </div>
+    )
+  }
+
   // ---- writing a brand new one, if the address asks for it ---------------
   let composePane: React.ReactNode = null
   // Said in the reading pane rather than in a dialog of its own. It was a box
@@ -1494,24 +1544,20 @@ export async function UnifiedInboxPanel({
   // post you are looking at, not that it is the sent one.
   const folderPrefix = folderOwnerName ? `${folderOwnerName} \u00b7 ` : ''
   const viewTitle = params.draftsOnly
-    // Never a colleague's NAME in front of this one: drafts are the reader's
-    // own wherever they are read from, and a heading saying otherwise would be
-    // describing somebody else's writing over the top of their own. Which
-    // address they were left on is a different fact and worth saying, because
-    // the folder under a colleague's name is narrowed to that address and
-    // nothing else on the screen says so.
-    ? (folderInbox ? `Drafts \u00b7 ${folderInbox.address}` : 'Drafts')
-    // Nobody's name in front of this one either: a message set to go out
-    // belongs to whoever wrote it, wherever it leaves from.
+    // The colleague's name in front of it when it is theirs, exactly as the
+    // three folders beside it - "Sam Blake · Drafts" - because on this screen
+    // the surprising half is whose unfinished writing you are reading. No name
+    // at all on the tab under Yours, which is your own.
+    ? `${draftsAreOwn ? '' : folderPrefix}Drafts`
+    // Nobody's name in front of this one: a message set to go out belongs to
+    // whoever wrote it, wherever it leaves from, and there is no version of the
+    // folder under somebody else's name to need one.
     : params.scheduledOnly
     ? 'Scheduled'
     : params.sentOnly
       ? `${folderPrefix}Sent`
       : params.contactsOnly
         ? (showingOrganisations ? 'Organisations' : 'Contacts')
-        // No colleague's name in front of this one either, and for the same
-        // reason drafts have none: a spam folder belongs to the person who
-        // filled it, so there is no version of it under somebody else's name.
         : params.spamOnly
           ? `${folderPrefix}Spam`
         : params.mentionsOnly
@@ -1561,7 +1607,7 @@ export async function UnifiedInboxPanel({
         label: c.label,
         count: counts[`m:${c.key}`] ?? 0,
       }))}
-      allCount={allUnread}
+      allCount={allOpen}
       current={currentTab}
       me={{ id: user.id, name: staffById[user.id] ?? 'You' }}
       showAvatars={settings.showAvatars}
@@ -1713,6 +1759,11 @@ export async function UnifiedInboxPanel({
       params={carried}
       drafts={params.scheduledOnly ? scheduled : drafts}
       scheduled={params.scheduledOnly}
+      /* Whose folder this is. Null on this reader's own, where a row opens the
+         writing box it was left in; a colleague's name on theirs, where the
+         rows open a read-only view instead. Never set on Scheduled: there is
+         one of those and it is the reader's own. */
+      ownerName={params.draftsOnly && !draftsAreOwn ? folderOwnerName : null}
       inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
       openThreadId={params.threadId}
       openDraftId={params.draftId}
@@ -1769,7 +1820,7 @@ export async function UnifiedInboxPanel({
   // conversation's own header and body, so they need nothing round them; the
   // bare notices are given their air by .uin-read > .uin-empty in the
   // stylesheet rather than by a wrapper only some of them would want.
-  const otherPane = cannotComposePane ?? importPane ?? organisationPane ?? personPane
+  const otherPane = cannotComposePane ?? draftReadPane ?? importPane ?? organisationPane ?? personPane
   // Whether the right-hand half is showing something, which on a phone is the
   // difference between showing the list and showing what was opened from it.
   const opened = !!otherPane || !!threadPane

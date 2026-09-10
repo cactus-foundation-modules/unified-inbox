@@ -319,7 +319,7 @@ describe.runIf(shouldRun)('junk and blocked senders, against a real database', (
     const id = await threadIn(team, 'Cheap desks 7')
 
     const badge = async (reader: string): Promise<number> =>
-      (await lib.unreadCounts(reader, [team, samBox], false, []))[team] ?? 0
+      (await lib.openCounts(reader, [team, samBox], false, []))[team] ?? 0
     const counted = async (reader: string): Promise<number> => await lib.countThreads({
       viewerUserId: reader,
       inboxIds: [team, samBox],

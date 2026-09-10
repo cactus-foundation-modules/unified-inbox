@@ -1529,6 +1529,47 @@
    contacts" - is a box of its own rather than a page, so it takes its air as a
    margin and stays the height of what it says. */
 .uin-read > .uin-empty { margin: 1rem; align-self: start; }
+
+/* ---- a colleague's draft, read only ------------------------------------- */
+/* The Drafts folder under somebody's name opens one of theirs beside the list.
+   It is shaped like a message rather than like a form on purpose: there is
+   nothing here to fill in, and a writing box nobody may save would be a lie
+   told in furniture. Its own scroller, because a half-written reply to a long
+   thread can still run to a screenful. */
+.uin-draft-read {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem;
+  gap: 0.75rem;
+}
+.uin-draft-read-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.uin-draft-read-subject { margin: 0; font-size: 1.0625rem; line-height: 1.3; color: var(--color-text); }
+.uin-draft-read-who { margin: 0; font-size: 0.8125rem; color: var(--color-text-secondary); }
+/* Two columns where there is room for them, one where there is not - the same
+   bargain the rest of this pane makes at a phone's width. */
+.uin-draft-read-fields { margin: 0.25rem 0 0; display: grid; gap: 0.25rem 1rem; font-size: 0.8125rem; }
+.uin-draft-read-fields > div { display: flex; gap: 0.5rem; min-width: 0; }
+.uin-draft-read-fields dt { flex: 0 0 4.5rem; color: var(--color-text-secondary); }
+.uin-draft-read-fields dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--color-text); }
+.uin-draft-read-body { flex: 1 1 auto; min-height: 0; }
+.uin-draft-read-nothing { margin: 0; color: var(--color-text-secondary); font-size: 0.875rem; }
+/* Why there is no Send. Quiet, and at the foot rather than the head: somebody
+   came here to read the words, not to be told what they cannot do with them. */
+.uin-draft-read-note {
+  margin: 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-border);
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+}
 /* Nothing open. Said in the middle of the pane rather than at the top of it:
    it is the state of the whole half, not a note about the first inch of it. */
 .uin-nothing {

@@ -275,10 +275,10 @@ describe.runIf(shouldRun)('a reply puts a conversation back in Open, against a r
   })
 
   it('counts a reopened conversation on the badge again, which done ones are not', async () => {
-    // unreadCounts skips done conversations on purpose. That is precisely why a
-    // reply to a finished one had to reopen it rather than merely mark it
-    // unread: unread and done is unread and invisible.
-    const badge = async () => (await lib.unreadCounts(VIEWER, [inboxId], false))[inboxId] ?? 0
+    // openCounts counts open conversations and nothing else. That is precisely
+    // why a reply to a finished one had to reopen it rather than merely mark it
+    // unread: done is done, badge or no badge.
+    const badge = async () => (await lib.openCounts(VIEWER, [inboxId], false))[inboxId] ?? 0
 
     // A delta rather than an absolute: the tests above share this database and
     // have left their own reopened conversations lying about in it.

@@ -206,13 +206,15 @@ function calendarDate(raw: string | undefined): string | null {
  *  address somebody can read. Written `sent:<inbox id>` in the query string,
  *  which is what the folders under a colleague's name on the rail point at.
  *
- *  Spam is scoped by a different thing from the other three and it matters. The
- *  others narrow to an ADDRESS - what left sales@, what somebody was tagged in
- *  on sales@. A spam folder belongs to a PERSON, so `spam:<inbox id>` means
- *  "the bin of whoever owns that address" and is only meaningful on an
- *  individual one. The panel resolves the id against the addresses this reader
- *  may open and refuses to find an owner for a shared address, so the folder
- *  under a colleague's name is theirs and the entry under Yours is your own. */
+ *  Two of them are scoped by a different thing from the other two and it
+ *  matters. Sent and Mentioned narrow to an ADDRESS - what left sales@, what
+ *  somebody was tagged in on sales@. A spam folder and a drafts folder belong to
+ *  a PERSON, so `spam:<inbox id>` and `drafts:<inbox id>` mean "the bin, or the
+ *  half-written writing, of whoever owns that address" and are only meaningful
+ *  on an individual one. The panel resolves the id against the addresses this
+ *  reader may open and refuses to find an owner for a shared address, so the
+ *  folder under a colleague's name is theirs and the entry under Yours is your
+ *  own. */
 const SCOPED_FOLDERS = ['sent', 'drafts', 'mentions', 'spam'] as const
 
 type ScopedFolder = (typeof SCOPED_FOLDERS)[number]
@@ -261,10 +263,11 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
     unroutedOnly: inbox === 'none',
     draftsOnly: inbox === 'drafts' || scoped.folder === 'drafts',
     // No scoped form: there is one Scheduled folder, holding whatever this
-    // person has set going, whichever address it leaves from. The rail offers
-    // no version of it under a colleague's name for the same reason the Drafts
-    // folder there is really the reader's own - the row belongs to whoever
-    // wrote it.
+    // person has set going, whichever address it leaves from. Unlike Drafts,
+    // there is no version of it under a colleague's name - a message with a
+    // time on it has been decided about and is on its way, which is a thing to
+    // read in their Sent folder shortly rather than to look over their shoulder
+    // at now.
     scheduledOnly: inbox === 'scheduled',
     sentOnly: inbox === 'sent' || scoped.folder === 'sent',
     contactsOnly: inbox === 'contacts',
