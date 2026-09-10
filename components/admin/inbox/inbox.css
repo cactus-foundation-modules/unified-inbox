@@ -544,6 +544,23 @@
 .uin-rail-item[aria-current="page"] .uin-rail-count-quiet {
   background: var(--color-surface);
 }
+/* The row at the foot of "Yours" that folds Spam and Bin away. A button
+   wearing a rail row's clothes, because it stands in the list and reads as the
+   end of it - but it is a control rather than a place, so it is quieter: no
+   current state to wear, and the chevron turns over when the pair is showing. */
+.uin-rail-more {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: var(--color-text-muted);
+}
+.uin-rail-more:hover { background: var(--color-surface); color: var(--color-text); }
+.uin-rail-more-icon svg { transition: transform 120ms ease; }
+.uin-rail-more[aria-expanded="true"] .uin-rail-more-icon svg { transform: rotate(180deg); }
+
 /* A colleague's own post, and the folders of it that open out underneath.
    The colour IS the control: the dot comes out of the link and becomes a button
    standing exactly where it stood, so a colleague's name starts at the same

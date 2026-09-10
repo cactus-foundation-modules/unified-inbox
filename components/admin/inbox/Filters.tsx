@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { formatCalendarDate, inboxHref } from '@/modules/unified-inbox/lib/list'
 import { BlockedAddresses } from './BlockedAddresses'
+import { EmptyBinButton } from './EmptyBinButton'
 import { FilterMenu } from './FilterMenu'
 import { QueryForm } from './QueryForm'
 import { FilterIcon, SearchIcon, SortIcon } from './icons'
@@ -23,6 +24,12 @@ import { FilterIcon, SearchIcon, SortIcon } from './icons'
 // post lands - so it is where somebody is standing when they wonder who is on
 // the list. Nowhere else, since on every other list it would be a settings
 // screen wedged into a toolbar.
+//
+// The Bin folder keeps its own errand in exactly the same slot, and for the
+// same reason: emptying the bin is a thing to do about THIS folder rather than
+// a cut across it, and the person who wants to do it is standing in the folder
+// when the thought occurs. The two are never on screen together - a list is one
+// folder or the other - so the slot holds one control at a time.
 //
 // The filters used to be laid out flat here: a chip, a menu of names, and a
 // Filter button to make the menu mean anything. That is a permanent row of
@@ -77,11 +84,17 @@ type Props = {
    *  addresses the site turns away. Null everywhere else, and that is the whole
    *  of the condition: see the note beside the button. */
   blockedAddresses: { canUnblock: boolean } | null
+  /** The Bin folder, where the same slot holds the press that empties it. Null
+   *  everywhere else, on an empty bin, and for anybody who may not do the
+   *  emptying - which is a stricter grant than the one that fills it, because
+   *  emptying takes the conversations away from every colleague who could see
+   *  them and nothing brings them back. See the route. */
+  emptyBin: { inboxId: string | null; ownerName: string | null; count: number; closeHref: string } | null
 }
 
 export function Filters({
   base, params, unreadOnly, assignee, search, narrowed, staff, oldestFirst, ownInbox,
-  blockedAddresses,
+  blockedAddresses, emptyBin,
 }: Props) {
   // Any filter change starts again at page one and closes whatever was open,
   // since the conversation on screen may not survive the new filter. A person's
@@ -130,6 +143,17 @@ export function Filters({
             same route as Settings -> Collecting, not a second one. */}
         {blockedAddresses && (
           <BlockedAddresses staff={staff} canUnblock={blockedAddresses.canUnblock} />
+        )}
+        {/* And, in the Bin folder, the press that empties it - in the same slot
+            as the list of blocked addresses above, since a list is one folder
+            or the other and never both. */}
+        {emptyBin && (
+          <EmptyBinButton
+            inboxId={emptyBin.inboxId}
+            ownerName={emptyBin.ownerName}
+            count={emptyBin.count}
+            closeHref={emptyBin.closeHref}
+          />
         )}
         {/* On the reader's OWN address the menu is a menu of one, so it is not
             a menu. Everything in that list is either post that came to them or

@@ -3,6 +3,7 @@
 import { useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AdminTooltip } from '@/components/admin/Tooltip'
+import { BinButton } from './BinButton'
 import { Dropdown, MenuItem } from './Dropdown'
 import { SnoozePanel } from './SnoozePanel'
 import { SpamButton } from './SpamButton'
@@ -49,6 +50,14 @@ type Props = {
   senderBlocked: boolean
   /** Whether this reader may do the refusing. */
   canBlock: boolean
+  /** Whether the conversation is in the relevant bin - the OWNER's, which on a
+   *  colleague's own address is not the reader's. Rides here beside `spam` and
+   *  for the same reason: it is one person's decision about a conversation
+   *  rather than the conversation's own state. */
+  binned: boolean
+  /** The colleague whose bin it would land in, when that is not the reader's
+   *  own - see binOwnerFor. Null the rest of the time. */
+  binOwnerName: string | null
   /** The list with nothing open on it - where the close cross points. Junking
    *  something goes there, since the conversation has just left every list this
    *  reader could have been standing in. */
@@ -67,6 +76,7 @@ const STATUS_WORDS: Record<string, string> = {
 export function ThreadActions({
   threadId, status, assigneeUserId, snoozeUntil, staff, timezone,
   spam, spamOwnerName, senderAddress, senderBlocked, canBlock, closeHref,
+  binned, binOwnerName,
 }: Props) {
   const router = useRouter()
   const offerUndo = useOfferUndo()
@@ -151,15 +161,27 @@ export function ThreadActions({
   return (
     <>
       <div className="uin-thread-actions">
-        {/* The junk sign, the clock, then whose it is, then where it stands. All
-            four sit on the subject line now, hard against the way out of the
-            conversation: they are what you press on the way OUT of one, and a
-            row of them on a line of their own was a band of chrome between the
-            subject and the message.
-            Junk goes first, on the left, because it is the one press that ends
-            the conversation rather than arranging it - the same place every
-            mail program puts it, and the furthest of the four from the reply
-            arrow. */}
+        {/* The bin, the junk sign, the clock, then whose it is, then where it
+            stands. All five sit on the subject line now, hard against the way
+            out of the conversation: they are what you press on the way OUT of
+            one, and a row of them on a line of their own was a band of chrome
+            between the subject and the message.
+            The two that END a conversation rather than arranging it go first,
+            on the left - the same place every mail program puts them, and the
+            furthest of the row from the reply arrow. The bin is left of the
+            junk sign because it is the commoner of the two by a distance:
+            "I have finished with this" happens all day, and "this sender is a
+            nuisance" happens on Tuesdays. Keeping them apart is the whole
+            point of having both - people were reaching for the junk button to
+            mean "delete", which slowly filled the spam folder with post that
+            was not spam and made it useless for the one job it does have. */}
+        <BinButton
+          threadId={threadId}
+          binned={binned}
+          ownerName={binOwnerName}
+          closeHref={closeHref}
+          disabled={busy}
+        />
         <SpamButton
           threadId={threadId}
           spam={spam}

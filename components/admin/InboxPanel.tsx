@@ -108,6 +108,7 @@ import { DraftReadView } from './inbox/DraftReadView'
 import { SentListView } from './inbox/SentListView'
 import { ThreadPane, type ThreadMessageView } from './inbox/ThreadPane'
 import { spamOwnerFor, threadIsSpamFor } from '@/modules/unified-inbox/lib/spam'
+import { binOwnerFor, threadIsBinnedFor } from '@/modules/unified-inbox/lib/bin'
 import { isSenderBlocked } from '@/modules/unified-inbox/lib/blocked-senders'
 import { normaliseAddress } from '@/modules/unified-inbox/lib/addresses'
 import { ComposeView } from './inbox/ComposeView'
@@ -395,6 +396,7 @@ export async function UnifiedInboxPanel({
     assignedElsewhere,
     askedCount,
     spamCount,
+    binCount,
     sendableIds,
     smsAndDialler,
   ] = await Promise.all([
@@ -441,6 +443,24 @@ export async function UnifiedInboxPanel({
       // Their own, explicitly. The number under Yours counts your bin; a
       // colleague's folder carries its own total in the head of the list.
       spamOwnerUserId: user.id,
+      inboxIds: visibleIds,
+      includeUnrouted: canManage,
+      providerModules: channelModules,
+      status: 'all',
+      unreadOnly: true,
+      page: 1,
+      perPage: PER_PAGE,
+    }),
+    // And the same number for the Bin, on the same terms and through the same
+    // function, so the folder and the figure beside it can never disagree.
+    // Unread rather than the total, for the reason spelled out above: nobody
+    // empties a bin, and a permanent 412 is a number people stop reading. How
+    // much is actually in there is said at the head of the folder, beside the
+    // button that empties it, which is where somebody needs the honest figure.
+    countThreads({
+      viewerUserId: user.id,
+      binOnly: true,
+      binOwnerUserId: user.id,
       inboxIds: visibleIds,
       includeUnrouted: canManage,
       providerModules: channelModules,
@@ -620,6 +640,15 @@ export async function UnifiedInboxPanel({
     // one this reader may not open. That draws an empty folder rather than
     // quietly falling back to their own junk under somebody else's name.
     spamOwnerUserId: params.spamOnly ? folderOwnerId : undefined,
+    // And the same pair for the Bin, settled the same way and for the same
+    // reasons - their own under Yours, a colleague's under that colleague's
+    // name, and nobody's on a scope that will not resolve. It matters a shade
+    // more here than it does over the junk folder: the Bin is the one list on
+    // this screen with a button that destroys what it holds, so a folder drawn
+    // under the wrong heading would be a folder emptied on the wrong person's
+    // behalf.
+    binOnly: params.binOnly,
+    binOwnerUserId: params.binOnly ? folderOwnerId : undefined,
     inboxIds: visibleIds,
     includeUnrouted: canManage,
     providerModules: channelModules,
@@ -631,12 +660,13 @@ export async function UnifiedInboxPanel({
     alsoAssignedTo: pinnedInboxId && params.inboxId === pinnedInboxId ? user.id : null,
     providerModule: params.providerModule,
     unroutedOnly: params.unroutedOnly,
-    // Everything in the bin, whatever state it was in when it went there. The
-    // Spam folder draws no status tabs (see below), and a folder filtered by a
-    // choice it does not offer is a folder that hides things for no reason
-    // anybody can see: junk marked done before it was junked would simply not
-    // be there, under a default nobody picked.
-    status: params.spamOnly ? 'all' : status,
+    // Everything in the folder, whatever state it was in when it went there.
+    // Neither the Spam folder nor the Bin draws status tabs (see below), and a
+    // folder filtered by a choice it does not offer is a folder that hides
+    // things for no reason anybody can see: junk marked done before it was
+    // junked, or a finished conversation somebody then deleted, would simply
+    // not be there, under a default nobody picked.
+    status: params.spamOnly || params.binOnly ? 'all' : status,
     unreadOnly: params.unreadOnly,
     assignee: params.assignee,
     search: params.search,
@@ -666,10 +696,11 @@ export async function UnifiedInboxPanel({
   const listing = params.draftsOnly || params.scheduledOnly || params.sentOnly || params.contactsOnly
     || params.campaignsOnly || params.mentionsOnly
   // Open, Snoozed, Done and All are questions about work in hand. Nothing in
-  // the bin is work in hand: junk is not answered, not set aside until Monday
-  // and not finished, so the row of tabs above it offered four ways to look at
+  // either of the two "gone" folders is work in hand: junk is not answered, not
+  // set aside until Monday and not finished, and neither is anything somebody
+  // has deleted - so the row of tabs above them offered four ways to look at
   // one pile. Gone there, and the query that fills them is not run either.
-  const showStatusTabs = !listing && !params.spamOnly
+  const showStatusTabs = !listing && !params.spamOnly && !params.binOnly
   const showUnassigned = showStatusTabs && sharedInbox
   const [rows, total, statuses] = listing
     ? [[] as Awaited<ReturnType<typeof listThreads>>, 0, {} as Record<string, number>]
@@ -1149,6 +1180,17 @@ export async function UnifiedInboxPanel({
           ? allInboxes.find((i) => i.id === thread.inboxId) ?? null
           : null,
       })
+      // The bin follows the junk rule exactly - binOwnerFor IS spamOwnerFor,
+      // under a second name, because two copies of that decision would drift
+      // and the module would then disagree with itself about which folder a
+      // conversation went into. Named separately here anyway, so that a reader
+      // of this file sees both buttons being told whose folder they fill.
+      const binOwnerId = binOwnerFor({
+        pressedByUserId: user.id,
+        inbox: thread.inboxId
+          ? allInboxes.find((i) => i.id === thread.inboxId) ?? null
+          : null,
+      })
       //
       // EVERYTHING LEFT THAT THIS PANE NEEDS, IN ONE WAIT.
       //
@@ -1160,12 +1202,13 @@ export async function UnifiedInboxPanel({
       // asked at the same moment. The one genuine dependency is further down:
       // the hints and the public links are asked of what comes back here.
       const [
-        canReply, blockState, isSpam, senderBlocked, ask,
+        canReply, blockState, isSpam, isBinned, senderBlocked, ask,
         links, kindOptions, senderModules, merges, contextQuery,
       ] = await Promise.all([
         canReplyHere,
         blockStateAsked,
         threadIsSpamFor(thread.id, spamOwnerId),
+        threadIsBinnedFor(thread.id, binOwnerId),
         senderAddress ? isSenderBlocked(senderAddress) : Promise.resolve(false),
         // This reader's own ask on this conversation, when a colleague put
         // their name on it. Nobody else's: what somebody was asked and whether
@@ -1318,6 +1361,14 @@ export async function UnifiedInboxPanel({
                the grant for acting on the outside world rather than the one for
                reading it - the same line the channel block next door draws. */
             canBlock: canSendOut,
+          }}
+          binState={{
+            binned: isBinned,
+            /* Whose bin, said out loud when it is not the reader's own, for the
+               reason the junk button gives beside it: "Moved to Sam's bin" and
+               "Moved to your bin" are different sentences, and somebody
+               covering a colleague's post deserves the one that is true. */
+            ownerName: binOwnerId === user.id ? null : staffById[binOwnerId] ?? null,
           }}
           now={new Date()}
           timezone={timezone}
@@ -1529,7 +1580,15 @@ export async function UnifiedInboxPanel({
   // A folder under a colleague's name says which folder AND whose, in one
   // value, because the rail highlights one entry and there are three of them
   // under every colleague.
-  const folderTab = params.draftsOnly ? 'drafts' : params.sentOnly ? 'sent' : params.spamOnly ? 'spam' : 'mentions'
+  const folderTab = params.draftsOnly
+    ? 'drafts'
+    : params.sentOnly
+      ? 'sent'
+      : params.spamOnly
+        ? 'spam'
+        : params.binOnly
+          ? 'bin'
+          : 'mentions'
   const currentTab = params.folderInboxId
     ? `${folderTab}:${params.folderInboxId}`
     : params.draftsOnly
@@ -1544,6 +1603,8 @@ export async function UnifiedInboxPanel({
           ? 'campaigns'
           : params.spamOnly
           ? 'spam'
+          : params.binOnly
+          ? 'bin'
           : params.mentionsOnly
           ? 'mentions'
           : params.unroutedOnly
@@ -1581,6 +1642,8 @@ export async function UnifiedInboxPanel({
         ? (showingOrganisations ? 'Organisations' : 'Contacts')
         : params.spamOnly
           ? `${folderPrefix}Spam`
+        : params.binOnly
+          ? `${folderPrefix}Bin`
         : params.mentionsOnly
           ? `${folderPrefix}Mentioned`
           : params.unroutedOnly
@@ -1662,6 +1725,7 @@ export async function UnifiedInboxPanel({
       showScheduled={scheduledCount > 0 || currentTab === 'scheduled'}
       scheduledCount={scheduledCount}
       spamCount={spamCount}
+      binCount={binCount}
       contactCount={contactCount}
       showCampaigns={canCampaign}
       /* At the head of the rail, on every list: starting a message is the one
@@ -1830,6 +1894,8 @@ export async function UnifiedInboxPanel({
       neverSynced={neverSynced}
       spam={params.spamOnly}
       spamOwnerName={params.spamOnly ? folderOwnerName : null}
+      bin={params.binOnly}
+      binOwnerName={params.binOnly ? folderOwnerName : null}
       canManage={canManage}
       /* Blocking a pile of senders at once changes what everybody on the site
          receives from now on, so it takes the grant for acting on the outside
@@ -1927,7 +1993,11 @@ export async function UnifiedInboxPanel({
                 that used to carry the total is no longer drawn there, and a
                 folder that cannot say how much is in it is a folder people
                 count by hand. */}
-            {(listing || params.searchPage || params.spamOnly)
+            {/* And every Bin, on the same terms, where the total earns its keep
+                twice over: the button beside it destroys exactly that many
+                conversations, and a number nobody can see is a number nobody
+                checks before pressing. */}
+            {(listing || params.searchPage || params.spamOnly || params.binOnly)
               && !params.contactsOnly && (!params.mentionsOnly || !!folderOwnerName) && (
               <div className="uin-col-title">
                 <h2>{viewTitle}</h2>
@@ -1995,6 +2065,22 @@ export async function UnifiedInboxPanel({
                      other grant, the same one shutting the door takes, so the
                      two are asked separately. */
                   blockedAddresses={params.spamOnly && canManage ? { canUnblock: canSendOut } : null}
+                  /* The Bin, and only where there is something to empty and
+                     somebody allowed to empty it. `manage` rather than the
+                     grant that fills a bin, and deliberately stricter: putting
+                     a conversation in a bin hides it from one screen and undoes
+                     itself with the same press, while emptying takes it away
+                     from every colleague who could read it and nothing brings
+                     it back. The route asks the same question again - this only
+                     decides whether the button is drawn. */
+                  emptyBin={params.binOnly && canManage && total > 0
+                    ? {
+                        inboxId: folderInbox?.id ?? null,
+                        ownerName: folderOwnerName,
+                        count: total,
+                        closeHref: inboxHref(base, carried, { id: null }),
+                      }
+                    : null}
                 />
                 {showStatusTabs && (
                   <StatusTabs

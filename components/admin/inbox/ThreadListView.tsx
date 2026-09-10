@@ -91,6 +91,15 @@ type Props = {
    *  reads it, and it needs to: "only you can see this" is a plain untruth over
    *  a colleague's folder. */
   spamOwnerName: string | null
+  /** Whether this is the Bin folder. Read by the empty state, which has its own
+   *  sentence to say, and by the bar - a Delete button over a list of things
+   *  already deleted is an offer to do nothing, and a junk button there is an
+   *  offer to move something between two folders it would stay hidden in
+   *  either way. */
+  bin: boolean
+  /** Whose bin, when it is not the reader's own. Same job as `spamOwnerName`
+   *  above and the same reason. */
+  binOwnerName: string | null
   /** Whether this reader may open the settings the empty state would otherwise
    *  send them to. Being told where a button is on a screen you are not allowed
    *  to open is worse than not being told. */
@@ -131,7 +140,7 @@ function ChannelBadge({ channel }: { channel: string }) {
 
 export function ThreadListView({
   base, params, rows, total, page, openThreadId, staffById, meId, inboxNames, showAvatars,
-  neverSynced, spam, spamOwnerName, canManage, canBlock, searching, now, timezone,
+  neverSynced, spam, spamOwnerName, bin, binOwnerName, canManage, canBlock, searching, now, timezone,
 }: Props) {
   const router = useRouter()
   const offerUndo = useOfferUndo()
@@ -421,6 +430,16 @@ export function ThreadListView({
     })))
   }, [])
 
+  /** And the same again for the bin, which is a third door: deleting something
+   *  is neither a status nor an opinion about junk, and it has its own route. */
+  const takeOutOfBin = useCallback((ids: string[]) => async () => {
+    await Promise.allSettled(ids.map((id) => fetch(`/api/m/unified-inbox/threads/${id}/bin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bin: false }),
+    })))
+  }, [])
+
   /** "1 conversation", "6 conversations", for the sentence on the toast. */
   const them = useCallback((n: number) => (n === 1 ? 'conversation' : 'conversations'), [])
 
@@ -460,6 +479,52 @@ export function ThreadListView({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ spam: true }),
     }), { ...opts, closes: true }), [runOnPicked])
+
+  /** The picked pile into the bin, and the five seconds in which that was still
+   *  a mistake.
+   *
+   *  No question first, unlike the junk button beside it, and the difference is
+   *  what the press costs. Junking a pile also offers to shut the site's front
+   *  door on the senders, which is a decision worth stopping to make; deleting
+   *  moves conversations into a folder they can be lifted straight back out of,
+   *  destroys nothing, and undoes itself from the toast. A dialog in front of
+   *  every one of those is a dialog people learn to dismiss without reading,
+   *  which is how the one that matters gets dismissed too. The press that
+   *  genuinely throws things away is "Empty bin", in the folder, and it asks. */
+  const deletePicked = useCallback(async () => {
+    const ids = [...picked]
+    if (!(await runOnPicked((id) => fetch(`/api/m/unified-inbox/threads/${id}/bin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bin: true }),
+    }), { closes: true }))) return
+    offerUndo({
+      message: `${ids.length} ${them(ids.length)} moved to the bin.`,
+      undo: takeOutOfBin(ids),
+    })
+  }, [offerUndo, picked, runOnPicked, takeOutOfBin, them])
+
+  /** And back out again, which is the only bulk press the Bin folder offers.
+   *  A bin somebody can fill fifty at a time and empty one at a time is a bin
+   *  people stop putting things in. */
+  const restorePicked = useCallback(async () => {
+    const ids = [...picked]
+    if (!(await runOnPicked((id) => fetch(`/api/m/unified-inbox/threads/${id}/bin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bin: false }),
+    }), { closes: true }))) return
+    offerUndo({
+      message: `${ids.length} ${them(ids.length)} put back.`,
+      undo: async () => {
+        await Promise.allSettled(ids.map((id) => fetch(`/api/m/unified-inbox/threads/${id}/bin`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bin: true }),
+        })))
+      },
+    })
+  }, [offerUndo, picked, runOnPicked, them])
 
   /** Two decisions, kept apart exactly as they are on a single conversation (see
    *  SpamButton, which explains why at length). Moving the pile is one person's
@@ -598,7 +663,29 @@ export function ThreadListView({
   if (rows.length === 0) {
     return (
       <div className="uin-empty">
-        {spam ? (
+        {bin ? (
+          <>
+            {/* First, ahead of everything else, for the reason the Spam folder
+                gives below: an empty bin is the good outcome, and "nothing has
+                been collected yet" over the top of one would send somebody off
+                to check a mail account over nothing. */}
+            <strong>Nothing in here</strong>
+            {binOwnerName ? (
+              <>
+                Conversations deleted out of {binOwnerName}&rsquo;s post land here rather than in
+                your own bin, because it is their post. Nothing is destroyed until somebody
+                empties the bin, so anything that ends up in here by mistake can be put straight
+                back.
+              </>
+            ) : (
+              <>
+                Conversations you delete land in this folder, and only you can see them - deleting
+                something changes nothing for your colleagues. Nothing is destroyed until you
+                empty the bin, and nothing in your mail account is ever touched.
+              </>
+            )}
+          </>
+        ) : spam ? (
           <>
             {/* First, ahead of everything else: an empty spam folder is not a
                 problem to explain, and "nothing has been collected yet" over the
@@ -718,11 +805,29 @@ export function ThreadListView({
             />
           </Dropdown>
           {/* Not in the Spam folder, where everything on the screen is already
-              in the bin and the button would be an offer to do it again. */}
-          {!spam && (
+              marked and the button would be an offer to do it again - and not
+              in the Bin, where marking something as junk would move it between
+              two folders it stays hidden in either way. */}
+          {!spam && !bin && (
             <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
                     onClick={markPickedSpam}>
               Mark as spam
+            </button>
+          )}
+          {/* The bin, offered everywhere except the Bin folder itself - where
+              the same button turns round and puts the pile back, because a bin
+              you can fill fifty at a time and empty one at a time is a bin
+              people stop using. Neither press destroys anything: that is the
+              "Empty bin" button in the head of the folder, and it asks. */}
+          {bin ? (
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                    onClick={() => void restorePicked()}>
+              Put back
+            </button>
+          ) : (
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+                    onClick={() => void deletePicked()}>
+              Delete
             </button>
           )}
           {/* Two or more, because merging one conversation into itself is not a

@@ -52,9 +52,11 @@ the same human collapse into one story.
   when it arrived at a shared address. There is no separate "assigned to me"
   list to remember to check, because a list you have to remember to check is a
   list that goes unchecked. The handful of places at the top of the rail -
-  your address, All, Mentioned, Drafts, Scheduled, Sent, Spam - can be dragged into
+  your address, All, Mentioned, Drafts, Scheduled, Sent - can be dragged into
   whatever order suits how you work, and that order is yours alone: nobody
-  else's screen moves.
+  else's screen moves. **Spam** and **Bin** sit behind a **More** button
+  underneath, because they are the two nobody opens on purpose; the button says
+  how much is waiting in them, and standing in either one leaves it showing.
 - **Collecting the post.** Mail is gathered on the site's own schedule, from the
   inbox and the folders you file things into, so a message read on a phone is
   still here.
@@ -111,6 +113,23 @@ the same human collapse into one story.
   Cmd-click - ctrl on Windows - picks out odd ones anywhere in the list, and
   there is a box above it for the whole screenful. No tick box sitting in front
   of every row for the two mornings a week anybody wants one.
+- **The bin.** A waste basket at the top of every conversation, and a **Delete**
+  button on the bar when several are picked. It works the way the junk sign
+  beside it works, which is to say it is yours: what you delete leaves your
+  lists and changes nothing at all on a colleague's screen. A conversation
+  deleted out of somebody's own address goes into **their** bin rather than
+  yours, so covering their post while they are away cannot fill your own bin
+  with a fortnight of theirs - and their bin hangs under their name on the rail,
+  which is how a mis-click while covering gets put back. Nothing is destroyed by
+  being deleted, and nothing empties itself after thirty days: the bin holds
+  what you put in it until somebody presses **Empty bin**, in the head of the
+  folder, and answers the question it puts up. That press is the one thing on
+  the screen that genuinely throws something away - it takes the conversations
+  away from everybody who could see them, there is no way back, and it takes the
+  permission that looks after the site rather than the one that reads it.
+  **Nothing is ever deleted from your mail account.** Whatever arrived by email
+  is still sitting in the mailbox it arrived in; this only clears what is held
+  here.
 - **Merging conversations.** One conversation sometimes arrives as two - a
   different address on Thursday, a subject line somebody edited, a colleague
   forwarding it in. Pick them and press Merge, and everything folds into the one

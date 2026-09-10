@@ -58,8 +58,26 @@ export const ChevronLeftIcon = <svg {...ICON}><path d="m14.5 6-6 6 6 6" /></svg>
  *
  *  It is therefore close to BlockIcon below, and the two must never appear
  *  beside one another without words: give the block its own drawing first if
- *  that day comes. */
+ *  that day comes.
+ *
+ *  LATER: the basket now sits immediately to the left of this sign, as BinIcon,
+ *  and the split above turned out to be exactly right. There are two acts on
+ *  that row and they are different acts - refuse it, or throw it away - so the
+ *  basket means the second one and nothing else, and this sign is free to keep
+ *  meaning the first. */
 export const SpamIcon = <svg {...ICON}><circle cx="12" cy="12" r="8" /><path d="m6.7 17.3 10.6-10.6" /></svg>
+/** The bin. A waste basket, which is what every program in the world draws for
+ *  "delete" - and here it genuinely means it: what goes in can be emptied out
+ *  for good, which is the one thing on this screen that is not undoable. It
+ *  reads as Delete to everybody who has ever used a computer, and this is the
+ *  one control on the row where that reading is the correct one. */
+export const BinIcon = <svg {...ICON}><path d="M4.5 7h15" /><path d="M9.5 7V4.5h5V7" /><path d="M6.6 7l.9 12.5h9L17.4 7" /><path d="M10.2 10.5v6" /><path d="M13.8 10.5v6" /></svg>
+/** Emptying it: the same basket with its lid off and nothing inside. The lid is
+ *  what carries the meaning at 16px - a basket with a straight lid is the
+ *  button that fills it, and a basket with a tilted one is the button that
+ *  empties it - so the two are told apart at a glance rather than by hovering
+ *  and reading. */
+export const EmptyBinIcon = <svg {...ICON}><path d="m4.4 8.6 15.2-2.7" /><path d="m9.7 7.7-.4-2.4 4.9-.9.4 2.4" /><path d="M6.9 9.4h10.2l-.9 10.6H7.8z" /></svg>
 /** Turning somebody away at the door - the block, as opposed to the junk sign
  *  above. Not currently drawn anywhere; see the warning on SpamIcon before
  *  putting it on a screen that also carries one. */

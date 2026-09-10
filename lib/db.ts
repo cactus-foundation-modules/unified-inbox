@@ -2274,6 +2274,23 @@ export type ThreadListFilters = {
    *  Resolved against the addresses the reader may actually read before it gets
    *  here - never trusted from the address bar (E17). */
   spamOwnerUserId?: string | null
+  /** The Bin folder: one person's deleted conversations, rather than everything
+   *  nobody has deleted. The junk pair above wearing a different name, and for
+   *  the same reason - see lib/bin.ts and migrations/052_bin.sql. There is no
+   *  view in this module that shows both a bin and the lists it hides from.
+   *
+   *  It beats `spamOnly`: something deleted out of the Spam folder is deleted,
+   *  and a conversation that turned up in both folders at once would be one
+   *  nobody could explain. */
+  binOnly?: boolean
+  /** WHOSE bin, when `binOnly` is on. Null or absent means the reader's own,
+   *  which is what the Bin entry under "Yours" asks for; a colleague's id is
+   *  the folder under their name on the rail, and it exists because a
+   *  conversation deleted out of somebody's own address lands in THEIR bin
+   *  rather than in the bin of whoever happened to be covering their post that
+   *  morning. Resolved against the addresses the reader may actually read
+   *  before it gets here - never trusted from the address bar (E17). */
+  binOwnerUserId?: string | null
   /** Inbox ids this user may read, already resolved. Empty means none. */
   inboxIds: string[]
   /** Whether they may also see conversations that landed in no inbox at all -
@@ -2511,6 +2528,96 @@ function spamFolderMatch(ownerUserId: string): Prisma.Sql {
   ))`
 }
 
+/**
+ * "Somebody whose bin this conversation belongs in has deleted it."
+ *
+ * The junk clause above with the site's own stamp taken off it, and otherwise
+ * the same rule for the same reasons - the reader's own decision, or the
+ * decision of whoever owns an individual address the conversation sits in, so
+ * that covering somebody's post shows what THEY would see rather than a
+ * fortnight of work they have already thrown away. The long version is written
+ * over spamMatch; it is not repeated here, because two copies of an
+ * explanation drift exactly as two copies of a clause do.
+ *
+ * No `blocked_at` half, and that is the one genuine difference. Nothing ever
+ * arrives pre-deleted: a bin holds what a person put in it, and post the site
+ * turned away at the door goes to Spam, where somebody can still find it.
+ */
+function binMatch(viewerUserId: string): Prisma.Sql {
+  return Prisma.sql`EXISTS (
+    SELECT 1 FROM "uin_thread_bin" bn
+     WHERE bn."thread_id" = t."id"
+       AND (
+         bn."user_id" = ${viewerUserId}
+         OR bn."user_id" IN (
+              SELECT i."owner_user_id" FROM "uin_inboxes" i
+               WHERE i."kind" = 'individual'
+                 AND i."owner_user_id" IS NOT NULL
+                 AND (
+                   i."id" = t."inbox_id"
+                   OR EXISTS (
+                        SELECT 1 FROM "uin_thread_inboxes" ti
+                         WHERE ti."thread_id" = t."id" AND ti."inbox_id" = i."id"
+                      )
+                 )
+            )
+       )
+  )`
+}
+
+/**
+ * One named person's bin, which is a narrower question than the one above.
+ *
+ * The folder lists what THAT person deleted and nothing else: a colleague
+ * covering Sam sees Sam's bin under Sam's name on the rail, and their own under
+ * their own, and the two lists stay two lists. Answering this with binMatch()
+ * would put every colleague's deleted post into everybody's bin - and, since a
+ * bin has a button on it that destroys what is in it, that is a good deal worse
+ * here than it would be over a spam folder.
+ */
+function binFolderMatch(ownerUserId: string): Prisma.Sql {
+  return Prisma.sql`EXISTS (
+    SELECT 1 FROM "uin_thread_bin" bn
+     WHERE bn."thread_id" = t."id" AND bn."user_id" = ${ownerUserId}
+  )`
+}
+
+/**
+ * Every conversation in one person's bin that a given reader may see, as ids.
+ *
+ * What "Empty bin" is about to destroy, worked out on the server from the same
+ * two clauses the folder itself is drawn from - the visibility clause and the
+ * folder clause, ANDed in one WHERE. Never a list of ids from the browser: a
+ * body that could name conversations would be a body that could name any
+ * conversation, and this is the one route in the module that does not put them
+ * back afterwards (E17).
+ *
+ * Not paged, deliberately. Emptying a bin means emptying it, and a route that
+ * quietly did the first twenty-five would leave somebody pressing a button that
+ * says "Empty" over and over while a folder they were told was empty went on
+ * holding things. The caller counts what came back and reports the number.
+ */
+export async function binThreadIds(f: {
+  /** Whose bin. Already resolved against the addresses the reader may open. */
+  ownerUserId: string
+  /** What the reader may see, already resolved for them - which is where the
+   *  access half of this lives, exactly as it does for every list on the
+   *  screen. */
+  inboxIds: string[]
+  includeUnrouted: boolean
+  providerModules?: string[]
+}): Promise<string[]> {
+  const visible = visibilityClause(f.inboxIds, f.includeUnrouted, f.providerModules ?? [])
+  if (!visible) return []
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT t."id" FROM "uin_threads" t
+     WHERE ${visible}
+       AND t."merged_into_id" IS NULL
+       AND ${binFolderMatch(f.ownerUserId)}
+  `
+  return rows.map((r) => r.id)
+}
+
 function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
   const where: Prisma.Sql[] = []
   // A conversation that lost a merge is not a conversation any more. It is kept
@@ -2526,24 +2633,54 @@ function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
   // The folder itself asks a NARROWER question than the hiding does - see the
   // two builders above. Hiding covers "anybody whose bin this belongs in";
   // the folder is one named person's bin and nobody else's.
-  if (f.spamOnly) {
+  //
+  // The bin is asked FIRST and it wins, because the two folders are not peers.
+  // Junk is refused and kept; the bin is refused and can be emptied, so a
+  // conversation somebody has deleted out of their Spam folder has to leave the
+  // Spam folder - otherwise the two lists disagree about where it is, and the
+  // one with the destroying button on it is not the one to be vague about.
+  //
+  // So: the Bin folder shows everything in that bin, junk included, and every
+  // other list in the module - the Spam folder among them - shows nothing that
+  // is in a bin belonging to anybody whose bin it belongs in.
+  if (f.binOnly) {
     // Absent means "my own bin"; an explicit null means "a bin that belongs to
     // nobody", which is what a folder scoped to a shared address or to an id
-    // this reader may not open resolves to. Those two must not collapse into
-    // one, so it is `undefined` that falls back and null that yields nothing -
-    // the same rule the rest of this screen follows for a scope that will not
-    // resolve (E17). Falling back there would draw the reader's OWN junk under
-    // a heading with a colleague's name on it.
+    // this reader may not open resolves to. The same rule the junk folder
+    // below follows, and for the same reason: falling back there would draw the
+    // reader's OWN deleted post under a heading with a colleague's name on it,
+    // beside a button that empties it.
     //
-    // A bin belonging to nobody stays empty even of the post the site refused,
-    // which is the same rule read once more rather than an exception to it: an
-    // id this reader may not open must yield nothing at all, and ORing the
-    // site-wide stamp in here is how "nothing at all" quietly becomes "nothing
-    // except the interesting part".
-    const owner = f.spamOwnerUserId === undefined ? f.viewerUserId : f.spamOwnerUserId
-    where.push(owner === null ? Prisma.sql`false` : spamFolderMatch(owner))
+    // No junk clause at all beside it. The Bin holds what was deleted, whether
+    // or not it was junk first, because a conversation that was in two folders
+    // and showed in neither is exactly the message somebody spends a morning
+    // hunting for.
+    const owner = f.binOwnerUserId === undefined ? f.viewerUserId : f.binOwnerUserId
+    where.push(owner === null ? Prisma.sql`false` : binFolderMatch(owner))
   } else {
-    where.push(Prisma.sql`NOT ${spamMatch(f.viewerUserId)}`)
+    // Everything else - the Spam folder among them - hides what has been
+    // deleted. One push rather than one per branch below, so a third folder
+    // added here later cannot forget it.
+    where.push(Prisma.sql`NOT ${binMatch(f.viewerUserId)}`)
+    if (f.spamOnly) {
+      // Absent means "my own bin"; an explicit null means "a bin that belongs
+      // to nobody", which is what a folder scoped to a shared address or to an
+      // id this reader may not open resolves to. Those two must not collapse
+      // into one, so it is `undefined` that falls back and null that yields
+      // nothing - the same rule the rest of this screen follows for a scope
+      // that will not resolve (E17). Falling back there would draw the reader's
+      // OWN junk under a heading with a colleague's name on it.
+      //
+      // A bin belonging to nobody stays empty even of the post the site
+      // refused, which is the same rule read once more rather than an exception
+      // to it: an id this reader may not open must yield nothing at all, and
+      // ORing the site-wide stamp in here is how "nothing at all" quietly
+      // becomes "nothing except the interesting part".
+      const owner = f.spamOwnerUserId === undefined ? f.viewerUserId : f.spamOwnerUserId
+      where.push(owner === null ? Prisma.sql`false` : spamFolderMatch(owner))
+    } else {
+      where.push(Prisma.sql`NOT ${spamMatch(f.viewerUserId)}`)
+    }
   }
   if (f.unroutedOnly) {
     where.push(Prisma.sql`t."inbox_id" IS NULL AND t."provider_module" IS NULL`)
@@ -2858,6 +2995,7 @@ export async function openCounts(
        AND t."merged_into_id" IS NULL
        AND t."status" = 'open'
        AND NOT ${spamMatch(viewerUserId)}
+       AND NOT ${binMatch(viewerUserId)}
        ${restrict}
      GROUP BY COALESCE(ti."inbox_id", t."inbox_id", 'm:' || t."provider_module")
   `
@@ -2899,6 +3037,7 @@ export async function openAssignedElsewhere(
        AND t."assignee_user_id" = ${viewerUserId}
        AND NOT ${inboxMatch([ownInboxId])}
        AND NOT ${spamMatch(viewerUserId)}
+       AND NOT ${binMatch(viewerUserId)}
   `
   return Number(rows[0]?.count ?? 0)
 }

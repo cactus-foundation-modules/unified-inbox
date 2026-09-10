@@ -75,6 +75,15 @@ export type InboxParams = {
    *  no colleague's version of this folder to scope it to: `sam@` has no spam
    *  folder, Sam does. */
   spamOnly: boolean
+  /** The "Bin" tab: what THIS reader has deleted, across every address they can
+   *  read. Same slot again, and the same reason.
+   *
+   *  Scoped the way Spam is - `bin:<inbox id>` is the bin of whoever owns that
+   *  address - because a conversation deleted out of a colleague's own address
+   *  lands in THEIR bin, and somebody covering their post has to be able to go
+   *  and look at it. It is the one folder where that matters most: the Bin has
+   *  a button on it that destroys what is in it. */
+  binOnly: boolean
   /** Which colleague's address the Sent or Mentioned list above is narrowed to,
    *  or null for this reader's own across every address they can read. The rail
    *  offers no Drafts folder under a colleague - a draft is its author's - but
@@ -211,11 +220,12 @@ function calendarDate(raw: string | undefined): string | null {
  *  somebody was tagged in on sales@. A spam folder and a drafts folder belong to
  *  a PERSON, so `spam:<inbox id>` and `drafts:<inbox id>` mean "the bin, or the
  *  half-written writing, of whoever owns that address" and are only meaningful
- *  on an individual one. The panel resolves the id against the addresses this
+ *  on an individual one - as does `bin:<inbox id>`, which is the same fact
+ *  about a different folder. The panel resolves the id against the addresses this
  *  reader may open and refuses to find an owner for a shared address, so the
  *  folder under a colleague's name is theirs and the entry under Yours is your
  *  own. */
-const SCOPED_FOLDERS = ['sent', 'drafts', 'mentions', 'spam'] as const
+const SCOPED_FOLDERS = ['sent', 'drafts', 'mentions', 'spam', 'bin'] as const
 
 type ScopedFolder = (typeof SCOPED_FOLDERS)[number]
 
@@ -256,7 +266,8 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
       !isChannel && !scoped.folder
         && inbox && inbox !== 'all' && inbox !== 'none' && inbox !== 'drafts'
         && inbox !== 'sent' && inbox !== 'contacts' && inbox !== 'campaigns'
-        && inbox !== 'mentions' && inbox !== 'spam' && inbox !== 'scheduled'
+        && inbox !== 'mentions' && inbox !== 'spam' && inbox !== 'bin'
+        && inbox !== 'scheduled'
         ? inbox
         : null,
     providerModule: channel.length > 0 ? channel : null,
@@ -274,6 +285,7 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
     campaignsOnly: inbox === 'campaigns',
     mentionsOnly: inbox === 'mentions' || scoped.folder === 'mentions',
     spamOnly: inbox === 'spam' || scoped.folder === 'spam',
+    binOnly: inbox === 'bin' || scoped.folder === 'bin',
     folderInboxId: scoped.inboxId,
     campaignId: sp.campaign ? sp.campaign : null,
     contactsView: sp.view === 'organisations' ? 'organisations' : 'people',

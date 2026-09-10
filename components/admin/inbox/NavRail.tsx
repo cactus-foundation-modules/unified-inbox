@@ -6,8 +6,8 @@ import { LinkBusy } from './NavProgress'
 import { useRouter } from 'next/navigation'
 import { avatarHref, inboxHref, initialsFor, moveInOrder, sortByStoredOrder, splitInboxes } from '@/modules/unified-inbox/lib/list'
 import {
-  AlarmIcon, AssignedIcon, AtIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, FileIcon, FolderIcon,
-  InboxIcon, MegaphoneIcon, MenuIcon, PeopleIcon, SendIcon, SpamIcon,
+  AlarmIcon, AssignedIcon, AtIcon, BinIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, FileIcon,
+  FolderIcon, InboxIcon, MegaphoneIcon, MenuIcon, PeopleIcon, SendIcon, SpamIcon,
 } from './icons'
 import { Avatar } from './Avatar'
 import { CheckNowButton, type CheckNowNotice } from './CheckNowButton'
@@ -43,9 +43,12 @@ import { ComposeMenu, type ComposeMenuEntry } from './ComposeMenu'
 // cannot ask of their own folder. "Team inboxes" is colleagues' own post this
 // person has been let in to - covering somebody's mail while they are away,
 // working their diary - and each one opens out into that colleague's Drafts,
-// Sent, Mentioned and bin. All four are THEIRS: covering somebody's post means
-// knowing what they have half-answered as well as what they have answered, and
-// not knowing is how the same customer gets written to twice. Then the channels
+// Sent, Mentioned, spam folder and bin. All five are THEIRS: covering somebody's
+// post means knowing what they have half-answered as well as what they have
+// answered, and what they have thrown away as well as what they have kept -
+// not knowing the first is how the same customer gets written to twice, and not
+// being able to reach the last is how a mis-click while covering becomes a
+// message only its owner can ever get back. Then the channels
 // another module owns, then the three screens that are not a list of post at
 // all.
 //
@@ -175,6 +178,17 @@ type Props = {
    *  appears only once it has something in it is a folder people assume ate
    *  their message. */
   spamCount: number
+  /** How much is in this person's own bin and has not been read. Offered on the
+   *  same terms as Spam beside it - always there, whether or not there is
+   *  anything in it - because a folder that appears only once it has something
+   *  in it is a folder people assume ate their message, and this is the one
+   *  folder where "where did it go?" is answered by "you deleted it".
+   *
+   *  Unread rather than the total, for the reason the junk count gives: a bin
+   *  nobody empties fills up, and a permanent 412 beside a folder is a number
+   *  that has stopped meaning anything. How much is actually in there is said
+   *  at the head of the folder itself, beside the button that empties it. */
+  binCount: number
   /** Where "Write a message" goes, or null when there is no address this person
    *  may send from - in which case the button is not there at all, rather than
    *  there and disappointing. */
@@ -394,6 +408,11 @@ function Branch({ id, item, opens, folders, open, onToggle }: {
  *  one. */
 const REORDER_HINT = 'Hold Alt and press the up or down arrow keys to move it along the rail.'
 
+/** The two entries under Yours that live behind the More button. Named here
+ *  rather than tested for inline, so the list that hides them and the button
+ *  that reveals them cannot drift apart. */
+const BEHIND_MORE = ['spam', 'bin']
+
 /** Which of the two rows in the air a list is currently showing. */
 type RailDragState = { dragId: string | null; overId: string | null }
 
@@ -504,7 +523,7 @@ function useRailDrag(enabled: boolean, move: (fromId: string, toId: string) => v
 export function NavRail({
   base, params, inboxes, channels, allCount, current, me, showAvatars, askedCount, railOrder,
   showUnrouted, unroutedCount, showDrafts, draftCount, draftCounts, showScheduled, scheduledCount,
-  spamCount, contactCount, showCampaigns, composeHref,
+  spamCount, binCount, contactCount, showCampaigns, composeHref,
   composeEntries,
   defaultInboxId, canReorder, canCheckNow, autoCheckSeconds, lastCheckedAt, timezone,
 }: Props) {
@@ -876,6 +895,22 @@ export function NavRail({
       title: 'What you have marked as junk. Yours alone - nobody else sees this list.',
       count: <Count value={spamCount} word="unread, marked as junk" quiet />,
     },
+    {
+      // And the bin beside it, which is the other folder nobody opens on
+      // purpose. Both of them sit behind More by default - see `mine` below.
+      //
+      // Yours alone, on the same terms as Spam: deleting a conversation takes
+      // it off YOUR lists and changes nothing at all on a colleague's screen.
+      // Nothing in here is destroyed by being in here; that takes the button in
+      // the head of the folder, which asks first and says what it means.
+      key: 'bin',
+      href: link('bin'),
+      active: current === 'bin',
+      icon: BinIcon,
+      name: 'Bin',
+      title: 'What you have deleted. Yours alone, and nothing is destroyed until you empty it.',
+      count: <Count value={binCount} word="unread, in the bin" quiet />,
+    },
   ]
 
   // ...and the same list in the order this person put it in.
@@ -916,7 +951,7 @@ export function NavRail({
 
   const mineDrag = useRailDrag(mineDraggable, moveMine)
 
-  const mine: RailItem[] = orderedMine.map((item) => (mineDraggable ? {
+  const mineRows: RailItem[] = orderedMine.map((item) => (mineDraggable ? {
     ...item,
     // Kept rather than replaced: "nobody else can see this one" is worth
     // hearing before you answer from it, and it does not stop being true
@@ -926,6 +961,36 @@ export function NavRail({
     dragging: mineDrag.state.dragId === item.key,
     over: mineDrag.state.overId === item.key && mineDrag.state.dragId !== item.key,
   } : item))
+
+  // ...and the two of them that are folded away until somebody asks.
+  //
+  // Spam and Bin are the two folders on this rail that nobody opens on purpose.
+  // They are opened when something has gone missing, which is a handful of
+  // times a year, and the rest of the time they are two rows of furniture sat
+  // in the middle of the half-dozen places somebody genuinely lives in - and
+  // two rows that both mean "gone", side by side, are also two rows people
+  // muddle up at a glance. So they go behind More, which is exactly what a
+  // desktop mail program does with the same pair.
+  //
+  // Folded rather than removed. Everything on this rail is a place that must
+  // stay reachable: a folder people cannot find is a folder they assume ate
+  // their message, which on these two is precisely the wrong lesson.
+  //
+  // They are still in `orderedMine`, so this person's own arrangement of the
+  // rail keeps their place in it - the order is saved by key and a hidden row
+  // holds its slot. Only the drawing is affected.
+  const [moreOpen, setMoreOpen] = useState(false)
+  // Standing in one of them opens it whatever the button says, or the row
+  // telling somebody where they are would be the one row not on the screen.
+  // Only the two entries under Yours: a colleague's spam folder or bin is
+  // `spam:<id>` and hangs under their name further down the rail.
+  const inTheBack = current === 'spam' || current === 'bin'
+  const showBack = moreOpen || inTheBack
+  const mine = showBack ? mineRows : mineRows.filter((item) => !BEHIND_MORE.includes(item.key))
+  // What is waiting behind the button while it is shut, so folding the pair
+  // away cannot also hide the one thing about them worth noticing. Read off the
+  // same two numbers the rows themselves carry.
+  const behindCount = spamCount + binCount
 
   // ---- colleagues' own post -------------------------------------------
   //
@@ -1011,7 +1076,26 @@ export function NavRail({
       active: current === `spam:${inbox.id}`,
       icon: SpamIcon,
       name: 'Spam',
-      title: `What has been thrown away out of ${inbox.ownerName ?? 'their'} post`,
+      title: `What has been marked as junk out of ${inbox.ownerName ?? 'their'} post`,
+    }] : []),
+    // And their bin, which is here for the same reason their spam folder is,
+    // only more so. A conversation deleted out of this colleague's address
+    // lands in THIS colleague's bin (see binOwnerFor), so somebody covering
+    // their post who deletes the wrong thing has left it somewhere they cannot
+    // otherwise reach - and this is the one folder on the rail with a button in
+    // it that destroys what it holds. A bin nobody can look into is a bin
+    // nobody should be allowed to empty.
+    //
+    // Only where there is an owner, the same guard the three above wear. A bin
+    // belongs to a person; an address whose colleague's account has gone has
+    // nobody whose bin it could be.
+    ...(inbox.ownerUserId ? [{
+      key: `${inbox.id}:bin`,
+      href: link(`bin:${inbox.id}`),
+      active: current === `bin:${inbox.id}`,
+      icon: BinIcon,
+      name: 'Bin',
+      title: `What has been deleted out of ${inbox.ownerName ?? 'their'} post`,
     }] : []),
   ]
 
@@ -1031,7 +1115,7 @@ export function NavRail({
   // there is one right answer and it is already on the screen.
   const currentFolderInbox = (() => {
     if (!current) return null
-    for (const folder of ['sent', 'drafts', 'mentions', 'spam']) {
+    for (const folder of ['sent', 'drafts', 'mentions', 'spam', 'bin']) {
       if (current.startsWith(`${folder}:`)) return current.slice(folder.length + 1)
     }
     return null
@@ -1114,7 +1198,9 @@ export function NavRail({
   // its own to be active - it is `current === null` - so the fallback is what
   // the All row says.
   const here = (() => {
-    const own = mine.find((item) => item.active)
+    // Off the full list rather than the folded one: the bar below 1200px has to
+    // be able to say "Bin" even on the render where the More button is shut.
+    const own = mineRows.find((item) => item.active)
     if (own) return own
     for (const inbox of shared) {
       const row = inboxEntry(inbox, null)
@@ -1223,8 +1309,41 @@ export function NavRail({
 
         <div className="uin-rail-group">
           <p className="uin-rail-heading" id="uin-rail-mine">Yours</p>
-          <ul className="uin-rail-list" aria-labelledby="uin-rail-mine" {...mineDrag.handlers}>
+          <ul className="uin-rail-list" id="uin-rail-mine-list" aria-labelledby="uin-rail-mine" {...mineDrag.handlers}>
             {mine.map((item) => <Entry key={item.key} item={item} />)}
+            {/* The last row in the group, and not a place to go: it folds the
+                two "gone" folders away until somebody wants them. Inside the
+                same list so it reads as the end of it rather than as a stray
+                control underneath, and with no `data-uin-id`, so the drag
+                handlers on the <ul> walk straight past it.
+
+                Not offered at all while the reader is standing in one of the
+                two: the row saying where they are is on the screen because of
+                that, and a button offering to hide it would take the highlight
+                away from under them. */}
+            {!inTheBack && (
+              <li>
+                <button
+                  type="button"
+                  className="uin-rail-item uin-rail-more"
+                  aria-expanded={moreOpen}
+                  aria-controls="uin-rail-mine-list"
+                  onClick={() => setMoreOpen((open) => !open)}
+                >
+                  <span className="uin-rail-icon uin-rail-more-icon" aria-hidden="true">
+                    {ChevronDownIcon}
+                  </span>
+                  <span className="uin-rail-name">{moreOpen ? 'Less' : 'More'}</span>
+                  {/* Only while they are hidden, and only when there is
+                      something to say: a badge on a button that is already
+                      showing what it counts is a number said twice. */}
+                  {!moreOpen && <Count value={behindCount} word="waiting in Spam and Bin" quiet />}
+                  <span className="sr-only">
+                    {moreOpen ? '. Hide Spam and Bin' : '. Show Spam and Bin'}
+                  </span>
+                </button>
+              </li>
+            )}
           </ul>
         </div>
 

@@ -213,6 +213,30 @@ export const ThreadSpamBody = z.object({
   spam: z.boolean(),
 })
 
+/** The bin, as one person sees it. One boolean, for the reason above - and no
+ *  user id, for the reason the junk route gives at length: a body that could
+ *  name whose bin would be a body that could fill a colleague's. Whose is
+ *  worked out on the server from the address the conversation sits in. */
+export const ThreadBinBody = z.object({
+  bin: z.boolean(),
+})
+
+/** Emptying a bin, which is the one request in this module that destroys
+ *  anything.
+ *
+ *  It names an ADDRESS rather than a person, and that is deliberate. The folder
+ *  on the rail is scoped by inbox - `bin:<inbox id>` - so the address is what
+ *  the screen already knows, and the server resolves it to an owner the same
+ *  way it resolves the folder itself: against the addresses this reader may
+ *  actually open, refusing any it does not find (E17). A body naming a user id
+ *  would be a body that could empty anybody's bin.
+ *
+ *  Null - or absent - is the reader's own bin, which is the entry under Yours.
+ */
+export const EmptyBinBody = z.object({
+  inboxId: z.string().min(1).nullable().optional(),
+})
+
 /** Shutting the site's front door on somebody, or opening it again.
  *
  *  The address is checked for shape here and normalised in lib/blocked-senders.ts

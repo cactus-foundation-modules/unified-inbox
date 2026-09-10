@@ -152,6 +152,48 @@ describe('parseInboxParams', () => {
     })
   })
 
+  it('reads the Bin tab, which is a folder rather than an inbox id', () => {
+    expect(parseInboxParams({ inbox: 'bin' })).toMatchObject({
+      inboxId: null,
+      binOnly: true,
+      spamOnly: false,
+      sentOnly: false,
+      draftsOnly: false,
+      mentionsOnly: false,
+      unroutedOnly: false,
+      providerModule: null,
+    })
+    // An address genuinely called "bin" would be an id, and reading the folder
+    // out of one is how somebody's post disappears into a folder that has a
+    // button on it saying Empty.
+    expect(parseInboxParams({ inbox: 'abc' }).binOnly).toBe(false)
+    expect(parseInboxParams({}).binOnly).toBe(false)
+  })
+
+  it('reads a colleague-scoped Bin, which is whose bin rather than which address', () => {
+    // `bin:<id>` is the folder under a colleague's name on the rail, and it
+    // means "the bin of whoever owns that address" rather than "what was
+    // deleted at that address". A conversation deleted out of somebody's own
+    // inbox goes into THEIR bin, so without this a coverer's mis-click would be
+    // a message only its owner could ever put back.
+    const scoped = parseInboxParams({ inbox: 'bin:inbox_7' })
+    expect(scoped.binOnly).toBe(true)
+    expect(scoped.folderInboxId).toBe('inbox_7')
+    // And it is not read as an address, which would have listed that inbox's
+    // ordinary post under a heading saying Bin, beside a button that empties
+    // one.
+    expect(scoped.inboxId).toBeNull()
+    expect(scoped.spamOnly).toBe(false)
+  })
+
+  it('falls back to your own bin when the colon carries nothing after it', () => {
+    expect(parseInboxParams({ inbox: 'bin:' })).toMatchObject({
+      binOnly: true,
+      folderInboxId: null,
+      inboxId: null,
+    })
+  })
+
   it('reads which draft is being finished', () => {
     expect(parseInboxParams({}).draftId).toBeNull()
     expect(parseInboxParams({ compose: '1', draft: 'dft_7' })).toMatchObject({

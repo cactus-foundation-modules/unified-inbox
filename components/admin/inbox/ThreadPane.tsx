@@ -114,6 +114,18 @@ type Props = {
     senderBlocked: boolean
     canBlock: boolean
   }
+  /** The bin, as THIS reader sees it: whether the conversation has been deleted
+   *  into the relevant bin, and whose that is. Its own prop rather than a third
+   *  field on `spamState`, because the two are different decisions with
+   *  different consequences - junk is refused and kept for ever, while a bin
+   *  can be emptied - and folding them together is how a screen ends up
+   *  offering one word for both. */
+  binState: {
+    binned: boolean
+    /** The colleague whose bin it would go into, when that is not the reader.
+     *  Null on your own post and on every shared address. */
+    ownerName: string | null
+  }
   now: Date
   /** Whether to ask for people's own pictures. Off unless the site has switched
    *  it on - see Settings, People. */
@@ -644,7 +656,7 @@ export function ThreadPane({
   canReply, cannotReplyReason, style, destinationLine,
   replyTo, replyAllTo, replySubject, forwardSubject, draft,
   canAddProducts, draftProducts, newestFirst,
-  canDeleteMessages, blockState, spamState, now, timezone, heldDrafts, showAvatars,
+  canDeleteMessages, blockState, spamState, binState, now, timezone, heldDrafts, showAvatars,
   context, asked, merges, otherInboxNames, scrollToMessageId,
 }: Props) {
   // The list arrives oldest first. Reversing a copy rather than sorting again:
@@ -726,6 +738,8 @@ export function ThreadPane({
             senderAddress={spamState.senderAddress}
             senderBlocked={spamState.senderBlocked}
             canBlock={spamState.canBlock}
+            binned={binState.binned}
+            binOwnerName={binState.ownerName}
             closeHref={inboxHref(base, params, { id: null })}
           />
           <Link className="uin-thread-close" href={inboxHref(base, params, { id: null })}>
