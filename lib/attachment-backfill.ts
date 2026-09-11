@@ -12,17 +12,17 @@ import { repointAttachmentsSharingKey, unfiledAttachmentCount, unfiledAttachment
 // STORED, and an attachment whose bytes were fetched last March is never stored
 // again.
 //
-// So this walks them, a batch at a time, from a button on the settings screen.
-// A batch rather than a job, because the work is one download and one upload
-// per file and there is no telling in advance whether a site has eleven of them
-// or eleven thousand - the screen keeps asking until the count reaches zero,
-// which also means a site owner can stop watching at any point and the next
-// press carries on from where it left off.
+// So the nightly tidy walks them, a few at a time, and says nothing about it.
+// There is no button and no setting, which is the right answer to "these files
+// are in the wrong place" - a site owner has no way of knowing whether the
+// answer to that question should be yes, and being asked it is worse than not
+// being asked it. It drains itself over a few nights on a site with a lot of
+// post and in one pass on a site with a little, exactly as the retention sweep
+// beside it catches up on a ten-year-old mailbox.
 //
 // Deliberately NOT a migration. A migration runs inside a deploy, has no
-// storage credentials worth relying on, and cannot be stopped or resumed; and a
-// site that has never wanted its attachments in the library should not have
-// them moved there by an update it did not ask for.
+// storage credentials worth relying on, cannot be stopped and cannot be
+// resumed, and this is one download and one upload per file.
 //
 // Order of work, per file, and the reason for it:
 //
@@ -36,35 +36,44 @@ import { repointAttachmentsSharingKey, unfiledAttachmentCount, unfiledAttachment
 // a year in the meantime. The other order loses the file.
 // ---------------------------------------------------------------------------
 
-/** How long one press may spend working before it answers. Comfortably inside
- *  the ceiling a module route runs under, with room for the last file to
- *  finish. */
-const BUDGET_MS = 40_000
-
-/** How many to attempt in one press, whatever the budget allows. Each one is a
- *  download and an upload of up to 25MB; a batch bigger than this would spend
- *  most presses hitting the clock rather than the count. */
+/** How many to attempt in one pass. Each one is a download and an upload of up
+ *  to 25MB, and the nightly job has several other things to get through. */
 const BATCH = 10
 
-export type BackfillOutcome = {
+export type FilingSweepOutcome = {
   /** Files now sitting in the media library that were not before. */
   filed: number
   /** Files that could not be read or could not be written. They stay exactly
-   *  where they were and will be tried again on the next press. */
+   *  where they were and are tried again tomorrow. */
   failures: number
-  /** Still to do once this press finished. */
+  /** Still to do after this pass, so a night's log says whether it is nearly
+   *  through the backlog or has barely started. */
   remaining: number
 }
 
-export async function backfillAttachments(): Promise<BackfillOutcome> {
-  const deadline = Date.now() + BUDGET_MS
+const NOTHING: FilingSweepOutcome = { filed: 0, failures: 0, remaining: 0 }
+
+/**
+ * One pass of the filing sweep, bounded by the deadline the caller has left.
+ *
+ * The deadline is checked before each file rather than only at the top: the
+ * nightly job shares one function's worth of time between several sweeps, and a
+ * single 25MB attachment on a slow morning must not be what stops the retention
+ * window running.
+ */
+export async function sweepAttachmentFiling(
+  opts: { deadline: number } = { deadline: Date.now() + 12_000 },
+): Promise<FilingSweepOutcome> {
+  if (Date.now() > opts.deadline) return NOTHING
+
   const rows = await unfiledAttachments(BATCH)
+  if (rows.length === 0) return NOTHING
 
   let filed = 0
   let failures = 0
 
   for (const row of rows) {
-    if (Date.now() > deadline) break
+    if (Date.now() > opts.deadline) break
     try {
       const provider = row.mediaProvider as MediaProviderType
       const bytes = await downloadMedia(provider, row.mediaKey, row.mediaUrl)
@@ -78,10 +87,8 @@ export async function backfillAttachments(): Promise<BackfillOutcome> {
       // Two ways this is not a file that moved, and neither may be counted as
       // one. Null is a write that failed, and the row still points at the old
       // copy - the one thing that must not now be deleted. The same key back is
-      // the filing rules declining it after all, which leaves it exactly where
-      // it was AND still in the count of what is left to do: called a success,
-      // it would have the screen pressing the button for ever on a file that
-      // never budges.
+      // the filing rules declining it after all, which leaves it where it was
+      // and still in the count of what is left to do.
       if (!stored || stored.key === row.mediaKey) {
         failures += 1
         continue
@@ -98,11 +105,11 @@ export async function backfillAttachments(): Promise<BackfillOutcome> {
         // The file is safely in its new home and the row points at it. All that
         // is left behind is a copy nobody is holding, which the storage check
         // will offer up.
-        console.warn('[unified-inbox] backfill could not remove the old copy of an attachment:', err)
+        console.warn('[unified-inbox] filing sweep could not remove the old copy of an attachment:', err)
       })
     } catch (err) {
       failures += 1
-      console.warn('[unified-inbox] backfill could not file an attachment:', err)
+      console.warn('[unified-inbox] filing sweep could not file an attachment:', err)
     }
   }
 

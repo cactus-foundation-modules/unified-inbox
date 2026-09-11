@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { errorResponse } from '@/lib/utils'
 import { sweepAbandonedUploads, sweepRetention, sweepStalledSends } from '@/modules/unified-inbox/lib/retention'
+import { sweepAttachmentFiling } from '@/modules/unified-inbox/lib/attachment-backfill'
 import { pruneDeliveries } from '@/modules/unified-inbox/lib/webhooks-db'
 import { getSettings, wakeDueMentions } from '@/modules/unified-inbox/lib/db'
 import { pruneCampaignLogs } from '@/modules/unified-inbox/lib/campaigns/store'
@@ -26,6 +27,11 @@ import { reconcileBrevoWebhooks } from '@/modules/unified-inbox/lib/brevo-webhoo
 export const maxDuration = 60
 
 const BUDGET_MS = 18_000
+
+/** What the attachment filing sweep may have. Smaller than the retention
+ *  window's share because each file is a download and an upload rather than a
+ *  query, and because it is the one job here that nobody is waiting on. */
+const FILING_BUDGET_MS = 12_000
 
 export async function GET(request: NextRequest) {
   const secret = process.env.CRON_SECRET
@@ -55,6 +61,15 @@ export async function GET(request: NextRequest) {
   // the ones nothing at all points at, and only once they are a week old - a
   // draft holding one keeps it for as long as the draft lives.
   const uploads = await sweepAbandonedUploads()
+
+  // Attachments collected before this module filed them into the media library,
+  // moved into it a few at a time. Nothing moves them otherwise: a file is only
+  // ever filed at the moment its bytes are written, and bytes fetched last
+  // March are never written again. Last of the sweeps and on whatever time is
+  // left, because it is the only one here that is catching up on history rather
+  // than keeping up with the present - every other night's work still gets done
+  // on a morning when this one gets none.
+  const filing = await sweepAttachmentFiling({ deadline: Date.now() + FILING_BUDGET_MS })
 
   // The send-by-send ledger of campaigns that finished long ago. The recipient
   // rows are what hold a name, an address and a company, so those are what go;
@@ -95,6 +110,9 @@ export async function GET(request: NextRequest) {
     abandonedUploadFailures: uploads.failures,
     campaignRows,
     brevoAccountsUnreachable: brevoAccounts,
+    attachmentsFiled: filing.filed,
+    attachmentsToFile: filing.remaining,
+    attachmentFilingFailures: filing.failures,
     ...retention,
   })
 }

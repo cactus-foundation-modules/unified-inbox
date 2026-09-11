@@ -21,6 +21,7 @@ function indexFrom(refs: string[]): MediaUsageIndex {
     referencedIds: new Set<string>(),
     haystack,
     referenced: extractReferenceTokens(haystack),
+    referencedViaFormerAddress: new Set<string>(),
     degraded: false,
   }
 }
