@@ -1,0 +1,83 @@
+-- Unified Inbox - Migration 054: one message, thrown away, staying thrown away.
+--
+-- A NEW numbered file rather than an edit to an earlier one: a module migration
+-- is recorded once per install and never runs again, so editing an earlier one
+-- would reach a fresh install and nobody else. Everything below is idempotent,
+-- and there is no dollar-quoting anywhere - comments included - because the
+-- backup round-trip harness skips a whole module whose migration files carry a
+-- pair of them, which buys a green gate that proved nothing.
+--
+-- TEXT and TIMESTAMP(3) only, both of which this module already stores in a
+-- dozen places, so the backup serialiser and its schema-coverage backstop need
+-- no new branch.
+--
+-- ---------------------------------------------------------------------------
+-- WHAT THIS IS FOR.
+--
+-- Until now the smallest thing anybody could throw away was a whole
+-- conversation. Migration 052 built the bin for that and 053 built the
+-- gravestone that keeps a destroyed one destroyed. This is the same problem one
+-- size down: threading occasionally glues a stray email onto a conversation it
+-- has no business being in, and the answer to that has been to live with it.
+--
+-- Deleting one message out of a conversation is easy to write and easy to get
+-- catastrophically wrong, because DELETING THE ROW IS NOT ENOUGH. Every way
+-- mail reaches this module is a way for it to come straight back:
+--
+--   The collection dedupes on the Message-ID it finds in "uin_messages"
+--   (see findMessageByIdentity). Delete the row and that lookup misses, so the
+--   very next time the message is seen at a location the ledger has not already
+--   walked - the owner filing it into the archive from their phone, a mailbox
+--   re-seeded after UIDVALIDITY changed - it is filed again as a discovery.
+--
+--   A message a channel owns is worse still: it is a copy of something the
+--   owning module still holds and hands over on request, and the dedupe there
+--   is (thread, the channel's own message id). Delete the row and the next
+--   collection puts it straight back, every quarter of an hour, for ever.
+--
+-- So the row goes and a gravestone stays. One row per message destroyed, the
+-- same shape as the conversation-sized one next door in 053: an identity and a
+-- date, with deliberately nowhere to put a name, an address or a word anybody
+-- wrote - which is what lets it survive an erasure under D17 without keeping
+-- the thing that was erased.
+--
+-- ---------------------------------------------------------------------------
+-- WHAT IS IN IT.
+--
+-- "scope" and "identity" are a pair, and which pair depends on where the
+-- message came from:
+--
+--   Email:   scope 'email', identity the RFC 5322 Message-ID, angle brackets
+--            stripped - exactly what "uin_messages"."message_id_header" holds,
+--            including the synthetic identity this module mints for mail that
+--            arrived without one (see contentIdentity).
+--   Channel: scope the manifest entry id the channel is stored under - the
+--            channel, not the module, because one module may publish several -
+--            and identity that channel's own id for the message.
+--
+-- THE EMAIL SCOPE IS THE WHOLE SITE, not one account, and that is a decision
+-- rather than an oversight. A Message-ID is meant to be unique in the world, so
+-- one line drawn against it covers every mailbox this site collects from,
+-- including the one somebody adds next year. The narrow case it gets wrong is
+-- mail between two of the site's own addresses, which is deliberately filed
+-- twice - the sender's copy and the recipient's - under one Message-ID: delete
+-- one side and the other cannot be RE-collected. The copy already filed is
+-- untouched and stays exactly where it is, so the cost is a message that was
+-- never collected in the first place never arriving. That is a great deal
+-- better than the alternative failure, which is somebody deleting a message,
+-- watching it come back, and deleting it again.
+--
+-- The row is kept for ever. It is two short strings and a stamp, and the line
+-- it draws is what stops a re-collection quietly undoing somebody's deletion
+-- months later, so there is nothing here worth sweeping up.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS "uin_message_deleted" (
+    -- 'email', or the manifest entry id of the channel that owned the message.
+    "scope"      TEXT         NOT NULL,
+    -- The Message-ID for email; the channel's own message id for a channel.
+    "identity"   TEXT         NOT NULL,
+    "deleted_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "uin_message_deleted_pkey" PRIMARY KEY ("scope", "identity")
+);

@@ -21,7 +21,8 @@ import {
 // ---------------------------------------------------------------------------
 // A reply puts a conversation back in Open, executed.
 //
-// `reopenOnReply` is raw SQL, and raw SQL is a string to `tsc`, a string to
+// `reopenOnReply` - and `reopenOnOurReply`, the half that answers for a message
+// going the other way - is raw SQL, and raw SQL is a string to `tsc`, a string to
 // `eslint`, and never executed by a build - so a statement Postgres will not
 // parse, or one whose WHERE clause is a shade too wide, passes every gate this
 // repository has. This one is also the least ordinary statement in the module:
@@ -90,6 +91,10 @@ describe.runIf(shouldRun)('a reply puts a conversation back in Open, against a r
   let lib: Db
 
   let inboxId = ''
+  /** Somebody real. The timeline entry our own reopen writes carries a name,
+   *  and "user_id" is a foreign key to "User" - so a test that made one up
+   *  would be testing a statement production never runs. */
+  const MARCUS = 'user-marcus'
 
   /** A fresh conversation in whatever state the test needs it in. */
   const threadIn = async (
@@ -161,6 +166,13 @@ describe.runIf(shouldRun)('a reply puts a conversation back in Open, against a r
     inboxId = (await lib.createInbox({
       name: 'Sales', address: 'sales@deskwell.co.uk', connectionId: connection.id,
     })).id
+
+    await db.$executeRawUnsafe(`INSERT INTO "Role" ("id", "name") VALUES ('role-staff', 'Staff')`)
+    await db.$executeRawUnsafe(
+      `INSERT INTO "User" ("id", "email", "username", "roleId", "updatedAt")
+       VALUES ($1, 'marcus@deskwell.co.uk', 'marcus', 'role-staff', now())`,
+      MARCUS,
+    )
   }, 600_000)
 
   afterAll(async () => {
@@ -289,5 +301,79 @@ describe.runIf(shouldRun)('a reply puts a conversation back in Open, against a r
     await lib.reopenOnReply(id)
 
     expect(await badge()).toBe(before + 1)
+  })
+
+  // -------------------------------------------------------------------------
+  // The other direction: a reply WE send.
+  //
+  // Same shape of statement, deliberately narrower rule, and it needs proving
+  // against a real database for the same reason - it is the WHERE clause that
+  // is the whole of the behaviour, and nothing but Postgres reads it.
+  // -------------------------------------------------------------------------
+
+  it('answering something we had finished with opens it again', async () => {
+    const id = await threadIn('done')
+
+    expect(await lib.reopenOnOurReply(id)).toBe(true)
+    expect(await stateOf(id)).toEqual({ status: 'open', snoozeUntil: null })
+  })
+
+  it('leaves a sleep this side asked for exactly where it was', async () => {
+    // The narrowing, and the point of having two statements rather than one.
+    // Send later & snooze sets both in one press; waking it would undo half of
+    // an instruction nobody withdrew.
+    const id = await threadIn('snoozed', THURSDAY)
+
+    expect(await lib.reopenOnOurReply(id)).toBe(false)
+    expect(await stateOf(id)).toEqual({ status: 'snoozed', snoozeUntil: THURSDAY })
+  })
+
+  it('says nothing the second time, and nothing about one already open', async () => {
+    const done = await threadIn('done')
+    expect(await lib.reopenOnOurReply(done)).toBe(true)
+    expect(await lib.reopenOnOurReply(done)).toBe(false)
+
+    expect(await lib.reopenOnOurReply(await threadIn('open'))).toBe(false)
+  })
+
+  it('touches nothing but the conversation it was given', async () => {
+    const answered = await threadIn('done')
+    const finished = await threadIn('done')
+    const sleeping = await threadIn('snoozed', THURSDAY)
+
+    expect(await lib.reopenOnOurReply(answered)).toBe(true)
+
+    expect(await stateOf(finished)).toMatchObject({ status: 'done' })
+    expect(await stateOf(sleeping)).toMatchObject({ status: 'snoozed' })
+  })
+
+  it('writes a timeline entry with the sender attached to it', async () => {
+    const id = await threadIn('done')
+    expect(await lib.reopenOnOurReply(id)).toBe(true)
+    await lib.recordEvent(id, MARCUS, 'woken', { was: 'done', ours: true })
+
+    const events = await lib.listThreadEvents(id)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      kind: 'woken', userId: MARCUS, detail: { was: 'done', ours: true },
+    })
+  })
+
+  it('puts it back on the badge and in the Open tab', async () => {
+    const badge = async () => (await lib.openCounts(VIEWER, [inboxId], false))[inboxId] ?? 0
+    const listed = (status: 'open' | 'snoozed' | 'done') => lib.listThreads({
+      viewerUserId: VIEWER,
+      inboxIds: [inboxId], includeUnrouted: false, status, page: 1, perPage: 50,
+    }).then((rows) => rows.map((t) => t.id))
+
+    const before = await badge()
+    const id = await threadIn('done')
+    expect(await listed('done')).toContain(id)
+
+    await lib.reopenOnOurReply(id)
+
+    expect(await badge()).toBe(before + 1)
+    expect(await listed('open')).toContain(id)
+    expect(await listed('done')).not.toContain(id)
   })
 })

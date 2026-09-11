@@ -1,8 +1,10 @@
 import {
   getThreadDetail,
   insertProviderMessage,
+  recordEvent,
   recordLink,
   recountProviderThread,
+  reopenOnOurReply,
   setThreadRead,
   threadHasLink,
 } from './db'
@@ -217,6 +219,14 @@ export async function sendProviderReply(input: {
   if (thread.unread) {
     await setThreadRead(thread.id, false)
     await pushProviderRead(thread)
+  }
+
+  // And that it is not finished with. Same rule as an email reply and for the
+  // same reason - our own answer never comes back through the collecting pass
+  // to say so - and narrowed the same way: only something marked done, never a
+  // sleep this side asked for. See reopenOnOurReply.
+  if (await reopenOnOurReply(thread.id)) {
+    await recordEvent(thread.id, input.authorUserId, 'woken', { was: 'done', ours: true })
   }
 
   return { ok: true, messageId }

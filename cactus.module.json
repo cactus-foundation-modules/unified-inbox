@@ -1,6 +1,6 @@
 {
   "name": "unified-inbox",
-  "version": "0.1.74",
+  "version": "0.1.75",
   "tablePrefix": "uin_",
   "description": "Every conversation with every customer and supplier in one place - email, live chat, contact form, calls, texts and WhatsApp - with your own records beside them.",
   "requiresCoreVersion": "0.5.1574",
@@ -138,6 +138,7 @@
     "uin_thread_spam",
     "uin_thread_bin",
     "uin_provider_deleted",
+    "uin_message_deleted",
     "uin_thread_inboxes",
     "uin_threads",
     "uin_inbox_access",

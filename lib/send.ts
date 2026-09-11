@@ -17,6 +17,7 @@ import {
   recordEvent,
   recordLink,
   reopenForRetry,
+  reopenOnOurReply,
   settleDelivery,
   threadHasLink,
   getMessage,
@@ -473,6 +474,15 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
     // thread again.
     providerMessageId: cleanMessageId(outcome.providerMessageId),
   })
+
+  // Something we had finished with, answered - so it is not finished. Only a
+  // conversation that was already here can have been marked done, and only
+  // 'done' is reversed: a sleep somebody set themselves survives a send, which
+  // is the whole reason the scheduled sender reads it either side of one. See
+  // reopenOnOurReply. Credited to whoever sent it, because somebody did.
+  if (prepared.threadId && await reopenOnOurReply(threadId)) {
+    await recordEvent(threadId, request.authorUserId, 'woken', { was: 'done', ours: true })
+  }
 
   await copyToSentFolder({
     messageId: row.id,

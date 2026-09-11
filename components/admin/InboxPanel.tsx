@@ -1355,6 +1355,10 @@ export async function UnifiedInboxPanel({
           scrollToMessageId={openOnMessage?.id ?? null}
           showAvatars={settings.showAvatars}
           canDeleteMessages={canDeleteMessages}
+          /* Throwing one message away, or moving one out to a conversation of
+             its own. The same grant merging takes, for the same reason: both
+             change what everybody on the address sees. */
+          canManage={canManage}
           blockState={blockState}
           spamState={{
             spam: isSpam,

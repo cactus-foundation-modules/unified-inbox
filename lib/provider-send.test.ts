@@ -14,6 +14,8 @@ const recountProviderThread = vi.hoisted(() => vi.fn())
 const setThreadRead = vi.hoisted(() => vi.fn())
 const recordLink = vi.hoisted(() => vi.fn())
 const threadHasLink = vi.hoisted(() => vi.fn())
+const reopenOnOurReply = vi.hoisted(() => vi.fn())
+const recordEvent = vi.hoisted(() => vi.fn())
 const providerForKey = vi.hoisted(() => vi.fn())
 const resolveProducts = vi.hoisted(() => vi.fn())
 
@@ -23,6 +25,8 @@ vi.mock('./db', () => ({
   recountProviderThread,
   setThreadRead,
   recordLink,
+  recordEvent,
+  reopenOnOurReply,
   threadHasLink,
 }))
 vi.mock('./provider-registry', () => ({ providerForKey }))
@@ -110,6 +114,9 @@ beforeEach(() => {
   providerForKey.mockReset().mockResolvedValue(providerWith(send))
   recordLink.mockReset().mockResolvedValue(undefined)
   threadHasLink.mockReset().mockResolvedValue(false)
+  // Nothing was marked done unless a test says it was.
+  reopenOnOurReply.mockReset().mockResolvedValue(false)
+  recordEvent.mockReset().mockResolvedValue(undefined)
   resolveProducts.mockReset().mockResolvedValue([])
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
@@ -284,6 +291,25 @@ describe('sendProviderReply', () => {
   it('marks the conversation read, because answering something says you read it', async () => {
     await sendProviderReply({ threadId: 't1', body: { text: 'hi' }, authorUserId: 'u1', authorName: null })
     expect(setThreadRead).toHaveBeenCalledWith('t1', false)
+  })
+
+  it('and puts one that had been marked done back in Open', async () => {
+    reopenOnOurReply.mockResolvedValue(true)
+    await sendProviderReply({ threadId: 't1', body: { text: 'hi' }, authorUserId: 'u1', authorName: null })
+    expect(reopenOnOurReply).toHaveBeenCalledWith('t1')
+    expect(recordEvent).toHaveBeenCalledWith('t1', 'u1', 'woken', { was: 'done', ours: true })
+  })
+
+  it('with nothing said on the timeline when there was nothing to reopen', async () => {
+    reopenOnOurReply.mockResolvedValue(false)
+    await sendProviderReply({ threadId: 't1', body: { text: 'hi' }, authorUserId: 'u1', authorName: null })
+    expect(recordEvent).not.toHaveBeenCalled()
+  })
+
+  it('and not at all when the channel would not take it', async () => {
+    send.mockRejectedValue(new Error('Chatwoot 502'))
+    await sendProviderReply({ threadId: 't1', body: { text: 'hi' }, authorUserId: 'u1', authorName: null })
+    expect(reopenOnOurReply).not.toHaveBeenCalled()
   })
 
   it('stamps its own row so the far end’s copy can be told apart later', async () => {

@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db/prisma'
 import { encryptSecret, tryDecryptSecret } from '@/lib/crypto/secrets'
 import { normaliseAddress } from './addresses'
-import type { ThreadRef } from './threading'
+import { normaliseSubject, type ThreadRef } from './threading'
 import { mergedStatus, mergedUnread, validateMerge } from './thread-merge'
 import type { OutboundCandidate } from './relay-copy'
 import { hasInlineImages, readableHtml, rewriteInlineImages } from './html'
@@ -1346,8 +1346,16 @@ export type InsertMessageInput = {
  * Message-ID index turned a duplicate spotted by the pair key into an exception
  * that aborted the whole sweep. Bare DO NOTHING covers every unique index on
  * the table, which is what "we already hold this" has always meant here.
+ *
+ * And nothing somebody has thrown away comes back. The dedupe above is a lookup
+ * in this very table, so a deleted message misses it and would be filed again
+ * as a discovery the moment it is seen at a location the ledger has not already
+ * walked - the owner archiving it from their phone is enough. The gravestone is
+ * what makes a deletion stick; see migration 054.
  */
 export async function insertMessage(data: InsertMessageInput): Promise<string | null> {
+  if (await messageWasDeleted('email', data.messageIdHeader)) return null
+
   const rows = await prisma.$queryRaw<{ id: string }[]>`
     INSERT INTO "uin_messages"
       ("thread_id", "connection_id", "direction", "channel", "message_id_header", "in_reply_to",
@@ -3543,6 +3551,51 @@ export async function reopenOnReply(threadId: string): Promise<ReopenedFrom> {
   `
   const was = rows[0]?.was
   return was === 'snoozed' || was === 'done' ? was : null
+}
+
+/**
+ * One conversation put back in Open, because WE have written on it.
+ *
+ * The other half of reopenOnReply, and deliberately not the same rule.
+ *
+ * A reply typed in this hub never comes back through the collecting pass - the
+ * copy that surfaces in the Sent folder is turned away as one we already hold -
+ * so a conversation somebody had marked done and then answered stayed done,
+ * with our own answer sitting under it and no badge anywhere. Answering
+ * something is the plainest statement there is that it is not finished.
+ *
+ * ONLY 'done', where the inbound rule takes both. A snooze is this side's own
+ * instruction - "not until Thursday" - and sending is frequently the very
+ * reason for it: Send later & snooze says both things in one press, and the
+ * scheduled sender reads the sleep either side of a send precisely so it
+ * survives one (see threadSleep, follow-up.ts). Waking a conversation because
+ * of a message we ourselves set to go out would undo an instruction nobody
+ * withdrew. Done is the one that never comes back on its own, which is what
+ * makes it worth reversing.
+ *
+ * Shaped like its sibling for the same reasons: one row, named, matched only
+ * when there is something to change, so two presses of Send cost one no-op, and
+ * the status is read in a CTE under FOR UPDATE because RETURNING would hand
+ * back the value just written.
+ *
+ * Returns whether it actually moved, so an already-open conversation writes no
+ * timeline entry at all.
+ */
+export async function reopenOnOurReply(threadId: string): Promise<boolean> {
+  const rows = await prisma.$queryRaw<{ was: string }[]>`
+    WITH "before" AS (
+      SELECT "id", "status"
+        FROM "uin_threads"
+       WHERE "id" = ${threadId} AND "status" = 'done'
+         FOR UPDATE
+    )
+    UPDATE "uin_threads" t
+       SET "status" = 'open', "snooze_until" = NULL, "updated_at" = now()
+      FROM "before"
+     WHERE t."id" = "before"."id"
+    RETURNING "before"."status" AS "was"
+  `
+  return rows.length > 0
 }
 
 /**
@@ -6097,8 +6150,15 @@ export type ProviderMessageInput = {
 }
 
 /** Files one of the provider's messages. Returns null when we already hold it,
- *  which is the ordinary answer every time a conversation is re-read. */
+ *  which is the ordinary answer every time a conversation is re-read.
+ *
+ *  Or when somebody threw this one away. A channel's message is a COPY of
+ *  something the owning module still holds and hands over on every request, so
+ *  without the gravestone a deleted one is filed straight back on the next
+ *  collection, and on the one after that, for ever. Migration 054. */
 export async function insertProviderMessage(data: ProviderMessageInput): Promise<string | null> {
+  if (await messageWasDeleted(data.providerModule, data.providerMessageId)) return null
+
   const rows = await prisma.$queryRaw<{ id: string }[]>`
     INSERT INTO "uin_messages"
       ("thread_id", "direction", "channel", "from_name", "from_address", "from_phone",
@@ -7819,4 +7879,294 @@ export async function undoThreadMerge(
   }, { timeout: 60_000, maxWait: 15_000 })
 
   return { ok: true, winnerId, loserId }
+}
+
+// ---------------------------------------------------------------------------
+// S9: one message, rather than a whole conversation.
+//
+// Two things can be done to a single message from the dots beside it, and they
+// are opposites: throwing it away, and moving it somewhere it belongs. Both
+// exist because threading is a heuristic - a dropped References header and a
+// subject line two customers happened to share is all it takes to glue a stray
+// email onto somebody else's conversation - and until now the only answers were
+// to live with it or to throw the whole conversation away.
+//
+// Both are gated on `unifiedinbox.manage` in their routes, and for the reason
+// emptying a bin is: this changes what EVERYBODY on the address sees, which is
+// a different act from the bin, where a deletion is one person's own view of
+// their own screen.
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether somebody has already thrown this exact message away.
+ *
+ * Asked on the way IN, by both of the functions that file a message, because
+ * deleting the row is not enough on its own: the collection's dedupe is a
+ * lookup in `uin_messages`, so a deleted message misses it and is filed again
+ * as a discovery the next time it is seen somewhere the ledger has not walked.
+ * Migration 054 explains the two shapes of the pair at length.
+ *
+ * A message with no identity at all cannot be tombstoned and cannot be
+ * re-collected either - it has no location and nothing to match on - so the
+ * answer there is a cheerful no rather than a query.
+ */
+export async function messageWasDeleted(
+  scope: string,
+  identity: string | null,
+): Promise<boolean> {
+  if (!identity) return false
+  const rows = await prisma.$queryRaw<{ one: number }[]>`
+    SELECT 1 AS "one" FROM "uin_message_deleted"
+     WHERE "scope" = ${scope} AND "identity" = ${identity}
+     LIMIT 1
+  `
+  return rows.length > 0
+}
+
+/** One message, in what the two actions below and their routes need to decide
+ *  whether they are allowed and what they are about to do. */
+export type MessageForAction = {
+  id: string
+  threadId: string
+  channel: string
+  direction: 'in' | 'out' | 'note'
+  source: string
+  /** The channel that owns it, where one does. Not the same question as the
+   *  conversation's own: a note somebody typed here on a chat is ours. */
+  providerModule: string | null
+  providerMessageId: string | null
+  messageIdHeader: string | null
+  subject: string | null
+  snippet: string | null
+  sentAt: Date
+  /** How many messages the conversation holds, counted rather than read off
+   *  the thread's own column: that column is bookkeeping and can be stale, and
+   *  both refusals below turn on the number being right. */
+  siblings: number
+  /** The conversation it is on, and whether that one has itself been merged
+   *  away - which both actions refuse, because a conversation nothing shows is
+   *  not one to be moving messages out of. */
+  threadMergedIntoId: string | null
+  threadProviderModule: string | null
+  threadInboxId: string | null
+  threadUnread: boolean
+  threadStatus: string
+  threadSnoozeUntil: Date | null
+}
+
+export async function messageForAction(id: string): Promise<MessageForAction | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT m."id", m."thread_id", m."channel", m."direction", m."source",
+           m."provider_module", m."provider_message_id", m."message_id_header",
+           m."subject", m."snippet", m."sent_at",
+           t."merged_into_id", t."provider_module" AS "thread_provider_module",
+           t."inbox_id", t."unread", t."status", t."snooze_until",
+           (SELECT COUNT(*)::int FROM "uin_messages" s WHERE s."thread_id" = m."thread_id") AS "siblings"
+      FROM "uin_messages" m
+      JOIN "uin_threads" t ON t."id" = m."thread_id"
+     WHERE m."id" = ${id}
+  `
+  const r = rows[0]
+  if (!r) return null
+  return {
+    id: r.id as string,
+    threadId: r.thread_id as string,
+    channel: r.channel as string,
+    direction: r.direction as 'in' | 'out' | 'note',
+    source: r.source as string,
+    providerModule: (r.provider_module as string | null) ?? null,
+    providerMessageId: (r.provider_message_id as string | null) ?? null,
+    messageIdHeader: (r.message_id_header as string | null) ?? null,
+    subject: (r.subject as string | null) ?? null,
+    snippet: (r.snippet as string | null) ?? null,
+    sentAt: r.sent_at as Date,
+    siblings: Number(r.siblings ?? 0),
+    threadMergedIntoId: (r.merged_into_id as string | null) ?? null,
+    threadProviderModule: (r.thread_provider_module as string | null) ?? null,
+    threadInboxId: (r.inbox_id as string | null) ?? null,
+    threadUnread: !!r.unread,
+    threadStatus: r.status as string,
+    threadSnoozeUntil: (r.snooze_until as Date | null) ?? null,
+  }
+}
+
+/** The stored objects hanging off ONE message, so a deletion can take the bytes
+ *  out of storage before it takes the row out of the database - the same order
+ *  retention and the bin use, so an interrupted delete leaves an orphaned
+ *  object that the storage check can offer up rather than a row pointing at
+ *  bytes that have gone. */
+export async function storedObjectsForMessage(messageId: string): Promise<StoredObjectRef[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT a."id", a."media_key", a."media_provider"
+      FROM "uin_attachments" a
+     WHERE a."message_id" = ${messageId}
+       AND a."media_key" IS NOT NULL
+       AND a."media_provider" IS NOT NULL
+  `
+  return rows.map((r) => ({
+    attachmentId: r.id as string,
+    mediaKey: r.media_key as string,
+    mediaProvider: r.media_provider as string,
+  }))
+}
+
+/**
+ * Throws one message away, here, for good.
+ *
+ * NOT at the far end. Nothing in this function touches a mail server or asks a
+ * channel to delete anything - the email is still in whoever's mailbox it was
+ * collected from, and the chat is still in the module that owns the chat. This
+ * is a fact about what this site holds, which is the same promise emptying a
+ * bin makes. (The one route that DOES reach the far end is the Delete button on
+ * a voicemail, which asks the channel first and is a different act.)
+ *
+ * The gravestone goes in first and in the same transaction as the delete, so
+ * there is no window in which the row is gone and nothing is stopping the next
+ * collection from filing it straight back.
+ *
+ * The conversation is left standing even when this was the last message in it.
+ * An empty conversation reads as one on the screen and can be thrown away
+ * whole from the bin; destroying it quietly from a menu entry that says
+ * "Delete this message" would be a larger act than the words promise.
+ */
+export async function deleteMessageHere(
+  message: MessageForAction,
+  userId: string | null,
+): Promise<void> {
+  // Which line to draw. A message a channel owns is marked against that
+  // channel's own id for it; everything else is email and is marked against its
+  // Message-ID. Migration 054 has the argument for the email scope being the
+  // whole site rather than one account.
+  const scope = message.source === 'provider' && message.providerModule
+    ? message.providerModule
+    : 'email'
+  const identity = message.source === 'provider'
+    ? message.providerMessageId
+    : message.messageIdHeader
+
+  await prisma.$transaction(async (tx) => {
+    if (identity) {
+      await tx.$executeRaw`
+        INSERT INTO "uin_message_deleted" ("scope", "identity")
+        VALUES (${scope}, ${identity})
+        ON CONFLICT ("scope", "identity") DO NOTHING
+      `
+    }
+
+    // Attachment rows, delivery events and the rest go with it by cascade; a
+    // colleague's ask that pointed at it keeps its place on the conversation
+    // with nothing to point at, which is what ON DELETE SET NULL is there for.
+    await tx.$executeRaw`DELETE FROM "uin_messages" WHERE "id" = ${message.id}`
+
+    await recomputeThreadCounters(tx, message.threadId)
+
+    // Said out loud in the log, because this is the one thing anybody can do to
+    // a conversation that leaves no trace of itself in the conversation. What
+    // was in the message is deliberately not recorded: a deletion that kept a
+    // copy of the subject and the sender in an audit row would be a deletion
+    // only in name, and the same row has to survive an erasure under D17.
+    await tx.$executeRaw`
+      INSERT INTO "uin_events" ("thread_id", "user_id", "kind", "detail")
+      VALUES (${message.threadId}, ${userId}, 'message_deleted', NULL)
+    `
+  }, { timeout: 30_000, maxWait: 15_000 })
+}
+
+/** Why a message cannot be moved out on its own, in the words of whoever asked. */
+export function splitRefusal(message: MessageForAction): string | null {
+  if (message.threadMergedIntoId) {
+    return 'That conversation has been merged into another one. Open that one and move it out from there.'
+  }
+  if (message.siblings <= 1) {
+    return 'That is the only message in this conversation, so it is already one of its own.'
+  }
+  // A channel's message is a copy of something the owning module still holds,
+  // and that module decides which conversation it is in: the very next
+  // collection would offer it back on the conversation it came from, and we
+  // would be holding it twice. The conversation itself can still be merged and
+  // unmerged - that is a fact about this hub - but the pieces of it are not
+  // ours to rearrange.
+  if (message.source === 'provider') {
+    return 'That message belongs to another part of the site, which decides what is in its conversations.'
+  }
+  return null
+}
+
+export type MessageSplitResult = { threadId: string } | { error: string }
+
+/**
+ * Moves one message out of its conversation and onto a new one of its own.
+ *
+ * The undo is the merge that already exists: the two conversations are merged
+ * back together, which is why nothing here records a snapshot of its own. That
+ * is a deliberate trade - a bespoke undo would be a second, subtly different
+ * implementation of moving messages between conversations, and the one we have
+ * is tested.
+ *
+ * The new conversation is deliberately born WITHOUT a person on it. Whose it is
+ * gets worked out on the next collection from the message's own counterparty
+ * (see unresolvedThreads), which is the right answer rather than the one it was
+ * wrongly filed under - and being filed under the wrong person is usually why
+ * somebody is splitting it in the first place.
+ */
+export async function splitMessageToNewThread(
+  message: MessageForAction,
+  userId: string | null,
+): Promise<MessageSplitResult> {
+  const refusal = splitRefusal(message)
+  if (refusal) return { error: refusal }
+
+  const subject = message.subject ?? null
+
+  const threadId = await prisma.$transaction(async (tx) => {
+    const created = await tx.$queryRaw<{ id: string }[]>`
+      INSERT INTO "uin_threads"
+        ("inbox_id", "channel", "subject", "subject_normalised", "preview",
+         "last_message_at", "last_direction", "unread", "message_count",
+         "status", "snooze_until")
+      VALUES (${message.threadInboxId}, ${message.channel}, ${subject},
+              ${normaliseSubject(subject)}, ${message.snippet},
+              ${message.sentAt}, ${message.direction}, ${message.threadUnread}, 1,
+              -- Where it stood, carried across rather than reset: a message
+              -- moved out of something marked done has not become work again
+              -- just because it is now on a row of its own, and one moved out
+              -- of something asleep should not wake up shouting.
+              ${message.threadStatus},
+              ${message.threadStatus === 'snoozed' ? message.threadSnoozeUntil : null})
+      RETURNING "id"
+    `
+    const newThreadId = created[0]!.id
+
+    // `merged_from_thread_id` is deliberately left exactly as it is. Where an
+    // earlier merge put this message here, that merge's undo looks for it by id
+    // AND on the conversation it moved it to - so a message that has since been
+    // moved on again is quietly skipped rather than dragged back to a
+    // conversation it no longer has anything to do with.
+    await tx.$executeRaw`
+      UPDATE "uin_messages" SET "thread_id" = ${newThreadId} WHERE "id" = ${message.id}
+    `
+
+    await recomputeThreadCounters(tx, message.threadId)
+    await recomputeThreadCounters(tx, newThreadId)
+    // No merges and nobody it was put to, so this writes no rows at all - which
+    // is what "belongs to its own address and nothing else" looks like. Called
+    // anyway, so the new conversation goes through the same door every other
+    // conversation's addresses go through.
+    await recomputeThreadInboxes(tx, newThreadId)
+
+    await tx.$executeRaw`
+      INSERT INTO "uin_events" ("thread_id", "user_id", "kind", "detail")
+      VALUES (${message.threadId}, ${userId}, 'message_split',
+              ${JSON.stringify({ threadId: newThreadId })}::jsonb)
+    `
+    await tx.$executeRaw`
+      INSERT INTO "uin_events" ("thread_id", "user_id", "kind", "detail")
+      VALUES (${newThreadId}, ${userId}, 'split_from',
+              ${JSON.stringify({ threadId: message.threadId })}::jsonb)
+    `
+
+    return newThreadId
+  }, { timeout: 30_000, maxWait: 15_000 })
+
+  return { threadId }
 }

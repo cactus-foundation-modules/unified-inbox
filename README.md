@@ -144,6 +144,18 @@ the same human collapse into one story.
   four people spanning two inboxes becomes one - and it lets everybody on either
   address read the whole of it, which the confirmation says in as many words
   before it happens. It stays merged when somebody replies.
+- **Tidying up one message.** The dots beside a message hold two entries for
+  the times threading has guessed wrong, and both ask before they do anything.
+  **Move to its own conversation** takes one message out and starts a fresh
+  conversation with it - for the stray that got glued on because two customers
+  both wrote "Re: Quote" - and if that turns out to be wrong, merge the two back
+  together. **Delete this message** throws one message away and leaves the rest
+  of the conversation exactly as it was. It goes for everybody who can see the
+  address and it does not come back on the next collection, which is why both
+  take the same permission as merging rather than the everyday one. Nothing is
+  deleted from your mail account, and a message another part of the site owns -
+  a chat, an enquiry, a call - can be deleted but not moved, because the part
+  that owns it decides what is in its conversations.
 - **A discussion, a call or a text.** The arrow beside the write button opens
   the three things that are not an email. A **discussion** is a conversation
   with your colleagues - the box opens on the To line, and it lands in your own
@@ -348,3 +360,9 @@ from another channel that has been destroyed, holding that channel's own id for
 it and the date of the newest message it held. No name, no address and not a
 word anybody wrote, which is what lets it outlive an erasure without keeping the
 thing that was erased.
+
+`uin_message_deleted` is the same idea one size down: one row per single message
+somebody has thrown away, holding nothing but where it came from and its own
+identity. Both exist for the same reason - collecting the post is a question
+asked over and over, and without a line drawn somewhere the answer keeps putting
+back what somebody has just deleted.

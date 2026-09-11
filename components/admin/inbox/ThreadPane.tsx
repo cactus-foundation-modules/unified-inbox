@@ -96,6 +96,12 @@ type Props = {
    *  channel has to offer it AND the reader has to be allowed on that channel,
    *  and both halves are settled on the server. */
   canDeleteMessages: boolean
+  /** Whether this reader may rearrange the conversation itself: throw one
+   *  message away for everybody who can see the address, or move one out onto
+   *  a conversation of its own. `unifiedinbox.manage`, the same grant merging
+   *  and emptying a bin take, because all three change what everybody sees
+   *  rather than what one person's screen shows. */
+  canManage: boolean
   /** Whether the other party on this conversation can be refused from here.
    *  Null when the channel cannot refuse anybody, which is most of them. */
   blockState: { blocked: boolean; channelLabel: string } | null
@@ -577,6 +583,10 @@ const EVENT_WORDS: Record<string, string> = {
   linked: 'linked a record to it',
   unlinked: 'removed a link',
   merged: 'merged it with another',
+  unmerged: 'separated one back out again',
+  message_deleted: 'deleted a message from it',
+  message_split: 'moved a message out to its own conversation',
+  split_from: 'moved a message here out of another conversation',
 }
 
 /** What one entry says the person did. Named where naming them is the point:
@@ -588,6 +598,11 @@ function eventWords(event: ThreadEventRow, staffById: Record<string, string>): s
     const wanted = typeof event.detail?.userId === 'string' ? staffById[event.detail.userId] : null
     return wanted ? `asked ${wanted} to look` : 'asked somebody to look'
   }
+  // A waking with a name on it is one of ours: somebody answered a conversation
+  // that had been marked done. The unattended version of the same line says a
+  // reply arrived, which is the other half of the same rule and is somebody
+  // else's doing - see unattendedEvent.
+  if (event.kind === 'woken') return 'answered it, so it was opened again'
   return EVENT_WORDS[event.kind] ?? 'changed something'
 }
 
@@ -661,7 +676,7 @@ export function ThreadPane({
   canReply, cannotReplyReason, style, destinationLine,
   replyTo, replyAllTo, replySubject, forwardSubject, draft,
   canAddProducts, draftProducts, canSuggestReplies, newestFirst,
-  canDeleteMessages, blockState, spamState, binState, now, timezone, heldDrafts, showAvatars,
+  canDeleteMessages, canManage, blockState, spamState, binState, now, timezone, heldDrafts, showAvatars,
   context, asked, merges, otherInboxNames, scrollToMessageId,
 }: Props) {
   // The list arrives oldest first. Reversing a copy rather than sorting again:
@@ -921,9 +936,27 @@ export function ThreadPane({
                        quoted into anything that leaves the site, so it carries
                        nothing and the send falls back to the newest message. */
                     messageId={message.direction === 'note' ? null : message.id}
+                    /* Which message the last two entries act ON, which is this
+                       one whatever it is - a note included. */
+                    actOn={message.id}
                     canReply={canReply}
                     canReplyAll={canReply && replyAllTo.length > replyTo.length}
                     canForward={canReply && style.forward}
+                    /* Not where the foot of the message already carries the
+                       far-end Delete: that one asks the channel to get rid of
+                       it at the phone company as well, and two controls a few
+                       pixels apart that both say Delete and mean different
+                       things is how somebody deletes the wrong thing. */
+                    canDeleteHere={canManage && !(canDeleteMessages && message.source === 'provider')}
+                    /* A channel's message is a copy of something the owning
+                       module still holds and would hand back on the next
+                       collection, so it is not ours to move - and the only
+                       message in a conversation is already on one of its own.
+                       The route refuses both again; this is so the entry is
+                       not drawn for somebody to press and be told no. */
+                    canSplit={canManage && message.source !== 'provider' && messages.length > 1}
+                    base={base}
+                    params={params}
                   />
                 )}
               />

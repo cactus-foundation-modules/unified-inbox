@@ -26,6 +26,8 @@ const db = vi.hoisted(() => ({
   assignThreadIfUnassigned: vi.fn(async (): Promise<boolean> => true),
   recordLink: vi.fn(),
   reopenForRetry: vi.fn(),
+  // Nothing was marked done unless a test says it was, so nothing is reopened.
+  reopenOnOurReply: vi.fn(async (): Promise<boolean> => false),
   getMessage: vi.fn(),
   listAttachmentsForMessage: vi.fn(),
   getSettings: vi.fn(),
@@ -206,6 +208,50 @@ describe('sendMessage - the order of operations', () => {
       threadId: 'thread-1',
       inboxId: 'inbox-1',
     })
+  })
+})
+
+describe('sendMessage - something finished with, answered', () => {
+  // Our own reply never comes back through the collecting pass to say the
+  // conversation is alive again - the copy in Sent is turned away as one we
+  // already hold - so if it is not said here it is not said at all.
+
+  it('puts a conversation that had been marked done back in Open', async () => {
+    db.reopenOnOurReply.mockResolvedValue(true)
+
+    await sendMessage(baseRequest())
+
+    expect(db.reopenOnOurReply).toHaveBeenCalledWith('thread-1')
+    expect(db.recordEvent).toHaveBeenCalledWith('thread-1', 'user-1', 'woken', {
+      was: 'done',
+      ours: true,
+    })
+  })
+
+  it('says nothing on the timeline when there was nothing to reopen', async () => {
+    db.reopenOnOurReply.mockResolvedValue(false)
+
+    await sendMessage(baseRequest())
+
+    expect(db.recordEvent).not.toHaveBeenCalledWith(
+      'thread-1', expect.anything(), 'woken', expect.anything(),
+    )
+  })
+
+  it('only once the message has genuinely gone', async () => {
+    transport.deliver.mockResolvedValue({ ok: false, error: 'The mail server refused it.' })
+
+    await sendMessage(baseRequest())
+
+    expect(db.reopenOnOurReply).not.toHaveBeenCalled()
+  })
+
+  it('is not asked at all of a conversation this send started', async () => {
+    db.createOutboundThread.mockResolvedValue('thread-new')
+
+    await sendMessage(baseRequest({ threadId: undefined, inboxId: 'inbox-1', mode: 'new', to: ['jane@customer.com'], subject: 'Chairs' }))
+
+    expect(db.reopenOnOurReply).not.toHaveBeenCalled()
   })
 })
 
