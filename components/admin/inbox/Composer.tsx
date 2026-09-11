@@ -490,6 +490,19 @@ export function Composer({
   // at all, so neither is a thing to draft an answer to a customer for.
   const offerSuggestions = canSuggestReplies && (mode === 'reply' || mode === 'reply-all')
 
+  /** Whether the last thing said on this conversation was ours, so the button
+   *  says what it is actually going to do. A conversation ending with our own
+   *  email wants chasing, not answering, and being offered "Suggest reply" on
+   *  one reads as an offer to reply to yourself. The far end works the same
+   *  thing out for itself from the messages - this is only the wording. */
+  const chasing = useMemo(() => {
+    // Notes are already absent from this list, which is exactly the rule the
+    // stance wants: a colleague writing "chase this on Friday" has said nothing
+    // to the customer.
+    const newest = quotedPreviews[quotedPreviews.length - 1]
+    return !!newest?.ownSender
+  }, [quotedPreviews])
+
   /** What was in the box before a suggestion was tried in it. Stashed on the
    *  FIRST preview and not on any after it, so flicking between three drafts
    *  still puts back what somebody actually wrote rather than the draft they
@@ -1150,6 +1163,7 @@ export function Composer({
             disabled={busy}
             onPreview={previewSuggestion}
             onAccept={acceptSuggestion}
+            label={chasing ? 'Suggest a follow-up' : 'Suggest reply'}
           />
         </div>
       )}
