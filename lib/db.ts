@@ -1468,6 +1468,14 @@ export type AttachmentRow = {
   /** The Content-ID the message refers to this part by, when it declared one.
    *  Empty on everything that arrived before migration 048. */
   contentId: string | null
+  /** The media library row filed for this attachment, when it has one. Inline
+   *  parts and anything with no correspondent keep the private prefix and get
+   *  none - see lib/attachment-filing.ts. */
+  mediaId: string | null
+  /** Whether this module wrote the object media_key points at. False for a file
+   *  picked out of the media library and for a forward re-using the original's
+   *  bytes: deleting the message must not take either of those with it. */
+  ownsObject: boolean
 }
 
 function mapAttachment(r: Record<string, unknown>): AttachmentRow {
@@ -1489,6 +1497,8 @@ function mapAttachment(r: Record<string, unknown>): AttachmentRow {
     inboxId: (r.inbox_id as string | null) ?? null,
     externalUrl: (r.external_url as string | null) ?? null,
     contentId: (r.content_id as string | null) ?? null,
+    mediaId: (r.media_id as string | null) ?? null,
+    ownsObject: r.owns_object === true,
   }
 }
 
@@ -1540,6 +1550,8 @@ export async function recordAttachmentStored(id: string, stored: {
   provider: string
   url: string
   sizeBytes: number
+  /** The media library row filed alongside the bytes, when one was. */
+  mediaId: string | null
 }): Promise<void> {
   await prisma.$executeRaw`
     UPDATE "uin_attachments"
@@ -1547,19 +1559,173 @@ export async function recordAttachmentStored(id: string, stored: {
            "media_provider" = ${stored.provider},
            "media_url" = ${stored.url},
            "size_bytes" = ${stored.sizeBytes},
+           "media_id" = ${stored.mediaId},
+           "owns_object" = true,
            "fetched_at" = now()
      WHERE "id" = ${id}
   `
 }
 
-/** Every storage key and url this module is holding on to, for the media usage
- *  provider. These objects have no library row by design, and without something
- *  vouching for them the storage check would classify the lot as orphaned. */
+/**
+ * Is anything else still pointing at these bytes?
+ *
+ * Forwarding a message travels with the ORIGINAL's attachment, and the row
+ * written for the forward carries the very same media_key - one object, two
+ * rows. So "delete the message, delete its files" has to ask this first, or
+ * throwing away the forward takes the bytes off the message it was forwarded
+ * from, months after anybody would connect the two.
+ */
+export async function attachmentKeySharedElsewhere(attachmentId: string, mediaKey: string): Promise<boolean> {
+  const rows = await prisma.$queryRaw<{ found: number }[]>`
+    SELECT 1 AS found
+      FROM "uin_attachments"
+     WHERE "media_key" = ${mediaKey}
+       AND "id" <> ${attachmentId}
+     LIMIT 1
+  `
+  return rows.length > 0
+}
+
+/**
+ * Point everything else that shares these bytes at where they have just moved
+ * to. Used by the backfill: the original is the row that owns the object and
+ * the one that gets filed, and a forward of it would otherwise be left holding
+ * the address of a copy that has just been deleted.
+ *
+ * Deliberately does NOT hand over ownership or the library row id. There is one
+ * object, one library item and one owner; the others are along for the ride.
+ */
+export async function repointAttachmentsSharingKey(
+  oldKey: string,
+  exceptId: string,
+  newKey: string,
+  newUrl: string,
+): Promise<number> {
+  return prisma.$executeRaw`
+    UPDATE "uin_attachments"
+       SET "media_key" = ${newKey},
+           "media_url" = ${newUrl}
+     WHERE "media_key" = ${oldKey}
+       AND "id" <> ${exceptId}
+  `
+}
+
+/**
+ * What a message says about itself, for deciding where its files are filed.
+ *
+ * Asked of the attachment rather than passed in by the caller: three quite
+ * different paths store bytes - a sync fetching one on first open, a person
+ * pressing Send, another module filing a purchase order - and a rule about
+ * folders that each of them has to remember to apply is a rule that will be
+ * applied two ways out of three.
+ */
+export async function attachmentFilingContext(attachmentId: string): Promise<{
+  direction: string
+  fromAddress: string | null
+  toAddresses: string[]
+  contentId: string | null
+} | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT m."direction", m."from_address", m."to_addresses", a."content_id"
+      FROM "uin_attachments" a
+      JOIN "uin_messages" m ON m."id" = a."message_id"
+     WHERE a."id" = ${attachmentId}
+  `
+  const row = rows[0]
+  if (!row) return null
+  return {
+    direction: String(row.direction),
+    fromAddress: (row.from_address as string | null) ?? null,
+    toAddresses: Array.isArray(row.to_addresses) ? (row.to_addresses as string[]) : [],
+    contentId: (row.content_id as string | null) ?? null,
+  }
+}
+
+/**
+ * Attachments that are still on the old private prefix and could be filed into
+ * the media library.
+ *
+ * The conditions are the filing rules from lib/attachment-filing.ts, written
+ * out in SQL rather than checked in TypeScript afterwards, so that the count
+ * this returns is the count the button can actually shift. A row the filing
+ * rules would refuse - an inline part, a message with no correspondent - would
+ * otherwise be fetched, refused, left exactly as it was, and fetched again on
+ * the next pass, and the remaining count would never reach zero.
+ */
+const UNFILED_ATTACHMENTS = Prisma.sql`
+      FROM "uin_attachments" a
+      JOIN "uin_messages" m ON m."id" = a."message_id"
+     WHERE a."media_key" IS NOT NULL
+       AND a."media_provider" IS NOT NULL
+       AND a."media_url" IS NOT NULL
+       AND a."media_id" IS NULL
+       AND a."owns_object" = true
+       AND a."content_id" IS NULL
+       AND ((m."direction" = 'in' AND m."from_address" IS NOT NULL AND m."from_address" <> '')
+            OR (m."direction" = 'out' AND m."to_addresses"[1] IS NOT NULL AND m."to_addresses"[1] <> ''))`
+
+export async function unfiledAttachmentCount(): Promise<number> {
+  const rows = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT count(*) AS count ${UNFILED_ATTACHMENTS}
+  `
+  return Number(rows[0]?.count ?? 0)
+}
+
+export type UnfiledAttachment = {
+  id: string
+  messageId: string
+  filename: string
+  contentType: string | null
+  mediaKey: string
+  mediaProvider: string
+  mediaUrl: string
+}
+
+export async function unfiledAttachments(limit: number): Promise<UnfiledAttachment[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT a."id", a."message_id", a."filename", a."content_type",
+           a."media_key", a."media_provider", a."media_url"
+      ${UNFILED_ATTACHMENTS}
+     ORDER BY a."created_at" ASC
+     LIMIT ${limit}
+  `
+  return rows.map((r) => ({
+    id: r.id as string,
+    messageId: r.message_id as string,
+    filename: r.filename as string,
+    contentType: (r.content_type as string | null) ?? null,
+    mediaKey: r.media_key as string,
+    mediaProvider: r.media_provider as string,
+    mediaUrl: r.media_url as string,
+  }))
+}
+
+/**
+ * Every storage reference this module is holding on to, for the media usage
+ * provider: the key, the url and the library row id of every attachment, plus
+ * the same for a file dropped onto a message that has not been sent yet.
+ *
+ * All three of them, and the id is the one that matters most. Core decides
+ * whether a library item is in use by looking for its url, its key OR its id in
+ * what the usage providers hand over, and the first two are values that MOVE -
+ * optimising an image, or renaming the folder an attachment sits in, mints a
+ * fresh key and url. The id never changes for the life of the item, so an
+ * attachment cannot read as "not in use" in the window between a move and this
+ * module's rewriter catching up. "Not in use" is the verdict that arms a
+ * bulk-delete button, and the thing it would delete is a customer's paperwork.
+ *
+ * The keys and urls still earn their place: the files kept outside the library
+ * on purpose - inline parts, anything with no correspondent, a dropped file
+ * waiting to be sent - have no row and no id, and without them vouched for the
+ * storage check would class the lot as orphaned.
+ */
 export async function listAttachmentStorageRefs(): Promise<string[]> {
   const rows = await prisma.$queryRaw<{ ref: string | null }[]>`
     SELECT "media_key" AS ref FROM "uin_attachments" WHERE "media_key" IS NOT NULL
     UNION ALL
     SELECT "media_url" AS ref FROM "uin_attachments" WHERE "media_url" IS NOT NULL
+    UNION ALL
+    SELECT "media_id" AS ref FROM "uin_attachments" WHERE "media_id" IS NOT NULL
     UNION ALL
     SELECT "media_key" AS ref FROM "uin_outbound_uploads"
     UNION ALL
@@ -1602,6 +1768,24 @@ export async function recordOutboundUpload(data: {
     RETURNING "id"
   `
   return rows[0]!.id
+}
+
+/**
+ * Which of these keys are files somebody dropped onto the message, rather than
+ * library items they picked.
+ *
+ * The difference decides who owns the bytes. A dropped file is this module's to
+ * file away and to delete with the message; a library item is the site's, and a
+ * sent email must not move it out of the folder the site put it in - a product
+ * photograph emailed to a customer still has a shop page pointing at it.
+ */
+export async function stagedUploadKeys(keys: string[]): Promise<Set<string>> {
+  if (keys.length === 0) return new Set()
+  const rows = await prisma.$queryRaw<{ media_key: string }[]>`
+    SELECT "media_key" FROM "uin_outbound_uploads"
+     WHERE "media_key" = ANY(${keys}::text[])
+  `
+  return new Set(rows.map((r) => r.media_key))
 }
 
 /**
@@ -6527,7 +6711,26 @@ export async function retentionDueCounts(cutoff: Date): Promise<{ due: number; l
 
 /** A stored object this module owns, so the sweep can take the bytes out of
  *  storage before it takes the row out of the database. */
-export type StoredObjectRef = { attachmentId: string; mediaKey: string; mediaProvider: string }
+export type StoredObjectRef = {
+  attachmentId: string
+  mediaKey: string
+  mediaProvider: string
+  /** The library row filed for it, to go when the bytes do. */
+  mediaId: string | null
+  /** False for a library pick or a forwarded original - bytes that belong to
+   *  something other than this message, and must survive it. */
+  ownsObject: boolean
+}
+
+function mapStoredObject(r: Record<string, unknown>): StoredObjectRef {
+  return {
+    attachmentId: r.id as string,
+    mediaKey: r.media_key as string,
+    mediaProvider: r.media_provider as string,
+    mediaId: (r.media_id as string | null) ?? null,
+    ownsObject: r.owns_object === true,
+  }
+}
 
 export async function storedObjectsForThreads(threadIds: string[]): Promise<StoredObjectRef[]> {
   if (threadIds.length === 0) return []
@@ -6536,7 +6739,7 @@ export async function storedObjectsForThreads(threadIds: string[]): Promise<Stor
   // moved onto another conversation is no longer ON one of these threads, and
   // the bytes behind it would sit in storage for ever.
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT a."id", a."media_key", a."media_provider"
+    SELECT a."id", a."media_key", a."media_provider", a."media_id", a."owns_object"
       FROM "uin_attachments" a
       JOIN "uin_messages" m ON m."id" = a."message_id"
      WHERE (m."thread_id" IN (${Prisma.join(threadIds)})
@@ -6544,11 +6747,7 @@ export async function storedObjectsForThreads(threadIds: string[]): Promise<Stor
        AND a."media_key" IS NOT NULL
        AND a."media_provider" IS NOT NULL
   `
-  return rows.map((r) => ({
-    attachmentId: r.id as string,
-    mediaKey: r.media_key as string,
-    mediaProvider: r.media_provider as string,
-  }))
+  return rows.map(mapStoredObject)
 }
 
 /** Removes the conversations themselves. Messages, attachment rows, events and
@@ -7997,17 +8196,13 @@ export async function messageForAction(id: string): Promise<MessageForAction | n
  *  bytes that have gone. */
 export async function storedObjectsForMessage(messageId: string): Promise<StoredObjectRef[]> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT a."id", a."media_key", a."media_provider"
+    SELECT a."id", a."media_key", a."media_provider", a."media_id", a."owns_object"
       FROM "uin_attachments" a
      WHERE a."message_id" = ${messageId}
        AND a."media_key" IS NOT NULL
        AND a."media_provider" IS NOT NULL
   `
-  return rows.map((r) => ({
-    attachmentId: r.id as string,
-    mediaKey: r.media_key as string,
-    mediaProvider: r.media_provider as string,
-  }))
+  return rows.map(mapStoredObject)
 }
 
 /**

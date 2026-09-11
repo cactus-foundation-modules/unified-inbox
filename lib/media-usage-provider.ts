@@ -2,16 +2,19 @@ import { listAttachmentStorageRefs } from './db'
 
 // Provider for the core.media-usage-providers extension point.
 //
-// Email attachments are stored under this module's own key prefix with NO media
-// library row, on purpose: a customer's invoice from accounts@ appearing in the
-// media picker for anybody holding media permission would undo per-inbox access
-// entirely.
+// Two quite different sets of objects are vouched for here, and both would be
+// classified as orphaned without it - an object with no library row and nothing
+// pointing at it is the exact shape of a leftover, and the storage repair
+// deletes leftovers.
 //
-// The consequence is that core's storage check sees objects in the bucket that
-// no row owns, and an object with no row and nothing pointing at it is
-// classified as orphaned - which the storage repair will happily delete. That
-// would wipe every email attachment on the site, months later, with nothing to
-// restore from.
+// The first is everything still kept outside the library on purpose: inline
+// parts, anything with no correspondent to file it under, and a dropped file
+// waiting for its message to be sent. Those have no row at all.
+//
+// The second is the files somebody attached FROM the library, whose key this
+// module holds without owning. Those have a row already, and listing them here
+// is what stops the library offering a product photograph for deletion on the
+// grounds that nothing appears to use it when an email does.
 //
 // So this vouches for them. Core folds these strings into the same haystack it
 // scans page and module content with, the objects come back as claimed rather

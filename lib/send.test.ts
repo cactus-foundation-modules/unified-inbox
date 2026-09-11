@@ -16,7 +16,11 @@ const db = vi.hoisted(() => ({
   newestMessageOnThread: vi.fn(),
   createOutboundThread: vi.fn(),
   insertOutboundMessage: vi.fn(),
-  insertOutboundAttachment: vi.fn(),
+  insertOutboundAttachment: vi.fn(async (): Promise<string> => 'att-1'),
+  // Nothing was dropped onto the message unless a test says so: everything
+  // attached came out of the media library, which is the case that must NOT be
+  // copied into a Sent folder.
+  stagedUploadKeys: vi.fn(async (): Promise<Set<string>> => new Set()),
   settleDelivery: vi.fn(),
   recordAppendOutcome: vi.fn(),
   recordEvent: vi.fn(),
@@ -69,7 +73,7 @@ vi.mock('./transport', async () => {
 vi.mock('./own-post', () => ownPost)
 vi.mock('./append', () => append)
 vi.mock('./mime', () => mime)
-vi.mock('./attachments', () => ({ loadAttachmentBytes: vi.fn() }))
+vi.mock('./attachments', () => ({ loadAttachmentBytes: vi.fn(), cacheAttachment: vi.fn() }))
 vi.mock('@/lib/media/upload', () => ({ downloadMedia: media.downloadMedia }))
 vi.mock('@/lib/config/env', () => ({
   getActiveMediaProvider: media.getActiveMediaProvider,

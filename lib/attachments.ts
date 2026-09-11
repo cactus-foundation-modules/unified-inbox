@@ -1,42 +1,49 @@
 import { simpleParser } from 'mailparser'
 import { getActiveMediaProvider, isMediaProviderConfigured } from '@/lib/config/env'
-import { uploadMedia, downloadMedia, mediaKeyPrefix } from '@/lib/media/upload'
+import { uploadMedia, downloadMedia, mediaKeyPrefix, saveMediaRecord } from '@/lib/media/upload'
+import { prisma } from '@/lib/db/prisma'
 import type { MediaProviderType } from '@prisma/client'
 import { credentialsForConnection, openMailbox } from './imap'
-import { getAttachment, recordAttachmentStored, type AttachmentRow } from './db'
+import { attachmentFilingContext, getAttachment, recordAttachmentStored, type AttachmentRow } from './db'
+import { filedAttachmentKey, filingFor, folderForFiling } from './attachment-filing'
 
 // ---------------------------------------------------------------------------
-// Attachments, and why they are not in the media library.
+// Attachments, and where they live.
 //
-// A customer's invoice pulled out of accounts@ must never turn up in the media
-// picker for everybody who happens to hold media permission - that would undo
-// the whole of per-inbox access in one step. Core's uploadMedia writes the
-// object and nothing else; it is the CALLER that mints the library row. So
-// these are written under this module's own key prefix with no row at all, and
-// they are invisible to the library by construction rather than by a filter
-// somebody could later forget.
+// They are media library items, filed under who the correspondence was with -
+// Inbox / their address / Received, or / Sent. lib/attachment-filing.ts builds
+// that tree and explains the shape of it.
 //
-// Which leaves the other half of the problem. The storage check classifies an
-// object with no row and nothing pointing at it as ORPHANED, and the repair
-// offers orphans up for deletion - which would quietly bin every email
-// attachment on the site. lib/media-usage-provider.ts is what vouches for them:
-// it hands core the keys and urls held here, the storage check counts them as
-// claimed, and nothing offers to delete them. That file is not optional.
+// This was the other way round until the site owner asked for it: everything
+// went under one flat private prefix with no library row, so that an invoice
+// pulled out of accounts@ could not appear in the media picker for everybody
+// holding media permission. Filing them in the library gives that up on
+// purpose, and anybody with media permission can now see them.
+//
+// Two things still keep the old arrangement, because both would otherwise
+// drown the library: inline parts (a signature logo, a pasted screenshot) and
+// anything with no correspondent to file it under. Those have no library row,
+// which leaves the storage check looking at an object with no row and nothing
+// pointing at it - the shape of a leftover. lib/media-usage-provider.ts vouches
+// for them: it hands core the keys and urls held here, the storage check counts
+// them as claimed, and nothing offers to delete them. That file is not optional.
 //
 // Bytes are fetched only when somebody opens one (D17, and the sync engine's
 // 25 second budget), and served only through a route that re-checks who is
 // asking. Nothing here ever returns a storage url to a browser.
 // ---------------------------------------------------------------------------
 
-/** Everything this module writes lives under this, inside the provider's own
- *  media prefix. One prefix, so a site can see at a glance what the inbox is
- *  holding, and so a future retention sweep has something to walk. */
+/** The private folder, inside the provider's own media prefix, for the files
+ *  that are deliberately NOT library items: inline parts, anything with no
+ *  correspondent, and a dropped file waiting for its message to be sent. Also
+ *  where every attachment lived before they were filed into the library, which
+ *  is what the backfill walks. */
 export const ATTACHMENT_FOLDER = 'unified-inbox'
 
 /** Refuse to bring anything ludicrous back through a serverless function. */
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
-function safeFilename(filename: string): string {
+export function safeFilename(filename: string): string {
   const cleaned = filename
     .normalize('NFKD')
     .replace(/[^\w.\- ]+/g, '-')
@@ -47,10 +54,11 @@ function safeFilename(filename: string): string {
 }
 
 /**
- * The storage key for one attachment: the provider's media prefix, then this
- * module's folder, then the message and the attachment's own id. The attachment
- * id makes it unique without a nanoid, and keeping the message id in the path
- * means a thread's files sit together when somebody has to go and look.
+ * The storage key for an attachment that is NOT going into the library: the
+ * provider's media prefix, then this module's private folder, then the message
+ * and the attachment's own id. The attachment id makes it unique without a
+ * nanoid, and keeping the message id in the path means a thread's files sit
+ * together when somebody has to go and look.
  */
 export function attachmentKey(
   provider: MediaProviderType,
@@ -178,37 +186,93 @@ async function fetchFromMailbox(
 }
 
 /**
- * Writes the bytes under our own key so the next person to open it does not go
- * back to the mail server. A storage failure is not fatal: the reader already
- * has their file, and the only cost is fetching it again next time.
+ * Writes the bytes into storage - and, when the message has a correspondent to
+ * file them under, into the media library as an ordinary item - so the next
+ * person to open it does not go back to the mail server.
+ *
+ * The single place bytes are stored, for both directions and for a message
+ * another module sent. Three callers, one rule about folders: a rule each of
+ * them had to remember to apply would be applied two ways out of three.
+ *
+ * A storage failure is not fatal: the reader already has their file, and the
+ * only cost is fetching it again next time. Returns where the bytes ended up,
+ * or null when nothing was stored - which is how the backfill knows whether
+ * there is an old copy left to tidy away, and what to point a forward at.
  */
 export async function cacheAttachment(
   attachment: { id: string; messageId: string; filename: string },
   buffer: Buffer,
   contentType: string,
-): Promise<void> {
+): Promise<{ key: string; url: string } | null> {
   try {
     const provider = await getActiveMediaProvider()
-    if (!provider || !isMediaProviderConfigured(provider)) return
-    const key = attachmentKey(provider, attachment.messageId, attachment.id, attachment.filename)
+    if (!provider || !isMediaProviderConfigured(provider)) return null
+
+    const context = await attachmentFilingContext(attachment.id)
+    const filing = context ? filingFor(context) : null
+    const folder = filing ? await folderForFiling(filing) : null
+
+    const key = folder
+      ? filedAttachmentKey(provider, folder.folderPath, attachment.id, safeFilename(attachment.filename))
+      : attachmentKey(provider, attachment.messageId, attachment.id, attachment.filename)
+
     const result = await uploadMedia(
       buffer,
       contentType,
       provider,
       attachment.filename,
-      undefined,
+      // Only meaningful to the providers that keep folders of their own
+      // (Cloudinary, ImageKit); the S3 family takes the whole key above.
+      folder?.folderPath,
       false,
       key,
     )
-    // Deliberately NO saveMediaRecord: a library row here is the leak. The
-    // media usage provider is what stops the storage check calling this orphaned.
+
+    const media = folder
+      ? await libraryRowFor({
+          key: result.key,
+          url: result.url,
+          provider,
+          mimeType: contentType || 'application/octet-stream',
+          sizeBytes: result.sizeBytes,
+          originalName: attachment.filename,
+          folderId: folder.folderId,
+        })
+      : null
+
     await recordAttachmentStored(attachment.id, {
       key: result.key,
       provider,
       url: result.url,
       sizeBytes: result.sizeBytes,
+      mediaId: media?.id ?? null,
     })
+    return { key: result.key, url: result.url }
   } catch {
     // Storage is a cache in this direction, not the record. Carry on.
+    return null
   }
+}
+
+/**
+ * The library row for a key, made if it is not already there.
+ *
+ * Storing the same attachment twice is ordinary rather than exceptional - a
+ * message re-fetched after its bytes were removed lands on the very same key,
+ * because the key is built from ids rather than from a nanoid - and Media.key
+ * is unique, so a second plain insert would throw and be swallowed by the catch
+ * above, leaving the file stored and the library none the wiser.
+ */
+async function libraryRowFor(data: {
+  key: string
+  url: string
+  provider: MediaProviderType
+  mimeType: string
+  sizeBytes: number
+  originalName: string
+  folderId: string
+}): Promise<{ id: string }> {
+  const existing = await prisma.media.findUnique({ where: { key: data.key }, select: { id: true } })
+  if (existing) return existing
+  return saveMediaRecord(data)
 }

@@ -2,6 +2,7 @@
 
 import { useId, useState } from 'react'
 import type { BlockedSenderRow, Caller, Inbox, RetentionForecast, Settings, StaffMember } from './types'
+import { AttachmentFilingSection } from './AttachmentFilingSection'
 import { BlockedSendersSection } from './BlockedSendersSection'
 import { CheckField, FieldGroup, FieldRow, FormActions, MUTED, Panel } from './ui'
 
@@ -228,6 +229,11 @@ export function CollectingPanel({ settings, inboxes, retention, blockedSenders, 
           control that has already taken effect sitting above a button marked
           Save is how somebody comes to believe they have not saved it. */}
       <BlockedSendersSection blocked={blockedSenders} users={users} busy={busy} call={call} />
+
+      {/* Draws nothing at all unless there is something to move, which on most
+          sites is never. Same argument as the note above: it is its own job,
+          not part of the form. */}
+      <AttachmentFilingSection />
     </Panel>
   )
 }

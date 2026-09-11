@@ -1,5 +1,6 @@
 import type { MediaProviderType } from '@prisma/client'
 import { deleteMedia } from '@/lib/media/upload'
+import { releaseStoredObject } from './attachment-filing'
 import {
   abandonedOutboundUploads,
   deleteOutboundUploads,
@@ -128,7 +129,7 @@ export async function sweepRetention(opts: { deadline: number; now?: Date } = { 
     for (const object of objects) {
       if (Date.now() > opts.deadline) break
       try {
-        await deleteMedia(object.mediaProvider as MediaProviderType, object.mediaKey)
+        await releaseStoredObject(object)
         outcome.storedObjects += 1
       } catch (err) {
         outcome.storedObjectFailures += 1

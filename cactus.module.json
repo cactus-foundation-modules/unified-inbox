@@ -1,6 +1,6 @@
 {
   "name": "unified-inbox",
-  "version": "0.1.75",
+  "version": "0.1.76",
   "tablePrefix": "uin_",
   "description": "Every conversation with every customer and supplier in one place - email, live chat, contact form, calls, texts and WhatsApp - with your own records beside them.",
   "requiresCoreVersion": "0.5.1574",
@@ -61,6 +61,12 @@
       "id": "unified-inbox",
       "import": "./lib/media-private-storage",
       "component": "unifiedInboxPrivateStorage"
+    },
+    {
+      "point": "core.media-reference-rewriters",
+      "id": "unified-inbox",
+      "import": "./lib/media-reference-rewriter",
+      "component": "unifiedInboxMediaReferenceRewriter"
     },
     {
       "point": "core.outbound-email-identity",

@@ -33,7 +33,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import type { MediaProviderType } from '@prisma/client'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
-import { deleteMedia } from '@/lib/media/upload'
+import { releaseStoredObject } from '@/modules/unified-inbox/lib/attachment-filing'
 import { errorResponse } from '@/lib/utils'
 import { canOpenThread } from '@/modules/unified-inbox/lib/access'
 import {
@@ -67,7 +67,7 @@ export async function POST(
   let storedObjectFailures = 0
   for (const object of await storedObjectsForMessage(message.id)) {
     try {
-      await deleteMedia(object.mediaProvider as MediaProviderType, object.mediaKey)
+      await releaseStoredObject(object)
     } catch (err) {
       storedObjectFailures += 1
       console.warn('[unified-inbox] deleting a message could not remove a stored attachment:', err)

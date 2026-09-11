@@ -19,13 +19,14 @@ import {
   reopenForRetry,
   reopenOnOurReply,
   settleDelivery,
+  stagedUploadKeys,
   threadHasLink,
   getMessage,
   getSettings,
   listAttachmentsForMessage,
   type OutboundMessageRow,
 } from './db'
-import { loadAttachmentBytes } from './attachments'
+import { cacheAttachment, loadAttachmentBytes } from './attachments'
 import {
   assembleBody,
   buildReferences,
@@ -368,7 +369,7 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
   }
 
   for (const file of files.items) {
-    await insertOutboundAttachment({
+    const attachmentId = await insertOutboundAttachment({
       messageId: row.id,
       filename: file.filename,
       contentType: file.contentType,
@@ -377,6 +378,21 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
       mediaProvider: file.provider,
       mediaUrl: file.url,
     })
+
+    // A dropped file went into storage before the message had a recipient to
+    // file it under, so it is sitting in this module's staging folder. Now that
+    // the message has gone it can be filed properly - under whoever it was sent
+    // to - and the staging copy is left to the housekeeping sweep rather than
+    // deleted here: nothing points at it once the row above is re-keyed, which
+    // is the very condition that sweep looks for, and deleting it here would
+    // race a draft that still holds the same reference.
+    if (file.staged) {
+      await cacheAttachment(
+        { id: attachmentId, messageId: row.id, filename: file.filename },
+        file.content,
+        file.contentType ?? 'application/octet-stream',
+      )
+    }
   }
 
   if (request.link) {
@@ -582,6 +598,10 @@ type GatheredAttachment = {
   key: string | null
   provider: string | null
   url: string | null
+  /** True when the bytes are a file dropped onto this message, which is this
+   *  module's to file into the library. False for a library item somebody
+   *  picked and for a forwarded original - see stagedUploadKeys. */
+  staged: boolean
 }
 
 /** The bytes for everything travelling with this message. */
@@ -599,6 +619,8 @@ async function gatherAttachments(
     }
   }
 
+  const staged = await stagedUploadKeys((request.attachments ?? []).map((f) => f.key))
+
   for (const file of request.attachments ?? []) {
     try {
       const bytes = await downloadMedia(provider!, file.key, file.url)
@@ -609,6 +631,7 @@ async function gatherAttachments(
         key: file.key,
         provider,
         url: file.url,
+        staged: staged.has(file.key),
       })
     } catch {
       return {
@@ -637,6 +660,12 @@ async function gatherAttachments(
         key: attachment.mediaKey,
         provider: attachment.mediaProvider,
         url: attachment.mediaUrl,
+        // A forward travels with the ORIGINAL's bytes, which belong to the
+        // message they arrived on and are already filed under whoever sent
+        // them. Copying them into a Sent folder as well would put the same
+        // file in the library twice and leave the copy to be deleted with
+        // whichever of the two messages went first.
+        staged: false,
       })
     }
   }

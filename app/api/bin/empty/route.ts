@@ -59,7 +59,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import type { MediaProviderType } from '@prisma/client'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
-import { deleteMedia } from '@/lib/media/upload'
+import { releaseStoredObject } from '@/modules/unified-inbox/lib/attachment-filing'
 import { errorResponse } from '@/lib/utils'
 import { visibleInboxIds } from '@/modules/unified-inbox/lib/access'
 import {
@@ -151,7 +151,7 @@ export async function POST(request: NextRequest) {
     // person pressing the button over and over.
     for (const object of await storedObjectsForThreads(batch)) {
       try {
-        await deleteMedia(object.mediaProvider as MediaProviderType, object.mediaKey)
+        await releaseStoredObject(object)
         storedObjects += 1
       } catch (err) {
         storedObjectFailures += 1

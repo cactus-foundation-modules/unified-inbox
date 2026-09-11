@@ -1,5 +1,5 @@
 import type { MediaProviderType } from '@prisma/client'
-import { deleteMedia } from '@/lib/media/upload'
+import { releaseStoredObject } from './attachment-filing'
 import {
   deletePersonRow,
   deleteThreads,
@@ -198,7 +198,7 @@ export async function erasePerson(personId: string): Promise<EraseOutcome> {
     const objects = await storedObjectsForThreads(threadIds)
     for (const object of objects) {
       try {
-        await deleteMedia(object.mediaProvider as MediaProviderType, object.mediaKey)
+        await releaseStoredObject(object)
         outcome.storedObjects += 1
       } catch (err) {
         outcome.storedObjectFailures += 1
