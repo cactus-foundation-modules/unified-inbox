@@ -672,7 +672,7 @@ describe('sendMessage - the copy in Sent is allowed to fail (D4)', () => {
 
 describe('sendMessage - attachments are never silently dropped (5.2)', () => {
   it('refuses an oversized file before a row is written or anything is sent', async () => {
-    media.downloadMedia.mockResolvedValue(Buffer.alloc(9 * 1024 * 1024))
+    media.downloadMedia.mockResolvedValue(Buffer.alloc(21 * 1024 * 1024))
 
     const result = await sendMessage(
       baseRequest({

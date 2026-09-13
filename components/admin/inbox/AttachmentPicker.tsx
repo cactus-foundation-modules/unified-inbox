@@ -330,8 +330,7 @@ export function AttachmentPicker({ drop, attached, onPick, onRemove, onClose }: 
                 onChange={onChosen}
               />
               <p className="uin-dropzone-note">
-                Up to {describeBytes(MAX_DROPPED_BYTES)} each. Anything bigger, put it in your files
-                first and then search for it above.
+                Up to {describeBytes(MAX_DROPPED_BYTES)} per file and per message.
               </p>
             </div>
           )}

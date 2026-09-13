@@ -25,15 +25,24 @@ import { MAX_UPLOAD_BYTES } from '@/lib/media/limits'
 /**
  * The most one dropped file may weigh.
  *
- * Not a rule about email - a message may carry 8MB of attachments and does so
- * happily when they come out of the library. It is the hosting platform: a
- * serverless function's request body is capped, and a bigger file is refused by
- * the edge before this module's route ever runs, with a reply that is not even
- * JSON. So the drop is bounded at the same number core's own uploader uses, and
- * anything larger is sent to the library, which has a direct-to-storage path
- * this one does not.
+ * This is the email service's ceiling. Files over the hosting platform's 4MB
+ * request limit take the direct-to-storage path, then arrive at Send as the
+ * same ordinary storage reference as a smaller upload. The server route keeps
+ * MAX_SERVER_UPLOAD_BYTES as its fallback for storage providers that cannot
+ * take a direct browser upload.
  */
-export const MAX_DROPPED_BYTES = MAX_UPLOAD_BYTES
+export const MAX_DROPPED_BYTES = 20 * 1024 * 1024
+
+/** The largest file that can still travel through the site's own request body. */
+export const MAX_SERVER_UPLOAD_BYTES = MAX_UPLOAD_BYTES
+
+/**
+ * Direct uploads are deliberately stored as opaque bytes. The original name
+ * and useful content type live in the staging row and later attachment row;
+ * the extra extension lets the media Worker type the object without trusting a
+ * browser header, and stops documents becoming renderable on the media origin.
+ */
+export const DIRECT_UPLOAD_EXTENSION = 'bin'
 
 /**
  * How many files may be handed over in one go - one drop, or one trip through
@@ -166,7 +175,7 @@ export function refuseDroppedFile(file: { name: string; type: string; size: numb
     return `"${name}" is a kind of file email services refuse to deliver, so it cannot be attached. Put it in a zip, or send a link to it.`
   }
   if (file.size > MAX_DROPPED_BYTES) {
-    return `"${name}" is ${describeBytes(file.size)}. Files dropped onto a message have to be under ${describeBytes(MAX_DROPPED_BYTES)}. Add it to your files first, then use Attach a file.`
+    return `"${name}" is ${describeBytes(file.size)}. The most one email attachment can be is ${describeBytes(MAX_DROPPED_BYTES)}.`
   }
   return null
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   MAX_DROPPED_BYTES,
+  MAX_SERVER_UPLOAD_BYTES,
   clampFilename,
   describeBytes,
   extensionOf,
@@ -31,6 +32,16 @@ describe('extensionOf', () => {
 })
 
 describe('refuseDroppedFile', () => {
+  it('allows files up to the 20MB email ceiling, beyond the server upload fallback', () => {
+    expect(MAX_DROPPED_BYTES).toBe(20 * 1024 * 1024)
+    expect(MAX_SERVER_UPLOAD_BYTES).toBe(4 * 1024 * 1024)
+    expect(refuseDroppedFile({
+      name: 'catalogue.pdf',
+      type: 'application/pdf',
+      size: 20 * 1024 * 1024,
+    })).toBeNull()
+  })
+
   it('takes an ordinary quote', () => {
     expect(refuseDroppedFile({ name: 'quote.pdf', type: 'application/pdf', size: 200_000 })).toBeNull()
   })
@@ -50,13 +61,13 @@ describe('refuseDroppedFile', () => {
     expect(reason).toContain('folder')
   })
 
-  it('sends anything too big for the drop round the other way', () => {
+  it('refuses anything over the email ceiling', () => {
     const reason = refuseDroppedFile({
       name: 'brochure.pdf',
       type: 'application/pdf',
       size: MAX_DROPPED_BYTES + 1,
     })
-    expect(reason).toContain('Attach a file')
+    expect(reason).toContain('20.0MB')
   })
 })
 

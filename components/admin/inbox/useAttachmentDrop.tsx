@@ -1,7 +1,12 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
-import { MAX_DROPPED_FILES, refuseDroppedFile } from '@/modules/unified-inbox/lib/uploads'
+import {
+  MAX_DROPPED_FILES,
+  MAX_SERVER_UPLOAD_BYTES,
+  describeBytes,
+  refuseDroppedFile,
+} from '@/modules/unified-inbox/lib/uploads'
 import type { Attachment } from './AttachmentPicker'
 
 // Dragging a file onto a message you are writing.
@@ -85,6 +90,76 @@ function gather(transfer: DataTransfer): { files: File[]; refusals: string[] } {
  *  enough that a slow line is not asked to carry eight at a time. */
 const AT_ONCE = 3
 
+async function responseReason(response: Response, fallback: string): Promise<string> {
+  const data = await response.json().catch(() => null)
+  return typeof data?.error === 'string' && data.error ? data.error : fallback
+}
+
+export async function uploadAttachmentFile(file: File, signal: AbortSignal): Promise<Attachment[]> {
+  // The ordinary request remains the cheapest path while the file fits. Above
+  // it, send only JSON through the site and put the bytes straight in storage.
+  if (file.size <= MAX_SERVER_UPLOAD_BYTES) {
+    const body = new FormData()
+    body.append('file', file)
+    const response = await fetch('/api/m/unified-inbox/uploads', {
+      method: 'POST',
+      body,
+      signal,
+    })
+    if (!response.ok) throw new Error(await responseReason(response, `"${file.name}" could not be attached.`))
+    const data = await response.json().catch(() => null)
+    return Array.isArray(data?.attachments) ? data.attachments : []
+  }
+
+  const prepare = await fetch('/api/m/unified-inbox/uploads', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'prepare', filename: file.name, type: file.type, sizeBytes: file.size }),
+    signal,
+  })
+  if (!prepare.ok) throw new Error(await responseReason(prepare, `"${file.name}" could not be attached.`))
+  const ticket = await prepare.json().catch(() => null)
+  if (!ticket?.available) {
+    const max = typeof ticket?.maxSizeBytes === 'number' ? ticket.maxSizeBytes : MAX_SERVER_UPLOAD_BYTES
+    throw new Error(
+      `"${file.name}" is ${describeBytes(file.size)}. This site's file storage can only take files up to ${describeBytes(max)} through this page.`,
+    )
+  }
+
+  const put = await fetch(ticket.uploadUrl, {
+    method: 'PUT',
+    headers: {
+      authorization: `Bearer ${ticket.token}`,
+      'content-type': ticket.contentType,
+    },
+    body: file,
+    signal,
+  })
+  if (!put.ok) {
+    if (put.status === 415) {
+      throw new Error('Your media service needs updating before it will accept larger email attachments. Go to Settings → Media and deploy the Worker again, then try once more.')
+    }
+    throw new Error(await responseReason(put, `"${file.name}" could not be sent to your file storage.`))
+  }
+
+  const record = await fetch('/api/m/unified-inbox/uploads', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      action: 'record',
+      filename: file.name,
+      type: file.type,
+      sizeBytes: file.size,
+      key: ticket.key,
+      token: ticket.token,
+    }),
+    signal,
+  })
+  if (!record.ok) throw new Error(await responseReason(record, `"${file.name}" uploaded, but could not be attached.`))
+  const data = await record.json().catch(() => null)
+  return Array.isArray(data?.attachments) ? data.attachments : []
+}
+
 export type AttachmentDrop = {
   /** Files chosen some other way than by dragging - the Choose files box in the
    *  attachment dialog - put through the same refusals and the same queue. */
@@ -164,30 +239,18 @@ export function useAttachmentDrop({ disabled = false, onAttached }: {
       for (;;) {
         const file = queue.current.shift()
         if (!file || controller.signal.aborted) break
-        const body = new FormData()
-        body.append('file', file)
         try {
-          const response = await fetch('/api/m/unified-inbox/uploads', {
-            method: 'POST',
-            body,
-            signal: controller.signal,
-          })
-          const data = await response.json().catch(() => null)
-          if (!response.ok) {
-            failures.current.push(
-              typeof data?.error === 'string' && data.error
-                ? data.error
-                : `"${file.name}" could not be attached.`,
-            )
-          } else {
-            const added: Attachment[] = Array.isArray(data?.attachments) ? data.attachments : []
-            for (const attachment of added) attachedRef.current(attachment)
-          }
-        } catch {
+          const added = await uploadAttachmentFile(file, controller.signal)
+          for (const attachment of added) attachedRef.current(attachment)
+        } catch (error) {
           // The composer going while a file was on its way is not a failure to
           // report to somebody who is no longer looking at it.
           if (controller.signal.aborted) break
-          failures.current.push(`"${file.name}" could not be attached. The site could not be reached.`)
+          failures.current.push(
+            error instanceof Error && error.message
+              ? error.message
+              : `"${file.name}" could not be attached. The site could not be reached.`,
+          )
         }
         counted.current = { done: counted.current.done + 1, total: counted.current.total }
         setProgress({ ...counted.current })

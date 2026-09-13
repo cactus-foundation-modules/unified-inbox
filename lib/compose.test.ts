@@ -11,7 +11,6 @@ import {
   assembleBody,
   checkAttachmentBudget,
   outgoingHeaders,
-  encodedSize,
   describeSize,
   MAX_SINGLE_ATTACHMENT_BYTES,
 } from './compose'
@@ -335,32 +334,32 @@ describe('checkAttachmentBudget (5.2 - never silently dropped)', () => {
     expect(out.reason).not.toMatch(/base64|MIME|payload/i)
   })
 
-  it('refuses a pile that only busts the ceiling once encoded', () => {
-    // Four 2MB files are 8MB raw and comfortably inside 9MB, but 10.6MB once
-    // base64 has had them - which is the size that actually travels.
-    const files = Array.from({ length: 4 }, (_, i) => ({
+  it('accepts one file at the new 20MB attachment ceiling', () => {
+    const out = checkAttachmentBudget(
+      [{ filename: 'catalogue.pdf', contentType: 'application/pdf', sizeBytes: 20 * 1024 * 1024 }],
+      0,
+    )
+    expect(out.ok).toBe(true)
+  })
+
+  it('refuses a pile over the whole-message ceiling', () => {
+    const files = Array.from({ length: 3 }, (_, i) => ({
       filename: `photo-${i}.jpg`,
       contentType: 'image/jpeg',
-      sizeBytes: 2 * 1024 * 1024,
+      sizeBytes: 7 * 1024 * 1024,
     }))
-    expect(files.reduce((n, f) => n + f.sizeBytes, 0)).toBeLessThan(9 * 1024 * 1024)
     const out = checkAttachmentBudget(files, 2_000)
     expect(out.ok).toBe(false)
   })
 
   it('says so in English a small-business owner can act on', () => {
     const out = checkAttachmentBudget(
-      [{ filename: 'big.pdf', contentType: null, sizeBytes: 20 * 1024 * 1024 }],
+      [{ filename: 'big.pdf', contentType: null, sizeBytes: 21 * 1024 * 1024 }],
       0,
     )
     if (out.ok) throw new Error('expected a refusal')
     expect(out.reason).toMatch(/too big/i)
-    expect(out.reason).toMatch(/20\.0MB/)
-  })
-
-  it('counts base64 overhead at four bytes for three', () => {
-    expect(encodedSize(3)).toBe(4)
-    expect(encodedSize(300)).toBe(400)
+    expect(out.reason).toMatch(/21\.0MB/)
   })
 
   it('describes sizes the way a person writes them', () => {

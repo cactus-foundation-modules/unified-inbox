@@ -30,24 +30,16 @@ import { flattenWithProducts, refKey, replaceSlots } from './products/slots'
 //   refused send, because the person believes they sent the quote (5.2).
 // ---------------------------------------------------------------------------
 
-/** How much of a message Brevo will accept, attachments and all. Theirs is
- *  10MB; this leaves room for the headers, the body and base64's overhead so
- *  the refusal happens here, in front of somebody who can do something about
- *  it, rather than as an API error after they pressed Send. */
-export const MAX_MESSAGE_BYTES = 9 * 1024 * 1024
+/** How much of a transactional message Brevo will accept, attachments and
+ *  content together. Refuse it here, in front of somebody who can do something
+ *  about it, rather than as an API error after they pressed Send. */
+export const MAX_MESSAGE_BYTES = 20 * 1024 * 1024
 
 /** Core drops a single attachment larger than this rather than losing the
  *  whole email - sensible for an order confirmation, wrong here. We refuse
  *  first, so nothing is ever dropped without the sender being told. Keep this
  *  in step with MAX_ATTACHMENT_BYTES in lib/email/index.ts. */
-export const MAX_SINGLE_ATTACHMENT_BYTES = 8 * 1024 * 1024
-
-/** Base64 costs four bytes for every three. Attachments are encoded before
- *  they go, so the ceiling has to be measured against the encoded size or a
- *  9MB pile of files sails past a 10MB limit and is refused at the far end. */
-export function encodedSize(bytes: number): number {
-  return Math.ceil(bytes / 3) * 4
-}
+export const MAX_SINGLE_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
 // ---------------------------------------------------------------------------
 // Message-ID
@@ -388,12 +380,12 @@ export function checkAttachmentBudget(
         reason: `"${file.filename}" is ${describeSize(file.sizeBytes)}, which is too big to email. The limit for one file is ${describeSize(MAX_SINGLE_ATTACHMENT_BYTES)}. Send a link to it instead.`,
       }
     }
-    total += encodedSize(file.sizeBytes)
+    total += file.sizeBytes
   }
   if (total > MAX_MESSAGE_BYTES) {
     return {
       ok: false,
-      reason: `Those attachments come to ${describeSize(total)} once packed for email, and the limit for one message is ${describeSize(MAX_MESSAGE_BYTES)}. Remove one and try again, or send them in two messages.`,
+      reason: `That message and its attachments come to ${describeSize(total)}, and the limit for one message is ${describeSize(MAX_MESSAGE_BYTES)}. Remove one and try again, or send them in two messages.`,
     }
   }
   return { ok: true, totalBytes: total }
