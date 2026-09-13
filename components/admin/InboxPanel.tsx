@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import Link from 'next/link'
 import { headers } from 'next/headers'
 import { after } from 'next/server'
@@ -1588,7 +1589,13 @@ export async function UnifiedInboxPanel({
   // against - see NavProgress. Built from the address the panel actually drew
   // rather than from the address bar, because those two are only the same once
   // the navigation has finished, which is precisely the thing being reported.
-  const routeKey = JSON.stringify(carried)
+  //
+  // A fresh id every render, not only the params: a click back to a screen
+  // this pane was already showing - Back, or two rails clicked in the wrong
+  // order - lands on the same `carried` as the one the bar started counting
+  // from, and a key made only of that would tell NavProgress nothing had
+  // arrived. This makes every landing count as one, even that one.
+  const routeKey = `${JSON.stringify(carried)}:${randomUUID()}`
 
   // A folder under a colleague's name says which folder AND whose, in one
   // value, because the rail highlights one entry and there are three of them
