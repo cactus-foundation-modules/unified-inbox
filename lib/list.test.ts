@@ -95,9 +95,9 @@ describe('parseInboxParams', () => {
     expect(parseInboxParams({ inbox: 'drafts' }).scheduledOnly).toBe(false)
     expect(parseInboxParams({ inbox: 'abc' }).scheduledOnly).toBe(false)
     expect(parseInboxParams({}).scheduledOnly).toBe(false)
-    // No scoped form: one folder, whichever address the message leaves from.
-    expect(parseInboxParams({ inbox: 'scheduled:in1' })).toMatchObject({
-      scheduledOnly: false, inboxId: 'scheduled:in1', folderInboxId: null,
+    // A link that lost its address is not a scope, the same as `sent:`.
+    expect(parseInboxParams({ inbox: 'scheduled:' })).toMatchObject({
+      scheduledOnly: true, folderInboxId: null, inboxId: null,
     })
   })
 
@@ -215,10 +215,10 @@ describe('parseInboxParams', () => {
   })
 })
 
-// Sent, Drafts and Mentioned can each be looked at across every address or
-// narrowed to one - the folders under a colleague's name on the rail. Reading
-// the scoped form as an ordinary inbox id is what turns "Sam's sent post" into
-// a conversation list of an address called "sent:in1".
+// Sent, Drafts, Scheduled and Mentioned can each be looked at across every
+// address or narrowed to one - the folders under a colleague's name on the
+// rail. Reading the scoped form as an ordinary inbox id is what turns "Sam's
+// sent post" into a conversation list of an address called "sent:in1".
 describe('parseInboxParams, on one colleague\u2019s folders', () => {
   it('reads a scoped folder as that folder, narrowed to that address', () => {
     expect(parseInboxParams({ inbox: 'sent:in1' })).toMatchObject({
@@ -227,6 +227,9 @@ describe('parseInboxParams, on one colleague\u2019s folders', () => {
     })
     expect(parseInboxParams({ inbox: 'drafts:in1' })).toMatchObject({
       draftsOnly: true, sentOnly: false, folderInboxId: 'in1', inboxId: null,
+    })
+    expect(parseInboxParams({ inbox: 'scheduled:in1' })).toMatchObject({
+      scheduledOnly: true, draftsOnly: false, folderInboxId: 'in1', inboxId: null,
     })
     expect(parseInboxParams({ inbox: 'mentions:in1' })).toMatchObject({
       mentionsOnly: true, folderInboxId: 'in1', inboxId: null,

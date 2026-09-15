@@ -675,6 +675,13 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
       expect(await lib.listScheduledDrafts(chris, [])).toEqual([])
     })
 
+    it('counts scheduled messages per colleague address for the rail', async () => {
+      expect(await lib.countScheduledDraftsByInboxOwner()).toEqual({
+        [chrisInbox]: 2,
+        [emmaInbox]: 1,
+      })
+    })
+
     it('puts one whose send was refused back under Drafts, not here', async () => {
       // It is not going anywhere on its own any more, and it wants somebody to
       // look at it - so it belongs in the list people open, with its reason on

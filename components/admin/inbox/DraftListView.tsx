@@ -66,7 +66,13 @@ export function DraftListView({
   const readOnly = !!ownerName
   if (drafts.length === 0) {
     if (readOnly) {
-      return (
+      return scheduled ? (
+        <div className="uin-empty">
+          <strong>Nothing waiting to go out</strong>
+          {ownerName} has not set anything to send on its own from this address. If they do, it
+          will show here so you know before you answer something they have already queued.
+        </div>
+      ) : (
         <div className="uin-empty">
           <strong>Nothing half-written here</strong>
           {ownerName} has not left anything unsent on this address. If they do, it will show here

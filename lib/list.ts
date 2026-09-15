@@ -218,14 +218,14 @@ function calendarDate(raw: string | undefined): string | null {
  *  Two of them are scoped by a different thing from the other two and it
  *  matters. Sent and Mentioned narrow to an ADDRESS - what left sales@, what
  *  somebody was tagged in on sales@. A spam folder and a drafts folder belong to
- *  a PERSON, so `spam:<inbox id>` and `drafts:<inbox id>` mean "the bin, or the
- *  half-written writing, of whoever owns that address" and are only meaningful
- *  on an individual one - as does `bin:<inbox id>`, which is the same fact
- *  about a different folder. The panel resolves the id against the addresses this
- *  reader may open and refuses to find an owner for a shared address, so the
- *  folder under a colleague's name is theirs and the entry under Yours is your
- *  own. */
-const SCOPED_FOLDERS = ['sent', 'drafts', 'mentions', 'spam', 'bin'] as const
+ *  a PERSON, so `spam:<inbox id>`, `drafts:<inbox id>` and `scheduled:<inbox id>`
+ *  mean "the bin, the half-written writing, or what is set to go out on its
+ *  own, of whoever owns that address" and are only meaningful on an individual
+ *  one - as does `bin:<inbox id>`, which is the same fact about a different
+ *  folder. The panel resolves the id against the addresses this reader may open
+ *  and refuses to find an owner for a shared address, so the folder under a
+ *  colleague's name is theirs and the entry under Yours is your own. */
+const SCOPED_FOLDERS = ['sent', 'drafts', 'scheduled', 'mentions', 'spam', 'bin'] as const
 
 type ScopedFolder = (typeof SCOPED_FOLDERS)[number]
 
@@ -273,13 +273,7 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
     providerModule: channel.length > 0 ? channel : null,
     unroutedOnly: inbox === 'none',
     draftsOnly: inbox === 'drafts' || scoped.folder === 'drafts',
-    // No scoped form: there is one Scheduled folder, holding whatever this
-    // person has set going, whichever address it leaves from. Unlike Drafts,
-    // there is no version of it under a colleague's name - a message with a
-    // time on it has been decided about and is on its way, which is a thing to
-    // read in their Sent folder shortly rather than to look over their shoulder
-    // at now.
-    scheduledOnly: inbox === 'scheduled',
+    scheduledOnly: inbox === 'scheduled' || scoped.folder === 'scheduled',
     sentOnly: inbox === 'sent' || scoped.folder === 'sent',
     contactsOnly: inbox === 'contacts',
     campaignsOnly: inbox === 'campaigns',

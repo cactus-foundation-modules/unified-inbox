@@ -4313,6 +4313,36 @@ export async function countScheduledDrafts(
   return Number(rows[0]?.count ?? 0)
 }
 
+/** How much each colleague has set to go out on their own address, for the
+ *  Scheduled folder under their name on the rail.
+ *
+ *  Whose it is, is the whole point: the OWNER's, matched inside the query
+ *  against the address's own `owner_user_id` rather than handed in by the
+ *  caller. Somebody covering Sam's post needs to know what is already set to
+ *  leave on its own before they write a second answer to the same customer.
+ *
+ *  Individual addresses only. A shared address has no owner, so there is nobody
+ *  whose scheduled messages these could be, and the rail offers no folder there
+ *  either.
+ *
+ *  One grouped query rather than one call per address: the rail is drawn on
+ *  every list this hub renders. */
+export async function countScheduledDraftsByInboxOwner(): Promise<Record<string, number>> {
+  const rows = await prisma.$queryRaw<{ inbox_id: string; count: bigint }[]>`
+    SELECT d."inbox_id" AS "inbox_id", COUNT(*)::bigint AS "count"
+      FROM "uin_drafts" d
+      JOIN "uin_inboxes" i
+        ON i."id" = d."inbox_id"
+       AND i."kind" = 'individual'
+       AND i."owner_user_id" = d."author_user_id"
+     WHERE ${DRAFT_WAITING}
+     GROUP BY d."inbox_id"
+  `
+  const counts: Record<string, number> = {}
+  for (const row of rows) counts[row.inbox_id] = Number(row.count)
+  return counts
+}
+
 // ---------------------------------------------------------------------------
 // Sent.
 //

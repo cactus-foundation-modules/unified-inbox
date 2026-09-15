@@ -131,8 +131,8 @@ type Props = {
   allCount: number
   /** Which entry is on: an inbox id, `m:<module>`, 'none', 'drafts', 'scheduled', 'sent',
    *  'contacts', 'campaigns', 'mentions', one of `sent:<inbox id>` /
-   *  `drafts:<inbox id>` / `mentions:<inbox id>` for a folder under a
-   *  colleague's name, or null for All. */
+   *  `drafts:<inbox id>` / `scheduled:<inbox id>` / `mentions:<inbox id>` for a
+   *  folder under a colleague's name, or null for All. */
   current: string | null
   /** Who is reading, for the picture and initials at the head of the rail, and
    *  for telling their own address apart from the ones merely pinned to it. */
@@ -176,6 +176,12 @@ type Props = {
   showScheduled: boolean
   /** How many are waiting for a time to come round. */
   scheduledCount: number
+  /** How much each colleague has set to go out on their OWN address, keyed by
+   *  inbox id, for the Scheduled folder under their name. Matched against the
+   *  address's owner in the query behind it, so a number here is never this
+   *  reader's own writing. The folder is offered whether or not there is
+   *  anything in it, the same as Drafts beside it. */
+  scheduledCounts: Record<string, number>
   /** How much is in this person's own spam folder. Always offered, unlike
    *  Drafts: the folder is where junk goes the moment anybody presses the
    *  button, so it has to be somewhere they can already see - a folder that
@@ -534,6 +540,7 @@ function useRailDrag(enabled: boolean, move: (fromId: string, toId: string) => v
 export function NavRail({
   base, params, inboxes, channels, allCount, current, me, showAvatars, askedCount, railOrder,
   showUnrouted, unroutedCount, showDrafts, draftCount, draftCounts, showScheduled, scheduledCount,
+  scheduledCounts,
   spamCount, binCount, contactCount, showCampaigns, composeHref,
   composeEntries,
   defaultInboxId, canReorder, canCheckNow, lastCheckedAt, timezone,
@@ -1062,6 +1069,15 @@ export function NavRail({
       title: `Messages ${inbox.ownerName ?? 'they'} have started on ${inbox.address} and not sent`,
       count: <Count value={draftCounts[inbox.id] ?? 0} word="saved" quiet />,
     }] : []),
+    ...(inbox.ownerUserId ? [{
+      key: `${inbox.id}:scheduled`,
+      href: link(`scheduled:${inbox.id}`),
+      active: current === `scheduled:${inbox.id}`,
+      icon: AlarmIcon,
+      name: 'Scheduled',
+      title: `Messages ${inbox.ownerName ?? 'they'} have set to go out on their own from ${inbox.address}`,
+      count: <Count value={scheduledCounts[inbox.id] ?? 0} word="waiting" quiet />,
+    }] : []),
     sentFolderFor(inbox),
     ...(inbox.ownerUserId ? [{
       key: `${inbox.id}:mentions`,
@@ -1126,7 +1142,7 @@ export function NavRail({
   // there is one right answer and it is already on the screen.
   const currentFolderInbox = (() => {
     if (!current) return null
-    for (const folder of ['sent', 'drafts', 'mentions', 'spam', 'bin']) {
+    for (const folder of ['sent', 'drafts', 'scheduled', 'mentions', 'spam', 'bin']) {
       if (current.startsWith(`${folder}:`)) return current.slice(folder.length + 1)
     }
     return null

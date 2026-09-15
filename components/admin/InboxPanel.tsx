@@ -14,6 +14,7 @@ import {
   countDrafts,
   countDraftsByInboxOwner,
   countScheduledDrafts,
+  countScheduledDraftsByInboxOwner,
   categoriesForPeople,
   categoriesForPerson,
   countThreadsForPerson,
@@ -243,7 +244,12 @@ export async function UnifiedInboxPanel({
     // how much each COLLEAGUE has left half-written on their own address, for the
     // Drafts folder under their name (see countDraftsByInboxOwner). One grouped
     // query, because the rail is drawn on every list this hub renders.
-    Promise.all([countDrafts(user.id), countDraftsByInboxOwner(), countScheduledDrafts(user.id)]),
+    Promise.all([
+      countDrafts(user.id),
+      countDraftsByInboxOwner(),
+      countScheduledDrafts(user.id),
+      countScheduledDraftsByInboxOwner(),
+    ]),
     listConnections(),
     // Both counts in one query - one of them rides on the hub's own tab row, so
     // it is asked for on every render either way and there is no sense in two.
@@ -257,7 +263,7 @@ export async function UnifiedInboxPanel({
     wakeDueThreads(),
     wakeDueMentions(),
   ])
-  const [draftCount, draftCounts, scheduledCount] = draftTallies
+  const [draftCount, draftCounts, scheduledCount, scheduledCounts] = draftTallies
   const { people: contactCount, organisations: organisationCount } = peopleTally
 
   if (!canView) {
@@ -574,8 +580,10 @@ export async function UnifiedInboxPanel({
   // out without me. Fetched only when that is the list being looked at; the
   // number beside it is wanted on every screen, which is why the count above
   // is not conditional.
-  const scheduled = params.scheduledOnly
-    ? await listScheduledDrafts(user.id, folderAsked ? folderIds : null)
+  const scheduledAreOwn = !folderAsked || folderOwnerId === user.id
+  const scheduledOwnerId = scheduledAreOwn ? user.id : folderOwnerId
+  const scheduled = params.scheduledOnly && scheduledOwnerId
+    ? await listScheduledDrafts(scheduledOwnerId, folderAsked ? folderIds : null)
     : []
 
   // What has been sent. Two different lists behind one word, and which one this
@@ -1596,13 +1604,15 @@ export async function UnifiedInboxPanel({
   // under every colleague.
   const folderTab = params.draftsOnly
     ? 'drafts'
-    : params.sentOnly
-      ? 'sent'
-      : params.spamOnly
-        ? 'spam'
-        : params.binOnly
-          ? 'bin'
-          : 'mentions'
+    : params.scheduledOnly
+      ? 'scheduled'
+      : params.sentOnly
+        ? 'sent'
+        : params.spamOnly
+          ? 'spam'
+          : params.binOnly
+            ? 'bin'
+            : 'mentions'
   const currentTab = params.folderInboxId
     ? `${folderTab}:${params.folderInboxId}`
     : params.draftsOnly
@@ -1645,11 +1655,8 @@ export async function UnifiedInboxPanel({
     // the surprising half is whose unfinished writing you are reading. No name
     // at all on the tab under Yours, which is your own.
     ? `${draftsAreOwn ? '' : folderPrefix}Drafts`
-    // Nobody's name in front of this one: a message set to go out belongs to
-    // whoever wrote it, wherever it leaves from, and there is no version of the
-    // folder under somebody else's name to need one.
     : params.scheduledOnly
-    ? 'Scheduled'
+    ? `${scheduledAreOwn ? '' : folderPrefix}Scheduled`
     : params.sentOnly
       ? `${folderPrefix}Sent`
       : params.contactsOnly
@@ -1736,6 +1743,7 @@ export async function UnifiedInboxPanel({
          does not pull the list out from under whoever is reading it. */
       showScheduled={scheduledCount > 0 || currentTab === 'scheduled'}
       scheduledCount={scheduledCount}
+      scheduledCounts={scheduledCounts}
       spamCount={spamCount}
       binCount={binCount}
       contactCount={contactCount}
@@ -1866,9 +1874,12 @@ export async function UnifiedInboxPanel({
       scheduled={params.scheduledOnly}
       /* Whose folder this is. Null on this reader's own, where a row opens the
          writing box it was left in; a colleague's name on theirs, where the
-         rows open a read-only view instead. Never set on Scheduled: there is
-         one of those and it is the reader's own. */
-      ownerName={params.draftsOnly && !draftsAreOwn ? folderOwnerName : null}
+         rows open a read-only view instead. */
+      ownerName={
+        (params.draftsOnly && !draftsAreOwn) || (params.scheduledOnly && !scheduledAreOwn)
+          ? folderOwnerName
+          : null
+      }
       inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
       openThreadId={params.threadId}
       openDraftId={params.draftId}
