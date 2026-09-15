@@ -1421,21 +1421,26 @@ export async function UnifiedInboxPanel({
     }
   }
 
-  // ---- a colleague's draft, opened to be read -----------------------------
+  // ---- a colleague's draft or scheduled message, opened to be read ---------
   //
-  // Only ever reached from the Drafts folder under somebody's name, and never
-  // opened to be WRITTEN in: the row links here with `?draft=` and nothing
-  // else, so the composing branch below is not entered and there is no writing
-  // box on the screen to be refused afterwards. What the pane does offer, to
-  // somebody who may send from that address, is a button that posts it exactly
-  // as it stands - see canSendDraftForOwner in lib/drafts.ts.
+  // Only ever reached from the Drafts or Scheduled folder under somebody's
+  // name, and never opened to be WRITTEN in: the row links here with `?draft=`
+  // and nothing else, so the composing branch below is not entered and there
+  // is no writing box on the screen to be refused afterwards. What the pane
+  // does offer, to somebody who may send from that address, is a button that
+  // posts an ordinary draft exactly as it stands - see canSendDraftForOwner in
+  // lib/drafts.ts. A message already set to go out on its own is read-only even
+  // when they may send: sending a second copy is worse than leaving it alone.
   //
   // Both halves of the question go to the database (E17): whose draft, and
   // which address it is filed on. `folderInbox` has already been resolved
   // against the addresses this reader may open, so an id typed into the address
   // bar for an address they may not see finds nothing at all.
   let draftReadPane: React.ReactNode = null
-  if (params.draftsOnly && !draftsAreOwn && params.draftId && folderInbox && folderOwnerId) {
+  if (
+    params.draftId && folderInbox && folderOwnerId
+    && ((params.draftsOnly && !draftsAreOwn) || (params.scheduledOnly && !scheduledAreOwn))
+  ) {
     const reading = await getDraftInInbox(params.draftId, folderOwnerId, folderInbox.id)
     draftReadPane = reading ? (
       <DraftReadView

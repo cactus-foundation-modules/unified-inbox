@@ -63,6 +63,7 @@ export function DraftReadView({
   // loudest of all on somebody else's draft: a message leaving on its own on
   // Thursday is a message you must not send a second copy of today.
   const going = scheduleLabel(draft, now, timezone)
+  const waitingToSend = draft.sendState === 'scheduled' && draft.sendAt !== null
 
   return (
     <div className="uin-draft-read">
@@ -130,7 +131,7 @@ export function DraftReadView({
           do - it does not hand over the writing - because a Send on somebody
           else's draft is otherwise easy to read as "open it and finish it". */}
       <div className="uin-draft-read-foot">
-        {canSend ? (
+        {canSend && !waitingToSend ? (
           <>
             <p className="uin-draft-read-note">
               It is {ownerName}&apos;s writing, so only they can change it. You can send it out for
@@ -144,6 +145,11 @@ export function DraftReadView({
               />
             </div>
           </>
+        ) : waitingToSend ? (
+          <p className="uin-draft-read-note">
+            This is {ownerName}&apos;s writing and it is set to go out on its own, so it is here to
+            read only. Sending a second copy would be worse than leaving it alone.
+          </p>
         ) : (
           <p className="uin-draft-read-note">
             This is {ownerName}&apos;s writing, so it is here to read only. Only they can finish it
