@@ -446,6 +446,8 @@ describe('syncProvider', () => {
 
 describe('syncAllProviders', () => {
   it('asks each channel about what has happened since the newest thing we hold', async () => {
+    // Watermark older than the first-pass window, so the grace date wins.
+    vi.useFakeTimers({ now: new Date('2027-01-01T12:00:00.000Z') })
     const list = vi.fn().mockResolvedValue({ items: [] })
     allConversationProviders.mockResolvedValue([resolved({ list, thread: vi.fn() })])
     providerWatermarks.mockResolvedValue({ 'live-chat': new Date('2026-08-28T10:00:00Z') })
@@ -458,6 +460,22 @@ describe('syncAllProviders', () => {
     // channel revising something it already said - a voicemail typed up minutes
     // after it was left, which makes the conversation no newer at all.
     expect(since.toISOString()).toBe('2026-08-28T09:30:00.000Z')
+    vi.useRealTimers()
+  })
+
+  it('never lists closer in than the first-pass window, so older conversations still arrive', async () => {
+    vi.useFakeTimers({ now: new Date('2026-09-15T12:00:00.000Z') })
+    const list = vi.fn().mockResolvedValue({ items: [] })
+    allConversationProviders.mockResolvedValue([resolved({ list, thread: vi.fn() })])
+    // Watermark is recent; without the floor a voicemail from a week ago on a
+    // number nobody had rung yet would never be offered.
+    providerWatermarks.mockResolvedValue({ 'live-chat': new Date('2026-09-14T17:43:48.000Z') })
+
+    await syncAllProviders()
+
+    const since = list.mock.calls[0]![0]!.since as Date
+    expect(since.toISOString()).toBe('2026-06-17T12:00:00.000Z')
+    vi.useRealTimers()
   })
 
   it('lets one broken channel cost only itself', async () => {

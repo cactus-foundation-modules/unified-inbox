@@ -449,8 +449,17 @@ export async function syncAllProviders(opts: { deadline?: number } = {}): Promis
       await syncProvider(resolved, {
         // The newest thing we hold from them, less the grace window - see
         // REVISION_GRACE_MS for what that is covering and why it is cheap.
+        //
+        // Never closer in than the first-pass window. Once one conversation on
+        // a channel moves the watermark forward, anything older that was never
+        // copied - a voicemail on a number nobody had rung yet - would never
+        // appear at all. Re-listing back to the first-pass floor is cheap:
+        // settled conversations fail one date check and are not opened.
         since: watermarks[resolved.id]
-          ? new Date(watermarks[resolved.id]!.getTime() - REVISION_GRACE_MS)
+          ? new Date(Math.min(
+              watermarks[resolved.id]!.getTime() - REVISION_GRACE_MS,
+              firstPassSince.getTime(),
+            ))
           : firstPassSince,
         deadline: opts.deadline,
       }),

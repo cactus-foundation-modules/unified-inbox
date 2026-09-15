@@ -448,9 +448,11 @@ function Message({ message, personId, showAvatars, staffById, now, timezone, can
   const kind = message.direction === 'note' ? 'note' : message.direction === 'out' ? 'out' : 'in'
 
   // Only a message a channel owns can be deleted at the far end, and only where
-  // that channel says it can. Everything else in a thread lives here and
-  // nowhere else.
-  const offerDelete = canDelete && message.source === 'provider'
+  // that channel says it can. Today that means a voicemail - not a call log
+  // line or a text, which the phone company keeps regardless.
+  const offerDelete = canDelete
+    && message.source === 'provider'
+    && message.providerMessageId?.startsWith('voicemail:')
 
   return (
     <article id={messageDomId(message.id)} className={`uin-msg uin-msg-${kind}`}>

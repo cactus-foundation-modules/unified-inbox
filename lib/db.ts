@@ -3398,6 +3398,9 @@ export type ThreadMessageRow = {
   bounceDetail: string | null
   authorUserId: string | null
   source: string
+  /** The owning channel's id for this message, when source is provider - e.g.
+   *  `voicemail:RE…` for a voicemail the phone module still holds. */
+  providerMessageId: string | null
 }
 
 function mapThreadMessage(r: Record<string, unknown>): ThreadMessageRow {
@@ -3436,6 +3439,7 @@ function mapThreadMessage(r: Record<string, unknown>): ThreadMessageRow {
     bounceDetail: (r.bounce_detail as string | null) ?? null,
     authorUserId: (r.author_user_id as string | null) ?? null,
     source: r.source as string,
+    providerMessageId: (r.provider_message_id as string | null) ?? null,
   }
 }
 
