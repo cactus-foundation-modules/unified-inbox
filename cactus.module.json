@@ -1,6 +1,6 @@
 {
   "name": "unified-inbox",
-  "version": "0.1.80",
+  "version": "0.1.81",
   "tablePrefix": "uin_",
   "description": "Every conversation with every customer and supplier in one place - email, live chat, contact form, calls, texts and WhatsApp - with your own records beside them.",
   "requiresCoreVersion": "0.5.1616",
@@ -49,6 +49,13 @@
       "permission": "unifiedinbox.view",
       "import": "./components/admin/InboxPanel",
       "component": "UnifiedInboxPanel"
+    },
+    {
+      "point": "core.admin-background-services",
+      "id": "unified-inbox",
+      "permission": "unifiedinbox.view",
+      "import": "./components/admin/AdminMailPulse",
+      "component": "AdminMailPulse"
     },
     {
       "point": "core.media-usage-providers",

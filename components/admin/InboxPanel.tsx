@@ -66,7 +66,6 @@ import {
   type AttachmentRow,
   type MentionStatusFilter,
 } from '@/modules/unified-inbox/lib/db'
-import { countRunningCampaigns } from '@/modules/unified-inbox/lib/campaigns/store'
 import { isSmsAvailable } from '@/lib/sms/send'
 import { canSuggestReplies } from '@/lib/conversations/reply-suggestions'
 import { callerNumbers, firstDialler } from '@/lib/dialler/registry'
@@ -97,7 +96,6 @@ import { InboxStyles } from './inbox/styles'
 import { InboxIcon } from './inbox/icons'
 import { NavRail } from './inbox/NavRail'
 import { CampaignsPanel } from './inbox/campaigns/CampaignsPanel'
-import { CampaignPulse } from './inbox/campaigns/CampaignPulse'
 import { StatusTabs } from './inbox/StatusTabs'
 import { SearchBar } from './inbox/SearchBar'
 import { Filters } from './inbox/Filters'
@@ -178,7 +176,6 @@ export async function UnifiedInboxPanel({
     draftTallies,
     connections,
     peopleTally,
-    runningCampaigns,
   ] = await Promise.all([
     hasPermission(user, 'unifiedinbox.view'),
     hasPermission(user, 'unifiedinbox.manage'),
@@ -251,9 +248,6 @@ export async function UnifiedInboxPanel({
     // Both counts in one query - one of them rides on the hub's own tab row, so
     // it is asked for on every render either way and there is no sense in two.
     peopleCount(),
-    // Only whether anything is running at all, so the campaign clock is mounted
-    // on a site that has a campaign on the go and left off every other one.
-    countRunningCampaigns(),
     // Anything whose snooze has elapsed is open again by the time the list is
     // drawn. Doing it here rather than on a tick means a conversation is back
     // the moment somebody looks, which is the only moment it matters. The same
@@ -1698,8 +1692,6 @@ export async function UnifiedInboxPanel({
   // where there is something for it to do: somebody allowed to send campaigns,
   // and a campaign actually running.
   const rail = (
-    <>
-      {canCampaign && runningCampaigns > 0 && <CampaignPulse />}
     <NavRail
       base={base}
       params={carried}
@@ -1756,11 +1748,9 @@ export async function UnifiedInboxPanel({
       defaultInboxId={pinnedInboxId}
       canReorder={canManage}
       canCheckNow={canManage && connections.length > 0}
-      autoCheckSeconds={settings.autoCheckSeconds}
       lastCheckedAt={lastCheckedAt}
       timezone={timezone}
     />
-    </>
   )
 
   // Campaigns, laid out the way the post is: every campaign down the middle

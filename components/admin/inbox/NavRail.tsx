@@ -214,11 +214,6 @@ type Props = {
    *  account to collect from, and a site whose only channels are a chat and an
    *  enquiry form has nothing for the button to do. */
   canCheckNow: boolean
-  /** Seconds between checks that run on their own while this page is open and
-   *  in front of somebody, or null when the site has not asked for that. Only
-   *  meaningful alongside canCheckNow - the button owns the timer, and there is
-   *  no timer without the button. */
-  autoCheckSeconds: number | null
   /** When any mail account was last opened, in milliseconds, or null when none
    *  ever has been. Read at the foot of the rail as a clock time, and moved on
    *  by every check this page runs. */
@@ -541,7 +536,7 @@ export function NavRail({
   showUnrouted, unroutedCount, showDrafts, draftCount, draftCounts, showScheduled, scheduledCount,
   spamCount, binCount, contactCount, showCampaigns, composeHref,
   composeEntries,
-  defaultInboxId, canReorder, canCheckNow, autoCheckSeconds, lastCheckedAt, timezone,
+  defaultInboxId, canReorder, canCheckNow, lastCheckedAt, timezone,
 }: Props) {
   const router = useRouter()
   const [notice, setNotice] = useState<CheckNowNotice | null>(null)
@@ -1492,7 +1487,6 @@ export function NavRail({
               <CheckNowButton
                 onResult={showNotice}
                 onChecked={setOwnCheckedAt}
-                autoSeconds={autoCheckSeconds}
               />
             )}
           </div>
