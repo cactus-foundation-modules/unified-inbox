@@ -1,8 +1,27 @@
 'use client'
 
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { UndoToast } from './UndoToast'
+
+/** A point on the screen, in viewport coordinates. Passed with an offer when
+ *  the caller already knows where the press was; otherwise the provider
+ *  remembers the last pointer down inside the page. */
+export type UndoAnchor = { x: number; y: number }
+
+/** Read from a click or pointer event when an offer is raised in the same
+ *  handler. Most callers need not bother - see UndoProvider. */
+export function undoAt(event: Pick<MouseEvent, 'clientX' | 'clientY'>): UndoAnchor {
+  return { x: event.clientX, y: event.clientY }
+}
+
+function anchorFromFocus(): UndoAnchor | null {
+  const el = document.activeElement
+  if (!(el instanceof HTMLElement)) return null
+  const box = el.getBoundingClientRect()
+  if (box.width === 0 && box.height === 0) return null
+  return { x: box.left + box.width / 2, y: box.bottom }
+}
 
 // ---------------------------------------------------------------------------
 // Where the regret window lives.
@@ -33,6 +52,9 @@ export type UndoOffer = {
   /** Put it back. Requests only: whatever raised this has very probably been
    *  unmounted by now. The redraw afterwards is handled here. */
   undo: () => Promise<void>
+  /** Where to draw the toast. Left out on most calls: the last pointer down, or
+   *  the button that still has focus, is enough. */
+  at?: UndoAnchor | null
 }
 
 const OfferUndo = createContext<(offer: UndoOffer) => void>(() => {})
@@ -49,12 +71,29 @@ export function UndoProvider({ children }: { children: ReactNode }) {
   // The key restarts the five seconds. UndoToast sets its timers once, on
   // mount, so a second press while the first toast is still up would otherwise
   // inherit whatever was left of the first one's countdown.
-  const [offer, setOffer] = useState<(UndoOffer & { key: number }) | null>(null)
+  const [offer, setOffer] = useState<(UndoOffer & { key: number; at: UndoAnchor | null }) | null>(null)
   const nextKey = useRef(0)
+  // Where the last press landed. Most offers fire after an async request, often
+  // from a component that has already unmounted, so the toast cannot read the
+  // button's box back - but the press itself happened a moment ago.
+  const lastPointer = useRef<UndoAnchor | null>(null)
+
+  useEffect(() => {
+    const remember = (event: PointerEvent) => {
+      lastPointer.current = { x: event.clientX, y: event.clientY }
+    }
+    document.addEventListener('pointerdown', remember, true)
+    return () => document.removeEventListener('pointerdown', remember, true)
+  }, [])
 
   const show = useCallback((next: UndoOffer) => {
     nextKey.current += 1
-    setOffer({ ...next, key: nextKey.current })
+    const { at: given, ...rest } = next
+    setOffer({
+      ...rest,
+      key: nextKey.current,
+      at: given ?? lastPointer.current ?? anchorFromFocus(),
+    })
   }, [])
 
   const undo = useCallback(async (which: UndoOffer) => {
@@ -77,6 +116,7 @@ export function UndoProvider({ children }: { children: ReactNode }) {
       {offer && (
         <UndoToast
           key={offer.key}
+          at={offer.at}
           onUndo={() => void undo(offer)}
           onDone={() => setOffer((current) => (current?.key === offer.key ? null : current))}
         >
