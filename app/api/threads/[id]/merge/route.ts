@@ -3,7 +3,7 @@ import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { canOpenThread } from '@/modules/unified-inbox/lib/access'
-import { getThreadDetail, mergeThreads } from '@/modules/unified-inbox/lib/db'
+import { getInbox, getThreadDetail, mergeThreads } from '@/modules/unified-inbox/lib/db'
 import { mergeSummary } from '@/modules/unified-inbox/lib/thread-merge'
 import { ThreadMergeBody } from '@/modules/unified-inbox/lib/validation'
 
@@ -47,13 +47,20 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const result = await mergeThreads(id, parsed.data.loserIds, user.id)
   if ('error' in result) return errorResponse(result.error)
 
+  // Said out loud, because it changes which address the next reply leaves from.
+  const home = result.rehomedToInboxId ? await getInbox(result.rehomedToInboxId) : null
+  const moved = home
+    ? ` It now lives in ${home.name}, so the team can see it and replies go from ${home.address}.`
+    : ''
+
   return NextResponse.json({
     ok: true,
     threadId: result.winnerId,
     mergeIds: result.mergeIds,
+    rehomedToInboxId: result.rehomedToInboxId,
     message: `${mergeSummary(
       { id: winner.id, inboxId: winner.inboxId, subject: winner.subject, status: winner.status, unread: winner.unread, createdAt: winner.createdAt },
       result.merged,
-    )} You can put this back from the conversation itself if it was wrong.`,
+    )}${moved} You can put this back from the conversation itself if it was wrong.`,
   })
 }

@@ -4,7 +4,7 @@ import { prisma } from '@/lib/db/prisma'
 import { encryptSecret, tryDecryptSecret } from '@/lib/crypto/secrets'
 import { normaliseAddress } from './addresses'
 import { normaliseSubject, type ThreadRef } from './threading'
-import { mergedStatus, mergedUnread, validateMerge } from './thread-merge'
+import { mergedHomeInboxId, mergedStatus, mergedUnread, validateMerge } from './thread-merge'
 import type { OutboundCandidate } from './relay-copy'
 import { hasInlineImages, readableHtml, rewriteInlineImages } from './html'
 import { inlineImageHref, matchInlinePart, type InlineImagePart } from './inline-images'
@@ -3575,6 +3575,57 @@ export type ThreadEventKind =
   /** A scheduled message went out carrying a follow-up, so the conversation was
    *  put to sleep until the chase is due. */
   | 'awaiting'
+  /** Somebody moved it to another mailbox. `detail` carries where from and
+   *  where to, by id and by name - the name because a mailbox can be deleted and
+   *  the log should still say where the conversation had been. */
+  | 'moved'
+
+/**
+ * Move a conversation to another mailbox.
+ *
+ * Where a conversation lives is ONE column, `uin_threads.inbox_id`, and nearly
+ * everything that matters already reads it: the list files by it, the sync
+ * leaves it alone once it is set (`COALESCE` in both upserts, written with this
+ * in mind), and a reply is sent from it - `prepareSend` falls back to the
+ * conversation's own mailbox when the writing box names none, which it never
+ * does. So moving the column IS "replies now go from the new address".
+ *
+ * Two things hang off the old mailbox and have to come too:
+ *
+ * - `uin_thread_inboxes`. A merged conversation is listed under every address
+ *   it absorbed, and one dragged out of sales@ that still showed in sales@
+ *   because of a side row would read as the move not having worked. The rows are
+ *   cleared: it lives where it was put, and nowhere else. (A later merge or
+ *   un-merge recomputes them, and will count the NEW home as its own.)
+ * - Its unsent drafts. A draft carries the mailbox it was started in, the drafts
+ *   folder files by it, and a scheduled draft is checked against it before it
+ *   goes - so one left behind would either vanish from view or go out from the
+ *   address the conversation has just left.
+ *
+ * Messages are deliberately NOT touched. `uin_messages.inbox_id` is which
+ * address a message left from or arrived at, and that is history.
+ *
+ * Returns where it was, or null when the conversation is not there.
+ */
+export async function moveThreadToInbox(threadId: string, inboxId: string): Promise<{ fromInboxId: string | null } | null> {
+  return prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<{ inbox_id: string | null }[]>`
+      SELECT "inbox_id" FROM "uin_threads" WHERE "id" = ${threadId} FOR UPDATE
+    `
+    const current = rows[0]
+    if (!current) return null
+
+    await tx.$executeRaw`
+      UPDATE "uin_threads" SET "inbox_id" = ${inboxId}, "updated_at" = CURRENT_TIMESTAMP WHERE "id" = ${threadId}
+    `
+    await tx.$executeRaw`DELETE FROM "uin_thread_inboxes" WHERE "thread_id" = ${threadId}`
+    await tx.$executeRaw`
+      UPDATE "uin_drafts" SET "inbox_id" = ${inboxId}, "updated_at" = CURRENT_TIMESTAMP
+       WHERE "thread_id" = ${threadId}
+    `
+    return { fromInboxId: current.inbox_id }
+  })
+}
 
 export async function recordEvent(
   threadId: string,
@@ -4270,16 +4321,25 @@ export async function listScheduledDrafts(
  *  One grouped query rather than one call per address: the rail is drawn on
  *  every list this hub renders, and a site with nine colleagues on it would
  *  otherwise ask the same question nine times. */
-export async function countDraftsByInboxOwner(): Promise<Record<string, number>> {
+export async function countDraftsByInboxOwner(readableInboxIds: string[]): Promise<Record<string, number>> {
+  // Nothing readable, nothing to count - and an empty ANY() would say the same
+  // thing a round trip later.
+  if (readableInboxIds.length === 0) return {}
+  // Keyed by the OWNER's own address, counted by AUTHOR. It used to be counted
+  // by the address the draft was filed on, which is the conversation's - so a
+  // reply Sam started to something in purchasing@ was filed under purchasing@,
+  // which has no Drafts folder, and appeared nowhere anybody else could look. A
+  // draft is its author's, wherever the conversation lives. Held to the
+  // mailboxes THIS reader may open, so the number matches the list under it.
   const rows = await prisma.$queryRaw<{ inbox_id: string; count: bigint }[]>`
-    SELECT d."inbox_id" AS "inbox_id", COUNT(*)::bigint AS "count"
+    SELECT i."id" AS "inbox_id", COUNT(*)::bigint AS "count"
       FROM "uin_drafts" d
       JOIN "uin_inboxes" i
-        ON i."id" = d."inbox_id"
-       AND i."kind" = 'individual'
+        ON i."kind" = 'individual'
        AND i."owner_user_id" = d."author_user_id"
      WHERE ${DRAFT_NOT_WAITING}
-     GROUP BY d."inbox_id"
+       AND d."inbox_id" = ANY(${readableInboxIds}::text[])
+     GROUP BY i."id"
   `
   const counts: Record<string, number> = {}
   for (const row of rows) counts[row.inbox_id] = Number(row.count)
@@ -4327,16 +4387,25 @@ export async function countScheduledDrafts(
  *
  *  One grouped query rather than one call per address: the rail is drawn on
  *  every list this hub renders. */
-export async function countScheduledDraftsByInboxOwner(): Promise<Record<string, number>> {
+export async function countScheduledDraftsByInboxOwner(readableInboxIds: string[]): Promise<Record<string, number>> {
+  // Nothing readable, nothing to count - and an empty ANY() would say the same
+  // thing a round trip later.
+  if (readableInboxIds.length === 0) return {}
+  // Keyed by the OWNER's own address, counted by AUTHOR. It used to be counted
+  // by the address the draft was filed on, which is the conversation's - so a
+  // reply Sam started to something in purchasing@ was filed under purchasing@,
+  // which has no Drafts folder, and appeared nowhere anybody else could look. A
+  // draft is its author's, wherever the conversation lives. Held to the
+  // mailboxes THIS reader may open, so the number matches the list under it.
   const rows = await prisma.$queryRaw<{ inbox_id: string; count: bigint }[]>`
-    SELECT d."inbox_id" AS "inbox_id", COUNT(*)::bigint AS "count"
+    SELECT i."id" AS "inbox_id", COUNT(*)::bigint AS "count"
       FROM "uin_drafts" d
       JOIN "uin_inboxes" i
-        ON i."id" = d."inbox_id"
-       AND i."kind" = 'individual'
+        ON i."kind" = 'individual'
        AND i."owner_user_id" = d."author_user_id"
      WHERE ${DRAFT_WAITING}
-     GROUP BY d."inbox_id"
+       AND d."inbox_id" = ANY(${readableInboxIds}::text[])
+     GROUP BY i."id"
   `
   const counts: Record<string, number> = {}
   for (const row of rows) counts[row.inbox_id] = Number(row.count)
@@ -4405,6 +4474,7 @@ function sentWhere(
   includeUnrouted: boolean,
   providerModules: string[],
   ownUserId: string | null,
+  alsoWrittenBy: SentAlsoWrittenBy | null = null,
 ): Prisma.Sql | null {
   const visible = visibilityClause(inboxIds, includeUnrouted, providerModules)
   if (!visible) return null
@@ -4414,8 +4484,20 @@ function sentWhere(
     : Prisma.sql`(${outbound} OR (m."direction" = 'in' AND lower(m."from_address") IN (
         SELECT lower(i."address") FROM "uin_inboxes" i WHERE i."id" IN (${Prisma.join(inboxIds)})
       ) AND ${notAlreadyListed(inboxIds)}))`
-  return ownUserId ? Prisma.sql`(${anybody} AND ${writtenBy(ownUserId)})` : anybody
+  const folder = ownUserId ? Prisma.sql`(${anybody} AND ${writtenBy(ownUserId)})` : anybody
+  if (!alsoWrittenBy) return folder
+  // The Sent folder under a COLLEAGUE's name. Everything that left their own
+  // address, as before - and also what they wrote from anywhere else this
+  // reader may open. A reply Sam sent from purchasing@ is in purchasing@'s Sent
+  // folder because it left that address, and it belongs in Sam's because Sam
+  // wrote it; it used to be in the first and missing from the second.
+  const elsewhere = visibilityClause(alsoWrittenBy.readableInboxIds, false, [])
+  if (!elsewhere) return folder
+  return Prisma.sql`(${folder} OR (m."direction" = 'out' AND ${elsewhere} AND m."author_user_id" = ${alsoWrittenBy.userId}))`
 }
+
+/** Whose writing a colleague's Sent folder also gathers up, and from where. */
+export type SentAlsoWrittenBy = { userId: string; readableInboxIds: string[] }
 
 /**
  * Keeps the colleague-post clause above from listing a message TWICE.
@@ -4498,8 +4580,9 @@ export async function listSentMessages(
   /** Whose folder this is. Null for an address's own - everything that has left
    *  it, whoever wrote it. See sentWhere. */
   ownUserId: string | null = null,
+  alsoWrittenBy: SentAlsoWrittenBy | null = null,
 ): Promise<SentMessageRow[]> {
-  const where = sentWhere(inboxIds, includeUnrouted, providerModules, ownUserId)
+  const where = sentWhere(inboxIds, includeUnrouted, providerModules, ownUserId, alsoWrittenBy)
   if (!where) return []
   const offset = Math.max(0, (page - 1) * perPage)
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
@@ -4536,8 +4619,9 @@ export async function countSentMessages(
   includeUnrouted: boolean,
   providerModules: string[],
   ownUserId: string | null = null,
+  alsoWrittenBy: SentAlsoWrittenBy | null = null,
 ): Promise<number> {
-  const where = sentWhere(inboxIds, includeUnrouted, providerModules, ownUserId)
+  const where = sentWhere(inboxIds, includeUnrouted, providerModules, ownUserId, alsoWrittenBy)
   if (!where) return 0
   const rows = await prisma.$queryRaw<{ count: bigint }[]>`
     SELECT COUNT(*)::bigint AS "count"
@@ -4589,6 +4673,57 @@ export async function getDraftInInbox(
      LIMIT 1
   `
   return rows[0] ? mapDraft(rows[0]) : null
+}
+
+/**
+ * One of a colleague's drafts, wherever it is filed, for the read-only view
+ * beside the Drafts folder under their name.
+ *
+ * The folder lists everything that person has started, not only what sits on
+ * their own address - so opening one has to find it the same way. Still never
+ * "one draft, then check": it is this author's, and it is filed somewhere this
+ * reader may open, or it is nothing.
+ */
+export async function getDraftOfColleague(
+  id: string,
+  authorUserId: string,
+  readableInboxIds: string[],
+): Promise<Draft | null> {
+  if (readableInboxIds.length === 0) return null
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT d.* FROM "uin_drafts" d
+     WHERE d."id" = ${id}
+       AND d."author_user_id" = ${authorUserId}
+       AND d."inbox_id" = ANY(${readableInboxIds}::text[])
+     LIMIT 1
+  `
+  return rows[0] ? mapDraft(rows[0]) : null
+}
+
+/** What OTHER people have started under this conversation, for the notice in
+ *  the conversation itself.
+ *
+ *  Anybody who can open a conversation can read every message in it, and the one
+ *  thing they most need to know before writing an answer is that a colleague is
+ *  halfway through one - its absence is how the same customer gets answered
+ *  twice. The caller has already settled that this reader may open the
+ *  conversation; this only leaves their OWN out, which the reply box opens on.
+ *
+ *  Reading only. Changing one is still its author's alone - see canEditDraft. */
+export async function draftsOnThreadByOthers(
+  threadId: string,
+  userId: string,
+): Promise<(Draft & { authorName: string | null })[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT d.*, COALESCE(u."displayName", u."username") AS "author_name"
+      FROM "uin_drafts" d
+      LEFT JOIN "User" u ON u."id" = d."author_user_id"
+     WHERE d."thread_id" = ${threadId}
+       AND d."author_user_id" <> ${userId}
+     ORDER BY d."updated_at" DESC
+     LIMIT 20
+  `
+  return rows.map((r) => ({ ...mapDraft(r), authorName: (r.author_name as string | null) ?? null }))
 }
 
 /** Whatever THIS person left under this conversation, which the reply box opens
@@ -7578,6 +7713,9 @@ export async function recentRecipients(opts: {
 export type MergeThreadRow = {
   id: string
   inboxId: string | null
+  /** 'shared' or 'individual', off the mailbox it lives in. Null when it lives
+   *  in none. What decides where a merged conversation is homed. */
+  inboxKind: string | null
   absorbedInboxIds: string[]
   mergedIntoId: string | null
   providerModule: string | null
@@ -7601,13 +7739,16 @@ export async function threadsForMerge(ids: string[]): Promise<MergeThreadRow[]> 
     SELECT t."id", t."inbox_id", t."merged_into_id", t."provider_module", t."channel",
            t."subject", t."status", t."unread", t."person_id", t."organisation_id",
            t."last_message_at", t."last_direction", t."message_count", t."created_at",
+           hb."kind" AS inbox_kind,
            ${ABSORBED_INBOX_IDS} AS absorbed_inbox_ids
       FROM "uin_threads" t
+      LEFT JOIN "uin_inboxes" hb ON hb."id" = t."inbox_id"
      WHERE t."id" IN (${Prisma.join(ids)})
   `
   return rows.map((r) => ({
     id: r.id as string,
     inboxId: (r.inbox_id as string | null) ?? null,
+    inboxKind: (r.inbox_kind as string | null) ?? null,
     absorbedInboxIds: (r.absorbed_inbox_ids as string[] | null) ?? [],
     mergedIntoId: (r.merged_into_id as string | null) ?? null,
     providerModule: (r.provider_module as string | null) ?? null,
@@ -7709,6 +7850,17 @@ async function recomputeThreadInboxes(tx: Tx, threadId: string): Promise<void> {
         SELECT w."inbox_id" FROM "uin_threads" w
          WHERE w."id" = ${threadId} AND w."inbox_id" IS NOT NULL
         UNION
+        -- The address a merge re-homed it OUT of. Merging a conversation from
+        -- somebody's own post with one in a shared mailbox moves its home to
+        -- the shared one (see mergedHomeInboxId), and the merge record is the
+        -- only thing that still knows where it began. Without this the
+        -- conversation would vanish from the post of the person it was sent to.
+        -- Joined to the mailboxes so one deleted since cannot break the insert.
+        SELECT hb."id" AS "inbox_id"
+          FROM "uin_thread_merges" hm
+          JOIN "uin_inboxes" hb ON hb."id" = hm."snapshot"->>'winnerInboxIdBefore'
+         WHERE hm."winner_id" = ${threadId} AND hm."undone_at" IS NULL
+        UNION
         -- Each losing side's own addresses: the ones IT absorbed if it was
         -- itself a winner once, and its own inbox otherwise.
         SELECT COALESCE(li."inbox_id", l."inbox_id") AS "inbox_id"
@@ -7739,7 +7891,14 @@ async function recomputeThreadInboxes(tx: Tx, threadId: string): Promise<void> {
   `
 }
 
-export type ThreadMergeResult = { mergeIds: string[]; winnerId: string; merged: number }
+export type ThreadMergeResult = {
+  mergeIds: string[]
+  winnerId: string
+  merged: number
+  /** The mailbox the merged conversation was re-homed into, where merging moved
+   *  it out of somebody's own post - see `mergedHomeInboxId`. Null otherwise. */
+  rehomedToInboxId: string | null
+}
 
 /**
  * Fold several conversations into one.
@@ -7761,6 +7920,13 @@ export async function mergeThreads(
 
   const winner = byId.get(winnerId)!
   const losers = loserIds.map((id) => byId.get(id)!)
+
+  // Out of somebody's own post and into the team's, where the merge has both.
+  const home = mergedHomeInboxId(winner, losers)
+  const rehomedTo = home !== null && home !== winner.inboxId ? home : null
+  // The one merge record that remembers it, so undoing THAT merge puts the
+  // conversation back where it lived - and undoing a different one does not.
+  const rehomingLoserId = rehomedTo ? losers.find((l) => l.inboxId === rehomedTo)?.id ?? null : null
 
   return prisma.$transaction(async (tx) => {
     const mergeIds: string[] = []
@@ -7885,6 +8051,9 @@ export async function mergeThreads(
         heldDraftIds: heldDrafts.map((r) => r.id),
         repointedThreadIds: repointed.map((r) => r.id),
         repointedMergeIds: repointedMerges.map((r) => r.id),
+        ...(rehomedTo && loser.id === rehomingLoserId
+          ? { rehomedToInboxId: rehomedTo, winnerInboxIdBefore: winner.inboxId }
+          : {}),
       }
 
       const row = await tx.$queryRaw<{ id: string }[]>`
@@ -7893,6 +8062,18 @@ export async function mergeThreads(
         RETURNING "id"
       `
       mergeIds.push(row[0]!.id)
+    }
+
+    // Before the addresses are worked out, because they are worked out FROM
+    // where it lives. Its unsent drafts come too, for the reason a moved
+    // conversation's do - see `moveThreadToInbox`.
+    if (rehomedTo) {
+      await tx.$executeRaw`
+        UPDATE "uin_threads" SET "inbox_id" = ${rehomedTo}, "updated_at" = now() WHERE "id" = ${winnerId}
+      `
+      await tx.$executeRaw`
+        UPDATE "uin_drafts" SET "inbox_id" = ${rehomedTo} WHERE "thread_id" = ${winnerId}
+      `
     }
 
     await recomputeThreadInboxes(tx, winnerId)
@@ -7925,10 +8106,11 @@ export async function mergeThreads(
                 mergeIds,
                 loserIds: losers.map((l) => l.id),
                 subjects: losers.map((l) => l.subject),
+                ...(rehomedTo ? { rehomedToInboxId: rehomedTo, fromInboxId: winner.inboxId } : {}),
               })}::jsonb)
     `
 
-    return { mergeIds, winnerId, merged: losers.length }
+    return { mergeIds, winnerId, merged: losers.length, rehomedToInboxId: rehomedTo }
   }, { timeout: 60_000, maxWait: 15_000 })
 }
 
@@ -8019,6 +8201,8 @@ export async function undoThreadMerge(
     heldDraftIds?: string[]
     repointedThreadIds?: string[]
     repointedMergeIds?: string[]
+    rehomedToInboxId?: string
+    winnerInboxIdBefore?: string | null
   }
 
   const [winner, loser] = await Promise.all([getThreadDetail(winnerId), getThreadDetail(loserId)])
@@ -8097,14 +8281,31 @@ export async function undoThreadMerge(
       UPDATE "uin_threads" SET "merged_into_id" = NULL, "updated_at" = now() WHERE "id" = ${loserId}
     `
 
+    // This merge moved the conversation out of somebody's own post. Put it back
+    // - but only if it is still where the merge left it: somebody who has since
+    // dragged it somewhere else made a decision of their own, and undoing a
+    // merge is not a reason to overrule it. After the drafts above have gone
+    // back to the other side, so only the winner's own are touched.
+    const before = snapshot.winnerInboxIdBefore ?? null
+    if (snapshot.rehomedToInboxId && before && winner.inboxId === snapshot.rehomedToInboxId) {
+      const still = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "uin_inboxes" WHERE "id" = ${before}`
+      if (still.length > 0) {
+        await tx.$executeRaw`UPDATE "uin_threads" SET "inbox_id" = ${before}, "updated_at" = now() WHERE "id" = ${winnerId}`
+        await tx.$executeRaw`UPDATE "uin_drafts" SET "inbox_id" = ${before} WHERE "thread_id" = ${winnerId}`
+      }
+    }
+    // Marked undone BEFORE the addresses are recomputed: the recompute reads
+    // live merge records for the address a merge re-homed the conversation out
+    // of, and this one is no longer live.
+    await tx.$executeRaw`
+      UPDATE "uin_thread_merges" SET "undone_at" = now(), "undone_by" = ${userId} WHERE "id" = ${mergeId}
+    `
+
     await recomputeThreadInboxes(tx, winnerId)
     await recomputeThreadInboxes(tx, loserId)
     await recomputeThreadCounters(tx, winnerId)
     await recomputeThreadCounters(tx, loserId)
 
-    await tx.$executeRaw`
-      UPDATE "uin_thread_merges" SET "undone_at" = now(), "undone_by" = ${userId} WHERE "id" = ${mergeId}
-    `
     await tx.$executeRaw`
       INSERT INTO "uin_events" ("thread_id", "user_id", "kind", "detail")
       VALUES (${winnerId}, ${userId}, 'unmerged', ${JSON.stringify({ mergeId, loserId })}::jsonb)

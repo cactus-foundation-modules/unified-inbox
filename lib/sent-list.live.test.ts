@@ -488,6 +488,29 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
       }
     })
 
+    it('puts what somebody sent from a SHARED address in the Sent folder under their name too', async () => {
+      // The folder hanging under a colleague's own address on the rail. It used
+      // to be that address and nothing else, so Chris's reply from sales@ was in
+      // sales@'s Sent folder and missing from his.
+      const everything = [chrisInbox, emmaInbox, salesInbox]
+      const under = await lib.listSentMessages(
+        [chrisInbox], false, [], 1, 25, null, { userId: chris, readableInboxIds: everything },
+      )
+      expect(under.map((r) => r.subject)).toContain('Re: Ten chairs')
+      expect(await lib.countSentMessages(
+        [chrisInbox], false, [], null, { userId: chris, readableInboxIds: everything },
+      )).toBe(under.length)
+      // Not for a reader who may not open sales@ - they could not read the
+      // conversation it is part of either.
+      const narrow = await lib.listSentMessages(
+        [chrisInbox], false, [], 1, 25, null, { userId: chris, readableInboxIds: [chrisInbox] },
+      )
+      expect(narrow.map((r) => r.subject)).not.toContain('Re: Ten chairs')
+      // And sales@'s own folder still has it, because it left that address.
+      expect((await lib.listSentMessages([salesInbox], false, [], 1, 25)).map((r) => r.subject))
+        .toContain('Re: Ten chairs')
+    })
+
     it('still holds the address\u2019s own folder to everything that left it', async () => {
       // The other half of the pair, and the reason the module mail is not lost:
       // the folder hanging under sales@ on the rail, which names one address and
@@ -549,16 +572,83 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
       // second has no folder to appear under, so it is not here. Emma's is on
       // emma@ and is counted there, under her name, whoever is looking.
       //
-      // No reader is passed in at all, which is the point: the query matches a
-      // draft's author against its address's own owner, so it cannot be talked
-      // into counting somebody's writing under a colleague's heading.
-      expect(await lib.countDraftsByInboxOwner()).toEqual({
+      // Counted by AUTHOR and keyed by the author's own address, within the
+      // mailboxes the reader may open - so it still cannot be talked into
+      // counting somebody's writing under a colleague's heading.
+      expect(await lib.countDraftsByInboxOwner([chrisInbox, emmaInbox, salesInbox])).toEqual({
         [chrisInbox]: 1,
         [emmaInbox]: 1,
       })
     })
 
-    it('leaves a draft written on somebody ELSE\u2019s address out of their number', async () => {
+    it('files a reply somebody began on a SHARED mailbox under their own name', async () => {
+      // The case that used to vanish. Emma starts an answer to something in
+      // sales@: the draft carries sales@, because that is the conversation's
+      // mailbox, and sales@ has no Drafts folder - so it was counted nowhere and
+      // nobody covering could find it. It is Emma's, so it is under Emma.
+      const onSales = await lib.saveDraft({
+        authorUserId: emma,
+        inboxId: salesInbox,
+        threadId: null,
+        mode: 'new',
+        to: ['customer@example.com'],
+        cc: [],
+        subject: 'Emma, answering something in sales@',
+        body: 'Dear customer,',
+        attachments: [],
+      })
+      try {
+        const everything = [chrisInbox, emmaInbox, salesInbox]
+        expect((await lib.countDraftsByInboxOwner(everything))[emmaInbox]).toBe(2)
+        // The folder under her name lists it, for a reader who may open sales@...
+        expect((await lib.listDrafts(emma, everything)).map((d) => d.id)).toContain(onSales.id)
+        expect((await lib.getDraftOfColleague(onSales.id, emma, everything))?.subject)
+          .toBe('Emma, answering something in sales@')
+        // ...and neither counts nor shows it to one who may not.
+        expect((await lib.countDraftsByInboxOwner([chrisInbox, emmaInbox]))[emmaInbox]).toBe(1)
+        expect((await lib.listDrafts(emma, [chrisInbox, emmaInbox])).map((d) => d.id)).not.toContain(onSales.id)
+        expect(await lib.getDraftOfColleague(onSales.id, emma, [chrisInbox, emmaInbox])).toBeNull()
+        // Never under the wrong name, and never with nothing readable at all.
+        expect(await lib.getDraftOfColleague(onSales.id, chris, everything)).toBeNull()
+        expect(await lib.countDraftsByInboxOwner([])).toEqual({})
+      } finally {
+        await lib.deleteDraft(onSales.id, emma)
+      }
+    })
+
+    it('shows a colleague\u2019s unfinished reply to whoever opens the conversation, and never their own', async () => {
+      const thread = await lib.createThread({
+        inboxId: salesInbox,
+        subject: 'Twelve desks',
+        subjectNormalised: 'twelve desks',
+        preview: 'A quote for twelve desks',
+        lastMessageAt: new Date('2026-09-01T09:00:00Z'),
+        lastDirection: 'in',
+        unread: true,
+      })
+      const hers = await lib.saveDraft({
+        authorUserId: emma,
+        inboxId: salesInbox,
+        threadId: thread,
+        mode: 'reply',
+        to: ['customer@example.com'],
+        cc: [],
+        subject: 'Re: Twelve desks',
+        body: 'Dear customer, about those desks',
+        attachments: [],
+      })
+      try {
+        const chrisSeesOnIt = await lib.draftsOnThreadByOthers(thread, chris)
+        expect(chrisSeesOnIt.map((d) => d.id)).toEqual([hers.id])
+        expect(chrisSeesOnIt[0]?.authorUserId).toBe(emma)
+        // Her own is what her reply box opens on, not a notice about herself.
+        expect(await lib.draftsOnThreadByOthers(thread, emma)).toEqual([])
+      } finally {
+        await lib.deleteDraft(hers.id, emma)
+      }
+    })
+
+    it('counts a draft written on somebody ELSE\u2019s address under its AUTHOR, not the address', async () => {
       // Chris starts something on Emma's address, which he may read and write
       // from. It is his writing, so it is not in Emma's folder - a folder under
       // her name holding his half-finished replies would be the wrong answer to
@@ -575,7 +665,9 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
         attachments: [],
       })
       try {
-        expect((await lib.countDraftsByInboxOwner())[emmaInbox]).toBe(1)
+        const counts = await lib.countDraftsByInboxOwner([chrisInbox, emmaInbox, salesInbox])
+        expect(counts[emmaInbox]).toBe(1)
+        expect(counts[chrisInbox]).toBe(2)
       } finally {
         await lib.deleteDraft(stray.id, chris)
       }
@@ -654,7 +746,7 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
         'Half-written, from Chris',
       ])
       expect(await lib.countDrafts(chris)).toBe(2)
-      expect((await lib.countDraftsByInboxOwner())[chrisInbox]).toBe(1)
+      expect((await lib.countDraftsByInboxOwner([chrisInbox, emmaInbox, salesInbox]))[chrisInbox]).toBe(1)
     })
 
     it('lists them soonest first, this person\u2019s own and nobody else\u2019s', async () => {
@@ -676,7 +768,7 @@ describe.runIf(shouldRun)('the Sent list against a real database', () => {
     })
 
     it('counts scheduled messages per colleague address for the rail', async () => {
-      expect(await lib.countScheduledDraftsByInboxOwner()).toEqual({
+      expect(await lib.countScheduledDraftsByInboxOwner([chrisInbox, emmaInbox, salesInbox])).toEqual({
         [chrisInbox]: 2,
         [emmaInbox]: 1,
       })

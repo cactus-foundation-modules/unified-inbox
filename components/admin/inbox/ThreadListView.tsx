@@ -29,6 +29,7 @@ import { Avatar } from './Avatar'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Dropdown } from './Dropdown'
 import { useRegisterRows, useSelection, type PickedRow } from './Selection'
+import { beginThreadDrag, draggedIds, endThreadDrag } from './thread-drag'
 import { SnoozePanel } from './SnoozePanel'
 import { useOfferUndo } from './UndoProvider'
 
@@ -962,6 +963,21 @@ export function ThreadListView({
                 data-opening={openingId === row.id ? 'true' : undefined}
                 onClick={(e) => onRowClick(e, row.id, index)}
                 onKeyDown={(e) => onRowKeyDown(e, row.id, index)}
+                // Onto a mailbox in the rail, which moves it there - see
+                // thread-drag.ts. A discussion stays put: it belongs to the
+                // people in it rather than to an address, and the route would
+                // refuse it, so it is not offered.
+                draggable={row.channel === 'discussion' ? false : true}
+                onDragStart={(e) => {
+                  if (row.channel === 'discussion') return
+                  const ids = draggedIds(row.id, picked)
+                  const carried = rows.filter((r) => ids.includes(r.id))
+                  beginThreadDrag(e.dataTransfer, {
+                    ids,
+                    fromInboxIds: [...new Set(carried.map((r) => r.inboxId ?? null))],
+                  })
+                }}
+                onDragEnd={endThreadDrag}
               >
                 {/* A picked row wears a tick where its face was. The circle is
                     already there on every row and already the right size, so

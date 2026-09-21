@@ -4,6 +4,7 @@ import {
   effectiveInboxIds,
   listSentence,
   mergeSummary,
+  mergedHomeInboxId,
   mergedInboxIds,
   mergedStatus,
   mergedUnread,
@@ -92,6 +93,30 @@ describe('what the merged conversation says about itself', () => {
   it('is unread if any side was', () => {
     expect(mergedUnread([false, true, false])).toBe(true)
     expect(mergedUnread([false, false])).toBe(false)
+  })
+})
+
+describe('which mailbox the merged conversation lives in', () => {
+  const own = { inboxId: 'chris', inboxKind: 'individual' }
+  const team = { inboxId: 'purchasing', inboxKind: 'shared' }
+
+  it('moves out of somebody’s own post into the shared mailbox it was merged with', () => {
+    expect(mergedHomeInboxId(own, [team])).toBe('purchasing')
+  })
+
+  it('leaves a winner already in a shared mailbox where it is', () => {
+    expect(mergedHomeInboxId(team, [own])).toBe('purchasing')
+    expect(mergedHomeInboxId(team, [{ inboxId: 'sales', inboxKind: 'shared' }])).toBe('purchasing')
+  })
+
+  it('stays put when no side of it is shared', () => {
+    expect(mergedHomeInboxId(own, [{ inboxId: 'marcus', inboxKind: 'individual' }])).toBe('chris')
+  })
+
+  it('files an unfiled winner into the shared mailbox, and takes the first one met', () => {
+    expect(mergedHomeInboxId({ inboxId: null, inboxKind: null }, [own, team, { inboxId: 'sales', inboxKind: 'shared' }]))
+      .toBe('purchasing')
+    expect(mergedHomeInboxId({ inboxId: null, inboxKind: null }, [own])).toBeNull()
   })
 })
 

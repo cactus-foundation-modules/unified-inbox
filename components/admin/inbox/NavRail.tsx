@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { LinkBusy } from './NavProgress'
 import { useRouter } from 'next/navigation'
@@ -14,6 +14,9 @@ import {
   PhoneIcon, SendIcon, SmartphoneIcon, SmsIcon, SpamIcon,
 } from './icons'
 import { Avatar } from './Avatar'
+import { useSelection } from './Selection'
+import { currentThreadDrag, endThreadDrag, isThreadDrag, movedMessage, wouldMove } from './thread-drag'
+import { useOfferUndo } from './UndoProvider'
 import { CheckNowButton, type CheckNowNotice } from './CheckNowButton'
 import { NewMailNotifier } from './NewMailNotifier'
 import { InboxSearch } from './InboxSearch'
@@ -161,13 +164,12 @@ type Props = {
    *  the folder does not take the list they are on out of the rail. */
   showDrafts: boolean
   draftCount: number
-  /** How much each colleague has left half-written on their OWN address, keyed
-   *  by inbox id, for the Drafts folder under their name. Matched against the
-   *  address's owner in the query behind it, so a number here is never this
-   *  reader's own writing and never somebody else's address's. The folder is
-   *  offered whether or not there is anything in it, the same as the three
-   *  beside it: a folder that appears only once it has something in it is a
-   *  folder people assume ate their message. */
+  /** How much each colleague has left half-written, keyed by the id of THEIR OWN
+   *  address, for the Drafts folder under their name. Counted by author, so it
+   *  includes a reply they began on a shared mailbox, and held to the mailboxes
+   *  this reader may open so the number matches the list under it. The folder
+   *  is drawn only while this is above nought, or while it is the folder being
+   *  looked at - the same terms Drafts under Yours has always had. */
   draftCounts: Record<string, number>
   /** Whether Scheduled is worth offering, on the same terms as Drafts above:
    *  only once there is something waiting in it, and kept while the reader is
@@ -176,11 +178,8 @@ type Props = {
   showScheduled: boolean
   /** How many are waiting for a time to come round. */
   scheduledCount: number
-  /** How much each colleague has set to go out on their OWN address, keyed by
-   *  inbox id, for the Scheduled folder under their name. Matched against the
-   *  address's owner in the query behind it, so a number here is never this
-   *  reader's own writing. The folder is offered whether or not there is
-   *  anything in it, the same as Drafts beside it. */
+  /** How much each colleague has set to go out on its own, keyed and counted the
+   *  same way as `draftCounts` above, and drawn on the same terms. */
   scheduledCounts: Record<string, number>
   /** How much is in this person's own spam folder. Always offered, unlike
    *  Drafts: the folder is where junk goes the moment anybody presses the
@@ -321,13 +320,48 @@ type RailItem = {
   /** Said inside the link rather than hung on it: a link takes its name from
    *  what is in it, so this reaches the keyboard everywhere. */
   hint?: string
+  /** The mailbox a conversation dropped on this row is moved into. Only on rows
+   *  that ARE a mailbox - never on a folder under one, a channel or a view. */
+  dropInboxId?: string
+  /** What the move is reported as: "Moved to Sales." */
+  dropName?: string
+}
+
+/** A conversation dragged off the list and let go over a mailbox. The handlers
+ *  go on each mailbox ROW, unlike the reordering ones, which sit on the list:
+ *  those have to know which row is under the pointer, these only whether the
+ *  pointer is over this one. The two never both act on a drag - the reordering
+ *  handlers return at once for any drag a rail row did not start. */
+type ThreadDrop = {
+  overInboxId: string | null
+  over: (event: React.DragEvent, inboxId: string) => void
+  leave: (event: React.DragEvent, inboxId: string) => void
+  drop: (event: React.DragEvent, inboxId: string, name: string) => void
+}
+
+const ThreadDropContext = createContext<ThreadDrop | null>(null)
+
+/** The three handlers and the highlight for one mailbox row, or nothing at all
+ *  for a row that is not a mailbox. */
+function useDropTarget(item: RailItem) {
+  const drop = useContext(ThreadDropContext)
+  const inboxId = item.dropInboxId
+  if (!drop || !inboxId) return {}
+  return {
+    onDragOver: (event: React.DragEvent) => drop.over(event, inboxId),
+    onDragLeave: (event: React.DragEvent) => drop.leave(event, inboxId),
+    onDrop: (event: React.DragEvent) => drop.drop(event, inboxId, item.dropName ?? item.name),
+    'data-uin-drop': drop.overInboxId === inboxId ? '1' : undefined,
+  }
 }
 
 function Entry({ item }: { item: RailItem }) {
+  const dropTarget = useDropTarget(item)
   return (
     <li>
       <Link
         className="uin-rail-item"
+        {...dropTarget}
         href={item.href}
         aria-current={item.active ? 'page' : undefined}
         title={item.title}
@@ -378,6 +412,7 @@ function Branch({ id, item, opens, folders, open, onToggle }: {
   open: boolean
   onToggle: () => void
 }) {
+  const dropTarget = useDropTarget(item)
   return (
     <li>
       <div className="uin-rail-branch">
@@ -394,6 +429,7 @@ function Branch({ id, item, opens, folders, open, onToggle }: {
         </button>
         <Link
           className="uin-rail-item"
+          {...dropTarget}
           href={item.href}
           aria-current={item.active ? 'page' : undefined}
           title={item.title}
@@ -575,6 +611,83 @@ export function NavRail({
    *  because it means the opposite and because it expires: see toggleOpen. */
   const [shut, setShut] = useState<{ where: string | null; id: string } | null>(null)
   const [error, setError] = useState('')
+  // Which mailbox a dragged conversation is hovering over, for the highlight.
+  const [dropOver, setDropOver] = useState<string | null>(null)
+  const offerUndo = useOfferUndo()
+  const { clear: clearPicked } = useSelection()
+
+  /** One request per conversation rather than a bulk endpoint, as everywhere
+   *  else on this screen: the route already checks who may touch which mailbox,
+   *  and one refusal should not hide five successes. */
+  const moveThreads = useCallback(async (ids: string[], inboxId: string, name: string) => {
+    setError('')
+    const settled = await Promise.allSettled(ids.map(async (id) => {
+      const response = await fetch(`/api/m/unified-inbox/threads/${id}/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inboxId }),
+      })
+      const data = await response.json().catch(() => null) as { error?: string; moved?: boolean; fromInboxId?: string | null } | null
+      if (!response.ok) throw new Error(data?.error ?? 'That conversation could not be moved.')
+      return { id, moved: data?.moved === true, fromInboxId: data?.fromInboxId ?? null }
+    }))
+
+    const went = settled.flatMap((result) => (result.status === 'fulfilled' && result.value.moved ? [result.value] : []))
+    const refused = settled.flatMap((result) => (result.status === 'rejected' ? [result.reason instanceof Error ? result.reason.message : ''] : []))
+    if (refused.length > 0) {
+      setError(
+        refused.length === 1 && ids.length === 1
+          ? refused[0] || 'That conversation could not be moved.'
+          : `${refused.length} of ${ids.length} could not be moved. ${refused[0] ?? ''}`.trim(),
+      )
+    }
+    if (went.length === 0) return
+
+    clearPicked()
+    // Only what had somewhere to go back to. A conversation that was filed
+    // nowhere cannot be un-filed - the next collection would only file it again.
+    const back = went.filter((one): one is typeof one & { fromInboxId: string } => one.fromInboxId !== null)
+    offerUndo({
+      message: movedMessage(went.length, name),
+      undo: async () => {
+        await Promise.allSettled(back.map((one) => fetch(`/api/m/unified-inbox/threads/${one.id}/move`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ inboxId: one.fromInboxId }),
+        })))
+      },
+    })
+    router.refresh()
+  }, [clearPicked, offerUndo, router])
+
+  const threadDrop: ThreadDrop = {
+    overInboxId: dropOver,
+    over: (event, inboxId) => {
+      // Not ours, or already there: say nothing, and the browser shows the
+      // pointer that means "not here" all by itself.
+      if (!isThreadDrag(event.dataTransfer) || !wouldMove(currentThreadDrag(), inboxId)) return
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'move'
+      if (dropOver !== inboxId) setDropOver(inboxId)
+    },
+    leave: (event, inboxId) => {
+      // Crossing from the row onto the name or the count inside it fires a leave
+      // on the row. That is not leaving, and treating it as one makes the
+      // highlight flicker the whole way across.
+      const into = event.relatedTarget
+      if (into instanceof Node && event.currentTarget.contains(into)) return
+      setDropOver((current) => (current === inboxId ? null : current))
+    },
+    drop: (event, inboxId, name) => {
+      const carried = currentThreadDrag()
+      setDropOver(null)
+      if (!isThreadDrag(event.dataTransfer) || !wouldMove(carried, inboxId) || !carried) return
+      // A row is a link. Without this the browser follows it.
+      event.preventDefault()
+      endThreadDrag()
+      void moveThreads(carried.ids, inboxId, name)
+    },
+  }
   // Whether this browser can be nudged at all, which only the browser knows.
   // See the box at the foot of the rail: on a site with no mail account the
   // bell is the only thing in it, and an empty bordered box is worse than none.
@@ -811,6 +924,8 @@ export function NavRail({
       : inbox.kind === 'individual'
         ? 'Your own inbox. Nobody else can see it.'
         : 'Your own inbox.',
+    dropInboxId: inbox.id,
+    dropName: inbox.name,
     dragId: drag ? inbox.id : undefined,
     dragging: drag ? drag.dragId === inbox.id : undefined,
     over: drag ? drag.overId === inbox.id && drag.dragId !== inbox.id : undefined,
@@ -1060,22 +1175,28 @@ export function NavRail({
     // Ahead of Sent, because it is the half that has not happened yet: somebody
     // covering this address wants to know what is already half-answered before
     // they go and answer it themselves.
-    ...(inbox.ownerUserId ? [{
+    // Only while there is something in it, or while it is the folder being
+    // looked at. A colleague with nothing half-written is the ordinary case, and
+    // nine colleagues each showing an empty Drafts and an empty Scheduled is
+    // eighteen rows of nothing between the reader and the folders that matter.
+    // The one being looked at stays, or emptying it would pull the row out from
+    // under whoever is standing on it. (Yours has always worked this way.)
+    ...(inbox.ownerUserId && ((draftCounts[inbox.id] ?? 0) > 0 || current === `drafts:${inbox.id}`) ? [{
       key: `${inbox.id}:drafts`,
       href: link(`drafts:${inbox.id}`),
       active: current === `drafts:${inbox.id}`,
       icon: FileIcon,
       name: 'Drafts',
-      title: `Messages ${inbox.ownerName ?? 'they'} have started on ${inbox.address} and not sent`,
+      title: `Messages ${inbox.ownerName ?? 'they'} have started and not sent, from their own address or a shared one`,
       count: <Count value={draftCounts[inbox.id] ?? 0} word="saved" quiet />,
     }] : []),
-    ...(inbox.ownerUserId ? [{
+    ...(inbox.ownerUserId && ((scheduledCounts[inbox.id] ?? 0) > 0 || current === `scheduled:${inbox.id}`) ? [{
       key: `${inbox.id}:scheduled`,
       href: link(`scheduled:${inbox.id}`),
       active: current === `scheduled:${inbox.id}`,
       icon: AlarmIcon,
       name: 'Scheduled',
-      title: `Messages ${inbox.ownerName ?? 'they'} have set to go out on their own from ${inbox.address}`,
+      title: `Messages ${inbox.ownerName ?? 'they'} have set to go out on their own, from their own address or a shared one`,
       count: <Count value={scheduledCounts[inbox.id] ?? 0} word="waiting" quiet />,
     }] : []),
     sentFolderFor(inbox),
@@ -1259,6 +1380,7 @@ export function NavRail({
   })()
 
   return (
+    <ThreadDropContext.Provider value={threadDrop}>
     <nav className="uin-rail" aria-label="Inboxes and views" data-drawer={placesOpen ? 'open' : 'closed'}>
       {/* Who is reading, and the two buttons up here that are not places to
           go. The same arrangement every mail program uses, for the same
@@ -1518,5 +1640,6 @@ export function NavRail({
         </div>
       )}
     </nav>
+    </ThreadDropContext.Provider>
   )
 }

@@ -74,6 +74,35 @@ export function mergedInboxIds(winner: MergeCandidate, losers: MergeCandidate[])
 }
 
 /**
+ * Which mailbox the merged conversation LIVES in - its home, as opposed to the
+ * addresses it is merely listed under. The home is what a reply is sent from.
+ *
+ * Normally the winner's own, and the winner is the oldest. But the oldest is
+ * quite often somebody's OWN post: a supplier writes to chris@ first, then to
+ * purchasing@, and merging the two left the whole exchange homed in chris@ -
+ * answered from one person's address, in one person's name, with the team's
+ * mailbox only looking on. A shared mailbox is the team's and a personal one is
+ * not, so where the winner is in somebody's own post (or nowhere) and any side
+ * of the merge is in a shared mailbox, the shared one becomes the home.
+ *
+ * The first shared mailbox met, in the order the conversations were given, so
+ * the same merge always lands in the same place. A winner already in a shared
+ * mailbox never moves: two team mailboxes have no such pecking order, and the
+ * oldest conversation keeping its place is the rule everywhere else.
+ *
+ * It stays LISTED under the personal address too - see `recomputeThreadInboxes`
+ * - so nothing vanishes from anybody's post; only where it lives changes.
+ */
+export function mergedHomeInboxId(
+  winner: { inboxId: string | null; inboxKind: string | null },
+  losers: { inboxId: string | null; inboxKind: string | null }[],
+): string | null {
+  if (winner.inboxId && winner.inboxKind !== 'individual') return winner.inboxId
+  const shared = losers.find((loser) => loser.inboxId && loser.inboxKind === 'shared')
+  return shared?.inboxId ?? winner.inboxId
+}
+
+/**
  * Where the merged conversation stands.
  *
  * An open half makes the whole thing open, and that is the only reading that is

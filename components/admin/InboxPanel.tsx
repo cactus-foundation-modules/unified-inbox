@@ -25,7 +25,8 @@ import {
   draftForThread,
   draftsHeldByThread,
   getDraft,
-  getDraftInInbox,
+  getDraftOfColleague,
+  draftsOnThreadByOthers,
   getPerson,
   getSettings,
   getThreadDetail,
@@ -74,7 +75,7 @@ import { siteDiallingCode } from '@/lib/phone.server'
 import { attachableKinds, loadContext, loadHints } from '@/modules/unified-inbox/lib/adapters'
 import { defaultLinkKind } from '@/modules/unified-inbox/lib/link-kinds'
 import { modulesForInbox } from '@/modules/unified-inbox/lib/module-senders'
-import { forComposer } from '@/modules/unified-inbox/lib/drafts'
+import { draftBodyText, forComposer } from '@/modules/unified-inbox/lib/drafts'
 import { canAddProducts as canAddProductsFor, resolveProducts } from '@/modules/unified-inbox/lib/products'
 import { publicRecordUrls } from '@/modules/unified-inbox/lib/record-urls'
 import { addressesForPerson, buildContextQuery } from '@/modules/unified-inbox/lib/identity'
@@ -246,9 +247,7 @@ export async function UnifiedInboxPanel({
     // query, because the rail is drawn on every list this hub renders.
     Promise.all([
       countDrafts(user.id),
-      countDraftsByInboxOwner(),
       countScheduledDrafts(user.id),
-      countScheduledDraftsByInboxOwner(),
     ]),
     listConnections(),
     // Both counts in one query - one of them rides on the hub's own tab row, so
@@ -263,7 +262,7 @@ export async function UnifiedInboxPanel({
     wakeDueThreads(),
     wakeDueMentions(),
   ])
-  const [draftCount, draftCounts, scheduledCount, scheduledCounts] = draftTallies
+  const [draftCount, scheduledCount] = draftTallies
   const { people: contactCount, organisations: organisationCount } = peopleTally
 
   if (!canView) {
@@ -276,6 +275,15 @@ export async function UnifiedInboxPanel({
 
   const visibleIds = await visibleInboxIds(user, allInboxes.map((i) => i.id))
   const visible = new Set(visibleIds)
+  // How much each COLLEAGUE has half-written, and has set to go out, for the two
+  // folders under their name. Asked here rather than with the rest above because
+  // the answer depends on what this reader may open: the number has to match the
+  // list under it, and the list leaves out drafts on conversations they cannot
+  // read. It is also what decides whether those two folders are drawn at all.
+  const [draftCounts, scheduledCounts] = await Promise.all([
+    countDraftsByInboxOwner(visibleIds),
+    countScheduledDraftsByInboxOwner(visibleIds),
+  ])
   const inboxes = allInboxes.filter((i) => visible.has(i.id))
 
   // Minus the ones the owner has switched off in Settings. A site that points
@@ -571,8 +579,16 @@ export async function UnifiedInboxPanel({
   // own drafts under somebody else's name.
   const draftsAreOwn = !folderAsked || folderOwnerId === user.id
   const draftOwnerId = draftsAreOwn ? user.id : folderOwnerId
+  // A colleague's folder holds everything THEY have started, wherever the
+  // conversation lives - a reply Sam began to something in purchasing@ is Sam's
+  // draft, and it used to be filed under purchasing@, which has no Drafts folder,
+  // so nobody covering could find it. Held to the mailboxes this reader may
+  // open: they see Sam's drafts on conversations they could read anyway, and
+  // none on the ones they could not. Nothing at all when the address named is
+  // not one they may open (`folderInbox` is null then).
+  const colleagueScope = folderInbox ? visibleIds : []
   const drafts = params.draftsOnly && draftOwnerId
-    ? await listDrafts(draftOwnerId, folderAsked ? folderIds : null)
+    ? await listDrafts(draftOwnerId, !folderAsked ? null : draftsAreOwn ? folderIds : colleagueScope)
     : []
   // The other half of the same table: what has a time on it and has not gone
   // yet. Its own folder rather than a tag in the list above, because the two
@@ -583,7 +599,7 @@ export async function UnifiedInboxPanel({
   const scheduledAreOwn = !folderAsked || folderOwnerId === user.id
   const scheduledOwnerId = scheduledAreOwn ? user.id : folderOwnerId
   const scheduled = params.scheduledOnly && scheduledOwnerId
-    ? await listScheduledDrafts(scheduledOwnerId, folderAsked ? folderIds : null)
+    ? await listScheduledDrafts(scheduledOwnerId, !folderAsked ? null : scheduledAreOwn ? folderIds : colleagueScope)
     : []
 
   // What has been sent. Two different lists behind one word, and which one this
@@ -602,10 +618,18 @@ export async function UnifiedInboxPanel({
   //
   // Only fetched when that is the list being looked at.
   const sentOwnerId = folderAsked ? null : user.id
+  // The folder under a COLLEAGUE's name is both: everything that left their own
+  // address, and everything they wrote from a shared one this reader may open.
+  // What Sam sent from purchasing@ sits in purchasing@'s Sent folder because it
+  // left that address, and in Sam's because Sam wrote it.
+  const sentAlso = folderInbox && folderInbox.kind === 'individual' && folderInbox.ownerUserId
+    && folderInbox.ownerUserId !== user.id
+    ? { userId: folderInbox.ownerUserId, readableInboxIds: visibleIds }
+    : null
   const [sent, sentTotal] = params.sentOnly
     ? await Promise.all([
-        listSentMessages(folderIds, !folderAsked && canManage, folderAsked ? [] : channelModules, params.page, PER_PAGE, sentOwnerId),
-        countSentMessages(folderIds, !folderAsked && canManage, folderAsked ? [] : channelModules, sentOwnerId),
+        listSentMessages(folderIds, !folderAsked && canManage, folderAsked ? [] : channelModules, params.page, PER_PAGE, sentOwnerId, sentAlso),
+        countSentMessages(folderIds, !folderAsked && canManage, folderAsked ? [] : channelModules, sentOwnerId, sentAlso),
       ])
     : [[] as Awaited<ReturnType<typeof listSentMessages>>, 0]
 
@@ -999,7 +1023,7 @@ export async function UnifiedInboxPanel({
         after(() => pushProviderRead(thread))
       }
 
-      const [messages, files, events, ownDraft, heldDrafts, sellsAnything] = await Promise.all([
+      const [messages, files, events, ownDraft, heldDrafts, sellsAnything, othersDrafts] = await Promise.all([
         listThreadMessages(thread.id),
         attachmentsForThread(thread.id),
         listThreadEvents(thread.id),
@@ -1013,6 +1037,11 @@ export async function UnifiedInboxPanel({
         // person may see it. Asked here rather than in the box, because it is a
         // permission and the box is in a browser.
         canAddProductsFor(user),
+        // What colleagues have started under this conversation. This reader has
+        // already been let into the conversation, and that is the whole of the
+        // test: somebody about to answer needs to know somebody else is halfway
+        // through answering.
+        draftsOnThreadByOthers(thread.id, user.id),
       ])
       // What the half-written reply was carrying out of that catalogue, as it
       // stands today. The draft stores only which - a name and a price a week
@@ -1388,6 +1417,20 @@ export async function UnifiedInboxPanel({
           }}
           now={new Date()}
           timezone={timezone}
+          othersDrafts={othersDrafts.map((other) => ({
+            id: other.id,
+            authorName: other.authorName ?? staffById[other.authorUserId] ?? 'A colleague',
+            mode: other.mode,
+            to: other.to,
+            // Plain words, the way the read-only view beside a Drafts folder
+            // shows them. Never the markup: it is somebody's unfinished writing,
+            // shown to be read rather than to be sent.
+            body: draftBodyText(other).trim(),
+            attachmentCount: other.attachments.length,
+            updatedAt: other.updatedAt.toISOString(),
+            sendAt: other.sendAt ? other.sendAt.toISOString() : null,
+            waiting: other.sendState === 'scheduled' || other.sendState === 'sending',
+          }))}
           heldDrafts={heldDrafts.map((held) => ({
             id: held.id,
             threadId: held.threadId,
@@ -1441,21 +1484,30 @@ export async function UnifiedInboxPanel({
     params.draftId && folderInbox && folderOwnerId
     && ((params.draftsOnly && !draftsAreOwn) || (params.scheduledOnly && !scheduledAreOwn))
   ) {
-    const reading = await getDraftInInbox(params.draftId, folderOwnerId, folderInbox.id)
+    // Wherever it is filed, among the mailboxes this reader may open - the
+    // folder lists everything its owner has started, so opening one has to find
+    // it the same way.
+    const reading = await getDraftOfColleague(params.draftId, folderOwnerId, visibleIds)
+    const readingInbox = reading?.inboxId ? allInboxes.find((i) => i.id === reading.inboxId) ?? null : null
     draftReadPane = reading ? (
       <DraftReadView
         base={base}
         params={carried}
         draft={reading}
         ownerName={folderOwnerName ?? folderInbox.name}
-        inboxName={folderInbox.name}
+        inboxName={readingInbox?.name ?? folderInbox.name}
         inboxId={folderInbox.id}
         // Whether they may send it out for its author, which is exactly whether
         // they may send from that address at all (D16) - the same list the
         // compose button is built from. Reading somebody's post is not sending
         // as them, so a coverer let in to read and no more gets the read-only
         // sentence they always got.
-        canSend={sendableIds.includes(folderInbox.id)}
+        //
+        // And only a draft on their OWN address. "Send it for Sam" posts Sam's
+        // words as Sam, which the route allows on Sam's address and nowhere
+        // else; a reply Sam began on a shared mailbox is one this reader can
+        // simply write themselves, from the conversation.
+        canSend={reading.inboxId === folderInbox.id && sendableIds.includes(folderInbox.id)}
         now={new Date()}
         timezone={timezone}
       />

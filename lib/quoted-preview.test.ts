@@ -10,6 +10,8 @@ function preview(id: string, sentAtMs: number): QuotedPreview {
     id,
     sentAtMs,
     attribution: `On whenever, somebody wrote (${id}):`,
+    replySubject: 'Re: Ten chairs',
+    forwardSubject: 'Fwd: Ten chairs',
     forwardHeader: [['From', 'Jane Smith jane@customer.com']],
     hasHtml: false,
     hasRemoteImages: false,

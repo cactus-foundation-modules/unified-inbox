@@ -336,7 +336,14 @@ export function Composer({
   /** What the subject would be if nobody touched it. Only ever shown once the
    *  Subject line has been opened - a reply with a subject nobody typed is what
    *  every reply has always been. */
-  const defaultSubject = forwarding ? forwardSubject : replySubject
+  //
+  // Off the message actually being answered - the one Reply was pressed on, or
+  // the newest - which is what the send route does too. It used to be the
+  // newest message's whatever had been pressed, so answering the second of
+  // five and opening this line quietly retitled the reply after the fifth.
+  const defaultSubject = forwarding
+    ? quoting?.forwardSubject ?? forwardSubject
+    : quoting?.replySubject ?? replySubject
 
   /** A file dragged straight onto the box, rather than found in the library.
    *  Off for an internal note, which is not sent anywhere and has nothing to

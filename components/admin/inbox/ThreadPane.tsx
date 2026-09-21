@@ -6,7 +6,10 @@ import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 import type { ReplyStyle } from '@/modules/unified-inbox/lib/channel-reply'
 import { avatarHref, channelLabel, formatFull, formatWhen, inboxHref, initialsFor, splitQuotedText } from '@/modules/unified-inbox/lib/list'
 import { draftHref } from '@/modules/unified-inbox/lib/drafts'
-import { attributionLine, forwardHeaderRows } from '@/modules/unified-inbox/lib/compose'
+import {
+  attributionLine, forwardHeaderRows, forwardSubject as forwardSubjectOf, replySubject as replySubjectOf,
+} from '@/modules/unified-inbox/lib/compose'
+import { normaliseSubject } from '@/modules/unified-inbox/lib/threading'
 import type { QuotedPreview } from '@/modules/unified-inbox/lib/quoted-preview'
 import { describeSendAt } from '@/modules/unified-inbox/lib/scheduled'
 import { AtIcon, BackIcon, ClockIcon, CloseIcon, InboundIcon, NoteIcon, OutboundIcon, PaperclipIcon, TickIcon } from './icons'
@@ -148,6 +151,9 @@ type Props = {
    *  this conversation arrived. Almost always empty; when it is not, it is the
    *  most important thing on the screen. */
   heldDrafts: HeldDraftView[]
+  /** What colleagues have started writing under this conversation and not sent.
+   *  Read-only, every one of them: see OthersDrafts. */
+  othersDrafts: OtherDraftView[]
   /** Who this is with and what it is about, drawn under the actions. What the
    *  rest of the site knows ABOUT that person - their orders, their quotes -
    *  is a different question and stays in the panel beside the conversation. */
@@ -194,6 +200,21 @@ export type AskedView = {
 
 /** One stood-down message, said in the little the warning needs: who it was
  *  for, what it was about, when it was going to go, and where to open it. */
+/** A colleague's unfinished reply, as the conversation shows it. Strings all the
+ *  way down: a Date in props arrives at a client component as an empty object. */
+export type OtherDraftView = {
+  id: string
+  authorName: string
+  mode: string
+  to: string[]
+  body: string
+  attachmentCount: number
+  updatedAt: string
+  sendAt: string | null
+  /** Set to go out on its own, rather than merely saved. */
+  waiting: boolean
+}
+
 export type HeldDraftView = {
   id: string
   threadId: string | null
@@ -431,8 +452,11 @@ function messageDomId(messageId: string): string {
   return `uin-msg-${messageId}`
 }
 
-function Message({ message, personId, showAvatars, staffById, now, timezone, canDelete, tools }: {
+function Message({ message, threadSubject, personId, showAvatars, staffById, now, timezone, canDelete, tools }: {
   message: ThreadMessageView
+  /** What the conversation is called, so a message called something else can
+   *  say so. */
+  threadSubject: string | null
   /** Whoever the conversation is with, for the picture on an inbound message. */
   personId: string | null
   showAvatars: boolean
@@ -465,6 +489,20 @@ function Message({ message, personId, showAvatars, staffById, now, timezone, can
         timezone={timezone}
         tools={tools}
       />
+      {/* Its own subject, wherever that is not the conversation's. A conversation
+          keeps the subject it started with, and a supplier who answers "Quote"
+          with "PO 1234 - revised delivery date" has told you something the
+          heading at the top of the pane is not going to. Compared the way
+          threading compares them - "Re:", "Fwd:" and list tags off, case
+          ignored - so an ordinary reply does not repeat the heading on every
+          message. Never on a note, which has no subject to have. */}
+      {message.direction !== 'note'
+        && message.subject?.trim()
+        && normaliseSubject(message.subject) !== normaliseSubject(threadSubject) && (
+        <div className="uin-msg-subject">
+          <span className="uin-msg-dir-label">Subject:</span> {message.subject.trim()}
+        </div>
+      )}
       {message.autoKind && message.autoKind !== 'own-notification' && (
         <div className="uin-msg-foot uin-msg-flag">
           <span className="uin-tag uin-tag-snoozed">{AUTO_LABELS[message.autoKind] ?? 'Sent automatically'}</span>
@@ -586,6 +624,7 @@ const EVENT_WORDS: Record<string, string> = {
   unlinked: 'removed a link',
   merged: 'merged it with another',
   unmerged: 'separated one back out again',
+  moved: 'moved it to another mailbox',
   message_deleted: 'deleted a message from it',
   message_split: 'moved a message out to its own conversation',
   split_from: 'moved a message here out of another conversation',
@@ -605,6 +644,14 @@ function eventWords(event: ThreadEventRow, staffById: Record<string, string>): s
   // reply arrived, which is the other half of the same rule and is somebody
   // else's doing - see unattendedEvent.
   if (event.kind === 'woken') return 'answered it, so it was opened again'
+  // Where from and where to, off the names recorded at the time: a mailbox can be
+  // renamed or deleted since, and the log should still say where this had been.
+  if (event.kind === 'moved') {
+    const from = typeof event.detail?.fromName === 'string' ? event.detail.fromName : null
+    const to = typeof event.detail?.toName === 'string' ? event.detail.toName : null
+    if (from && to) return `moved it from ${from} to ${to}`
+    if (to) return `moved it to ${to}`
+  }
   return EVENT_WORDS[event.kind] ?? 'changed something'
 }
 
@@ -678,7 +725,7 @@ export function ThreadPane({
   canReply, cannotReplyReason, style, destinationLine,
   replyTo, replyAllTo, replySubject, forwardSubject, draft,
   canAddProducts, draftProducts, canSuggestReplies, newestFirst,
-  canDeleteMessages, canManage, blockState, spamState, binState, now, timezone, heldDrafts, showAvatars,
+  canDeleteMessages, canManage, blockState, spamState, binState, now, timezone, heldDrafts, othersDrafts, showAvatars,
   context, asked, merges, otherInboxNames, scrollToMessageId,
 }: Props) {
   // The list arrives oldest first. Reversing a copy rather than sorting again:
@@ -705,6 +752,8 @@ export function ThreadPane({
       id: message.id,
       sentAtMs: message.sentAt.getTime(),
       attribution: attributionLine(message, timezone),
+      replySubject: replySubjectOf(message.subject ?? thread.subject),
+      forwardSubject: forwardSubjectOf(message.subject ?? thread.subject),
       forwardHeader: forwardHeaderRows(message, timezone),
       hasHtml: message.hasHtml,
       hasRemoteImages: message.remoteImages > 0,
@@ -873,6 +922,39 @@ export function ThreadPane({
           </div>
         ))}
 
+        {/* What colleagues are halfway through saying. Shut by default - it is
+            somebody else's unfinished writing, and the fact that it exists is
+            the news; the words are one press away for whoever needs them.
+            There is no button on it that sends or changes anything: a draft is
+            its author's until they send it. */}
+        {othersDrafts.map((other) => (
+          <details key={other.id} className="uin-others-draft">
+            <summary>
+              <strong>{other.authorName}</strong>{' '}
+              {other.waiting && other.sendAt
+                ? <>has a {other.mode === 'forward' ? 'forward' : 'reply'} set to go out{' '}
+                    <span title={formatFull(new Date(other.sendAt), timezone)}>{formatWhen(new Date(other.sendAt), now, timezone)}</span></>
+                : <>has started a {other.mode === 'forward' ? 'forward' : 'reply'} and not sent it</>}
+              <span className="uin-others-draft-when">
+                , last touched{' '}
+                <span title={formatFull(new Date(other.updatedAt), timezone)}>{formatWhen(new Date(other.updatedAt), now, timezone)}</span>
+              </span>
+            </summary>
+            <div className="uin-others-draft-body">
+              <p className="uin-others-draft-to">
+                To {other.to.length > 0 ? other.to.join(', ') : 'nobody yet'}
+                {other.attachmentCount > 0 && ` - ${other.attachmentCount === 1 ? 'one file' : `${other.attachmentCount} files`} attached`}
+              </p>
+              {other.body
+                ? <MessageText text={other.body} />
+                : <p className="uin-others-draft-to">Nothing written yet.</p>}
+              <p className="uin-others-draft-to">
+                It is {other.authorName}&apos;s writing, so only they can change it or send it.
+              </p>
+            </div>
+          </details>
+        ))}
+
         {thread.providerModule && messages.length === 0 && (
           <div className="alert alert-info">
             This conversation came from somewhere else on the site, and whatever used to serve it is
@@ -924,6 +1006,7 @@ export function ThreadPane({
               <Message
                 key={message.id}
                 message={message}
+                threadSubject={thread.subject}
                 personId={thread.personId}
                 showAvatars={showAvatars}
                 staffById={staffById}

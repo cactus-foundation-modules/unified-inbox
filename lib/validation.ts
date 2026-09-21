@@ -221,6 +221,13 @@ export const ThreadBinBody = z.object({
   bin: z.boolean(),
 })
 
+/** Moving a conversation to another mailbox. The mailbox and nothing else: what
+ *  follows from it - the drafts on it, which address a reply now leaves from -
+ *  is worked out on the server, off the conversation itself. */
+export const ThreadMoveBody = z.object({
+  inboxId: z.string().min(1).max(100),
+})
+
 /** Emptying a bin, which is the one request in this module that destroys
  *  anything.
  *

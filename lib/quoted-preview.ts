@@ -26,6 +26,14 @@ export type QuotedPreview = {
    *  the quotation in a reply, built by the same function that writes it into
    *  the message. */
   attribution: string
+  /** What an answer to THIS message is called if nobody opens the Subject line,
+   *  and what forwarding it is. Off the message's own subject, because a
+   *  conversation is often three subjects long - "Quote", then "Re: Quote -
+   *  revised", then "PO 1234" - and the reply to the third is not a reply to
+   *  the first. Worked out on the server by the same two functions the send
+   *  route uses, so opening the line shows what would have been sent anyway. */
+  replySubject: string
+  forwardSubject: string
   /** From / Date / Subject / To, as a forward reproduces them. Same rows the
    *  forwarded message carries, so the box is not describing something else. */
   forwardHeader: Array<[string, string]>

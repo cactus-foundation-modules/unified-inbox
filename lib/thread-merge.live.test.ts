@@ -380,6 +380,57 @@ describe.runIf(shouldRun)('merging conversations, against a real database', () =
     expect([...links.map((l) => l.recordId)].sort()).toEqual(['900', '901'])
   })
 
+  it('re-homes a conversation from somebody’s own post into the shared mailbox it is merged with, and back', async () => {
+    // A real person: somebody's own post carries a foreign key to its owner,
+    // and so does a draft to its author.
+    await db.$executeRawUnsafe(`INSERT INTO "Role" ("id", "name") VALUES ('role-staff', 'Staff') ON CONFLICT DO NOTHING`)
+    await db.$executeRawUnsafe(
+      `INSERT INTO "User" ("id", "email", "username", "roleId", "updatedAt")
+       VALUES ($1, 'viewer@deskwell.co.uk', 'viewer', 'role-staff', now()) ON CONFLICT DO NOTHING`,
+      viewer,
+    )
+    const own = (await lib.createInbox({
+      name: 'Chris, personal', address: 'chris.own@deskwell.co.uk', connectionId, kind: 'individual', ownerUserId: viewer,
+    })).id
+    const purchasing = (await lib.createInbox({
+      name: 'Purchasing', address: 'purchasing@deskwell.co.uk', connectionId,
+    })).id
+
+    // The personal one is the older, so it wins - which is exactly the case
+    // that used to leave the whole exchange living in one person's post.
+    const winner = await conversation({ inboxId: own, subject: 'Pallet racking quote' })
+    const loser = await conversation({ inboxId: purchasing, subject: 'Racking', sentAt: LATER })
+    await db.$executeRawUnsafe(
+      `INSERT INTO "uin_drafts" ("author_user_id", "inbox_id", "thread_id", "mode", "body")
+       VALUES ($1, $2, $3, 'reply', 'Dear supplier,')`,
+      viewer, own, winner,
+    )
+
+    const result = await lib.mergeThreads(winner, [loser], null)
+    if ('error' in result) throw new Error(result.error)
+    expect(result.rehomedToInboxId).toBe(purchasing)
+
+    const merged = await lib.getThreadDetail(winner)
+    // Lives in the team's mailbox - which is what a reply is sent from - and is
+    // still listed under the personal address it began in.
+    expect(merged?.inboxId).toBe(purchasing)
+    expect([...(merged?.absorbedInboxIds ?? [])].sort()).toEqual([own, purchasing].sort())
+    const draft = await db.$queryRawUnsafe<{ inbox_id: string }[]>(
+      `SELECT "inbox_id" FROM "uin_drafts" WHERE "thread_id" = $1`, winner,
+    )
+    expect(draft[0]?.inbox_id).toBe(purchasing)
+
+    const undone = await lib.undoThreadMerge(result.mergeIds[0]!, null)
+    expect(undone).not.toHaveProperty('error')
+    const after = await lib.getThreadDetail(winner)
+    expect(after?.inboxId).toBe(own)
+    expect(after?.absorbedInboxIds).toEqual([])
+    const draftAfter = await db.$queryRawUnsafe<{ inbox_id: string }[]>(
+      `SELECT "inbox_id" FROM "uin_drafts" WHERE "thread_id" = $1`, winner,
+    )
+    expect(draftAfter[0]?.inbox_id).toBe(own)
+  })
+
   it('puts a merge back, messages and addresses and all', async () => {
     const winner = await conversation({ inboxId: chrisInbox, subject: 'Filing cabinets' })
     const loser = await conversation({ inboxId: marcusInbox, subject: 'Cabinets', sentAt: LATER })
