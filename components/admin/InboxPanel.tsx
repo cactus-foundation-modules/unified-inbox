@@ -105,6 +105,7 @@ import { ThreadListView } from './inbox/ThreadListView'
 import { SelectionProvider } from './inbox/Selection'
 import { UndoProvider } from './inbox/UndoProvider'
 import { NavProgress } from './inbox/NavProgress'
+import { MailViewBeacon } from './inbox/MailViewBeacon'
 import { MentionListView } from './inbox/MentionListView'
 import { DraftListView } from './inbox/DraftListView'
 import { DraftReadView } from './inbox/DraftReadView'
@@ -2012,6 +2013,7 @@ export async function UnifiedInboxPanel({
     <div className="uin-page">
       <InboxStyles />
       <NavProgress routeKey={routeKey} />
+      <MailViewBeacon />
 
       {/* Everything below can raise the five-second offer to take a press back,
           and it is raised HERE so that it outlives whatever raised it: junking a

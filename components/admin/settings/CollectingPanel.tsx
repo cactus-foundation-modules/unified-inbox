@@ -190,10 +190,11 @@ export function CollectingPanel({ settings, inboxes, retention, blockedSenders, 
               <option value="1800">Every half hour</option>
             </select>
             <span className="field-hint">
-              Only while somebody has the inbox open and is actually looking at that tab, and only
-              for people who look after the mail accounts. A tab left behind another window stops
-              checking until it comes back to the front. The more often you ask, the more work your
-              hosting does, so pick the longest wait you can live with.
+              This pace is only kept while somebody has the inbox open in the tab they are looking
+              at, and only for people who look after the mail accounts. Anywhere else in the admin
+              area, or in a tab left behind another window, it checks every 5 minutes instead (or at
+              this pace, if it is slower). The more often you ask, the more work your hosting does,
+              so pick the longest wait you can live with.
             </span>
           </div>
         </FieldRow>
