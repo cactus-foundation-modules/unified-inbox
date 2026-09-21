@@ -1555,7 +1555,15 @@
   background: var(--color-surface);
 }
 .uin-read > * { min-width: 0; }
-.uin-read > .uin-thread,
+/* Grows to fill the pane, NEVER shrinks to it - and that is the whole of why a
+   conversation is not on the rule below. The header pinned inside a
+   conversation can only travel as far as this box reaches. With min-height: 0
+   the box was squeezed to the height of the pane with the messages spilling out
+   of the bottom of it, so the header held for exactly one screenful and then
+   left with the first email. */
+.uin-read > .uin-thread { flex: 1 0 auto; }
+/* A colleague's draft is the opposite bargain: it IS the height of the pane,
+   and scrolls its own body inside that. */
 .uin-read > .uin-draft-read { flex: 1 1 auto; min-height: 0; }
 /* Everything that is not a conversation brings no padding of its own. */
 .uin-read-pad { padding: 1rem; }
@@ -1641,13 +1649,20 @@
 .uin-nothing svg { width: 1.75rem; height: 1.75rem; color: var(--color-text-disabled); margin-bottom: 0.35rem; }
 
 /* ---- one conversation --------------------------------------------------- */
+/* A column, and deliberately NOT a grid. The header below is position: sticky,
+   and a sticky box can only travel inside its containing block - which for a
+   grid item is its own grid AREA. The header was row one of this grid, a row
+   exactly as tall as the header, so it had nowhere to travel and let go of the
+   top of the pane as the conversation scrolled. A flex item has no such cell:
+   its containing block is this whole box, which is as long as the conversation.
+   The same goes for the note bar pinned to the foot of it. */
 .uin-thread {
-  display: grid;
-  gap: 0;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   background: var(--color-surface);
 }
+.uin-thread > * { flex: none; min-width: 0; }
 /* The subject, the meta line and the two rows of actions, pinned to the top of
    the conversation as it scrolls. Reply, Forward and Internal note live in
    there, and a button you have to scroll four thousand pixels of quoted email
@@ -1920,12 +1935,12 @@
 /* A conversation, unlike the other things drawn in this pane, has something
    pinned under it - so its middle row takes whatever is left over and the bar
    is at the foot of the pane even on a thread with one line in it. */
-.uin-thread-conv { grid-template-rows: auto 1fr auto; }
+.uin-thread-conv > .uin-thread-body { flex: 1 0 auto; }
 .uin-thread-body {
   display: grid;
   gap: 0.75rem;
-  /* A conversation's middle row is 1fr, so this box is as tall as the pane
-     however little is in it. Without this, the leftover space is handed to the
+  /* A conversation's middle takes whatever height is left over, so this box is
+     as tall as the pane however little is in it. Without this, the leftover space is handed to the
      rows inside it and one short message is drawn as a box the height of the
      screen. The messages sit at the top and the space is left at the bottom,
      which is what a conversation with one line in it looks like. */
