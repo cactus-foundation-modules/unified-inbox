@@ -3,10 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { CampaignPulse } from './inbox/campaigns/CampaignPulse'
-import { autoCheckSeconds, checkDue } from '@/modules/unified-inbox/lib/auto-check-pace'
+import { autoCheckSeconds, checkDue, returnCheckSeconds } from '@/modules/unified-inbox/lib/auto-check-pace'
 import { isMailViewOpen, onMailViewChange } from '@/modules/unified-inbox/lib/mail-view'
 
 const CONFIG_EVERY_MS = 60_000
+
+// A return that needed no round of its own still redraws the list, but not on
+// every alt-tab: at most this often.
+const RETURN_REFRESH_SECONDS = 15
 
 // When any admin tab in this browser last started a round, so three tabs left
 // open do not check three times as often as one: a tab reading mail keeps the
@@ -55,20 +59,28 @@ export function AdminMailPulse() {
   const [config, setConfig] = useState<PulseConfig | null>(null)
   const checkRunning = useRef(false)
   const lastCheckAt = useRef(0)
+  // When this tab last redrew the list with fresh data, from a round of its own
+  // or from catching up on one another tab ran.
+  const lastRefreshAt = useRef(0)
+  // Focus and visibilitychange usually arrive together for one return.
+  const lastReturnAt = useRef(0)
   const configRef = useRef<PulseConfig | null>(null)
 
   useEffect(() => {
     configRef.current = config
   }, [config])
 
-  const runCheck = useCallback(async () => {
+  /** Resolves true when a round was started (or one is already under way). */
+  const runCheck = useCallback(async (returning = false): Promise<boolean> => {
     const cfg = configRef.current
-    if (!cfg?.hasConnections || !cfg.autoCheckSeconds) return
-    if (checkRunning.current) return
+    if (!cfg?.hasConnections || !cfg.autoCheckSeconds) return false
+    if (checkRunning.current) return true
     const watching = isMailViewOpen() && document.visibilityState === 'visible'
-    const seconds = autoCheckSeconds(cfg.autoCheckSeconds, watching)
+    const seconds = returning
+      ? returnCheckSeconds(cfg.autoCheckSeconds)
+      : autoCheckSeconds(cfg.autoCheckSeconds, watching)
     const now = Date.now()
-    if (!checkDue(Math.max(lastCheckAt.current, readSharedLastCheck()), seconds, now)) return
+    if (!checkDue(Math.max(lastCheckAt.current, readSharedLastCheck()), seconds, now)) return false
     lastCheckAt.current = now
     writeSharedLastCheck(now)
     checkRunning.current = true
@@ -78,12 +90,16 @@ export function AdminMailPulse() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ auto: true }),
       })
-      if (response.ok) router.refresh()
+      if (response.ok) {
+        lastRefreshAt.current = Date.now()
+        router.refresh()
+      }
     } catch {
       // A moment offline is not worth an alert nobody asked for.
     } finally {
       checkRunning.current = false
     }
+    return true
   }, [router])
 
   useEffect(() => {
@@ -121,18 +137,39 @@ export function AdminMailPulse() {
     return () => window.clearInterval(id)
   }, [config?.autoCheckSeconds, config?.hasConnections, runCheck])
 
-  // Somebody arriving at the mail view, or bringing the tab back to the front,
-  // gets a round straight away if the faster pace says one is due, rather than
-  // waiting out whatever is left of a background interval.
+  // Somebody arriving at the mail view - from another admin screen, another
+  // browser tab or another window - gets a round straight away, whatever the
+  // Settings interval says: they have been away from a list that has not moved.
+  // See returnCheckSeconds for the short floor that keeps alt-tabbing cheap.
+  //
+  // When no round is needed because one ran moments ago - quite possibly in
+  // another tab, whose refresh only redrew that tab - this one still redraws,
+  // so what that round brought in is on the screen being looked at.
   useEffect(() => {
-    const catchUp = () => { void runCheck() }
+    const catchUp = () => {
+      if (document.visibilityState !== 'visible' || !isMailViewOpen()) {
+        void runCheck()
+        return
+      }
+      const now = Date.now()
+      if (now - lastReturnAt.current < 2_000) return
+      lastReturnAt.current = now
+      void runCheck(true).then((started) => {
+        if (started) return
+        if (!checkDue(lastRefreshAt.current, RETURN_REFRESH_SECONDS, Date.now())) return
+        lastRefreshAt.current = Date.now()
+        router.refresh()
+      })
+    }
     const stopWatchingView = onMailViewChange(catchUp)
     document.addEventListener('visibilitychange', catchUp)
+    window.addEventListener('focus', catchUp)
     return () => {
       stopWatchingView()
       document.removeEventListener('visibilitychange', catchUp)
+      window.removeEventListener('focus', catchUp)
     }
-  }, [runCheck])
+  }, [runCheck, router])
 
   const showCampaignPulse = config?.canCampaign === true && (config?.runningCampaigns ?? 0) > 0
 

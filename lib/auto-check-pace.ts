@@ -28,3 +28,18 @@ const TIMER_SLACK_MS = 1_000
 export function checkDue(lastCheckAt: number, seconds: number, now: number): boolean {
   return now - lastCheckAt >= seconds * 1000 - TIMER_SLACK_MS
 }
+
+// Somebody coming back to the mail view - from another browser tab, another
+// window, or another admin screen - has been away from a list that has not
+// moved, and the Settings interval says nothing about how long ago the last
+// round was from where they are standing. So a return checks straight away,
+// held back only by a short floor: alt-tabbing to a spreadsheet and back three
+// times in a minute is one check, not three. The route's own per-account
+// cooldown still stands behind this, so no mailbox is opened more than once a
+// minute however often somebody comes back.
+export const RETURN_CHECK_SECONDS = 15
+
+/** Seconds a return to the mail view waits after the last round before checking again. */
+export function returnCheckSeconds(configured: number): number {
+  return Math.min(configured, RETURN_CHECK_SECONDS)
+}

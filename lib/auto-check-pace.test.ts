@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { BACKGROUND_CHECK_SECONDS, autoCheckSeconds, checkDue } from './auto-check-pace'
+import {
+  BACKGROUND_CHECK_SECONDS,
+  RETURN_CHECK_SECONDS,
+  autoCheckSeconds,
+  checkDue,
+  returnCheckSeconds,
+} from './auto-check-pace'
 
 describe('autoCheckSeconds', () => {
   it('keeps the Settings interval while somebody is reading mail', () => {
@@ -38,5 +44,22 @@ describe('checkDue', () => {
 
   it('is due when nothing has ever checked', () => {
     expect(checkDue(0, BACKGROUND_CHECK_SECONDS, now)).toBe(true)
+  })
+})
+
+describe('returnCheckSeconds', () => {
+  const now = new Date('2026-09-21T12:00:00.000Z').getTime()
+
+  it('checks on return long before the Settings interval is up', () => {
+    expect(checkDue(now - 60_000, returnCheckSeconds(600), now)).toBe(true)
+  })
+
+  it('does not check again on a return moments after the last round', () => {
+    expect(checkDue(now - 5_000, returnCheckSeconds(600), now)).toBe(false)
+  })
+
+  it('never waits longer than Settings asked for', () => {
+    expect(returnCheckSeconds(10)).toBe(10)
+    expect(returnCheckSeconds(600)).toBe(RETURN_CHECK_SECONDS)
   })
 })
