@@ -7277,6 +7277,11 @@ export type DeliveryUpdate = {
   detail: string | null
   bounceKind: string | null
   source: 'brevo' | 'receipt'
+  /** The address the event came from and the program that made it, where
+   *  whoever reported it said. Neither is needed to file the event; both are
+   *  what the history screen shows when somebody asks who fetched it. */
+  ip?: string | null
+  userAgent?: string | null
 }
 
 /**
@@ -7348,18 +7353,20 @@ export async function recordDeliveryEvent(
   // scanner working through every link in a message does them all inside one
   // second, and those are five clicks rather than one (M047).
   const detail = update.detail === null ? null : update.detail.slice(0, 2000)
+  const ip = update.ip ? update.ip.slice(0, 64) : null
+  const userAgent = update.userAgent ? update.userAgent.slice(0, 500) : null
   const inserted = update.kind === 'clicked'
     ? await prisma.$queryRaw<{ id: string }[]>`
-        INSERT INTO "uin_delivery_events" ("message_id", "kind", "source", "detail", "occurred_at")
-        VALUES (${messageId}, ${update.kind}, ${update.source}, ${detail}, ${update.occurredAt})
+        INSERT INTO "uin_delivery_events" ("message_id", "kind", "source", "detail", "occurred_at", "ip", "user_agent")
+        VALUES (${messageId}, ${update.kind}, ${update.source}, ${detail}, ${update.occurredAt}, ${ip}, ${userAgent})
         ON CONFLICT ("message_id", "occurred_at", COALESCE("detail", ''))
           WHERE "kind" = 'clicked'
           DO NOTHING
         RETURNING "id"
       `
     : await prisma.$queryRaw<{ id: string }[]>`
-        INSERT INTO "uin_delivery_events" ("message_id", "kind", "source", "detail", "occurred_at")
-        VALUES (${messageId}, ${update.kind}, ${update.source}, ${detail}, ${update.occurredAt})
+        INSERT INTO "uin_delivery_events" ("message_id", "kind", "source", "detail", "occurred_at", "ip", "user_agent")
+        VALUES (${messageId}, ${update.kind}, ${update.source}, ${detail}, ${update.occurredAt}, ${ip}, ${userAgent})
         ON CONFLICT ("message_id", "kind", "occurred_at")
           WHERE "kind" <> 'clicked'
           DO NOTHING
@@ -7457,20 +7464,83 @@ async function applyDeliveryEvent(messageId: string, update: DeliveryUpdate): Pr
 /** Every event on one sent message, newest first. For the screen that wants to
  *  show the working rather than the conclusion. */
 export async function listDeliveryEvents(messageId: string): Promise<
-  Array<{ kind: string; source: string; detail: string | null; occurredAt: Date }>
+  Array<{ id: string; kind: string; source: string; detail: string | null; occurredAt: Date; ip: string | null; userAgent: string | null }>
 > {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT "kind", "source", "detail", "occurred_at"
+    SELECT "id", "kind", "source", "detail", "occurred_at", "ip", "user_agent"
       FROM "uin_delivery_events"
      WHERE "message_id" = ${messageId}
      ORDER BY "occurred_at" DESC
   `
   return rows.map((r) => ({
+    id: r.id as string,
     kind: r.kind as string,
     source: r.source as string,
     detail: (r.detail as string | null) ?? null,
     occurredAt: r.occurred_at as Date,
+    ip: (r.ip as string | null) ?? null,
+    userAgent: (r.user_agent as string | null) ?? null,
   }))
+}
+
+/** Writes the address an event came from onto its row, once. Only a row that
+ *  has none takes it: the report is asked every time the history opens, and
+ *  the first answer is the one to keep. */
+export async function setDeliveryEventIps(updates: Array<{ id: string; ip: string }>): Promise<void> {
+  for (const { id, ip } of updates) {
+    await prisma.$executeRaw`
+      UPDATE "uin_delivery_events"
+         SET "ip" = ${ip.slice(0, 64)}
+       WHERE "id" = ${id} AND "ip" IS NULL
+    `
+  }
+}
+
+/** The handful of things the history screen needs to know about one sent
+ *  message: who may look, what the mail service called it, and when it went.
+ *  Null for a message that does not exist or was never sent by us. */
+export async function getSentMessageForHistory(id: string): Promise<{
+  threadId: string
+  inboxId: string | null
+  providerModule: string | null
+  providerMessageId: string | null
+  sentAt: Date
+} | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT m."inbox_id", m."thread_id", m."provider_message_id", m."sent_at",
+           t."inbox_id" AS "thread_inbox_id", t."provider_module"
+      FROM "uin_messages" m
+      JOIN "uin_threads" t ON t."id" = m."thread_id"
+     WHERE m."id" = ${id} AND m."direction" = 'out'
+  `
+  const r = rows[0]
+  if (!r) return null
+  return {
+    threadId: r.thread_id as string,
+    inboxId: ((r.inbox_id as string | null) ?? (r.thread_inbox_id as string | null)) ?? null,
+    providerModule: (r.provider_module as string | null) ?? null,
+    providerMessageId: (r.provider_message_id as string | null) ?? null,
+    sentAt: r.sent_at as Date,
+  }
+}
+
+/** The Brevo keys worth asking about one message, the inbox's own first. A
+ *  message went out through exactly one account, and the inbox it was sent
+ *  from is the best guess at which; the rest are tried after it, because a
+ *  copy filed here by the shop went out on the site's key rather than the
+ *  inbox's. */
+export async function brevoKeysForInbox(inboxId: string | null): Promise<string[]> {
+  const all = (await brevoSendingKeys()).map((entry) => entry.apiKey)
+  if (!inboxId) return all
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT "brevo_api_key_encrypted"
+      FROM "uin_inboxes"
+     WHERE "id" = ${inboxId} AND "send_transport" = 'brevo'
+  `
+  const stored = (rows[0]?.brevo_api_key_encrypted as string | null) ?? null
+  const own = stored ? tryDecryptSecret(stored) : null
+  if (!own) return all
+  return [own, ...all.filter((key) => key !== own)]
 }
 
 /**

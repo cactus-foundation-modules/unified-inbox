@@ -59,6 +59,9 @@ export type NormalisedDeliveryEvent = {
   /** 'hard' | 'soft' | 'blocked' | 'spam' | 'invalid' | 'deferred' | 'error',
    *  and null for anything that is not a failure. */
   bounceKind: string | null
+  /** The browser or mail program that fetched the picture or followed the
+   *  link, as Brevo reported it. Null on a delivery, which nobody fetched. */
+  userAgent: string | null
 }
 
 /** The events we ask Brevo to send us, in the spelling its subscription API
@@ -221,8 +224,15 @@ export function normaliseBrevoEvent(body: unknown): NormalisedBrevoEvent | null 
 
   const occurredAt = eventMoment(payload)
   const reason = firstString(payload, ['reason', 'error', 'message'])
-  const about = (event: NormalisedDeliveryEvent): NormalisedBrevoEvent =>
-    ({ messageId, providerMessageId, event })
+  // Brevo names the program that fetched the picture or followed the link, and
+  // that is worth keeping: a scanner announces itself in it more often than
+  // not. It does NOT name the address the fetch came from - the webhook carries
+  // `sending_ip`, which is Brevo's own relay and says nothing about the reader.
+  // The address is learned later from the event report (see
+  // normaliseBrevoReportEvent) and written onto the row then.
+  const userAgent = firstString(payload, ['user_agent', 'userAgent'])?.slice(0, 500) ?? null
+  const about = (event: Omit<NormalisedDeliveryEvent, 'userAgent'>): NormalisedBrevoEvent =>
+    ({ messageId, providerMessageId, event: { ...event, userAgent } })
 
   if (name === 'delivered') {
     return about({ kind: 'delivered', occurredAt, detail: null, bounceKind: null })
@@ -340,4 +350,232 @@ export function readReadReceipt(input: {
         : 'Their mail program said it was deleted without being opened.'
       : null,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Brevo's event report, and the ledger laid over it.
+//
+// The webhook is how events arrive; the report (GET /smtp/statistics/events)
+// is Brevo's own memory of the same events, asked for by message. It is the
+// only one of the two that says which network address fetched the picture or
+// followed the link, and it also holds "request" - the moment Brevo took the
+// message from us - which is not an event worth a webhook but is worth a line
+// on a history screen.
+//
+// The two are joined here, in pure code, so the awkward part is testable: a
+// report row and a ledger row describing the same open carry moments a second
+// or two apart, because one was stamped by Brevo and the other by the webhook
+// arriving, and "the same open" has to be decided on something looser than
+// equality. A row on both sides is shown once, with the address the report
+// knew filled in; a row on one side only is shown as it is.
+// ---------------------------------------------------------------------------
+
+/** One line of the history a person sees. `sent` is Brevo accepting the
+ *  message from us - nothing is ever filed as it, so it only comes from the
+ *  report; `receipt_unread` only ever comes from the ledger. */
+export type HistoryEventKind = DeliveryEventKind | 'sent' | 'receipt_unread'
+
+/** One row out of Brevo's event report, already in our terms. */
+export type ReportedDeliveryEvent = {
+  kind: HistoryEventKind
+  occurredAt: Date
+  detail: string | null
+  bounceKind: string | null
+  /** The address the event came from. On a send or a delivery that is Brevo's
+   *  own relay talking to the far end; on an open or a click it is whoever
+   *  fetched the message, which is the whole reason for asking. */
+  ip: string | null
+}
+
+/** What the report calls an event, against what this module calls it. Matched
+ *  on the lower-cased name so a change of capitalisation at their end does not
+ *  quietly turn a whole kind into "unknown". */
+const REPORT_KINDS: Record<string, HistoryEventKind | 'skip'> = {
+  requests: 'sent',
+  request: 'sent',
+  sent: 'sent',
+  delivered: 'delivered',
+  opened: 'opened',
+  uniqueopened: 'opened',
+  unique_opened: 'opened',
+  loadedbyproxy: 'proxy_open',
+  proxy_open: 'proxy_open',
+  unique_proxy_open: 'proxy_open',
+  clicks: 'clicked',
+  click: 'clicked',
+  hardbounces: 'bounced',
+  hard_bounce: 'bounced',
+  softbounces: 'bounced',
+  soft_bounce: 'bounced',
+  bounces: 'bounced',
+  blocked: 'bounced',
+  spam: 'bounced',
+  invalid: 'bounced',
+  invalid_email: 'bounced',
+  deferred: 'bounced',
+  error: 'bounced',
+  unsubscribed: 'skip',
+}
+
+const REPORT_BOUNCE_KINDS: Record<string, string> = {
+  hardbounces: 'hard',
+  hard_bounce: 'hard',
+  softbounces: 'soft',
+  soft_bounce: 'soft',
+  bounces: 'hard',
+  blocked: 'blocked',
+  spam: 'spam',
+  invalid: 'invalid',
+  invalid_email: 'invalid',
+  deferred: 'deferred',
+  error: 'error',
+}
+
+/** A network address as the report writes one, or null for anything that is
+ *  not one. It goes on the screen and into a column, so it is checked rather
+ *  than trusted: the report is somebody else's data in somebody else's shape. */
+function reportedIp(payload: Record<string, unknown>): string | null {
+  const raw = firstString(payload, ['ip', 'ipAddress', 'ip_address'])
+  if (!raw) return null
+  const value = raw.slice(0, 64)
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(value)
+  if (v4 && v4.slice(1).every((part) => Number(part) <= 255)) return value
+  if (/^[0-9a-f:]+$/i.test(value) && value.includes(':')) return value.toLowerCase()
+  return null
+}
+
+/**
+ * One row of Brevo's event report, or null for a row this module has no
+ * opinion about (an unsubscribe) or cannot place in time.
+ */
+export function normaliseBrevoReportEvent(body: unknown): ReportedDeliveryEvent | null {
+  if (!body || typeof body !== 'object') return null
+  const payload = body as Record<string, unknown>
+  const name = typeof payload.event === 'string' ? payload.event.trim().toLowerCase() : ''
+  if (!name) return null
+  const kind = REPORT_KINDS[name]
+  if (!kind || kind === 'skip') return null
+
+  const when = firstString(payload, ['date', 'ts_event', 'ts'])
+  if (!when) return null
+  const occurredAt = new Date(when.replace(' ', 'T'))
+  if (Number.isNaN(occurredAt.getTime())) return null
+
+  const detail = kind === 'clicked'
+    ? clickedLink(payload)
+    : kind === 'bounced'
+      ? firstString(payload, ['reason', 'error', 'message'])
+      : null
+
+  return {
+    kind,
+    occurredAt,
+    detail,
+    bounceKind: kind === 'bounced' ? REPORT_BOUNCE_KINDS[name] ?? 'error' : null,
+    ip: reportedIp(payload),
+  }
+}
+
+/** A row out of our own ledger, as the history screen needs it. */
+export type StoredDeliveryEvent = {
+  id: string
+  kind: string
+  source: string
+  detail: string | null
+  occurredAt: Date
+  ip: string | null
+  userAgent: string | null
+}
+
+/** One line of history, from wherever it was learned. `id` is the ledger row
+ *  where there is one, and null for a line only the report knew about. */
+export type HistoryEvent = {
+  id: string | null
+  kind: HistoryEventKind
+  /** 'brevo' for something the mail service pushed or reported, 'receipt' for
+   *  a read receipt the recipient's own mail program sent back. */
+  source: 'brevo' | 'receipt'
+  occurredAt: Date
+  detail: string | null
+  ip: string | null
+  userAgent: string | null
+}
+
+/** How far apart the two records of one event may be stamped. The report is
+ *  stamped when Brevo saw the event and the ledger when the webhook about it
+ *  landed here, and a webhook that was retried can be minutes behind. Two
+ *  minutes is comfortably past that and well short of a second genuine open. */
+export const HISTORY_MATCH_WINDOW_MS = 120_000
+
+/**
+ * The ledger and the report, laid over each other and put in order.
+ *
+ * Returns the lines to show, oldest first, and the addresses the report knew
+ * that the ledger did not, so the caller can write them onto the rows once and
+ * never need the report for them again.
+ */
+export function mergeDeliveryHistory(
+  stored: StoredDeliveryEvent[],
+  reported: ReportedDeliveryEvent[],
+): { events: HistoryEvent[]; learnedIps: Array<{ id: string; ip: string }> } {
+  const claimed = new Set<string>()
+  const learnedIps: Array<{ id: string; ip: string }> = []
+  const events: HistoryEvent[] = []
+
+  for (const report of reported) {
+    // The nearest unclaimed ledger row of the same kind inside the window. A
+    // click has to be the same link as well: a scanner working through every
+    // link in a message does them all inside one second.
+    let best: StoredDeliveryEvent | null = null
+    let bestGap = Number.POSITIVE_INFINITY
+    for (const row of stored) {
+      if (claimed.has(row.id) || row.kind !== report.kind) continue
+      if (report.kind === 'clicked' && row.detail !== report.detail) continue
+      const gap = Math.abs(row.occurredAt.getTime() - report.occurredAt.getTime())
+      if (gap <= HISTORY_MATCH_WINDOW_MS && gap < bestGap) {
+        best = row
+        bestGap = gap
+      }
+    }
+    if (best) {
+      claimed.add(best.id)
+      const ip = best.ip ?? report.ip
+      if (!best.ip && report.ip) learnedIps.push({ id: best.id, ip: report.ip })
+      events.push({
+        id: best.id,
+        kind: best.kind as HistoryEventKind,
+        source: best.source === 'receipt' ? 'receipt' : 'brevo',
+        occurredAt: best.occurredAt,
+        detail: best.detail ?? report.detail,
+        ip,
+        userAgent: best.userAgent,
+      })
+    } else {
+      events.push({
+        id: null,
+        kind: report.kind,
+        source: 'brevo',
+        occurredAt: report.occurredAt,
+        detail: report.detail,
+        ip: report.ip,
+        userAgent: null,
+      })
+    }
+  }
+
+  for (const row of stored) {
+    if (claimed.has(row.id)) continue
+    events.push({
+      id: row.id,
+      kind: row.kind as HistoryEventKind,
+      source: row.source === 'receipt' ? 'receipt' : 'brevo',
+      occurredAt: row.occurredAt,
+      detail: row.detail,
+      ip: row.ip,
+      userAgent: row.userAgent,
+    })
+  }
+
+  events.sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime())
+  return { events, learnedIps }
 }

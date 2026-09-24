@@ -4455,3 +4455,67 @@
 }
 
 
+
+/* ---- what became of a message: the labels that open, and the history ---- */
+/* A label that can be pressed wears the badge's own look and a button's
+   behaviour - the reset is what stops the browser drawing it as a button. */
+.uin-tag-btn {
+  font: inherit;
+  font-size: 0.6875rem;
+  cursor: pointer;
+  appearance: none;
+}
+.uin-tag-btn:hover,
+.uin-tag-btn:focus-visible { text-decoration: underline; text-underline-offset: 2px; }
+.uin-tag-btn:focus-visible { outline: 2px solid var(--color-focus, var(--color-primary)); outline-offset: 1px; }
+
+.uin-history-card { width: min(38rem, 100%); }
+.uin-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.uin-history-row {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.uin-history-row:last-child { border-bottom: 0; }
+.uin-history-what {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 0.75rem;
+  font-size: 0.8125rem;
+}
+.uin-history-done > .uin-history-what > b { color: var(--color-success); }
+.uin-history-failed > .uin-history-what > b { color: var(--color-destructive-hover); }
+.uin-history-when { font-size: 0.75rem; color: var(--color-text-secondary); white-space: nowrap; }
+.uin-history-from {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  min-width: 0;
+}
+.uin-history-ip {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.75rem;
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.25rem;
+  background: var(--color-bg-subtle);
+  color: var(--color-text);
+}
+.uin-history-agent {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+}
+.uin-history-detail { font-size: 0.75rem; color: var(--color-text-secondary); overflow-wrap: anywhere; }

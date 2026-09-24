@@ -405,6 +405,7 @@ export async function UnifiedInboxPanel({
   // this site do it at all" questions, in one wait rather than seven.
   const [
     counts,
+    openTotal,
     assignedElsewhere,
     askedCount,
     spamCount,
@@ -413,6 +414,22 @@ export async function UnifiedInboxPanel({
     smsAndDialler,
   ] = await Promise.all([
     openCounts(user.id, visibleIds, canManage, channelModules),
+    // The All total itself, counted the way the Open tab counts it - one row
+    // per conversation, however many addresses a merge has since given it.
+    // Summing the per-address tally above would count a merged conversation
+    // once for every address it merged across, which is exactly backwards:
+    // that duplication is what makes the per-address badges agree with each
+    // address's own list, and carrying it into a sum is what used to put a 2
+    // beside All when the Open tab under it held one conversation.
+    countThreads({
+      viewerUserId: user.id,
+      inboxIds: visibleIds,
+      includeUnrouted: canManage,
+      providerModules: channelModules,
+      status: 'open',
+      page: 1,
+      perPage: PER_PAGE,
+    }),
     // What has been handed to whoever is reading and is filed somewhere other
     // than their own address. It goes onto their own address's number, because
     // standing in that address is now where they read it - there is no
@@ -499,9 +516,7 @@ export async function UnifiedInboxPanel({
       : Promise.resolve([false, null] as const),
   ])
 
-  // Before the desk is added below: All is the sum of the addresses, and a
-  // conversation counted twice would make it larger than the list it stands for.
-  const allOpen = Object.values(counts).reduce((a, b) => a + b, 0)
+  const allOpen = openTotal
   const [smsReady, dialler] = smsAndDialler
   const sendable = inboxes.filter((i) => sendableIds.includes(i.id))
   const composeHref = sendable.length > 0

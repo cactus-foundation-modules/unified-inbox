@@ -2,10 +2,13 @@ import { describe, it, expect } from 'vitest'
 import {
   CUSTOM_TAG_HEADER,
   customTagFor,
+  mergeDeliveryHistory,
   normaliseBrevoEvent,
+  normaliseBrevoReportEvent,
   readCustomTag,
   readReadReceipt,
 } from './receipts'
+import type { ReportedDeliveryEvent, StoredDeliveryEvent } from './receipts'
 import { outgoingHeaders } from './compose'
 
 // Nothing here touches a database, a mail server or Brevo. Every case below is
@@ -220,5 +223,133 @@ describe('the headers a tracked message goes out with', () => {
     expect(headers['Disposition-Notification-To']).toBe('<hi@deskwell.co.uk>')
     // The threading headers are untouched by any of it.
     expect(headers['Message-ID']).toBe('<a@b>')
+  })
+})
+
+describe('normaliseBrevoReportEvent', () => {
+  it('reads a row of the event report in our terms, address and all', () => {
+    const row = normaliseBrevoReportEvent({
+      email: 'customer@example.com',
+      date: '2026-09-22T13:09:41.000Z',
+      event: 'opened',
+      messageId: '<abc@deskwell.example>',
+      ip: '172.186.8.69',
+    })
+    expect(row?.kind).toBe('opened')
+    expect(row?.ip).toBe('172.186.8.69')
+    expect(row?.occurredAt.toISOString()).toBe('2026-09-22T13:09:41.000Z')
+  })
+
+  it('knows the report’s own names for things', () => {
+    expect(normaliseBrevoReportEvent({ event: 'requests', date: '2026-09-22 13:09:00' })?.kind).toBe('sent')
+    expect(normaliseBrevoReportEvent({ event: 'loadedByProxy', date: '2026-09-22 13:09:00' })?.kind).toBe('proxy_open')
+    expect(normaliseBrevoReportEvent({ event: 'clicks', date: '2026-09-22 13:09:00', link: 'https://example.co.uk/q' })?.detail)
+      .toBe('https://example.co.uk/q')
+    const bounce = normaliseBrevoReportEvent({ event: 'hardBounces', date: '2026-09-22 13:09:00', reason: 'no such user' })
+    expect(bounce?.kind).toBe('bounced')
+    expect(bounce?.bounceKind).toBe('hard')
+    expect(bounce?.detail).toBe('no such user')
+  })
+
+  it('will not put anything but an address in the address column', () => {
+    expect(normaliseBrevoReportEvent({ event: 'opened', date: '2026-09-22 13:09:00', ip: '<script>' })?.ip).toBeNull()
+    expect(normaliseBrevoReportEvent({ event: 'opened', date: '2026-09-22 13:09:00', ip: '999.1.1.1' })?.ip).toBeNull()
+    expect(normaliseBrevoReportEvent({ event: 'opened', date: '2026-09-22 13:09:00', ip: '2A02:C7C:1::1' })?.ip).toBe('2a02:c7c:1::1')
+  })
+
+  it('drops what it cannot place or has no opinion on', () => {
+    expect(normaliseBrevoReportEvent({ event: 'unsubscribed', date: '2026-09-22 13:09:00' })).toBeNull()
+    expect(normaliseBrevoReportEvent({ event: 'opened' })).toBeNull()
+    expect(normaliseBrevoReportEvent({ event: 'opened', date: 'yesterday-ish' })).toBeNull()
+    expect(normaliseBrevoReportEvent(null)).toBeNull()
+  })
+})
+
+describe('mergeDeliveryHistory', () => {
+  const at = (iso: string) => new Date(iso)
+  const stored = (over: Partial<StoredDeliveryEvent> & { id: string; kind: string; occurredAt: Date }): StoredDeliveryEvent => ({
+    source: 'brevo', detail: null, ip: null, userAgent: null, ...over,
+  })
+  const reported = (over: Partial<ReportedDeliveryEvent> & { kind: ReportedDeliveryEvent['kind']; occurredAt: Date }): ReportedDeliveryEvent => ({
+    detail: null, bounceKind: null, ip: null, ...over,
+  })
+
+  it('shows one line for an event both sides know, with the address the report knew', () => {
+    const { events, learnedIps } = mergeDeliveryHistory(
+      [stored({ id: 'row-1', kind: 'opened', occurredAt: at('2026-09-22T13:09:44Z'), userAgent: 'Outlook' })],
+      [reported({ kind: 'opened', occurredAt: at('2026-09-22T13:09:41Z'), ip: '172.186.8.69' })],
+    )
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ id: 'row-1', ip: '172.186.8.69', userAgent: 'Outlook' })
+    // The ledger's own stamp wins: it is the one the labels were built from.
+    expect(events[0]!.occurredAt.toISOString()).toBe('2026-09-22T13:09:44.000Z')
+    expect(learnedIps).toEqual([{ id: 'row-1', ip: '172.186.8.69' }])
+  })
+
+  it('keeps an address the ledger already had rather than learning it twice', () => {
+    const { events, learnedIps } = mergeDeliveryHistory(
+      [stored({ id: 'row-1', kind: 'opened', occurredAt: at('2026-09-22T13:09:44Z'), ip: '10.0.0.1' })],
+      [reported({ kind: 'opened', occurredAt: at('2026-09-22T13:09:41Z'), ip: '172.186.8.69' })],
+    )
+    expect(events[0]!.ip).toBe('10.0.0.1')
+    expect(learnedIps).toEqual([])
+  })
+
+  it('shows what only one side knows, and puts everything in order', () => {
+    const { events } = mergeDeliveryHistory(
+      [
+        stored({ id: 'row-1', kind: 'delivered', occurredAt: at('2026-09-22T13:09:30Z') }),
+        stored({ id: 'row-2', kind: 'receipt', source: 'receipt', occurredAt: at('2026-09-22T15:00:00Z') }),
+      ],
+      [
+        reported({ kind: 'sent', occurredAt: at('2026-09-22T13:09:28Z'), ip: '77.32.148.26' }),
+        reported({ kind: 'delivered', occurredAt: at('2026-09-22T13:09:31Z'), ip: '77.32.148.26' }),
+      ],
+    )
+    expect(events.map((e) => e.kind)).toEqual(['sent', 'delivered', 'receipt'])
+    expect(events[0]!.id).toBeNull()
+    expect(events[1]).toMatchObject({ id: 'row-1', ip: '77.32.148.26' })
+    expect(events[2]).toMatchObject({ id: 'row-2', source: 'receipt' })
+  })
+
+  it('does not fold two genuine opens into one, and pairs each with its nearest', () => {
+    const { events } = mergeDeliveryHistory(
+      [
+        stored({ id: 'row-1', kind: 'opened', occurredAt: at('2026-09-22T13:10:00Z') }),
+        stored({ id: 'row-2', kind: 'opened', occurredAt: at('2026-09-22T13:10:40Z') }),
+      ],
+      [
+        reported({ kind: 'opened', occurredAt: at('2026-09-22T13:10:38Z'), ip: '2.2.2.2' }),
+        reported({ kind: 'opened', occurredAt: at('2026-09-22T13:09:59Z'), ip: '1.1.1.1' }),
+      ],
+    )
+    expect(events).toHaveLength(2)
+    expect(events.find((e) => e.id === 'row-1')?.ip).toBe('1.1.1.1')
+    expect(events.find((e) => e.id === 'row-2')?.ip).toBe('2.2.2.2')
+  })
+
+  it('treats two clicks on different links in the same second as two clicks', () => {
+    const { events } = mergeDeliveryHistory(
+      [stored({ id: 'row-1', kind: 'clicked', detail: 'https://example.co.uk/a', occurredAt: at('2026-09-22T13:10:00Z') })],
+      [
+        reported({ kind: 'clicked', detail: 'https://example.co.uk/b', occurredAt: at('2026-09-22T13:10:00Z'), ip: '3.3.3.3' }),
+        reported({ kind: 'clicked', detail: 'https://example.co.uk/a', occurredAt: at('2026-09-22T13:10:00Z'), ip: '3.3.3.3' }),
+      ],
+    )
+    expect(events).toHaveLength(2)
+    expect(events.find((e) => e.id === 'row-1')?.ip).toBe('3.3.3.3')
+    expect(events.find((e) => e.id === null)?.detail).toBe('https://example.co.uk/b')
+  })
+
+  it('remembers the program that fetched it when the webhook said', () => {
+    const one = normaliseBrevoEvent({
+      event: 'opened',
+      email: 'customer@example.com',
+      ts_event: 1_756_000_000,
+      user_agent: 'Mozilla/5.0 (Windows NT 10.0) Outlook',
+      sending_ip: '77.32.148.26',
+      [CUSTOM_TAG_HEADER]: customTagFor('msg-1'),
+    })
+    expect(one?.event.userAgent).toBe('Mozilla/5.0 (Windows NT 10.0) Outlook')
   })
 })

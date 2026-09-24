@@ -28,6 +28,7 @@ import { UnmergeButton, type ThreadMergeView } from './Unmerge'
 import { AddressLine } from './AddressLine'
 import { ScrollToMessage } from './ScrollToMessage'
 import { MentionActions } from './MentionActions'
+import { DeliveryHistory } from './DeliveryHistory'
 
 // One conversation, oldest message first - the order the story happened in.
 //
@@ -239,90 +240,6 @@ const AUTO_LABELS: Record<string, string> = {
   bounce: 'This one bounced - it never reached them',
   'auto-reply': 'An automatic out-of-office reply',
   bulk: 'Sent to a list rather than written to you',
-}
-
-/**
- * What became of a reply once it left, when the site is watching for that.
- *
- * The wording is fussier than it looks, and deliberately. A mail app fetching
- * the invisible picture in a message is not a person reading it, and somebody
- * deciding whether to ring a customer who has "read" their quote deserves to
- * know which of the two happened. Every message on a site with receipts
- * switched off has none of these, and this renders nothing.
- *
- * A followed link sits BESIDE the open rather than instead of it, and is the
- * only one of these that can appear twice over: the two answer different
- * questions - whether the message was looked at, and whether the quote in it
- * was - and a message can easily have the second without the first, since an
- * open is a picture that plenty of mail apps never load. It only appears at all
- * where the mail service rewrites the addresses in the message, which is a
- * setting on its account rather than on this site.
- */
-function DeliveryReceipt({ message, now, timezone }: { message: ThreadMessageView; now: Date; timezone: string }) {
-  const hardBounce = message.bouncedAt
-    && ['hard', 'blocked', 'invalid', 'spam', 'error'].includes(message.bounceKind ?? '')
-  const softBounce = message.bouncedAt && !hardBounce
-
-  return (
-    <>
-      {hardBounce && (
-        // Whatever the far end said about it is kept off the page on purpose.
-        // It is written for whoever runs a mail server, and a site owner reading
-        // it learns nothing except that something technical went wrong.
-        <span
-          className="uin-tag uin-tag-failed"
-          title="The address turned it away. It is worth checking it is spelt right, or reaching them another way."
-        >
-          It did not arrive
-        </span>
-      )}
-      {softBounce && (
-        <span
-          className="uin-tag"
-          title="Something at the other end is holding it up. It may still get through on its own."
-        >
-          Held up on the way
-        </span>
-      )}
-      {message.clickedAt && (
-        <span
-          className="uin-tag uin-tag-done"
-          title={
-            `A link in it was followed: ${formatFull(message.clickedAt, timezone)}`
-            + (message.clickCount > 1 ? ` - ${message.clickCount} in all, the last one ${formatFull(message.lastClickAt, timezone)}` : '')
-            + '. Worth knowing: some office email systems check every link in a message when it arrives, so several at once within a minute of it landing is more likely to be their security than them.'
-          }
-        >
-          {TickIcon} Followed a link {formatWhen(message.clickedAt, now, timezone)}
-          {message.clickCount > 1 ? ` (${message.clickCount} times)` : ''}
-        </span>
-      )}
-      {message.openedAt ? (
-        <span
-          className="uin-tag uin-tag-done"
-          title={
-            message.openSource === 'receipt'
-              ? `Their email program confirmed it: ${formatFull(message.openedAt, timezone)}`
-              : `First opened ${formatFull(message.openedAt, timezone)}`
-          }
-        >
-          {TickIcon} Opened {formatWhen(message.openedAt, now, timezone)}
-          {message.openCount > 1 ? ` (${message.openCount} times)` : ''}
-        </span>
-      ) : message.openSource === 'proxy' ? (
-        <span
-          className="uin-tag"
-          title="Their email program downloaded the pictures in the message, which it often does before anybody has looked at it. Not proof that it was read."
-        >
-          Their email app fetched it
-        </span>
-      ) : message.deliveredAt && !hardBounce ? (
-        <span className="uin-tag" title={`Delivered ${formatFull(message.deliveredAt, timezone)}`}>
-          Delivered {formatWhen(message.deliveredAt, now, timezone)}
-        </span>
-      ) : null}
-    </>
-  )
 }
 
 /** When a message happened, written the way the list beside it writes the same
@@ -578,7 +495,23 @@ function Message({ message, threadSubject, personId, showAvatars, staffById, now
           {message.deliveryStatus === 'sent' && (
             <>
               <span className="uin-tag uin-tag-done">{TickIcon} Sent</span>
-              <DeliveryReceipt message={message} now={now} timezone={timezone} />
+              <DeliveryHistory
+                messageId={message.id}
+                receipt={{
+                  deliveredAt: message.deliveredAt,
+                  openedAt: message.openedAt,
+                  lastOpenAt: message.lastOpenAt,
+                  openCount: message.openCount,
+                  openSource: message.openSource,
+                  clickedAt: message.clickedAt,
+                  lastClickAt: message.lastClickAt,
+                  clickCount: message.clickCount,
+                  bouncedAt: message.bouncedAt,
+                  bounceKind: message.bounceKind,
+                }}
+                now={now}
+                timezone={timezone}
+              />
             </>
           )}
           {message.deliveryStatus === 'failed' && (
