@@ -19,6 +19,7 @@ import { MessageText } from './MessageText'
 import { RetryButton } from './RetryButton'
 import { ThreadActions } from './ThreadActions'
 import { DeleteMessageButton } from './MessageActions'
+import { ProviderAudio, type ProviderAudioFile } from './ProviderAudio'
 import { BlockParticipant } from './BlockParticipant'
 import { ComposerOpenProvider, ComposerSlot } from './ComposerOpen'
 import { MessageMenu } from './MessageMenu'
@@ -369,6 +370,13 @@ function messageDomId(messageId: string): string {
   return `uin-msg-${messageId}`
 }
 
+/** A recording a channel handed over by url - a call, a voicemail - rather than
+ *  a file held here. */
+function isRecording(file: { externalUrl: string | null; contentType: string | null; filename: string }): boolean {
+  return !!file.externalUrl
+    && (!!file.contentType?.startsWith('audio/') || /\.(mp3|wav|ogg|m4a)$/i.test(file.filename))
+}
+
 function Message({ message, threadSubject, personId, showAvatars, staffById, now, timezone, canDelete, tools }: {
   message: ThreadMessageView
   /** What the conversation is called, so a message called something else can
@@ -394,6 +402,10 @@ function Message({ message, threadSubject, personId, showAvatars, staffById, now
   const offerDelete = canDelete
     && message.source === 'provider'
     && message.providerMessageId?.startsWith('voicemail:')
+
+  const recordings: ProviderAudioFile[] = message.attachments
+    .filter(isRecording)
+    .map((file) => ({ id: file.id, filename: file.filename, url: file.externalUrl!, contentType: file.contentType }))
 
   return (
     <article id={messageDomId(message.id)} className={`uin-msg uin-msg-${kind}`}>
@@ -450,45 +462,30 @@ function Message({ message, threadSubject, personId, showAvatars, staffById, now
       </div>
       {(message.attachments.length > 0 || message.deliveryStatus || offerDelete) && (
         <div className="uin-msg-foot">
-          {message.attachments.map((file) => {
-            // Provider attachments with external URLs (like Twilio voicemails) 
-            // are rendered as audio players or download links
-            const isAudio = file.contentType?.startsWith('audio/') || file.filename.match(/\.(mp3|wav|ogg|m4a)$/i)
-            const externalUrl = file.externalUrl
-            
-            if (isAudio && externalUrl) {
-              return (
-                <div key={file.id} style={{ margin: '0.5rem 0' }}>
-                  <audio controls style={{ maxWidth: '100%' }}>
-                    <source src={externalUrl} type={file.contentType || 'audio/mpeg'} />
-                    Your browser does not support the audio element.
-                  </audio>
-                  <a
-                    className="uin-attachment"
-                    href={externalUrl}
-                    download={file.filename}
-                    style={{ fontSize: '0.875rem', marginTop: '0.25rem', display: 'inline-block' }}
-                  >
-                    {PaperclipIcon}
-                    {file.filename}
-                  </a>
-                </div>
-              )
-            }
-            
-            return (
+          {/* A channel's recordings - a call, a voicemail - are drawn as players,
+              together, by a small client island that also asks the channel what
+              can be done to each one where it keeps them. */}
+          {recordings.length > 0 && (
+            <ProviderAudio
+              messageId={message.id}
+              files={recordings}
+              canAct={canDelete && message.source === 'provider'}
+            />
+          )}
+          {message.attachments
+            .filter((file) => !isRecording(file))
+            .map((file) => (
               <a
                 key={file.id}
                 className="uin-attachment"
-                href={externalUrl || `/api/m/unified-inbox/attachments/${file.id}`}
+                href={file.externalUrl || `/api/m/unified-inbox/attachments/${file.id}`}
                 download={file.filename}
               >
                 {PaperclipIcon}
                 {file.filename}
                 {file.sizeBytes ? <span style={{ color: 'var(--color-text-muted)' }}>{formatBytes(file.sizeBytes)}</span> : null}
               </a>
-            )
-          })}
+            ))}
           {message.deliveryStatus === 'sending' && (
             <span className="uin-tag">{ClockIcon} On its way</span>
           )}

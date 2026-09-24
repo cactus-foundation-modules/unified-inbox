@@ -2089,6 +2089,17 @@
    already a flex row, so this stays inside it and out of the message body. */
 .uin-msg-actions { display: flex; gap: 0.5rem; align-items: center; margin-left: auto; }
 .uin-attachment:hover { border-color: var(--color-border-strong); color: var(--color-text); text-decoration: none; }
+/* A channel's recording: its own line in the foot, the player first, then the
+   download, where it is kept, and whatever can be done to it there. Wraps on a
+   phone rather than pushing the foot sideways. */
+.uin-recording {
+  display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center;
+  flex-basis: 100%;
+  margin: 0.25rem 0;
+}
+.uin-recording-player { max-width: 100%; }
+.uin-recording-note { color: var(--color-text-secondary); }
+.uin-recording-actions { display: inline-flex; flex-wrap: wrap; gap: 0.4rem; }
 /* ---- where a link actually goes ----------------------------------------- */
 /* The address is the whole point of the panel, so it is the biggest thing in
    it, it wraps at any character - a tracking link is four hundred characters of
