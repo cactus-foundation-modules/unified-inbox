@@ -4,7 +4,7 @@ import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { canOpenThread } from '@/modules/unified-inbox/lib/access'
 import {
-  getThreadDetail, insertNote, recordEvent, recordLink, threadHasLink,
+  getThreadDetail, insertNote, recordEvent, recordLink, reopenDiscussionForEveryone, setThreadStatus, threadHasLink,
 } from '@/modules/unified-inbox/lib/db'
 import { notifyMentions } from '@/modules/unified-inbox/lib/mentions'
 import { queueNoteWebhooks } from '@/modules/unified-inbox/lib/colleague-webhooks'
@@ -79,6 +79,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     authorUserId: user.id,
   })
   await recordEvent(id, user.id, 'note', { messageId })
+
+  // Written in a discussion somebody had closed for themselves: it is open for
+  // them again, as an answered email would be - the writer included, who has
+  // plainly picked it back up.
+  // One closed the old way, for everybody at once before closing became each
+  // person's own, opens for everybody too.
+  if (thread.channel === 'discussion') {
+    await reopenDiscussionForEveryone(id)
+    if (thread.status === 'done') await setThreadStatus(id, 'open', null)
+  }
 
   // Everything quoted, now on the conversation - the same row an order or a
   // purchase order sits on. Checked first rather than left to the insert: two

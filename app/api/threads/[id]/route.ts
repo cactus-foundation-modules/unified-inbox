@@ -5,7 +5,9 @@ import { errorResponse } from '@/lib/utils'
 import { canOpenThread } from '@/modules/unified-inbox/lib/access'
 import {
   assignThread,
+  closeDiscussionFor,
   getThreadDetail,
+  reopenDiscussionFor,
   recordEvent,
   setThreadRead,
   setThreadStatus,
@@ -63,6 +65,26 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (body.status === 'snoozed' && (!until || Number.isNaN(until.getTime()))) {
       return errorResponse('Say when it should come back.', 400)
     }
+
+    // An internal discussion is several colleagues' work at once, so done is
+    // done FOR YOU: the shared status stays where it is for everybody still
+    // working on it (migrations/059_discussion_closures.sql). Opening it again,
+    // or putting it to sleep, takes your own closing off first.
+    if (thread.channel === 'discussion') {
+      if (body.status === 'done') {
+        await closeDiscussionFor(id, user.id)
+        await recordEvent(id, user.id, 'status', { status: 'done', forUserOnly: true })
+        return NextResponse.json({ ok: true, thread: await getThreadDetail(id, user.id) })
+      }
+      await reopenDiscussionFor(id, user.id)
+      // Nothing shared to change when it is already open for everybody - the
+      // person was only reopening their own.
+      if (body.status === 'open' && thread.status === 'open') {
+        await recordEvent(id, user.id, 'status', { status: 'open', forUserOnly: true })
+        return NextResponse.json({ ok: true, thread: await getThreadDetail(id, user.id) })
+      }
+    }
+
     await setThreadStatus(id, body.status, until)
     await recordEvent(id, user.id, body.status === 'snoozed' ? 'snoozed' : 'status', {
       status: body.status,
@@ -70,5 +92,5 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     })
   }
 
-  return NextResponse.json({ ok: true, thread: await getThreadDetail(id) })
+  return NextResponse.json({ ok: true, thread: await getThreadDetail(id, user.id) })
 }

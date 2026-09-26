@@ -23,7 +23,7 @@ import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { canOpenThread } from '@/modules/unified-inbox/lib/access'
 import { getInbox, getThreadDetail } from '@/modules/unified-inbox/lib/db'
-import { binOwnerFor, markThreadBinned, unmarkThreadBinned } from '@/modules/unified-inbox/lib/bin'
+import { binOwnerForThread, markThreadBinned, unmarkThreadBinned } from '@/modules/unified-inbox/lib/bin'
 import { ThreadBinBody } from '@/modules/unified-inbox/lib/validation'
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -49,7 +49,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   // one home is an answer that can be explained. Already established as one this
   // reader may open, by canOpenThread above.
   const inbox = thread.inboxId ? await getInbox(thread.inboxId) : null
-  const owner = binOwnerFor({ pressedByUserId: user.id, inbox })
+  const owner = binOwnerForThread({ pressedByUserId: user.id, inbox, channel: thread.channel })
 
   if (parsed.data.bin) await markThreadBinned(id, owner)
   else await unmarkThreadBinned(id, owner)

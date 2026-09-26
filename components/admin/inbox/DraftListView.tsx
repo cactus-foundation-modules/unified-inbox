@@ -121,7 +121,9 @@ export function DraftListView({
         // Read-only rows carry the draft and nothing else: no `compose`, so the
         // panel draws the reading view rather than a writing box.
         const href = readOnly
-          ? inboxHref(base, params, { draft: draft.id, compose: null, id: null, person: null, page: null })
+          // A reply opens in its conversation, with this draft opened out in it;
+          // a new message, which has none, opens on its own.
+          ? inboxHref(base, params, { draft: draft.id, compose: null, id: draft.threadId, person: null, page: null })
           : draftHref(base, params, draft)
         const inboxName = draft.inboxId ? inboxNames[draft.inboxId] : null
         return (

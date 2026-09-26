@@ -38,6 +38,9 @@ import { AlarmIcon, ChevronDownIcon } from './icons'
 type Props = {
   threadId: string
   status: string
+  /** An internal discussion, where done closes it for this reader alone and
+   *  everybody else keeps it open (migrations/059_discussion_closures.sql). */
+  doneForMeOnly?: boolean
   assigneeUserId: string | null
   /** When a snoozed conversation is due back, as an ISO string. Only used to
    *  put it back the way it was if marking it done is undone - the API will
@@ -91,7 +94,7 @@ const STATUS_WORDS: Record<string, string> = {
 }
 
 export function ThreadActions({
-  threadId, status, assigneeUserId, snoozeUntil, staff, timezone,
+  threadId, status, doneForMeOnly = false, assigneeUserId, snoozeUntil, staff, timezone,
   spam, spamOwnerName, senderAddress, senderBlocked, canBlock, channelBlock, closeHref,
   binned, binOwnerName,
 }: Props) {
@@ -322,9 +325,14 @@ export function ThreadActions({
           {status !== 'done' && (
             <MenuItem
               disabled={busy}
-              onClick={() => void closeWith({ status: 'done' }, said('Marked as done.', 'marked as done'))}
+              onClick={() => void closeWith(
+                { status: 'done' },
+                doneForMeOnly
+                  ? said('Done for you. Still open for everybody else in it.', 'marked as done')
+                  : said('Marked as done.', 'marked as done'),
+              )}
             >
-              {many ? `Done - all ${targets.length}` : 'Done'}
+              {many ? `Done - all ${targets.length}` : doneForMeOnly ? 'Done for me' : 'Done'}
             </MenuItem>
           )}
         </Dropdown>

@@ -69,6 +69,7 @@ import {
   listInboxes,
   storedObjectsForThreads,
 } from '@/modules/unified-inbox/lib/db'
+import { purgeDiscussionsFromBin } from '@/modules/unified-inbox/lib/bin'
 import { visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
 import { EmptyBinBody } from '@/modules/unified-inbox/lib/validation'
 
@@ -122,7 +123,7 @@ export async function POST(request: NextRequest) {
     .map((channel) => channel.key)
     .filter((key) => !hidden.has(key))
 
-  const ids = await binThreadIds({
+  const allIds = await binThreadIds({
     ownerUserId,
     inboxIds: visibleIds,
     // `manage` is already established above, which is the same test the panel
@@ -130,12 +131,17 @@ export async function POST(request: NextRequest) {
     includeUnrouted: true,
     providerModules: channelModules,
   })
+  // Discussions are not destroyed, only emptied out of THIS person's bin: they
+  // belong to every colleague in them (migrations/059). Settled first and in
+  // one go, since it is a single update rather than a destruction.
+  const { destroy, purged } = await purgeDiscussionsFromBin(allIds, ownerUserId)
+  const ids = destroy
   if (ids.length === 0) {
-    return NextResponse.json({ ok: true, conversations: 0, storedObjects: 0, storedObjectFailures: 0, more: false })
+    return NextResponse.json({ ok: true, conversations: purged, storedObjects: 0, storedObjectFailures: 0, more: false })
   }
 
   const deadline = Date.now() + BUDGET_MS
-  let conversations = 0
+  let conversations = purged
   let storedObjects = 0
   let storedObjectFailures = 0
   let more = false

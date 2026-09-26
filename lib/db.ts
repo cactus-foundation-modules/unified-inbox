@@ -2736,12 +2736,16 @@ function spamFolderMatch(ownerUserId: string): Prisma.Sql {
  * turned away at the door goes to Spam, where somebody can still find it.
  */
 function binMatch(viewerUserId: string): Prisma.Sql {
+  // A discussion is every colleague's in it, so only the reader's OWN deleting
+  // hides one from them - never the owner of an address it happens to be filed
+  // under, which on a discussion is every other person it was put to
+  // (migrations/059_discussion_closures.sql).
   return Prisma.sql`EXISTS (
     SELECT 1 FROM "uin_thread_bin" bn
      WHERE bn."thread_id" = t."id"
        AND (
          bn."user_id" = ${viewerUserId}
-         OR bn."user_id" IN (
+         OR t."channel" <> 'discussion' AND bn."user_id" IN (
               SELECT i."owner_user_id" FROM "uin_inboxes" i
                WHERE i."kind" = 'individual'
                  AND i."owner_user_id" IS NOT NULL
@@ -2771,6 +2775,9 @@ function binFolderMatch(ownerUserId: string): Prisma.Sql {
   return Prisma.sql`EXISTS (
     SELECT 1 FROM "uin_thread_bin" bn
      WHERE bn."thread_id" = t."id" AND bn."user_id" = ${ownerUserId}
+       -- A discussion emptied out of this bin: gone for them, kept for
+       -- everybody else, and no longer in the folder (migrations/059).
+       AND bn."purged_at" IS NULL
   )`
 }
 
@@ -2808,6 +2815,25 @@ export async function binThreadIds(f: {
        AND ${binFolderMatch(f.ownerUserId)}
   `
   return rows.map((r) => r.id)
+}
+
+/**
+ * A conversation's status as ONE person sees it (migrations/059).
+ *
+ * The shared column, except on an internal discussion somebody has closed for
+ * themselves, which reads as done to them and to nobody else. Every list, tab,
+ * count and the open conversation ask this rather than the column, so the four
+ * of them never disagree about what somebody has left to do.
+ */
+function statusFor(viewerUserId: string | null | undefined): Prisma.Sql {
+  if (!viewerUserId) return Prisma.sql`t."status"`
+  return Prisma.sql`(CASE
+    WHEN t."channel" = 'discussion' AND EXISTS (
+      SELECT 1 FROM "uin_discussion_closures" dc
+       WHERE dc."thread_id" = t."id" AND dc."user_id" = ${viewerUserId}
+    ) THEN 'done'
+    ELSE t."status"
+  END)`
 }
 
 function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
@@ -2896,9 +2922,9 @@ function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
     // thing wherever it is asked from - the list, the count beside it and the
     // paging all come through this function, and a tab whose count was drawn
     // from a different WHERE than its list is the disagreement worth avoiding.
-    where.push(Prisma.sql`t."status" = 'open' AND t."assignee_user_id" IS NULL`)
+    where.push(Prisma.sql`${statusFor(f.viewerUserId)} = 'open' AND t."assignee_user_id" IS NULL`)
   } else if (f.status && f.status !== 'all') {
-    where.push(Prisma.sql`t."status" = ${f.status}`)
+    where.push(Prisma.sql`${statusFor(f.viewerUserId)} = ${f.status}`)
   }
   if (f.unreadOnly) where.push(Prisma.sql`t."unread" = true`)
   if (f.assignee === 'unassigned') where.push(Prisma.sql`t."assignee_user_id" IS NULL`)
@@ -3055,11 +3081,13 @@ function threadListQuery(
   limit: number,
   offset: number,
   oldestFirst = false,
+  /** Whose list it is, so a discussion they closed reads as done to them. */
+  viewerUserId: string | null = null,
 ): Prisma.Sql {
   const order = oldestFirst ? THREAD_LIST_ORDER_OLDEST : THREAD_LIST_ORDER
   return Prisma.sql`
     SELECT t."id", t."inbox_id", t."person_id", t."channel", t."provider_module", t."subject",
-           t."preview", t."status", t."snooze_until", t."assignee_user_id",
+           t."preview", ${statusFor(viewerUserId)} AS "status", t."snooze_until", t."assignee_user_id",
            t."last_message_at", t."last_direction", t."unread", t."message_count",
            t."created_at", t."started_by_user_id", t."to_user_ids",
            COALESCE(
@@ -3129,7 +3157,7 @@ export async function listThreads(f: ThreadListFilters): Promise<ThreadListRow[]
   const where = [visible, ...filterClauses(f)]
   const offset = Math.max(0, (f.page - 1) * f.perPage)
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>(
-    threadListQuery(where, f.perPage, offset, f.oldestFirst ?? false),
+    threadListQuery(where, f.perPage, offset, f.oldestFirst ?? false, f.viewerUserId),
   )
   return rows.map(mapThreadListRow)
 }
@@ -3185,7 +3213,7 @@ export async function openCounts(
       LEFT JOIN "uin_thread_inboxes" ti ON ti."thread_id" = t."id"
      WHERE ${visible}
        AND t."merged_into_id" IS NULL
-       AND t."status" = 'open'
+       AND ${statusFor(viewerUserId)} = 'open'
        AND NOT ${spamMatch(viewerUserId)}
        AND NOT ${binMatch(viewerUserId)}
        ${restrict}
@@ -3225,7 +3253,7 @@ export async function openAssignedElsewhere(
       FROM "uin_threads" t
      WHERE ${visible}
        AND t."merged_into_id" IS NULL
-       AND t."status" = 'open'
+       AND ${statusFor(viewerUserId)} = 'open'
        AND t."assignee_user_id" = ${viewerUserId}
        AND NOT ${inboxMatch([ownInboxId])}
        AND NOT ${spamMatch(viewerUserId)}
@@ -3249,12 +3277,12 @@ export async function statusCounts(f: ThreadListFilters): Promise<Record<string,
   if (!visible) return {}
   const where = [visible, ...filterClauses({ ...f, status: 'all' })]
   const rows = await prisma.$queryRaw<{ status: string; count: bigint; nobody: bigint }[]>`
-    SELECT t."status" AS "status",
+    SELECT ${statusFor(f.viewerUserId)} AS "status",
            COUNT(*)::bigint AS "count",
            COUNT(*) FILTER (WHERE t."assignee_user_id" IS NULL)::bigint AS "nobody"
       FROM "uin_threads" t
      WHERE ${Prisma.join(where, ' AND ')}
-     GROUP BY t."status"
+     GROUP BY 1
   `
   const out: Record<string, number> = {}
   let all = 0
@@ -3299,9 +3327,15 @@ export type ThreadDetail = {
   createdAt: Date
 }
 
-export async function getThreadDetail(id: string): Promise<ThreadDetail | null> {
+/**
+ * One conversation. Given whose screen it is for, its status is the one THEY
+ * see - a discussion they closed reads as done to them (see statusFor). Left
+ * out, it is the shared column, which is what every permission check and every
+ * write wants.
+ */
+export async function getThreadDetail(id: string, viewerUserId: string | null = null): Promise<ThreadDetail | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT t.*, ${ABSORBED_INBOX_IDS} AS absorbed_inbox_ids
+    SELECT t.*, ${statusFor(viewerUserId)} AS "viewer_status", ${ABSORBED_INBOX_IDS} AS absorbed_inbox_ids
       FROM "uin_threads" t WHERE t."id" = ${id}
   `
   const r = rows[0]
@@ -3317,7 +3351,7 @@ export async function getThreadDetail(id: string): Promise<ThreadDetail | null> 
     sourceLabel: (r.source_label as string | null) ?? null,
     subject: (r.subject as string | null) ?? null,
     subjectNormalised: (r.subject_normalised as string | null) ?? null,
-    status: r.status as string,
+    status: r.viewer_status as string,
     snoozeUntil: (r.snooze_until as Date | null) ?? null,
     assigneeUserId: (r.assignee_user_id as string | null) ?? null,
     personId: (r.person_id as string | null) ?? null,
@@ -3694,6 +3728,38 @@ export async function assignThreadIfUnassigned(threadId: string, userId: string)
      WHERE "id" = ${threadId} AND "assignee_user_id" IS NULL
   `
   return changed > 0
+}
+
+/**
+ * Close an internal discussion for one person and nobody else
+ * (migrations/059). The shared status is not touched: the colleagues still
+ * working on it keep it where it was.
+ */
+export async function closeDiscussionFor(threadId: string, userId: string): Promise<void> {
+  await prisma.$executeRaw`
+    INSERT INTO "uin_discussion_closures" ("thread_id", "user_id")
+    VALUES (${threadId}, ${userId})
+    ON CONFLICT ("thread_id", "user_id") DO UPDATE SET "closed_at" = CURRENT_TIMESTAMP
+  `
+}
+
+/** Open it again for that one person. */
+export async function reopenDiscussionFor(threadId: string, userId: string): Promise<void> {
+  await prisma.$executeRaw`
+    DELETE FROM "uin_discussion_closures" WHERE "thread_id" = ${threadId} AND "user_id" = ${userId}
+  `
+}
+
+/**
+ * Somebody has written in the discussion: it is open again for everybody who
+ * had closed it, the writer included. The same courtesy a reply pays an email -
+ * a discussion that has just been written in is not finished with, and
+ * somebody adding to one they had closed has plainly picked it back up.
+ */
+export async function reopenDiscussionForEveryone(threadId: string): Promise<void> {
+  await prisma.$executeRaw`
+    DELETE FROM "uin_discussion_closures" WHERE "thread_id" = ${threadId}
+  `
 }
 
 /** Status and snooze move together: a conversation put to sleep is 'snoozed'
@@ -5876,11 +5942,12 @@ export async function threadsForPerson(
   inboxIds: string[],
   includeUnrouted: boolean,
   providerModules: string[] = [],
+  viewerUserId: string | null = null,
 ): Promise<ThreadListRow[]> {
   const visible = visibilityClause(inboxIds, includeUnrouted, providerModules)
   if (!visible) return []
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>(
-    threadListQuery([visible, Prisma.sql`t."person_id" = ${personId}`], 50, 0),
+    threadListQuery([visible, Prisma.sql`t."person_id" = ${personId}`], 50, 0, false, viewerUserId),
   )
   return rows.map(mapThreadListRow)
 }

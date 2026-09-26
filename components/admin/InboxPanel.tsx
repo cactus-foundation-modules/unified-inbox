@@ -112,7 +112,7 @@ import { DraftReadView } from './inbox/DraftReadView'
 import { SentListView } from './inbox/SentListView'
 import { ThreadPane, type ThreadMessageView } from './inbox/ThreadPane'
 import { spamOwnerFor, threadIsSpamFor } from '@/modules/unified-inbox/lib/spam'
-import { binOwnerFor, threadIsBinnedFor } from '@/modules/unified-inbox/lib/bin'
+import { binOwnerForThread, threadIsBinnedFor } from '@/modules/unified-inbox/lib/bin'
 import { isSenderBlocked } from '@/modules/unified-inbox/lib/blocked-senders'
 import { normaliseAddress } from '@/modules/unified-inbox/lib/addresses'
 import { ComposeView } from './inbox/ComposeView'
@@ -821,7 +821,7 @@ export async function UnifiedInboxPanel({
     if (!person) {
       personPane = personNotHere()
     } else {
-      const personThreads = await threadsForPerson(person.id, visibleIds, canManage, channelModules)
+      const personThreads = await threadsForPerson(person.id, visibleIds, canManage, channelModules, user.id)
       // A person's page is reachable by anybody who may read the inbox, so it
       // needs the same gate the conversations themselves have. Otherwise
       // somebody who can only open hi@ learns the name, the addresses and the
@@ -1001,9 +1001,9 @@ export async function UnifiedInboxPanel({
     // conversation no list shows, holding at most the duplicate copies the
     // merge could not move - which reads as a conversation that has lost its
     // messages rather than one that was tidied up.
-    const opened = await getThreadDetail(params.threadId)
+    const opened = await getThreadDetail(params.threadId, user.id)
     const thread = opened?.mergedIntoId
-      ? await getThreadDetail(opened.mergedIntoId)
+      ? await getThreadDetail(opened.mergedIntoId, user.id)
       : opened
     // The whole rule in one call rather than a copy of it here: the guest list,
     // the channel's own permission, and - since colleagues can tag each other -
@@ -1038,6 +1038,27 @@ export async function UnifiedInboxPanel({
         // A channel that is slow, or down, now costs the reader nothing.
         after(() => pushProviderRead(thread))
       }
+
+      // A colleague's reply or scheduled reply, opened from their Drafts or
+      // Scheduled folder: it is read IN its conversation, opened out and
+      // scrolled to, rather than on a page of its own with the conversation it
+      // answers nowhere in sight. Found the same way the folder found it (E17),
+      // and only kept when it really belongs to this conversation.
+      const colleagueFolder = !!params.draftId && !!folderInbox && !!folderOwnerId
+        && ((params.draftsOnly && !draftsAreOwn) || (params.scheduledOnly && !scheduledAreOwn))
+      const focusing = colleagueFolder && params.draftId && folderOwnerId
+        ? await getDraftOfColleague(params.draftId, folderOwnerId, visibleIds)
+        : null
+      const focusDraft = focusing && focusing.threadId === thread.id && folderInbox
+        ? {
+            id: focusing.id,
+            // The same rule as the reading view: only a draft on the author's
+            // OWN address, and only for somebody who may send from it.
+            sendAs: focusing.inboxId === folderInbox.id && sendableIds.includes(folderInbox.id)
+              ? { inboxId: folderInbox.id, ownerName: folderOwnerName ?? folderInbox.name }
+              : null,
+          }
+        : null
 
       const [messages, files, events, ownDraft, heldDrafts, sellsAnything, othersDrafts] = await Promise.all([
         listThreadMessages(thread.id),
@@ -1235,11 +1256,12 @@ export async function UnifiedInboxPanel({
       // and the module would then disagree with itself about which folder a
       // conversation went into. Named separately here anyway, so that a reader
       // of this file sees both buttons being told whose folder they fill.
-      const binOwnerId = binOwnerFor({
+      const binOwnerId = binOwnerForThread({
         pressedByUserId: user.id,
         inbox: thread.inboxId
           ? allInboxes.find((i) => i.id === thread.inboxId) ?? null
           : null,
+        channel: thread.channel,
       })
       //
       // EVERYTHING LEFT THAT THIS PANE NEEDS, IN ONE WAIT.
@@ -1433,6 +1455,7 @@ export async function UnifiedInboxPanel({
           }}
           now={new Date()}
           timezone={timezone}
+          focusDraft={focusDraft}
           othersDrafts={othersDrafts.map((other) => ({
             id: other.id,
             authorName: other.authorName ?? staffById[other.authorUserId] ?? 'A colleague',
@@ -1504,8 +1527,11 @@ export async function UnifiedInboxPanel({
     // folder lists everything its owner has started, so opening one has to find
     // it the same way.
     const reading = await getDraftOfColleague(params.draftId, folderOwnerId, visibleIds)
+    // A reply is read in its conversation, which the thread pane above has
+    // already drawn with it opened out - see `focusDraft`. Only a new message,
+    // with no conversation to sit in, gets a page of its own here.
     const readingInbox = reading?.inboxId ? allInboxes.find((i) => i.id === reading.inboxId) ?? null : null
-    draftReadPane = reading ? (
+    draftReadPane = reading?.threadId ? null : reading ? (
       <DraftReadView
         base={base}
         params={carried}

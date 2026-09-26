@@ -41,6 +41,46 @@ import { spamOwnerFor } from './spam'
  */
 export const binOwnerFor = spamOwnerFor
 
+/**
+ * The same question for one particular conversation. An internal discussion is
+ * the exception: it belongs to every colleague in it, so deleting one only
+ * ever fills the presser's own bin - covering a colleague's post does not get
+ * to delete their discussions for them (migrations/059_discussion_closures.sql).
+ */
+export function binOwnerForThread(input: {
+  pressedByUserId: string
+  inbox: { kind: string; ownerUserId: string | null } | null
+  channel: string
+}): string {
+  if (input.channel === 'discussion') return input.pressedByUserId
+  return binOwnerFor(input)
+}
+
+/**
+ * Split what an emptied bin holds into what may be destroyed and the
+ * discussions that may not. A discussion is stamped out of this one person's
+ * bin instead - still hidden from them, and untouched for everybody else in it.
+ * Returns the ids that are safe to destroy.
+ */
+export async function purgeDiscussionsFromBin(threadIds: string[], ownerUserId: string): Promise<{
+  destroy: string[]
+  purged: number
+}> {
+  if (threadIds.length === 0) return { destroy: [], purged: 0 }
+  const discussions = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "uin_threads"
+     WHERE "id" = ANY(${threadIds}::text[]) AND "channel" = 'discussion'
+  `
+  const kept = new Set(discussions.map((r) => r.id))
+  const purged = kept.size === 0 ? 0 : await prisma.$executeRaw`
+    UPDATE "uin_thread_bin" SET "purged_at" = CURRENT_TIMESTAMP
+     WHERE "thread_id" = ANY(${[...kept]}::text[])
+       AND "user_id" = ${ownerUserId}
+       AND "purged_at" IS NULL
+  `
+  return { destroy: threadIds.filter((id) => !kept.has(id)), purged }
+}
+
 /** Put a conversation in somebody's bin. Pressing it twice is pressing it once
  *  - the pair is the primary key, so this is safe to repeat and safe to race. */
 export async function markThreadBinned(threadId: string, userId: string): Promise<void> {

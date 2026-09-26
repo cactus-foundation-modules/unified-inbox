@@ -28,6 +28,7 @@ import { ThreadContext, hasThreadContext, type ThreadContextView } from './Threa
 import { UnmergeButton, type ThreadMergeView } from './Unmerge'
 import { AddressLine } from './AddressLine'
 import { ScrollToMessage } from './ScrollToMessage'
+import { SendDraftForColleague } from './SendDraftForColleague'
 import { MentionActions } from './MentionActions'
 import { DeliveryHistory } from './DeliveryHistory'
 
@@ -156,6 +157,11 @@ type Props = {
   /** What colleagues have started writing under this conversation and not sent.
    *  Read-only, every one of them: see OthersDrafts. */
   othersDrafts: OtherDraftView[]
+  /** One of those, opened from its author's Drafts or Scheduled folder: shown
+   *  open, scrolled to, and - where this reader may send from the author's own
+   *  address and it is not already set to go - with the button that sends it
+   *  for them. Null on an ordinary visit. */
+  focusDraft?: { id: string; sendAs: { inboxId: string; ownerName: string } | null } | null
   /** Who this is with and what it is about, drawn under the actions. What the
    *  rest of the site knows ABOUT that person - their orders, their quotes -
    *  is a different question and stays in the panel beside the conversation. */
@@ -655,7 +661,7 @@ export function ThreadPane({
   canReply, cannotReplyReason, style, destinationLine,
   replyTo, replyAllTo, replySubject, forwardSubject, draft,
   canAddProducts, draftProducts, canSuggestReplies, newestFirst,
-  canDeleteMessages, canManage, blockState, spamState, binState, now, timezone, heldDrafts, othersDrafts, showAvatars,
+  canDeleteMessages, canManage, blockState, spamState, binState, now, timezone, heldDrafts, othersDrafts, focusDraft = null, showAvatars,
   context, asked, merges, otherInboxNames, scrollToMessageId,
 }: Props) {
   // The list arrives oldest first. Reversing a copy rather than sorting again:
@@ -730,6 +736,7 @@ export function ThreadPane({
           <ThreadActions
             threadId={thread.id}
             status={thread.status}
+            doneForMeOnly={thread.channel === 'discussion'}
             assigneeUserId={thread.assigneeUserId}
             snoozeUntil={thread.snoozeUntil ? thread.snoozeUntil.toISOString() : null}
             staff={staff}
@@ -817,7 +824,8 @@ export function ThreadPane({
             on it. Its buttons settle THEIR ask and nothing else - the
             conversation's own status, up in the header, is shared by everybody
             who can read it, and three people asked about one order must not
-            close it from under each other. */}
+            close it from under each other. (A discussion's done is the one
+            exception, and already each reader's own - migrations/059.) */}
         {asked && (
           <div className="uin-asked" role="status">
             <span className="uin-asked-icon" aria-hidden="true">{AtIcon}</span>
@@ -857,8 +865,16 @@ export function ThreadPane({
             the news; the words are one press away for whoever needs them.
             There is no button on it that sends or changes anything: a draft is
             its author's until they send it. */}
+        {focusDraft && (
+          <ScrollToMessage key={focusDraft.id} threadId={thread.id} targetId={`uin-others-draft-${focusDraft.id}`} />
+        )}
         {othersDrafts.map((other) => (
-          <details key={other.id} className="uin-others-draft">
+          <details
+            key={other.id}
+            id={`uin-others-draft-${other.id}`}
+            className="uin-others-draft"
+            open={focusDraft?.id === other.id ? true : undefined}
+          >
             <summary>
               <strong>{other.authorName}</strong>{' '}
               {other.waiting && other.sendAt
@@ -878,9 +894,23 @@ export function ThreadPane({
               {other.body
                 ? <MessageText text={other.body} />
                 : <p className="uin-others-draft-to">Nothing written yet.</p>}
-              <p className="uin-others-draft-to">
-                It is {other.authorName}&apos;s writing, so only they can change it or send it.
-              </p>
+              {focusDraft?.id === other.id && focusDraft.sendAs && !other.waiting ? (
+                <>
+                  <p className="uin-others-draft-to">
+                    It is {other.authorName}&apos;s writing, so only they can change it. You can send
+                    it out for them exactly as it stands.
+                  </p>
+                  <SendDraftForColleague
+                    draftId={other.id}
+                    inboxId={focusDraft.sendAs.inboxId}
+                    ownerName={focusDraft.sendAs.ownerName}
+                  />
+                </>
+              ) : (
+                <p className="uin-others-draft-to">
+                  It is {other.authorName}&apos;s writing, so only they can change it or send it.
+                </p>
+              )}
             </div>
           </details>
         ))}
