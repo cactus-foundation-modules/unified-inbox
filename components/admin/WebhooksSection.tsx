@@ -6,7 +6,7 @@ import { ConfirmDialog } from './inbox/ConfirmDialog'
 // used to be declared separately and disagree, so the Webhooks heading looked
 // nothing like the five above it.
 import { EditPanel, SETTINGS_SECTION_HEADING } from './settings/ui'
-import type { CredentialSource, SharedWebhookState } from '../../lib/webhook-types'
+import type { CredentialSource, SharedWebhookState, WebhookEvent } from '../../lib/webhook-types'
 
 // "When something arrives, tell this address about it."
 //
@@ -24,6 +24,39 @@ import type { CredentialSource, SharedWebhookState } from '../../lib/webhook-typ
 const API = '/api/m/unified-inbox/admin'
 
 const MUTED = { color: 'var(--color-text-muted)' } as const
+
+/** What each event is called on this screen, and what it means in a sentence.
+ *  In the order the form offers them. */
+const EVENT_CHOICES: { event: WebhookEvent; label: string; hint: string; short: string; history: string }[] = [
+  {
+    event: 'message.received',
+    label: 'Post arriving from outside',
+    hint: 'An email or message from a customer, supplier or anybody else lands in the inbox.',
+    short: 'post arriving',
+    history: 'Post arrived',
+  },
+  {
+    event: 'discussion.received',
+    label: 'A colleague writing in a discussion',
+    hint: 'Somebody writes in an internal discussion put to whoever owns the inbox, or filed in it.',
+    short: 'discussions',
+    history: 'Discussion',
+  },
+  {
+    event: 'mention.received',
+    label: 'Being asked to look at something',
+    hint: 'A colleague tags whoever owns the inbox in a note, on an email conversation or a discussion.',
+    short: 'being asked',
+    history: 'Asked to look',
+  },
+  {
+    event: 'conversation.assigned',
+    label: 'Being handed a conversation',
+    hint: 'A colleague hands a conversation to whoever owns the inbox. Not sent again about an email this address has already been told about.',
+    short: 'hand-overs',
+    history: 'Handed over',
+  },
+]
 
 
 type Webhook = {
@@ -51,6 +84,7 @@ type Webhook = {
 
 type Delivery = {
   id: string
+  event: string
   status: 'pending' | 'sent' | 'failed' | 'dead'
   attempts: number
   responseCode: number | null
@@ -65,6 +99,7 @@ type Draft = {
   inboxId: string
   url: string
   enabled: boolean
+  events: WebhookEvent[]
   payloadStyle: 'event' | 'literal'
   literalBody: string
   includeBody: boolean
@@ -85,6 +120,7 @@ function blank(): Draft {
     inboxId: '',
     url: '',
     enabled: true,
+    events: ['message.received'],
     payloadStyle: 'event',
     literalBody: '',
     includeBody: false,
@@ -133,13 +169,21 @@ function headersLine(hook: Webhook, shared: SharedWebhookState): string {
 function deliveryLine(row: Delivery): string {
   const when = new Date(row.createdAt).toLocaleString('en-GB')
   const tries = `${row.attempts} ${row.attempts === 1 ? 'try' : 'tries'}`
-  if (row.status === 'sent') return `${when} · Sent, and the address took it.`
-  if (row.status === 'pending') return `${when} · Waiting to go.`
-  if (row.status === 'failed') return `${when} · Not through yet, after ${tries}. It will keep trying.`
-  return `${when} · Given up after ${tries}.`
+  const what = EVENT_CHOICES.find((one) => one.event === row.event)?.history
+  const head = what ? `${when} · ${what}` : when
+  if (row.status === 'sent') return `${head} · Sent, and the address took it.`
+  if (row.status === 'pending') return `${head} · Waiting to go.`
+  if (row.status === 'failed') return `${head} · Not through yet, after ${tries}. It will keep trying.`
+  return `${head} · Given up after ${tries}.`
 }
 
-export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: string }[] }) {
+/** What a subscription listens for, said in a few words for its row. */
+function eventsLine(events: string[]): string {
+  const said = EVENT_CHOICES.filter((one) => events.includes(one.event)).map((one) => one.short)
+  return said.length > 0 ? said.join(', ') : 'nothing'
+}
+
+export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: string; kind?: 'individual' | 'shared' }[] }) {
   const [webhooks, setWebhooks] = useState<Webhook[] | null>(null)
   // Whether the site has a shared signing password and shared headers set. Only
   // ever the two booleans: the values themselves never leave the server.
@@ -211,6 +255,7 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
       inboxId: hook.inboxId ?? '',
       url: hook.url,
       enabled: hook.enabled,
+      events: EVENT_CHOICES.map((one) => one.event).filter((event) => hook.events.includes(event)),
       payloadStyle: hook.payloadStyle,
       literalBody: hook.literalBody ?? '',
       includeBody: hook.includeBody,
@@ -232,12 +277,17 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
       return
     }
 
+    if (draft.events.length === 0) {
+      setNote({ tone: 'bad', text: 'Tick at least one thing to tell it about, or it will never hear a thing.' })
+      return
+    }
+
     const body: Record<string, unknown> = {
       name: draft.name,
       inboxId: draft.inboxId || null,
       url: draft.url.trim(),
       enabled: draft.enabled,
-      events: ['message.received'],
+      events: draft.events,
       payloadStyle: draft.payloadStyle,
       literalBody: draft.payloadStyle === 'literal' ? draft.literalBody : null,
       includeBody: draft.includeBody,
@@ -362,6 +412,49 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
           </select>
         </div>
 
+        <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+          <legend style={{ fontWeight: 'var(--font-semibold)', fontSize: 'var(--text-sm)', marginBottom: '0.375rem', padding: 0 }}>
+            What to tell it about
+          </legend>
+          {EVENT_CHOICES.map((one) => (
+            <div key={one.event} style={{ marginBottom: '0.5rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontWeight: 400 }}>
+                <input
+                  type="checkbox"
+                  checked={draft.events.includes(one.event)}
+                  onChange={(e) => setDraft({
+                    ...draft,
+                    // Kept in the screen's own order, so what is saved reads the
+                    // same way round whatever order the boxes were ticked in.
+                    events: EVENT_CHOICES
+                      .map((choice) => choice.event)
+                      .filter((event) => event === one.event ? e.target.checked : draft.events.includes(event)),
+                  })}
+                />
+                {one.label}
+              </label>
+              <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.125rem 0 0 1.5rem' }}>{one.hint}</p>
+            </div>
+          ))}
+          {draft.events.includes('mention.received') && scopeKind(draft.inboxId) === 'shared' && (
+            <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.25rem 0 0' }}>
+              A shared inbox belongs to nobody in particular, so nobody can be asked through it. Point
+              this at somebody&rsquo;s own inbox, or at every inbox, to hear when they are asked.
+            </p>
+          )}
+          {draft.events.some((event) => event !== 'message.received') && draft.inboxId === '' && (
+            <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.25rem 0 0' }}>
+              On every inbox this hears about every colleague asked, every hand-over and every
+              discussion note on the site, not just one person&rsquo;s. Pick somebody&rsquo;s own
+              inbox to hear only about them.
+            </p>
+          )}
+          <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.25rem 0 0' }}>
+            Each message is only ever sent once to this address: an email that has already been
+            passed on is not passed on again because somebody was then handed it.
+          </p>
+        </fieldset>
+
         <div className="field">
           <label htmlFor={`${fieldId}-style`}>What to send</label>
           <select
@@ -369,7 +462,7 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
             value={draft.payloadStyle}
             onChange={(e) => setDraft({ ...draft, payloadStyle: e.target.value as 'event' | 'literal' })}
           >
-            <option value="event">Details of the message that arrived</option>
+            <option value="event">Details of the message</option>
             <option value="literal">The same fixed message every time</option>
           </select>
           <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.375rem 0 0' }}>
@@ -407,7 +500,8 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
             </label>
             <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.375rem 0 0' }}>
               Off by default, and worth leaving off unless the other end needs it: switching it on
-              sends a copy of your post to that address every time one arrives.
+              sends a copy of your post - and of what colleagues write to each other - to that
+              address every time.
             </p>
           </div>
         )}
@@ -504,6 +598,13 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
     )
   }
 
+  /** Whether the chosen inbox is one person's or shared. Null for every inbox,
+   *  or for one this screen was not told the kind of. */
+  function scopeKind(inboxId: string): 'individual' | 'shared' | null {
+    if (!inboxId) return null
+    return inboxes.find((inbox) => inbox.id === inboxId)?.kind ?? null
+  }
+
   const noteBlock = note && (
     <div
       className={note.tone === 'ok' ? 'alert alert-success' : 'alert alert-danger'}
@@ -536,9 +637,11 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
     <section className="card" style={{ marginBottom: '1.5rem' }}>
       <h3 style={SETTINGS_SECTION_HEADING}>Telling something else when the post arrives</h3>
       <p style={{ ...MUTED, fontSize: '0.875rem', marginTop: 0 }}>
-        Every time a message lands, this can send a note about it to a web address you choose -
-        useful for setting something else going on its own. Nothing here changes what happens in
-        the inbox itself, and switching it all off breaks nothing.
+        Every time a message lands, a colleague writes in a discussion, somebody is asked to look at
+        something, or a conversation is handed to somebody, this can send a note about it to a web
+        address you choose - useful for setting
+        something else going on its own. Nothing here changes what happens in the inbox itself, and
+        switching it all off breaks nothing.
       </p>
 
       {noteBlock}
@@ -647,6 +750,7 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
                 {hook.inboxId
                   ? inboxes.find((i) => i.id === hook.inboxId)?.name ?? 'One inbox'
                   : 'Every inbox'}
+                {` · ${eventsLine(hook.events)}`}
                 {/* What a delivery will actually carry, not merely what is
                     stored on the row. Saving a header and being told nothing
                     about it is how you end up wondering whether it went in. */}

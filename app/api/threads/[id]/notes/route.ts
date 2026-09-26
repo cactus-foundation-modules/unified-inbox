@@ -7,6 +7,7 @@ import {
   getThreadDetail, insertNote, recordEvent, recordLink, threadHasLink,
 } from '@/modules/unified-inbox/lib/db'
 import { notifyMentions } from '@/modules/unified-inbox/lib/mentions'
+import { queueNoteWebhooks } from '@/modules/unified-inbox/lib/colleague-webhooks'
 import { NoteBody } from '@/modules/unified-inbox/lib/validation'
 import { noteHtml } from '@/modules/unified-inbox/lib/notes'
 import { resolveProducts } from '@/modules/unified-inbox/lib/products'
@@ -99,7 +100,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   // The words, not the markup: a colleague told about this reads the note in a
   // bell notice and in an email, and neither is the place for a product slot.
-  await notifyMentions({ threadId: id, thread, mentions, byUserId: user.id, messageId, note: words })
+  const asked = await notifyMentions({ threadId: id, thread, mentions, byUserId: user.id, messageId, note: words })
+
+  // A note on a discussion reaches the people it is between; a tag reaches the
+  // person tagged, on any conversation. Queued only - see lib/colleague-webhooks.ts.
+  await queueNoteWebhooks(messageId, asked)
 
   return NextResponse.json({ ok: true, messageId })
 }

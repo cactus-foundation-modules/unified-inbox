@@ -263,9 +263,12 @@ export async function deleteWebhook(id: string): Promise<void> {
 /**
  * Queues one delivery per live subscription that cares about this inbox.
  *
- * The unique index on (webhook_id, event, message_id) is the real guard: two
- * ticks racing over the same message both land on ON CONFLICT DO NOTHING, so
- * an endpoint is told once about a message however many times it is re-read.
+ * The unique indexes are the real guard, and the conflict clause names none of
+ * them on purpose so that it honours both. (webhook_id, event, message_id) from
+ * 008: two ticks racing over the same message are told once. (webhook_id,
+ * message_id) from 057: one subscription is told about one message once,
+ * whichever event got there first - so post that arrived, then was handed to
+ * its owner seconds later, is one delivery rather than two.
  */
 export async function enqueueDeliveries(rows: {
   webhookId: string
@@ -281,8 +284,7 @@ export async function enqueueDeliveries(rows: {
         ("webhook_id", "event", "message_id", "thread_id", "payload")
       VALUES (${row.webhookId}, ${row.event}, ${row.messageId}, ${row.threadId},
               ${JSON.stringify(row.payload)}::jsonb)
-      ON CONFLICT ("webhook_id", "event", "message_id") WHERE "message_id" IS NOT NULL
-        DO NOTHING
+      ON CONFLICT DO NOTHING
     `
   }
   return queued
@@ -302,6 +304,35 @@ export async function webhooksForInbox(
     ORDER BY "created_at"
   `
   return rows.map(mapWebhook)
+}
+
+/** A live subscription together with what kind of inbox it watches and whose
+ *  it is. Null kind means it watches every inbox. */
+export type ScopedWebhook = {
+  hook: Webhook
+  inboxKind: 'individual' | 'shared' | null
+  ownerUserId: string | null
+}
+
+/** Live subscriptions listening for any of these events, each with the inbox it
+ *  is scoped to. Which of them a note or a hand-over reaches is decided in
+ *  lib/colleague-webhooks.ts, where it can be tested without a database. */
+export async function liveWebhooksForEvents(events: WebhookEvent[]): Promise<ScopedWebhook[]> {
+  if (events.length === 0) return []
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT w.*, i."kind" AS "scope_kind", i."owner_user_id" AS "scope_owner_user_id"
+    FROM "uin_webhooks" w
+    LEFT JOIN "uin_inboxes" i ON i."id" = w."inbox_id"
+    WHERE w."enabled" = true
+      AND w."auto_disabled_at" IS NULL
+      AND w."events" && ${events}::text[]
+    ORDER BY w."created_at"
+  `
+  return rows.map((r) => ({
+    hook: mapWebhook(r),
+    inboxKind: r.inbox_id ? ((r.scope_kind as 'individual' | 'shared' | null) ?? 'shared') : null,
+    ownerUserId: (r.scope_owner_user_id as string | null) ?? null,
+  }))
 }
 
 /**

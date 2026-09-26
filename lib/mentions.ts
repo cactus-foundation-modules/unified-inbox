@@ -70,9 +70,9 @@ export async function notifyMentions(input: {
   messageId?: string | null
   /** What the note said, kept beside the ask so the list reads. */
   note?: string | null
-}): Promise<void> {
+}): Promise<string[]> {
   const wanted = whoToTell(input.mentions, input.byUserId)
-  if (wanted.length === 0) return
+  if (wanted.length === 0) return []
 
   const named = await prisma.user.findMany({
     where: { id: { in: wanted }, suspendedAt: null },
@@ -80,9 +80,11 @@ export async function notifyMentions(input: {
   })
 
   const snippet = (input.note ?? '').trim().slice(0, NOTE_SNIPPET) || null
+  const asked: string[] = []
 
   for (const person of named) {
     if (!await userCanOpenHub(person.id)) continue
+    asked.push(person.id)
     await upsertMention({
       threadId: input.threadId,
       userId: person.id,
@@ -99,4 +101,7 @@ export async function notifyMentions(input: {
       actionLabel: 'Open the conversation',
     })
   }
+  // Who was actually asked, once the unknown, the suspended and the ones with
+  // no way into the hub have been dropped - which is who a webhook may name.
+  return asked
 }

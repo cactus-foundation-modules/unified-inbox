@@ -10,6 +10,7 @@ import {
   setThreadRead,
   setThreadStatus,
 } from '@/modules/unified-inbox/lib/db'
+import { queueAssignmentWebhooks } from '@/modules/unified-inbox/lib/colleague-webhooks'
 import { pushProviderRead } from '@/modules/unified-inbox/lib/provider-read'
 import { ThreadPatchBody } from '@/modules/unified-inbox/lib/validation'
 
@@ -51,6 +52,10 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   if (body.assigneeUserId !== undefined && body.assigneeUserId !== thread.assigneeUserId) {
     await assignThread(id, body.assigneeUserId)
     await recordEvent(id, user.id, 'assigned', { to: body.assigneeUserId })
+    // Anything outside that wants to know it was handed to somebody. Queued
+    // only, never to yourself, and never twice about the same post - see
+    // lib/colleague-webhooks.ts.
+    await queueAssignmentWebhooks({ threadId: id, assigneeUserId: body.assigneeUserId, byUserId: user.id })
   }
 
   if (body.status) {

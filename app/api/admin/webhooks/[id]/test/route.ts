@@ -4,7 +4,7 @@ import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { getWebhook, recordWebhookOutcome } from '@/modules/unified-inbox/lib/webhooks-db'
 import { bodyFor, deliverOnce } from '@/modules/unified-inbox/lib/webhooks'
-import type { MessageReceivedPayload } from '@/modules/unified-inbox/lib/webhook-types'
+import type { ColleaguePayload, MessageReceivedPayload } from '@/modules/unified-inbox/lib/webhook-types'
 
 // Send one now, with the same code path the scheduled sender uses, so what a
 // test proves is exactly what the real thing will do. The payload is made up
@@ -42,7 +42,41 @@ export async function POST(
     },
   }
 
-  const result = await deliverOnce(webhook, bodyFor(webhook, { style: 'event', body: sample }))
+  // Shaped as the first thing it listens for, so an endpoint that reads the
+  // event name is tested with the one it will actually get.
+  const first = webhook.events[0] ?? 'message.received'
+  const colleague = { id: 'test-user', name: 'Test Colleague', email: 'colleague@example.com' }
+  const body: MessageReceivedPayload | ColleaguePayload = first === 'message.received'
+    ? sample
+    : {
+        ...sample,
+        event: first,
+        conversation: first === 'discussion.received'
+          ? { ...sample.conversation, subject: 'A test discussion from your website' }
+          : sample.conversation,
+        // A hand-over carries the post being handed over, sender and all; a
+        // note is the colleague's own words.
+        message: first === 'conversation.assigned'
+          ? sample.message
+          : {
+              ...sample.message,
+              channel: first === 'discussion.received' ? 'discussion' : 'email',
+              direction: 'note',
+              from: { name: colleague.name, address: colleague.email, phone: null },
+              subject: null,
+            },
+        by: colleague,
+        for: [{
+          id: 'test-person',
+          name: 'Test Person',
+          email: 'person@example.com',
+          addressed: first === 'discussion.received',
+          mentioned: first === 'mention.received',
+          assigned: first === 'conversation.assigned',
+        }],
+      }
+
+  const result = await deliverOnce(webhook, bodyFor(webhook, { style: 'event', body }))
 
   // A test counts. An endpoint that answers proves the run of failures is over,
   // and one that does not should show on the screen like any other attempt.

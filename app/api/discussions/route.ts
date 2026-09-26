@@ -11,6 +11,7 @@ import {
   recordEvent,
 } from '@/modules/unified-inbox/lib/db'
 import { notifyMentions } from '@/modules/unified-inbox/lib/mentions'
+import { queueNoteWebhooks } from '@/modules/unified-inbox/lib/colleague-webhooks'
 import { noteHtml } from '@/modules/unified-inbox/lib/notes'
 import { normaliseSubject } from '@/modules/unified-inbox/lib/threading'
 import { DiscussionBody } from '@/modules/unified-inbox/lib/validation'
@@ -113,7 +114,7 @@ export async function POST(request: NextRequest) {
       authorUserId: user.id,
     })
     await recordEvent(threadId, user.id, 'note', { messageId })
-    await notifyMentions({
+    const asked = await notifyMentions({
       threadId,
       thread: { id: threadId, inboxId, providerModule: null },
       mentions: toTell,
@@ -121,6 +122,9 @@ export async function POST(request: NextRequest) {
       messageId,
       note: body,
     })
+    // Anything outside that wants to know a discussion was put to somebody, or
+    // that somebody was asked. Queued only; the scheduled tick sends it.
+    await queueNoteWebhooks(messageId, asked)
     threadIds.push(threadId)
   }
 

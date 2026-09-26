@@ -134,6 +134,50 @@ export function isPrivateAddress(address: string): boolean {
 // ---------------------------------------------------------------------------
 
 /**
+ * One message, with everything any event's payload is built from: the message,
+ * its conversation, the inbox the conversation lives in, and - for a note - who
+ * wrote it and who the discussion is between.
+ */
+export async function readMessageRow(messageId: string): Promise<Record<string, unknown> | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT
+      m."id"                 AS message_id,
+      m."thread_id"          AS thread_id,
+      m."direction"          AS direction,
+      m."channel"            AS channel,
+      m."from_name"          AS from_name,
+      m."from_address"       AS from_address,
+      m."from_phone"         AS from_phone,
+      m."subject"            AS subject,
+      m."snippet"            AS snippet,
+      m."body_text"          AS body_text,
+      m."sent_at"            AS sent_at,
+      m."has_attachments"    AS has_attachments,
+      m."author_user_id"     AS author_user_id,
+      t."subject"            AS thread_subject,
+      t."channel"            AS thread_channel,
+      t."inbox_id"           AS inbox_id,
+      t."started_by_user_id" AS started_by_user_id,
+      t."to_user_ids"        AS to_user_ids,
+      -- Every address the conversation is filed under. A conversation that
+      -- belongs to several lists them here and ONLY here; one that does not has
+      -- no rows, and its own inbox is the answer (see effectiveInboxIds).
+      COALESCE(
+        (SELECT array_agg(ti."inbox_id") FROM "uin_thread_inboxes" ti WHERE ti."thread_id" = t."id"),
+        array_remove(ARRAY[t."inbox_id"], NULL)
+      )                      AS filed_inbox_ids,
+      i."name"               AS inbox_name,
+      i."address"            AS inbox_address
+    FROM "uin_messages" m
+    JOIN "uin_threads" t ON t."id" = m."thread_id"
+    LEFT JOIN "uin_inboxes" i ON i."id" = t."inbox_id"
+    WHERE m."id" = ${messageId}
+    LIMIT 1
+  `
+  return rows[0] ?? null
+}
+
+/**
  * Called once for each message that has just been filed, by both ingest paths.
  *
  * Deliberately swallows its own errors. A webhook is a courtesy to something
@@ -143,31 +187,7 @@ export function isPrivateAddress(address: string): boolean {
  */
 export async function queueMessageWebhooks(messageId: string): Promise<number> {
   try {
-    const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-      SELECT
-        m."id"              AS message_id,
-        m."thread_id"       AS thread_id,
-        m."direction"       AS direction,
-        m."channel"         AS channel,
-        m."from_name"       AS from_name,
-        m."from_address"    AS from_address,
-        m."from_phone"      AS from_phone,
-        m."subject"         AS subject,
-        m."snippet"         AS snippet,
-        m."body_text"       AS body_text,
-        m."sent_at"         AS sent_at,
-        m."has_attachments" AS has_attachments,
-        t."subject"         AS thread_subject,
-        t."inbox_id"        AS inbox_id,
-        i."name"            AS inbox_name,
-        i."address"         AS inbox_address
-      FROM "uin_messages" m
-      JOIN "uin_threads" t ON t."id" = m."thread_id"
-      LEFT JOIN "uin_inboxes" i ON i."id" = t."inbox_id"
-      WHERE m."id" = ${messageId}
-      LIMIT 1
-    `
-    const row = rows[0]
+    const row = await readMessageRow(messageId)
     if (!row) return 0
 
     // Only what arrived. A reply somebody typed in the admin, and an internal
@@ -194,7 +214,9 @@ export async function queueMessageWebhooks(messageId: string): Promise<number> {
   }
 }
 
-function buildMessagePayload(row: Record<string, unknown>, hook: Webhook): MessageReceivedPayload {
+/** The envelope of one message, as an arrival. Shared with the note events,
+ *  which carry the same envelope and say who it was from and for on top. */
+export function buildMessagePayload(row: Record<string, unknown>, hook: Webhook): MessageReceivedPayload {
   const threadId = row.thread_id as string
   const site = process.env.SITE_URL ?? ''
 
