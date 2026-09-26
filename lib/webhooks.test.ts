@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import crypto from 'node:crypto'
-import { isPrivateAddress, signBody, bodyFor } from './webhooks'
+import { isAccountSecurityMail, isPrivateAddress, signBody, bodyFor } from './webhooks'
 import { headerProblem, literalProblem } from './webhook-validation'
 import { chooseCredentials } from './webhooks-db'
 import type { Webhook } from './webhook-types'
@@ -154,5 +154,19 @@ describe('chooseCredentials', () => {
       { secret: null, headers: {} },
     )
     expect(got.secret).toBeNull()
+  })
+})
+
+describe('isAccountSecurityMail', () => {
+  it('holds back the site\'s own login codes and recovery links', () => {
+    for (const key of ['auth.login-code', 'auth.recovery-link', 'auth.email-change-code', ' AUTH.verify-email ']) {
+      expect(isAccountSecurityMail(key)).toBe(true)
+    }
+  })
+
+  it('passes on everything else, including mail with no template at all', () => {
+    for (const key of [null, undefined, '', 'shop.order-confirmation', 'contact-form.notification', 'system.test-email']) {
+      expect(isAccountSecurityMail(key)).toBe(false)
+    }
   })
 })

@@ -178,6 +178,24 @@ export async function readMessageRow(messageId: string): Promise<Record<string, 
 }
 
 /**
+ * Whether a message is the site's own account-security mail - a login code, a
+ * recovery link, an email-change code - which is never passed on, whatever a
+ * subscription says.
+ *
+ * Read from the `X-Cactus-Template` header core puts on every template email,
+ * so it is the mail saying what it is rather than a guess from its sender. Two
+ * reasons, either enough on its own:
+ *
+ *   - The loop. An automation told about Marcus's post signs in to act on it;
+ *     signing in emails Marcus a code; the code lands in Marcus's inbox; the
+ *     automation is told about THAT, signs in again, and so on for ever.
+ *   - A login code has no business leaving the site in a webhook at all.
+ */
+export function isAccountSecurityMail(template: string | null | undefined): boolean {
+  return (template ?? '').trim().toLowerCase().startsWith('auth.')
+}
+
+/**
  * Called once for each message that has just been filed, by both ingest paths.
  *
  * Deliberately swallows its own errors. A webhook is a courtesy to something

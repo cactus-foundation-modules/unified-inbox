@@ -79,7 +79,7 @@ import {
   type ThreadMatch,
 } from './threading'
 import type { Inbox } from './types'
-import { queueMessageWebhooks } from './webhooks'
+import { isAccountSecurityMail, queueMessageWebhooks } from './webhooks'
 
 // ---------------------------------------------------------------------------
 // The engine. Reads mail, files it, and stops when the clock says so.
@@ -805,6 +805,10 @@ async function fileMessage(
     subject,
   }) ?? ownNotification(direction, fromAddress, ctx.siteSendingAddress)
 
+  // A login code or recovery link the site itself sent. Filed like anything
+  // else, never passed on to a webhook.
+  const securityMail = isAccountSecurityMail(headerValue(parsed, 'x-cactus-template'))
+
   const inReplyTo = cleanMessageId(headerValue(parsed, 'in-reply-to'))
   const references = parseReferences(headerValue(parsed, 'references'))
   const subjectNormalised = normaliseSubject(subject)
@@ -1070,7 +1074,7 @@ async function fileMessage(
     // Nothing is told about post the site refused. A webhook is this hub saying
     // "something has arrived that you may want to act on", and the site has
     // just decided the opposite about this one.
-    if (!junk) for (const messageId of written) await queueMessageWebhooks(messageId)
+    if (!junk && !securityMail) for (const messageId of written) await queueMessageWebhooks(messageId)
     return { stored: written.length > 0, sentAt }
   }
 
@@ -1101,7 +1105,10 @@ async function fileMessage(
   // Nobody is told about post the site refused. A webhook says "something has
   // arrived that you may want to act on", and the site has just decided the
   // opposite about this one.
-  if (!junk) await queueMessageWebhooks(messageId)
+  //
+  // Nor about the site's own login codes and recovery links: see
+  // isAccountSecurityMail for the loop that would otherwise start.
+  if (!junk && !securityMail) await queueMessageWebhooks(messageId)
 
   return { stored: true, sentAt }
 }
