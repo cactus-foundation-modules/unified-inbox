@@ -673,6 +673,68 @@ export function ThreadPane({
   // delete button refreshes instead, so this is server truth again.
   const ordered = newestFirst ? [...messages].reverse() : messages
 
+  /** Colleagues' unsent replies, placed where a reply sits - beside the newest
+   *  message - so they read as part of the conversation rather than a note
+   *  pinned above it. See OtherDraftView. */
+  const othersDraftsBlock = (
+    <>
+        {focusDraft && (
+          <ScrollToMessage key={focusDraft.id} threadId={thread.id} targetId={`uin-others-draft-${focusDraft.id}`} />
+        )}
+        {othersDrafts.map((other) => (
+          <details
+            key={other.id}
+            id={`uin-others-draft-${other.id}`}
+            className="uin-others-draft"
+            // Open as a matter of course: a colleague's reply waiting under the
+            // newest message IS part of the conversation, and a closed line at
+            // the top of it was easy to read straight past. Still closable.
+            open
+          >
+            <summary>
+              <span className="uin-tag">{other.waiting ? 'Scheduled' : 'Draft'}</span>{' '}
+              <strong>{other.authorName}</strong>{' '}
+              {other.waiting && other.sendAt
+                ? <>has a {other.mode === 'forward' ? 'forward' : 'reply'} set to go out{' '}
+                    <span title={formatFull(new Date(other.sendAt), timezone)}>{formatWhen(new Date(other.sendAt), now, timezone)}</span></>
+                : <>has started a {other.mode === 'forward' ? 'forward' : 'reply'} and not sent it</>}
+              <span className="uin-others-draft-when">
+                , last touched{' '}
+                <span title={formatFull(new Date(other.updatedAt), timezone)}>{formatWhen(new Date(other.updatedAt), now, timezone)}</span>
+              </span>
+            </summary>
+            <div className="uin-others-draft-body">
+              <p className="uin-others-draft-to">
+                To {other.to.length > 0 ? other.to.join(', ') : 'nobody yet'}
+                {other.attachmentCount > 0 && ` - ${other.attachmentCount === 1 ? 'one file' : `${other.attachmentCount} files`} attached`}
+              </p>
+              {other.body
+                ? <MessageText text={other.body} />
+                : <p className="uin-others-draft-to">Nothing written yet.</p>}
+              {focusDraft?.id === other.id && focusDraft.sendAs && !other.waiting ? (
+                <>
+                  <p className="uin-others-draft-to">
+                    It is {other.authorName}&apos;s writing, so only they can change it. You can send
+                    it out for them exactly as it stands.
+                  </p>
+                  <SendDraftForColleague
+                    draftId={other.id}
+                    inboxId={focusDraft.sendAs.inboxId}
+                    ownerName={focusDraft.sendAs.ownerName}
+                  />
+                </>
+              ) : (
+                <p className="uin-others-draft-to">
+                  It is {other.authorName}&apos;s writing, so only they can change it or send it.
+                </p>
+              )}
+            </div>
+          </details>
+        ))}
+    </>
+  )
+
+
   // What the writing box shows under the words, folded away behind "Show the
   // earlier messages". Built here rather than fetched: the conversation has
   // already been read out of the database, and the line above the quotation is
@@ -865,55 +927,6 @@ export function ThreadPane({
             the news; the words are one press away for whoever needs them.
             There is no button on it that sends or changes anything: a draft is
             its author's until they send it. */}
-        {focusDraft && (
-          <ScrollToMessage key={focusDraft.id} threadId={thread.id} targetId={`uin-others-draft-${focusDraft.id}`} />
-        )}
-        {othersDrafts.map((other) => (
-          <details
-            key={other.id}
-            id={`uin-others-draft-${other.id}`}
-            className="uin-others-draft"
-            open={focusDraft?.id === other.id ? true : undefined}
-          >
-            <summary>
-              <strong>{other.authorName}</strong>{' '}
-              {other.waiting && other.sendAt
-                ? <>has a {other.mode === 'forward' ? 'forward' : 'reply'} set to go out{' '}
-                    <span title={formatFull(new Date(other.sendAt), timezone)}>{formatWhen(new Date(other.sendAt), now, timezone)}</span></>
-                : <>has started a {other.mode === 'forward' ? 'forward' : 'reply'} and not sent it</>}
-              <span className="uin-others-draft-when">
-                , last touched{' '}
-                <span title={formatFull(new Date(other.updatedAt), timezone)}>{formatWhen(new Date(other.updatedAt), now, timezone)}</span>
-              </span>
-            </summary>
-            <div className="uin-others-draft-body">
-              <p className="uin-others-draft-to">
-                To {other.to.length > 0 ? other.to.join(', ') : 'nobody yet'}
-                {other.attachmentCount > 0 && ` - ${other.attachmentCount === 1 ? 'one file' : `${other.attachmentCount} files`} attached`}
-              </p>
-              {other.body
-                ? <MessageText text={other.body} />
-                : <p className="uin-others-draft-to">Nothing written yet.</p>}
-              {focusDraft?.id === other.id && focusDraft.sendAs && !other.waiting ? (
-                <>
-                  <p className="uin-others-draft-to">
-                    It is {other.authorName}&apos;s writing, so only they can change it. You can send
-                    it out for them exactly as it stands.
-                  </p>
-                  <SendDraftForColleague
-                    draftId={other.id}
-                    inboxId={focusDraft.sendAs.inboxId}
-                    ownerName={focusDraft.sendAs.ownerName}
-                  />
-                </>
-              ) : (
-                <p className="uin-others-draft-to">
-                  It is {other.authorName}&apos;s writing, so only they can change it or send it.
-                </p>
-              )}
-            </div>
-          </details>
-        ))}
 
         {thread.providerModule && messages.length === 0 && (
           <div className="alert alert-info">
@@ -927,6 +940,7 @@ export function ThreadPane({
             newest message rather than at the top of the pane, which reading
             newest first means above the list and otherwise below it: a reply
             belongs beside the thing being replied to. */}
+        {newestFirst && othersDraftsBlock}
         {newestFirst && (
           <ComposerSlot
             threadId={thread.id}
@@ -1009,6 +1023,7 @@ export function ThreadPane({
           </div>
         )}
 
+        {!newestFirst && othersDraftsBlock}
         {!newestFirst && (
           <ComposerSlot
             threadId={thread.id}

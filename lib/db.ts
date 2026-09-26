@@ -4182,6 +4182,22 @@ export async function setMentionStatus(input: {
   return changed > 0
 }
 
+/**
+ * Somebody has marked a conversation done: their own ask on it is done too.
+ *
+ * Two separate buttons used to mean the conversation was finished and the ask
+ * about it was not, so the Mentioned folder's Open tab went on listing work its
+ * owner had plainly finished. Only THEIR ask - a colleague asked about the same
+ * conversation keeps theirs until they say so. Returns how many it settled.
+ */
+export async function settleOwnMentionOn(threadId: string, userId: string): Promise<number> {
+  return prisma.$executeRaw`
+    UPDATE "uin_mentions"
+       SET "status" = 'done', "snooze_until" = NULL, "settled_at" = now(), "updated_at" = now()
+     WHERE "thread_id" = ${threadId} AND "user_id" = ${userId} AND "status" <> 'done'
+  `
+}
+
 /** Asks that were put off until now. The same sweep the conversations
  *  themselves get, run beside it. */
 export async function wakeDueMentions(): Promise<number> {

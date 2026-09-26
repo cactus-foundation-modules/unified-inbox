@@ -272,4 +272,37 @@ describe.runIf(shouldRun)('closing a discussion for yourself against a real data
       expect(await lib.getThreadDetail(talk)).not.toBeNull()
     })
   })
+
+  describe('asks on closed conversations', () => {
+    const openAsks = async (who: string) =>
+      (await lib.listMentions({ userId: who, status: 'open', page: 1, perPage: 50 })).map((r) => r.threadId)
+
+    it('settles your own ask when you mark the conversation done, and nobody else\'s', async () => {
+      await lib.upsertMention({ threadId: email, userId: emma, byUserId: sam, messageId: null, note: null })
+      await lib.upsertMention({ threadId: email, userId: sam, byUserId: emma, messageId: null, note: null })
+      expect(await lib.settleOwnMentionOn(email, emma)).toBe(1)
+      expect(await lib.settleOwnMentionOn(email, emma)).toBe(0)
+      expect(await openAsks(emma)).not.toContain(email)
+      expect(await openAsks(sam)).toContain(email)
+    })
+
+    it('migration 060 settles asks left open on conversations already closed', async () => {
+      await lib.upsertMention({ threadId: discussion, userId: emma, byUserId: sam, messageId: null, note: null })
+      await lib.closeDiscussionFor(discussion, emma)
+      await db.$executeRawUnsafe(`UPDATE "uin_threads" SET "status" = 'done' WHERE "id" = $1`, email)
+      // Snoozed on purpose: must be left alone.
+      await db.$executeRawUnsafe(
+        `UPDATE "uin_mentions" SET "status" = 'snoozed', "snooze_until" = now() + interval '1 day' WHERE "thread_id" = $1 AND "user_id" = $2`,
+        email, sam,
+      )
+      const { splitSqlStatements } = await import('@/lib/backup/restore')
+      const file = readFileSync(path.join(MODULE_MIGRATIONS, '060_settle_asks_on_closed_conversations.sql'), 'utf8')
+      for (const statement of splitSqlStatements(file)) await db.$executeRawUnsafe(statement)
+      expect(await openAsks(emma)).not.toContain(discussion)
+      const samRow = await db.$queryRawUnsafe<{ status: string }[]>(
+        `SELECT "status" FROM "uin_mentions" WHERE "thread_id" = $1 AND "user_id" = $2`, email, sam,
+      )
+      expect(samRow[0]!.status).toBe('snoozed')
+    })
+  })
 })

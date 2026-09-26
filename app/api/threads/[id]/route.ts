@@ -8,6 +8,7 @@ import {
   closeDiscussionFor,
   getThreadDetail,
   reopenDiscussionFor,
+  settleOwnMentionOn,
   recordEvent,
   setThreadRead,
   setThreadStatus,
@@ -73,6 +74,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (thread.channel === 'discussion') {
       if (body.status === 'done') {
         await closeDiscussionFor(id, user.id)
+        await settleOwnMentionOn(id, user.id)
         await recordEvent(id, user.id, 'status', { status: 'done', forUserOnly: true })
         return NextResponse.json({ ok: true, thread: await getThreadDetail(id, user.id) })
       }
@@ -86,6 +88,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
 
     await setThreadStatus(id, body.status, until)
+    // Finished with the conversation is finished with being asked about it.
+    if (body.status === 'done') await settleOwnMentionOn(id, user.id)
     await recordEvent(id, user.id, body.status === 'snoozed' ? 'snoozed' : 'status', {
       status: body.status,
       until: until ? until.toISOString() : null,
