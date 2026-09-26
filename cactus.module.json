@@ -1,9 +1,9 @@
 {
   "name": "unified-inbox",
-  "version": "0.1.95",
+  "version": "0.1.96",
   "tablePrefix": "uin_",
   "description": "Every conversation with every customer and supplier in one place - email, live chat, contact form, calls, texts and WhatsApp - with your own records beside them.",
-  "requiresCoreVersion": "0.5.1679",
+  "requiresCoreVersion": "0.5.1704",
   "migrationCatchups": {
     "041_spam": "none"
   },
@@ -88,6 +88,13 @@
       "serverOnly": true,
       "import": "./lib/outbound-record",
       "component": "unifiedInboxOutboundRecord"
+    },
+    {
+      "point": "core.email-tracking-event",
+      "id": "unified-inbox",
+      "serverOnly": true,
+      "import": "./lib/own-tracking",
+      "component": "ownTrackingListener"
     },
     {
       "point": "core.message-destinations",

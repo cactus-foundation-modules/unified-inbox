@@ -51,3 +51,15 @@ describe('isClickWrapper', () => {
     expect([isOpenBeacon(click), isClickWrapper(click)]).toEqual([false, true])
   })
 })
+
+describe('the site\'s own counters', () => {
+  it('are refused exactly as Brevo\'s are', () => {
+    expect(isOpenBeacon('https://deskwell.co.uk/api/email/o/v1.abc.def')).toBe(true)
+    expect(isClickWrapper('https://deskwell.co.uk/api/email/c/v1.abc.def')).toBe(true)
+    expect(isOpenBeacon('https://deskwell.co.uk/api/email/c/v1.abc.def')).toBe(false)
+  })
+
+  it('are recognised behind Gmail\'s picture proxy', () => {
+    expect(isOpenBeacon('https://ci3.googleusercontent.com/meips/ADKq#https://deskwell.co.uk/api/email/o/v1.a.b')).toBe(true)
+  })
+})

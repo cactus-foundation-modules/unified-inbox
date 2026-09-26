@@ -134,6 +134,7 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
       signatureHtml: inbox.signatureHtml ?? '',
       signaturePuck: inbox.signaturePuck ?? null,
       appendToSent: inbox.appendToSent,
+      ownTracking: inbox.ownTracking,
       sortOrder: inbox.sortOrder,
     })
     setStaff(accessByInbox.get(inbox.id) ?? [])
@@ -168,6 +169,7 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
       signatureHtml: draft.signatureHtml || null,
       signaturePuck: draft.signaturePuck ?? null,
       appendToSent: draft.appendToSent,
+      ownTracking: draft.ownTracking,
       sortOrder: Number(draft.sortOrder) || 0,
       ...(draft.brevoApiKey ? { brevoApiKey: draft.brevoApiKey } : {}),
       ...(draft.smtpPassword ? { smtpPassword: draft.smtpPassword } : {}),
@@ -460,6 +462,15 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
                   <span className="field-hint">Leave blank to keep the one already saved.</span>
                 </div>
               </FieldRow>
+              {/* Only offered where it can apply. Brevo counts opens and clicks
+                  on everything it sends, and a second counter on top of it would
+                  count every open twice. */}
+              <CheckField
+                label="Notice when replies are opened and their links followed"
+                checked={draft.ownTracking}
+                onChange={(ownTracking) => setDraft({ ...draft, ownTracking })}
+                hint="The site adds an invisible picture and sends each link through itself, so the label under a reply can say it was opened or a link was followed. Opens are a rough guide - Apple Mail fetches pictures on its own and Outlook often blocks them. The site-wide switch in Settings, under Emails, has the last word."
+              />
             </>
           )}
           <CheckField

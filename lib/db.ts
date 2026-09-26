@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db/prisma'
 import { encryptSecret, tryDecryptSecret } from '@/lib/crypto/secrets'
+import { emailEngagementFor, emptyEngagement, type EmailEngagement } from '@/lib/email/tracking/events'
 import { normaliseAddress } from './addresses'
 import { normaliseSubject, type ThreadRef } from './threading'
 import { mergedHomeInboxId, mergedStatus, mergedUnread, validateMerge } from './thread-merge'
@@ -265,6 +266,9 @@ function mapInbox(r: Record<string, unknown>): Inbox {
     signatureHtml: (r.signature_html as string | null) ?? null,
     signaturePuck: r.signature_puck ?? null,
     appendToSent: !!r.append_to_sent,
+    // Missing entirely on a database that has not had migration 061 yet, which
+    // reads as the default rather than as "off".
+    ownTracking: r.own_tracking === undefined || r.own_tracking === null ? true : !!r.own_tracking,
     colour: (r.colour as string | null) ?? null,
     sortOrder: Number(r.sort_order ?? 0),
     createdAt: r.created_at as Date,
@@ -344,6 +348,7 @@ export type InboxInput = {
   signatureHtml?: string | null
   signaturePuck?: unknown
   appendToSent?: boolean
+  ownTracking?: boolean
   colour?: string | null
   sortOrder?: number
 }
@@ -356,7 +361,7 @@ export async function createInbox(data: InboxInput): Promise<Inbox> {
        "folder_owns_mail",
        "send_transport", "brevo_api_key_encrypted", "smtp_host", "smtp_port", "smtp_username",
        "smtp_password_encrypted", "from_name", "signature_kind", "signature", "signature_html",
-       "signature_puck", "append_to_sent", "colour", "sort_order")
+       "signature_puck", "append_to_sent", "own_tracking", "colour", "sort_order")
     VALUES (${data.name}, ${normaliseAddress(data.address)},
             ${data.kind ?? 'shared'}, ${data.kind === 'individual' ? data.ownerUserId ?? null : null},
             ${data.connectionId ?? null},
@@ -366,7 +371,8 @@ export async function createInbox(data: InboxInput): Promise<Inbox> {
             ${data.smtpHost ?? null}, ${data.smtpPort ?? null}, ${data.smtpUsername ?? null},
             ${optionalSecret(data.smtpPassword) ?? null}, ${data.fromName ?? null},
             ${data.signatureKind ?? 'markdown'}, ${data.signature ?? null}, ${data.signatureHtml ?? null},
-            ${jsonOrNull(data.signaturePuck)}, ${data.appendToSent ?? false}, ${data.colour ?? null},
+            ${jsonOrNull(data.signaturePuck)}, ${data.appendToSent ?? false}, ${data.ownTracking ?? true},
+            ${data.colour ?? null},
             ${data.sortOrder ?? 0})
     RETURNING *
   `
@@ -403,6 +409,7 @@ export async function updateInbox(id: string, data: Partial<InboxInput>): Promis
   if (data.signatureHtml !== undefined) sets.push(Prisma.sql`"signature_html" = ${data.signatureHtml}`)
   if (data.signaturePuck !== undefined) sets.push(Prisma.sql`"signature_puck" = ${jsonOrNull(data.signaturePuck)}`)
   if (data.appendToSent !== undefined) sets.push(Prisma.sql`"append_to_sent" = ${data.appendToSent}`)
+  if (data.ownTracking !== undefined) sets.push(Prisma.sql`"own_tracking" = ${data.ownTracking}`)
   if (data.colour !== undefined) sets.push(Prisma.sql`"colour" = ${data.colour}`)
   if (data.sortOrder !== undefined) sets.push(Prisma.sql`"sort_order" = ${data.sortOrder}`)
   const brevoKey = optionalSecret(data.brevoApiKey)
@@ -2074,15 +2081,27 @@ export async function insertOutboundMessage(
 export async function settleDelivery(
   id: string,
   outcome:
-    | { status: 'sent'; providerMessageId: string | null }
+    | {
+        status: 'sent'
+        providerMessageId: string | null
+        /** What core recorded about the send (see lib/email/tracking): the log
+         *  row every later open, click and bounce is filed against, which way it
+         *  went, and whether the site's own tracking went out on it. Absent on a
+         *  path that never reached core's sender. */
+        tracking?: { emailLogId: string | null; sentVia: 'brevo' | 'smtp' | null; tracked: boolean }
+      }
     | { status: 'failed'; error: string }
 ): Promise<void> {
   if (outcome.status === 'sent') {
+    const tracking = outcome.tracking ?? { emailLogId: null, sentVia: null, tracked: false }
     await prisma.$executeRaw`
       UPDATE "uin_messages"
          SET "delivery_status" = 'sent',
              "delivery_error" = NULL,
              "provider_message_id" = ${outcome.providerMessageId},
+             "email_log_id" = ${tracking.emailLogId},
+             "sent_via" = ${tracking.sentVia},
+             "site_tracked" = ${tracking.tracked},
              "sent_at" = now()
        WHERE "id" = ${id}
     `
@@ -3430,6 +3449,11 @@ export type ThreadMessageRow = {
   bouncedAt: Date | null
   bounceKind: string | null
   bounceDetail: string | null
+  /** 'brevo' | 'smtp' - which way it went, where that was recorded (M061). An
+   *  SMTP send is never told it was delivered; the screen says what it can. */
+  sentVia: string | null
+  /** Whether the site's own open picture and links went out on it. */
+  siteTracked: boolean
   authorUserId: string | null
   source: string
   /** The owning channel's id for this message, when source is provider - e.g.
@@ -3471,6 +3495,8 @@ function mapThreadMessage(r: Record<string, unknown>): ThreadMessageRow {
     bouncedAt: (r.bounced_at as Date | null) ?? null,
     bounceKind: (r.bounce_kind as string | null) ?? null,
     bounceDetail: (r.bounce_detail as string | null) ?? null,
+    sentVia: (r.sent_via as string | null) ?? null,
+    siteTracked: !!r.site_tracked,
     authorUserId: (r.author_user_id as string | null) ?? null,
     source: r.source as string,
     providerMessageId: (r.provider_message_id as string | null) ?? null,
@@ -5995,6 +6021,13 @@ export type OutboundLogRow = {
   status: string
   error: string | null
   sentAt: Date
+  /** 'brevo' | 'smtp', null on rows written before it was recorded. */
+  transport: string | null
+  /** Whether the site's own open picture and tracked links went out on it. */
+  tracked: boolean
+  /** What the site's own tracking saw: opens, clicks, a bounce (core's
+   *  lib/email/tracking). Empty for anything untracked that never bounced. */
+  engagement: EmailEngagement
 }
 
 /**
@@ -6016,11 +6049,18 @@ export async function outboundLogForAddresses(addresses: string[]): Promise<Outb
     select: {
       id: true, toAddress: true, subject: true, templateKey: true,
       moduleName: true, status: true, error: true, sentAt: true,
+      transport: true, tracked: true,
     },
     orderBy: { sentAt: 'desc' },
     take: 25,
   })
-  return rows
+  // One grouped query for the lot. Not allowed to take the timeline down: a
+  // person's history without its open counts is still their history.
+  const engagement = await emailEngagementFor(rows.map((row) => row.id)).catch((err: unknown) => {
+    console.error('[unified-inbox] could not read what became of the site\'s own mail', err)
+    return new Map<string, EmailEngagement>()
+  })
+  return rows.map((row) => ({ ...row, engagement: engagement.get(row.id) ?? emptyEngagement() }))
 }
 
 // ---------------------------------------------------------------------------
@@ -7349,23 +7389,13 @@ export async function exportThreadsForPerson(personId: string): Promise<Array<{
 // only move when a row was genuinely new.
 // ---------------------------------------------------------------------------
 
-/** One thing that happened to a sent message. `receipt_unread` is a read
- *  receipt saying the message was deleted without being opened, which is worth
- *  recording and is emphatically not an open. `clicked` carries the address
- *  that was followed in `detail`, and is the one kind where two events in the
- *  same second are two events (M047). */
-export type DeliveryUpdate = {
-  kind: 'delivered' | 'opened' | 'proxy_open' | 'clicked' | 'bounced' | 'receipt' | 'receipt_unread'
-  occurredAt: Date
-  detail: string | null
-  bounceKind: string | null
-  source: 'brevo' | 'receipt'
-  /** The address the event came from and the program that made it, where
-   *  whoever reported it said. Neither is needed to file the event; both are
-   *  what the history screen shows when somebody asks who fetched it. */
-  ip?: string | null
-  userAgent?: string | null
-}
+// The writers live in their own file so the public open-picture and redirect
+// routes can reach them without this one - see lib/delivery-events-db.ts.
+export {
+  outboundIdsForTrackingEvent,
+  recordDeliveryEvent,
+  type DeliveryUpdate,
+} from './delivery-events-db'
 
 /**
  * Our own ids for sent messages the mail service knows by these names.
@@ -7408,140 +7438,6 @@ export async function outboundIdsByProviderMessageId(
     if (!found.has(row.provider_message_id)) found.set(row.provider_message_id, row.id)
   }
   return found
-}
-
-/**
- * Files one delivery event against one of our sent messages.
- *
- * Returns false when there was nothing to file: a message that no longer exists
- * because the retention sweep has been through, one that was never ours, or an
- * occurrence already recorded. None of those is an error - two of them are the
- * system working - so the caller answers the sender cheerfully either way and
- * nothing gets retried for ever.
- */
-export async function recordDeliveryEvent(
-  messageId: string,
-  update: DeliveryUpdate,
-): Promise<boolean> {
-  const owned = await prisma.$queryRaw<{ id: string }[]>`
-    SELECT "id" FROM "uin_messages"
-     WHERE "id" = ${messageId} AND "direction" = 'out'
-     LIMIT 1
-  `
-  if (!owned[0]) return false
-
-  // Two unique indexes, so two conflict targets - and each has to name the
-  // index's own WHERE clause, because Postgres will not infer a partial index
-  // without it. A click deduplicates on the address as well as the moment: a
-  // scanner working through every link in a message does them all inside one
-  // second, and those are five clicks rather than one (M047).
-  const detail = update.detail === null ? null : update.detail.slice(0, 2000)
-  const ip = update.ip ? update.ip.slice(0, 64) : null
-  const userAgent = update.userAgent ? update.userAgent.slice(0, 500) : null
-  const inserted = update.kind === 'clicked'
-    ? await prisma.$queryRaw<{ id: string }[]>`
-        INSERT INTO "uin_delivery_events" ("message_id", "kind", "source", "detail", "occurred_at", "ip", "user_agent")
-        VALUES (${messageId}, ${update.kind}, ${update.source}, ${detail}, ${update.occurredAt}, ${ip}, ${userAgent})
-        ON CONFLICT ("message_id", "occurred_at", COALESCE("detail", ''))
-          WHERE "kind" = 'clicked'
-          DO NOTHING
-        RETURNING "id"
-      `
-    : await prisma.$queryRaw<{ id: string }[]>`
-        INSERT INTO "uin_delivery_events" ("message_id", "kind", "source", "detail", "occurred_at", "ip", "user_agent")
-        VALUES (${messageId}, ${update.kind}, ${update.source}, ${detail}, ${update.occurredAt}, ${ip}, ${userAgent})
-        ON CONFLICT ("message_id", "kind", "occurred_at")
-          WHERE "kind" <> 'clicked'
-          DO NOTHING
-        RETURNING "id"
-      `
-  // Already had it. The counters must not move, which is the entire reason the
-  // insert happens before the update rather than beside it.
-  if (!inserted[0]) return false
-
-  await applyDeliveryEvent(messageId, update)
-  return true
-}
-
-/** The summary columns on the message, brought up to date by one new event. */
-async function applyDeliveryEvent(messageId: string, update: DeliveryUpdate): Promise<void> {
-  if (update.kind === 'delivered') {
-    // A soft bounce or a deferral that was followed by a delivery was the mail
-    // service retrying and getting there. Leaving the failure showing would
-    // have somebody chasing a message that arrived.
-    await prisma.$executeRaw`
-      UPDATE "uin_messages"
-         SET "delivered_at" = COALESCE("delivered_at", ${update.occurredAt}),
-             "bounced_at"    = CASE WHEN "bounce_kind" IN ('soft', 'deferred') THEN NULL ELSE "bounced_at" END,
-             "bounce_kind"   = CASE WHEN "bounce_kind" IN ('soft', 'deferred') THEN NULL ELSE "bounce_kind" END,
-             "bounce_detail" = CASE WHEN "bounce_kind" IN ('soft', 'deferred') THEN NULL ELSE "bounce_detail" END
-       WHERE "id" = ${messageId}
-    `
-    return
-  }
-
-  if (update.kind === 'opened' || update.kind === 'receipt') {
-    // A receipt beats a pixel: somebody's mail program was asked and answered.
-    const strength = update.kind === 'receipt' ? 'receipt' : 'human'
-    await prisma.$executeRaw`
-      UPDATE "uin_messages"
-         SET "opened_at"    = COALESCE("opened_at", ${update.occurredAt}),
-             "last_open_at" = GREATEST(COALESCE("last_open_at", ${update.occurredAt}), ${update.occurredAt}),
-             "open_count"   = "open_count" + 1,
-             "open_source"  = CASE
-                                WHEN "open_source" = 'receipt' THEN "open_source"
-                                ELSE ${strength}
-                              END,
-             "delivered_at" = COALESCE("delivered_at", ${update.occurredAt})
-       WHERE "id" = ${messageId}
-    `
-    return
-  }
-
-  if (update.kind === 'proxy_open') {
-    // Deliberately does NOT set opened_at or move the counter. A mail app
-    // fetched the picture; that is all anybody knows, and the screen says so in
-    // those words rather than claiming somebody read it.
-    await prisma.$executeRaw`
-      UPDATE "uin_messages"
-         SET "last_open_at" = GREATEST(COALESCE("last_open_at", ${update.occurredAt}), ${update.occurredAt}),
-             "open_source"  = COALESCE("open_source", 'proxy'),
-             "delivered_at" = COALESCE("delivered_at", ${update.occurredAt})
-       WHERE "id" = ${messageId}
-    `
-    return
-  }
-
-  if (update.kind === 'clicked') {
-    // Deliberately does NOT touch the open columns, for the same reason a proxy
-    // open does not: a click can be a mail scanner checking where a link goes,
-    // and "they opened it" is a sentence somebody rings a customer on the
-    // strength of. It does imply delivery, though - nothing gets followed out
-    // of a message that never landed.
-    await prisma.$executeRaw`
-      UPDATE "uin_messages"
-         SET "clicked_at"    = COALESCE("clicked_at", ${update.occurredAt}),
-             "last_click_at" = GREATEST(COALESCE("last_click_at", ${update.occurredAt}), ${update.occurredAt}),
-             "click_count"   = "click_count" + 1,
-             "delivered_at"  = COALESCE("delivered_at", ${update.occurredAt})
-       WHERE "id" = ${messageId}
-    `
-    return
-  }
-
-  if (update.kind === 'bounced') {
-    await prisma.$executeRaw`
-      UPDATE "uin_messages"
-         SET "bounced_at"    = ${update.occurredAt},
-             "bounce_kind"   = ${update.bounceKind},
-             "bounce_detail" = ${update.detail === null ? null : update.detail.slice(0, 2000)}
-       WHERE "id" = ${messageId}
-    `
-    return
-  }
-
-  // receipt_unread. The event row is the whole point of it - nothing on the
-  // message changes, because nothing about the message did.
 }
 
 /** Every event on one sent message, newest first. For the screen that wants to
@@ -7588,9 +7484,12 @@ export async function getSentMessageForHistory(id: string): Promise<{
   providerModule: string | null
   providerMessageId: string | null
   sentAt: Date
+  sentVia: string | null
+  siteTracked: boolean
 } | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT m."inbox_id", m."thread_id", m."provider_message_id", m."sent_at",
+           m."sent_via", m."site_tracked",
            t."inbox_id" AS "thread_inbox_id", t."provider_module"
       FROM "uin_messages" m
       JOIN "uin_threads" t ON t."id" = m."thread_id"
@@ -7604,6 +7503,8 @@ export async function getSentMessageForHistory(id: string): Promise<{
     providerModule: (r.provider_module as string | null) ?? null,
     providerMessageId: (r.provider_message_id as string | null) ?? null,
     sentAt: r.sent_at as Date,
+    sentVia: (r.sent_via as string | null) ?? null,
+    siteTracked: !!r.site_tracked,
   }
 }
 

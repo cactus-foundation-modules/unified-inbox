@@ -487,14 +487,24 @@ export type StoredDeliveryEvent = {
   userAgent: string | null
 }
 
+/** Where a line of history was learned. 'brevo' for something the mail service
+ *  pushed or reported, 'receipt' for a read receipt the recipient's own mail
+ *  program sent back, 'site' for what this site saw itself - its own open
+ *  picture, its own tracked links, a bounce read out of a mailbox (M061). */
+export type HistorySource = 'brevo' | 'receipt' | 'site'
+
+/** A stored source, as one of the three. Anything unrecognised is Brevo's,
+ *  which is what every row written before 061 was. */
+export function historySourceOf(value: string): HistorySource {
+  return value === 'receipt' || value === 'site' ? value : 'brevo'
+}
+
 /** One line of history, from wherever it was learned. `id` is the ledger row
  *  where there is one, and null for a line only the report knew about. */
 export type HistoryEvent = {
   id: string | null
   kind: HistoryEventKind
-  /** 'brevo' for something the mail service pushed or reported, 'receipt' for
-   *  a read receipt the recipient's own mail program sent back. */
-  source: 'brevo' | 'receipt'
+  source: HistorySource
   occurredAt: Date
   detail: string | null
   ip: string | null
@@ -529,7 +539,9 @@ export function mergeDeliveryHistory(
     let best: StoredDeliveryEvent | null = null
     let bestGap = Number.POSITIVE_INFINITY
     for (const row of stored) {
-      if (claimed.has(row.id) || row.kind !== report.kind) continue
+      // A line the site saw itself is never the same event as one Brevo
+      // reported: the two count different sends.
+      if (claimed.has(row.id) || row.kind !== report.kind || row.source === 'site') continue
       if (report.kind === 'clicked' && row.detail !== report.detail) continue
       const gap = Math.abs(row.occurredAt.getTime() - report.occurredAt.getTime())
       if (gap <= HISTORY_MATCH_WINDOW_MS && gap < bestGap) {
@@ -544,7 +556,7 @@ export function mergeDeliveryHistory(
       events.push({
         id: best.id,
         kind: best.kind as HistoryEventKind,
-        source: best.source === 'receipt' ? 'receipt' : 'brevo',
+        source: historySourceOf(best.source),
         occurredAt: best.occurredAt,
         detail: best.detail ?? report.detail,
         ip,
@@ -568,7 +580,7 @@ export function mergeDeliveryHistory(
     events.push({
       id: row.id,
       kind: row.kind as HistoryEventKind,
-      source: row.source === 'receipt' ? 'receipt' : 'brevo',
+      source: historySourceOf(row.source),
       occurredAt: row.occurredAt,
       detail: row.detail,
       ip: row.ip,

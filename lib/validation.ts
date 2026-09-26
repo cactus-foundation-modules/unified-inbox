@@ -33,6 +33,7 @@ export const InboxBody = z.object({
   signatureHtml: z.string().max(50000).nullable().optional(),
   signaturePuck: z.unknown().nullable().optional(),
   appendToSent: z.boolean().optional(),
+  ownTracking: z.boolean().optional(),
   colour: z.string().max(32).nullable().optional(),
   sortOrder: z.number().int().min(0).max(9999).optional(),
 })

@@ -5,7 +5,7 @@ import { getInbox, getSettings } from '../db'
 import { generateMessageId } from '../compose'
 import { buildRawMessage } from '../mime'
 import { appendToSent } from '../append'
-import { deliver, transportForInbox } from '../transport'
+import { deliver, campaignTransportForInbox } from '../transport'
 import { bounceVerdict, dayIsFull, isCampaignWideFailure } from './guards'
 import { buildCampaignMessage } from './message'
 import { addSuppression, isSuppressed } from './store'
@@ -409,7 +409,7 @@ async function sendToRecipient(
     return { kind: 'skipped' }
   }
 
-  const transport = await transportForInbox(inbox)
+  const transport = await campaignTransportForInbox(inbox)
 
   let built: Awaited<ReturnType<typeof buildCampaignMessage>>
   let sendId: string | null = null

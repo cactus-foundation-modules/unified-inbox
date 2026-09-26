@@ -162,6 +162,10 @@ export async function buildCampaignMessage(ctx: CampaignMessageContext): Promise
       // to the junk folder, and five thousand copies of a PDF through somebody's
       // own mailbox is a bad afternoon for everybody.
       attachments: [],
+      // Never the site's own tracking. Mailshots stay on Brevo, which counts
+      // them itself and carries the unsubscribe link; a campaign going out over
+      // an SMTP inbox is counted by nobody rather than by a second counter.
+      tracking: false,
     },
   }
 }

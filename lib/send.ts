@@ -474,6 +474,10 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
       contentType: f.contentType,
       content: f.content,
     })),
+    // The site's own open picture and tracked links, when this inbox has them on
+    // and core will apply them (SMTP only - Brevo counts its own). Our row id
+    // rides in the signed token, so every open and click finds this message.
+    tracking: inbox.ownTracking ? { ref: row.id } : false,
   }
 
   const outcome = await deliver(sendable)
@@ -489,6 +493,7 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
     // to compare equal if a reply quoting the provider's id is to find its
     // thread again.
     providerMessageId: cleanMessageId(outcome.providerMessageId),
+    tracking: outcome.tracking,
   })
 
   // Something we had finished with, answered - so it is not finished. Only a
@@ -750,6 +755,7 @@ export async function retrySend(messageId: string): Promise<SendResult> {
       ...(await receiptHeaderOptions(inbox.sendTransport, inbox.address, messageId)),
     }),
     attachments: files,
+    tracking: inbox.ownTracking ? { ref: messageId } : false,
   }
 
   const outcome = await deliver(sendable)
@@ -761,6 +767,7 @@ export async function retrySend(messageId: string): Promise<SendResult> {
   await settleDelivery(messageId, {
     status: 'sent',
     providerMessageId: cleanMessageId(outcome.providerMessageId),
+    tracking: outcome.tracking,
   })
   await copyToSentFolder({ messageId, inbox, identity, sendable, sentAt: new Date() })
 

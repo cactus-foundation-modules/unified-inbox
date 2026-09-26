@@ -103,7 +103,17 @@ describe('filing a module email', () => {
     expect(db.settleDelivery).toHaveBeenCalledWith('message-1', {
       status: 'sent',
       providerMessageId: 'brevo-1@smtp-relay.sendinblue.com',
+      // Nothing from core about the send on this fixture, so nothing claimed.
+      tracking: { emailLogId: null, sentVia: null, tracked: false },
     })
+  })
+
+  it('keeps the log row core wrote, so the site\'s own tracking can find the copy', async () => {
+    senders.getModuleCopyInboxId.mockResolvedValue('inbox-1')
+    await unifiedInboxOutboundRecord.record({ ...EMAIL, emailLogId: 'log-7', transport: 'smtp', tracked: true })
+    expect(db.settleDelivery).toHaveBeenCalledWith('message-1', expect.objectContaining({
+      tracking: { emailLogId: 'log-7', sentVia: 'smtp', tracked: true },
+    }))
   })
 
   it('keeps the document that travelled with it', async () => {

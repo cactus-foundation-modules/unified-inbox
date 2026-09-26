@@ -7,7 +7,7 @@ import { isValidAddress, normaliseAddress } from '@/modules/unified-inbox/lib/ad
 import { canReplyToInbox } from '@/modules/unified-inbox/lib/access'
 import { getInbox, getSettings } from '@/modules/unified-inbox/lib/db'
 import { generateMessageId } from '@/modules/unified-inbox/lib/compose'
-import { deliver, transportForInbox } from '@/modules/unified-inbox/lib/transport'
+import { deliver, campaignTransportForInbox } from '@/modules/unified-inbox/lib/transport'
 import { buildCampaignMessage } from '@/modules/unified-inbox/lib/campaigns/message'
 import {
   getCampaign,
@@ -94,7 +94,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       reason: null,
     },
     inbox,
-    transport: await transportForInbox(inbox),
+    transport: await campaignTransportForInbox(inbox),
     siteName: site.siteName,
     postalAddress: settings.campaignFooterAddress,
     sendId: 'test',

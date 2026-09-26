@@ -28,6 +28,7 @@ export function blankInbox() {
     signatureHtml: '',
     signaturePuck: null as unknown,
     appendToSent: false,
+    ownTracking: true,
     sortOrder: 0,
   }
 }

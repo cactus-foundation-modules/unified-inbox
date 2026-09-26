@@ -4506,6 +4506,17 @@
 .uin-history-done > .uin-history-what > b { color: var(--color-success); }
 .uin-history-failed > .uin-history-what > b { color: var(--color-destructive-hover); }
 .uin-history-when { font-size: 0.75rem; color: var(--color-text-secondary); white-space: nowrap; }
+/* Who told us: Brevo, this site, or their email program. Sits beside the label,
+   pushing the time to the far end the way it always was. */
+.uin-history-source {
+  margin-right: auto;
+  font-size: 0.6875rem;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 4px);
+  padding: 0 0.3rem;
+  white-space: nowrap;
+}
 .uin-history-from {
   display: flex;
   flex-wrap: wrap;

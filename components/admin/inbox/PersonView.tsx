@@ -5,6 +5,12 @@ import type { ContactCategory, Person, PersonIdentity, RecordLink } from '@/modu
 import { channelLabel, formatFull, formatWhen, inboxHref, participantLabel } from '@/modules/unified-inbox/lib/list'
 import { addressLines } from '@/modules/unified-inbox/lib/contacts'
 import { formatInSiteTimezone } from '@/lib/config/timezone'
+import {
+  OPEN_CAVEAT,
+  SMTP_VERDICT_EXPLAINED,
+  SMTP_VERDICT_LABELS,
+  smtpDeliveryVerdict,
+} from '@/lib/email/tracking/delivery'
 import { BackIcon, CloseIcon, InboundIcon, OutboundIcon } from './icons'
 import { PersonActionsBar, PersonActionsPanels, PersonActionsProvider } from './PersonActions'
 import { ContactIdentities } from './ContactIdentities'
@@ -243,6 +249,9 @@ export function PersonView({
                             {item.row.status === 'failed' && (
                               <span className="uin-tag uin-tag-failed">It did not send</span>
                             )}
+                            {item.row.status === 'sent' && (
+                              <OutboundLogTags row={item.row} now={now} timezone={timezone} />
+                            )}
                           </div>
                           <span className="uin-ctx-sub">
                             {item.row.toAddress} &middot; {formatWhen(item.at, now, timezone)}
@@ -304,5 +313,52 @@ export function PersonView({
         </div>
       </div>
     </PersonActionsProvider>
+  )
+}
+
+/**
+ * What became of one automatic email, as far as anybody knows: the same few
+ * words the labels under a sent reply use. Only ever the strongest one or two -
+ * a bounce, a followed link, an open - and for mail sent through an ordinary
+ * mail account, what the mail server said and nothing it did not.
+ */
+function OutboundLogTags({ row, now, timezone }: { row: OutboundLogRow; now: Date; timezone: string }) {
+  const seen = row.engagement
+  if (seen.bouncedAt) {
+    return (
+      <span className="uin-tag uin-tag-failed" title={SMTP_VERDICT_EXPLAINED.bounced}>
+        It did not arrive
+      </span>
+    )
+  }
+  const verdict = row.transport === 'smtp'
+    ? smtpDeliveryVerdict({ sentAt: row.sentAt, bouncedAt: null, deferredAt: seen.deferredAt, now })
+    : null
+  return (
+    <>
+      {seen.clickedAt && (
+        <span
+          className="uin-tag uin-tag-done"
+          title={`A link in it was first followed ${formatFull(seen.clickedAt, timezone)}. Some office email systems check every link in a message as it arrives, so several at once straight after it landed is more likely their security than them.`}
+        >
+          Followed a link {formatWhen(seen.clickedAt, now, timezone)}
+          {seen.clickCount > 1 ? ` (${seen.clickCount} times)` : ''}
+        </span>
+      )}
+      {seen.openedAt ? (
+        <span className="uin-tag uin-tag-done" title={`First opened ${formatFull(seen.openedAt, timezone)}. ${OPEN_CAVEAT}`}>
+          Opened {formatWhen(seen.openedAt, now, timezone)}
+          {seen.openCount > 1 ? ` (${seen.openCount} times)` : ''}
+        </span>
+      ) : seen.proxyOpenAt ? (
+        <span className="uin-tag" title={`Their email program downloaded the pictures, which it often does before anybody has looked. ${OPEN_CAVEAT}`}>
+          Their email app fetched it
+        </span>
+      ) : verdict && !seen.clickedAt ? (
+        <span className="uin-tag" title={SMTP_VERDICT_EXPLAINED[verdict]}>
+          {SMTP_VERDICT_LABELS[verdict]}
+        </span>
+      ) : null}
+    </>
   )
 }

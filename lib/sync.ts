@@ -49,6 +49,7 @@ import { ownPostAssignee, ownPostOwners } from './own-post'
 import { prepareInboundHtml, htmlToText } from './html'
 import { chooseRelayCopy, RELAY_COPY_WINDOW_MS } from './relay-copy'
 import { readReadReceipt } from './receipts'
+import { readBounce } from './bounces'
 import { clashMessage, mailboxClashes } from './reply-catcher-guard'
 import { credentialsForConnection, explainImapError, listFolders, openMailbox } from './imap'
 import {
@@ -584,6 +585,79 @@ function dispositionParts(parsed: ParsedMail): string[] {
   return parts
 }
 
+/**
+ * The parts of a delivery report worth reading: the plain body, the
+ * machine-readable status part, and the headers of the original message it is
+ * quoting back. The original can arrive whole (message/rfc822) with its body
+ * and attachments behind its headers, so only the front of it is kept - the
+ * headers are all that is wanted from it.
+ */
+function bounceParts(parsed: ParsedMail): string[] {
+  const parts: string[] = []
+  if (parsed.text) parts.push(parsed.text.slice(0, 64 * 1024))
+  for (const attachment of parsed.attachments) {
+    const type = (attachment.contentType || '').toLowerCase()
+    if (!type.includes('delivery-status') && !type.includes('rfc822')) continue
+    try {
+      parts.push(Buffer.from(attachment.content).subarray(0, 32 * 1024).toString('utf8'))
+    } catch {
+      // A part that will not decode tells us nothing.
+    }
+  }
+  return parts
+}
+
+/**
+ * A bounce that came back to a mailbox we collect, matched to the message it is
+ * about and filed against it - ours on the conversation, and core's log row for
+ * anything the site sent (see core's lib/email/tracking). This is the only news
+ * an SMTP send ever gets: the mail server says "accepted" and nothing more,
+ * unless something goes wrong.
+ *
+ * The report itself is still filed on the conversation as the machinery it is
+ * (classifyAutomated made it 'bounce'), so nothing here decides where it goes.
+ * NEVER throws: a bounce we could not place is a label that stays at "Sent",
+ * and a sync run that stopped over it would be a great deal worse.
+ */
+async function fileBounce(parsed: ParsedMail, subject: string | null, occurredAt: Date): Promise<void> {
+  try {
+    const reading = readBounce({
+      contentType: headerValue(parsed, 'content-type'),
+      parts: bounceParts(parsed),
+      inReplyTo: headerValue(parsed, 'in-reply-to'),
+      references: parseReferences(headerValue(parsed, 'references')),
+      subject,
+    })
+    if (!reading) return
+
+    for (const raw of reading.originalMessageIds) {
+      const id = cleanMessageId(raw)
+      const original = id ? await findOutboundByMessageId(id) : null
+      if (!original) continue
+      await recordDeliveryEvent(original.id, {
+        kind: 'bounced',
+        occurredAt,
+        detail: reading.detail,
+        bounceKind: reading.kind === 'hard' ? 'hard' : 'deferred',
+        source: 'site',
+      })
+    }
+
+    // Core's half: the site's own mail - order confirmations, quotes - is on the
+    // email log rather than here, and a bounce for one of those lands in this
+    // mailbox just the same when the site sends through it.
+    const { recordEmailBounce } = await import('@/lib/email/tracking/events')
+    await recordEmailBounce({
+      messageIds: reading.originalMessageIds,
+      kind: reading.kind,
+      detail: reading.detail,
+      occurredAt,
+    })
+  } catch (error) {
+    console.error('[unified-inbox] could not file a bounce against the message it is about', error)
+  }
+}
+
 function addressesFrom(parsed: ParsedMail, field: 'to' | 'cc'): string[] {
   const value = parsed[field]
   if (!value) return []
@@ -808,6 +882,10 @@ async function fileMessage(
   // A login code or recovery link the site itself sent. Filed like anything
   // else, never passed on to a webhook.
   const securityMail = isAccountSecurityMail(headerValue(parsed, 'x-cactus-template'))
+
+  // A bounce is filed against the message it is about as well as on the
+  // conversation - the "Sent" under our reply becomes "It did not arrive".
+  if (automated === 'bounce' && direction === 'in' && !junk) await fileBounce(parsed, subject, sentAt)
 
   const inReplyTo = cleanMessageId(headerValue(parsed, 'in-reply-to'))
   const references = parseReferences(headerValue(parsed, 'references'))

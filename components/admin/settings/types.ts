@@ -58,6 +58,8 @@ export type Inbox = {
   signatureHtml: string | null
   signaturePuck: unknown
   appendToSent: boolean
+  /** The site's own open and click tracking on mail sent over SMTP (M061). */
+  ownTracking: boolean
   /** Reserved. Stored and validated, but nothing on any screen sets it yet -
    *  it is here for the day inboxes are colour-coded in the list. */
   colour: string | null

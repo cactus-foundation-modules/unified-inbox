@@ -232,6 +232,11 @@ export type Inbox = {
   /** The block-built kind: Puck data rendered by core's email blocks. */
   signaturePuck: unknown
   appendToSent: boolean
+  /** Whether mail from this inbox carries the site's own open picture and
+   *  tracked links (M061). Only ever matters when it sends over SMTP - Brevo
+   *  counts its own - and the site-wide switch in Settings > Emails still has
+   *  the last word. */
+  ownTracking: boolean
   colour: string | null
   sortOrder: number
   createdAt: Date

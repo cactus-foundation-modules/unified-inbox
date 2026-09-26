@@ -312,6 +312,18 @@ describe('mergeDeliveryHistory', () => {
     expect(events[2]).toMatchObject({ id: 'row-2', source: 'receipt' })
   })
 
+  it('keeps what the site saw itself apart from what Brevo reported, and says so', () => {
+    const { events, learnedIps } = mergeDeliveryHistory(
+      [stored({ id: 'row-1', kind: 'opened', source: 'site', occurredAt: at('2026-09-22T13:09:44Z'), ip: '81.2.69.160' })],
+      [reported({ kind: 'opened', occurredAt: at('2026-09-22T13:09:41Z'), ip: '172.186.8.69' })],
+    )
+    // Two sends' worth of counting, during the move off Brevo: never one line.
+    expect(events).toHaveLength(2)
+    expect(events.find((e) => e.id === 'row-1')).toMatchObject({ source: 'site', ip: '81.2.69.160' })
+    expect(events.find((e) => e.id === null)).toMatchObject({ source: 'brevo' })
+    expect(learnedIps).toEqual([])
+  })
+
   it('does not fold two genuine opens into one, and pairs each with its nearest', () => {
     const { events } = mergeDeliveryHistory(
       [

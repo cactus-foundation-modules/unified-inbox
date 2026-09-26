@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { isClickWrapper } from '@/modules/unified-inbox/lib/tracking-beacons'
+import { ownTrackedDestination } from '@/lib/email/tracking/paths'
 
 // ---------------------------------------------------------------------------
 // Where a link in somebody else's email actually goes.
@@ -43,26 +44,35 @@ export function LinkPeek({ link, onClose }: { link: PeekedLink | null; onClose: 
 
   if (!link) return null
 
-  const parsed = safeUrl(link.href)
+  // One of the site's OWN tracked links - in our own sent mail, or quoted under
+  // a reply to it. Its real address is written inside it, so it is shown and
+  // opened directly: going through the counter from here would record the
+  // customer clicking a link that we clicked. Read without checking the
+  // signature (a browser never holds the key), which is fine for this - the
+  // address is only ever shown in full and opened on a deliberate press, the
+  // same as any other link in an email.
+  const ownDestination = ownTrackedDestination(link.href)
+  const target = ownDestination ?? link.href
+  const parsed = safeUrl(target)
   const openable = parsed !== null && OPENABLE.has(parsed.protocol)
   // A link the sending service rewrote on the way out. It is the address in
   // every message we send through Brevo with link tracking on, and it is the
   // address in our own copy of one. Nothing follows it on its own - the frame
   // hands the click here instead of going anywhere - so this is only ever a
   // deliberate press, and the only thing owed is saying what the press does.
-  const tracked = isClickWrapper(link.href)
+  const tracked = !ownDestination && isClickWrapper(link.href)
   // A mailto has no host worth printing, and printing "" reads as a bug.
   const host = parsed && parsed.protocol !== 'mailto:' ? parsed.host : null
-  const saidSomethingElse = link.text !== '' && link.text !== link.href && link.text !== stripSlash(link.href)
+  const saidSomethingElse = link.text !== '' && link.text !== target && link.text !== stripSlash(target)
 
   const open = () => {
     if (!openable) return
-    window.open(link.href, '_blank', 'noopener,noreferrer')
+    window.open(target, '_blank', 'noopener,noreferrer')
     onClose()
   }
 
   const copy = () => {
-    void navigator.clipboard?.writeText(link.href).then(() => setCopiedHref(link.href)).catch(() => {})
+    void navigator.clipboard?.writeText(target).then(() => setCopiedHref(target)).catch(() => {})
   }
 
   return (
@@ -97,12 +107,19 @@ export function LinkPeek({ link, onClose }: { link: PeekedLink | null; onClose: 
           )}
 
           <div className="uin-camp-hint">The whole address, exactly as it was written:</div>
-          <code className="uin-peek-url">{link.href}</code>
+          <code className="uin-peek-url">{target}</code>
 
           {!openable && (
             <div className="alert alert-danger" role="alert">
               This is not an ordinary web address, so it will not be opened from here. Nothing about
               that is normal in an email, and it is worth being suspicious of.
+            </div>
+          )}
+          {ownDestination && (
+            <div className="alert alert-info" role="note">
+              This is one of this site&apos;s own tracked links, and the address above is where it really
+              goes. Opening it from here goes straight there, so it is not counted as the person you sent it
+              to having clicked it.
             </div>
           )}
           {tracked && (
@@ -123,7 +140,7 @@ export function LinkPeek({ link, onClose }: { link: PeekedLink | null; onClose: 
 
         <div className="uin-modal-foot">
           <button type="button" className="btn btn-secondary btn-sm" onClick={copy}>
-            {copiedHref === link.href ? 'Copied' : 'Copy the address'}
+            {copiedHref === target ? 'Copied' : 'Copy the address'}
           </button>
           <button type="button" className="btn btn-secondary btn-sm" onClick={onClose}>Close</button>
           {openable && (

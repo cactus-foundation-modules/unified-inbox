@@ -1,4 +1,5 @@
 import { sendEmail, type EmailAttachment, type EmailTransport } from '@/lib/email'
+import type { EmailTrackingRequest } from '@/lib/email/tracking/plan'
 import { tryDecryptSecret } from '@/lib/crypto/secrets'
 import { getInboxSecrets } from './db'
 import type { Inbox } from './types'
@@ -41,10 +42,24 @@ export type SendableMessage = {
   text: string
   headers: Record<string, string>
   attachments: Array<{ filename: string; contentType: string | null; content: Buffer }>
+  /** The site's own open and click tracking (core's lib/email/tracking), which
+   *  core only ever applies to mail going out over SMTP. `{ ref }` names our row
+   *  so every open and click comes back to it; `false` keeps the message
+   *  untracked. REQUIRED rather than optional, so nothing new that sends -
+   *  a mailshot, above all, which stays on Brevo with its own counting - can
+   *  pick up tracking by forgetting to say. */
+  tracking: EmailTrackingRequest
+}
+
+/** What core recorded about a send that went: see settleDelivery. */
+export type SendTracking = {
+  emailLogId: string | null
+  sentVia: 'brevo' | 'smtp' | null
+  tracked: boolean
 }
 
 export type SendOutcome =
-  | { ok: true; providerMessageId: string | null }
+  | { ok: true; providerMessageId: string | null; tracking: SendTracking }
   | { ok: false; error: string }
 
 /**
@@ -112,6 +127,22 @@ export async function transportForInbox(inbox: Inbox): Promise<EmailTransport | 
 }
 
 /**
+ * The account a mailshot from this inbox goes out on.
+ *
+ * The inbox's own, when it has one - an inbox set to send over its own mail
+ * server keeps doing so. Otherwise Brevo on the site's key, named explicitly,
+ * rather than "whatever the site uses": the site can now choose to send its own
+ * mail over SMTP (Settings > Emails), and a mailshot must not follow it there.
+ * Campaigns stay on Brevo, which counts them and carries the unsubscribe link.
+ */
+export async function campaignTransportForInbox(inbox: Inbox): Promise<EmailTransport | null> {
+  const own = await transportForInbox(inbox)
+  if (own) return own
+  const siteKey = process.env.BREVO_API_KEY?.trim()
+  return siteKey ? { provider: 'brevo', apiKey: siteKey } : null
+}
+
+/**
  * Sends one message, and never throws.
  *
  * A thrown error here would have to be caught by the caller anyway - the row
@@ -132,7 +163,7 @@ export async function deliver(message: SendableMessage): Promise<SendOutcome> {
   }))
 
   try {
-    await sendEmail({
+    const sent = await sendEmail({
       to: message.to[0]!,
       from: {
         address: message.from.address,
@@ -149,12 +180,23 @@ export async function deliver(message: SendableMessage): Promise<SendOutcome> {
       text: message.text,
       headers: message.headers,
       moduleName: 'unified-inbox',
+      tracking: message.tracking,
       ...(attachments.length ? { attachments } : {}),
     })
-    // Core records Brevo's own id on the EmailLog row; it does not hand it
-    // back from sendEmail. The Message-ID we set is the handle that matters
-    // and we already have it.
-    return { ok: true, providerMessageId: null }
+    // Brevo's own id stays on the EmailLog row rather than coming back here:
+    // the Message-ID we set is the handle threading relies on, and we already
+    // have it. What does come back is the log row itself, which every open,
+    // click and bounce the site's own tracking sees is filed against.
+    return {
+      ok: true,
+      providerMessageId: null,
+      tracking: {
+        // A test double, or an older core, may hand back nothing at all.
+        emailLogId: sent?.emailLogId ?? null,
+        sentVia: sent?.transport ?? null,
+        tracked: sent?.tracked ?? false,
+      },
+    }
   } catch (err) {
     return { ok: false, error: explainSendError(err) }
   }

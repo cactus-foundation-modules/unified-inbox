@@ -109,6 +109,14 @@ async function record(email: RecordedOutboundEmail): Promise<void> {
     // Cleaned, because an inbound In-Reply-To is cleaned too and the two have
     // to compare equal for the reply to find its way back here.
     providerMessageId: cleanMessageId(email.providerMessageId ?? null),
+    // The log row core wrote for it, which is how an open, a click or a bounce
+    // the site's own tracking sees later finds this copy (see own-tracking.ts).
+    // Missing on an older core, which simply means no such events arrive.
+    tracking: {
+      emailLogId: email.emailLogId ?? null,
+      sentVia: email.transport ?? null,
+      tracked: email.tracked ?? false,
+    },
   })
 
   if (keepFiles) await keepAttachments(row.id, email)

@@ -1,3 +1,5 @@
+import { isOwnClickWrapper, isOwnOpenBeacon } from '@/lib/email/tracking/paths'
+
 // ---------------------------------------------------------------------------
 // The sending service's own counters, recognised so nothing here ever follows
 // one.
@@ -31,6 +33,15 @@
 //
 // Nothing refused here is visible in any case: an open beacon is a transparent
 // single pixel.
+//
+// The site's own counters are refused on exactly the same terms. Mail sent over
+// SMTP carries the site's own picture and tracked links (core's
+// lib/email/tracking), and our Sent copy, a Sent copy the mail provider saved
+// for itself, and the quote of it under the customer's reply all carry them
+// too. Those are matched by core's own test (isOwnOpenBeacon / isOwnClickWrapper)
+// rather than a path listed here, so the two can never drift apart - and they
+// match inside Gmail's image-proxy addresses as well, which keep the original
+// after a #.
 // ---------------------------------------------------------------------------
 
 /** The counters that report a message was opened. `tr` is the transactional
@@ -59,6 +70,7 @@ function pathOf(raw: string): string | null {
 /** True when fetching this address would tell the sending service the message
  *  had been opened. Never fetched, by anything, for anybody. */
 export function isOpenBeacon(url: string): boolean {
+  if (isOwnOpenBeacon(url)) return true
   const path = pathOf(url)
   return path !== null && OPEN_BEACON_PATHS.some((prefix) => path.startsWith(prefix))
 }
@@ -67,6 +79,7 @@ export function isOpenBeacon(url: string): boolean {
  *  clicked the link. Still openable - somebody may genuinely need to check
  *  where a link in their own mailshot goes - but not without being told. */
 export function isClickWrapper(url: string): boolean {
+  if (isOwnClickWrapper(url)) return true
   const path = pathOf(url)
   return path !== null && CLICK_WRAPPER_PATHS.some((prefix) => path.startsWith(prefix))
 }

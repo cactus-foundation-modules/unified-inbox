@@ -475,7 +475,9 @@ export function PersonActionsPanels() {
             {a.preview.outboundLogRows > 0 && (
               <li>
                 The site&rsquo;s record that {a.preview.outboundLogRows} automated email{a.preview.outboundLogRows === 1 ? ' was' : 's were'} sent
-                to them. That record holds the address and the subject and has never held a copy of what was said.
+                to them. That record holds the address and the subject - and, where the site noticed, when each was
+                opened and which links were followed - and has never held a copy of what was said. It is cleared by
+                the email log&rsquo;s own retention window.
               </li>
             )}
           </ul>

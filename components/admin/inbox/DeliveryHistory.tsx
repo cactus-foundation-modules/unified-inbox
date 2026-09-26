@@ -2,7 +2,13 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { formatFull, formatWhen } from '@/modules/unified-inbox/lib/list'
-import type { HistoryEventKind } from '@/modules/unified-inbox/lib/receipts'
+import type { HistoryEventKind, HistorySource } from '@/modules/unified-inbox/lib/receipts'
+import {
+  OPEN_CAVEAT,
+  SMTP_VERDICT_EXPLAINED,
+  SMTP_VERDICT_LABELS,
+  smtpDeliveryVerdict,
+} from '@/lib/email/tracking/delivery'
 import { TickIcon } from './icons'
 
 // ---------------------------------------------------------------------------
@@ -24,7 +30,11 @@ import { TickIcon } from './icons'
 // them.
 //
 // Every message on a site with receipts switched off has none of these, and
-// this renders nothing.
+// this renders nothing - except a message that went out over SMTP, which has a
+// label of its own. Nobody reports "delivered" for one of those; the mail
+// server says it accepted it and goes quiet unless something bounces. So it
+// says exactly that ("Accepted by the mail server"), and once two days have
+// passed without a bounce, that nothing bounced back - never "Delivered".
 // ---------------------------------------------------------------------------
 
 export type DeliveryReceiptView = {
@@ -38,12 +48,16 @@ export type DeliveryReceiptView = {
   clickCount: number
   bouncedAt: Date | string | null
   bounceKind: string | null
+  /** 'brevo' | 'smtp' where it was recorded (M061). */
+  sentVia?: string | null
+  /** When it left, for working out how long a bounce has been waited for. */
+  sentAt?: Date | string | null
 }
 
 type HistoryRow = {
   id: string | null
   kind: HistoryEventKind
-  source: 'brevo' | 'receipt'
+  source: HistorySource
   occurredAt: string
   detail: string | null
   ip: string | null
@@ -61,6 +75,23 @@ const KIND_LABELS: Record<HistoryEventKind, string> = {
   bounced: 'Turned away',
   receipt: 'Their email program confirmed it was read',
   receipt_unread: 'Their email program said it was deleted unread',
+}
+
+/** Where a line was learned, in words. Shown on every line, because during the
+ *  move from Brevo to an ordinary mail account one message's history can be
+ *  told by either, and a reader deciding what an open means wants to know which
+ *  of them is talking. */
+const SOURCE_LABELS: Record<HistorySource, string> = {
+  brevo: 'Reported by Brevo',
+  site: 'Seen by this site',
+  receipt: 'Sent back by their email program',
+}
+
+/** The words for one line. "Taken by the email service" is Brevo's moment; the
+ *  same moment on an SMTP send is the mail server accepting it. */
+function labelFor(event: HistoryRow): string {
+  if (event.kind === 'sent' && event.source === 'site') return 'Accepted by the mail server'
+  return KIND_LABELS[event.kind] ?? event.kind
 }
 
 /** Which of the labels' colours a line takes. The strong ones are the ones a
@@ -85,6 +116,12 @@ export function DeliveryHistory({
 
   const hardBounce = receipt.bouncedAt && HARD_BOUNCES.includes(receipt.bounceKind ?? '')
   const softBounce = receipt.bouncedAt && !hardBounce
+  // Only for a message that went out over SMTP, and only as the last word when
+  // nothing stronger is known. Worked out against the same clock as every other
+  // label on the page.
+  const smtpVerdict = receipt.sentVia === 'smtp' && receipt.sentAt
+    ? smtpDeliveryVerdict({ sentAt: receipt.sentAt, bouncedAt: null, now })
+    : null
 
   const show = () => setOpen(true)
   const hide = useCallback(() => setOpen(false), [])
@@ -137,7 +174,7 @@ export function DeliveryHistory({
             (receipt.openSource === 'receipt'
               ? `Their email program confirmed it: ${formatFull(receipt.openedAt, timezone)}`
               : `First opened ${formatFull(receipt.openedAt, timezone)}`)
-            + '. Press for the full history.'
+            + `. ${OPEN_CAVEAT} Press for the full history.`
           }
           onClick={show}
         >
@@ -161,6 +198,15 @@ export function DeliveryHistory({
           onClick={show}
         >
           Delivered {formatWhen(receipt.deliveredAt, now, timezone)}
+        </button>
+      ) : smtpVerdict && !receipt.bouncedAt ? (
+        <button
+          type="button"
+          className="uin-tag uin-tag-btn"
+          title={`${SMTP_VERDICT_EXPLAINED[smtpVerdict]} Press for the full history.`}
+          onClick={show}
+        >
+          {SMTP_VERDICT_LABELS[smtpVerdict]}
         </button>
       ) : null}
 
@@ -233,7 +279,8 @@ function HistoryDialog({ messageId, timezone, onClose }: { messageId: string; ti
               {answer.events.map((event, index) => (
                 <li key={event.id ?? `${event.kind}-${event.occurredAt}-${index}`} className={`uin-history-row ${toneOf(event.kind)}`}>
                   <div className="uin-history-what">
-                    <b>{KIND_LABELS[event.kind] ?? event.kind}</b>
+                    <b>{labelFor(event)}</b>
+                    <span className="uin-history-source">{SOURCE_LABELS[event.source] ?? event.source}</span>
                     <span className="uin-history-when" title={event.occurredAt}>
                       {formatFullWithSeconds(event.occurredAt, timezone)}
                     </span>

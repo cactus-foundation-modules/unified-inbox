@@ -511,6 +511,8 @@ function Message({ message, threadSubject, personId, showAvatars, staffById, now
                   clickCount: message.clickCount,
                   bouncedAt: message.bouncedAt,
                   bounceKind: message.bounceKind,
+                  sentVia: message.sentVia,
+                  sentAt: message.sentAt,
                 }}
                 now={now}
                 timezone={timezone}
