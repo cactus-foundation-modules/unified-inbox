@@ -69,6 +69,7 @@ type Webhook = {
   payloadStyle: 'event' | 'literal'
   literalBody: string | null
   includeBody: boolean
+  quietMinutes: number
   /** Whether it has one of its OWN stored, which is a different question from
    *  whether a delivery carries one. The sources below settle that. */
   hasSecret: boolean
@@ -103,6 +104,8 @@ type Draft = {
   payloadStyle: 'event' | 'literal'
   literalBody: string
   includeBody: boolean
+  /** Kept as typed, so the box can be emptied on the way to a new number. */
+  quietMinutes: string
   secret: string
   headersText: string
   secretSource: CredentialSource
@@ -124,6 +127,7 @@ function blank(): Draft {
     payloadStyle: 'event',
     literalBody: '',
     includeBody: false,
+    quietMinutes: '10',
     secret: '',
     headersText: '',
     // A new subscription takes the site's shared pair by default, which is what
@@ -259,6 +263,7 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
       payloadStyle: hook.payloadStyle,
       literalBody: hook.literalBody ?? '',
       includeBody: hook.includeBody,
+      quietMinutes: String(hook.quietMinutes),
       // Never pre-filled. The secret is not readable once saved, and showing a
       // row of dots that is not the real thing only teaches people to trust it.
       secret: '',
@@ -277,6 +282,12 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
       return
     }
 
+    const quietMinutes = Number(draft.quietMinutes.trim() || '0')
+    if (!Number.isInteger(quietMinutes) || quietMinutes < 0 || quietMinutes > 1440) {
+      setNote({ tone: 'bad', text: 'The quiet period is a whole number of minutes, from 0 up to a day (1440).' })
+      return
+    }
+
     if (draft.events.length === 0) {
       setNote({ tone: 'bad', text: 'Tick at least one thing to tell it about, or it will never hear a thing.' })
       return
@@ -291,6 +302,7 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
       payloadStyle: draft.payloadStyle,
       literalBody: draft.payloadStyle === 'literal' ? draft.literalBody : null,
       includeBody: draft.includeBody,
+      quietMinutes,
       secretSource: draft.secretSource,
       headersSource: draft.headersSource,
     }
@@ -454,6 +466,26 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
             passed on is not passed on again because somebody was then handed it.
           </p>
         </fieldset>
+
+        <div className="field">
+          <label htmlFor={`${fieldId}-quiet`}>Then keep quiet for <span style={{ ...MUTED, fontWeight: 400 }}>(minutes)</span></label>
+          <input
+            id={`${fieldId}-quiet`}
+            type="number"
+            inputMode="numeric"
+            min={0}
+            max={1440}
+            step={1}
+            style={{ maxWidth: '8rem' }}
+            value={draft.quietMinutes}
+            onChange={(e) => setDraft({ ...draft, quietMinutes: e.target.value })}
+          />
+          <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.375rem 0 0' }}>
+            After each note, nothing more is sent to this address for this long - anything that
+            happens in the meantime is left for whatever the first note set going to find. Stops an
+            automation being set off again and again while it is still working. 0 sends every one.
+          </p>
+        </div>
 
         <div className="field">
           <label htmlFor={`${fieldId}-style`}>What to send</label>
@@ -751,6 +783,7 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
                   ? inboxes.find((i) => i.id === hook.inboxId)?.name ?? 'One inbox'
                   : 'Every inbox'}
                 {` · ${eventsLine(hook.events)}`}
+                {hook.quietMinutes > 0 ? ` · quiet for ${hook.quietMinutes} min after each` : ''}
                 {/* What a delivery will actually carry, not merely what is
                     stored on the row. Saving a header and being told nothing
                     about it is how you end up wondering whether it went in. */}

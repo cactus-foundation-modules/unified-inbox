@@ -23,7 +23,7 @@ import type {
 // reaches anybody who can read a network tab.
 // ---------------------------------------------------------------------------
 
-function mapWebhook(r: Record<string, unknown>): Webhook {
+export function mapWebhook(r: Record<string, unknown>): Webhook {
   return {
     id: r.id as string,
     name: r.name as string,
@@ -34,6 +34,7 @@ function mapWebhook(r: Record<string, unknown>): Webhook {
     payloadStyle: r.payload_style as 'event' | 'literal',
     literalBody: (r.literal_body as string | null) ?? null,
     includeBody: !!r.include_body,
+    quietMinutes: Number(r.quiet_minutes ?? 0),
     hasSecret: !!r.secret_encrypted,
     hasHeaders: !!r.headers_encrypted,
     secretSource: (r.secret_source as CredentialSource | null) ?? 'none',
@@ -211,13 +212,15 @@ export async function createWebhook(data: WebhookInput): Promise<Webhook> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     INSERT INTO "uin_webhooks"
       ("name", "inbox_id", "url", "enabled", "events", "payload_style", "literal_body",
-       "include_body", "secret_encrypted", "headers_encrypted", "secret_source", "headers_source")
+       "include_body", "secret_encrypted", "headers_encrypted", "secret_source", "headers_source",
+       "quiet_minutes")
     VALUES (${data.name}, ${data.inboxId ?? null}, ${data.url}, ${data.enabled ?? true},
             ${data.events}::text[], ${data.payloadStyle}, ${data.literalBody ?? null},
             ${data.includeBody ?? false},
             ${optionalSecret(data.secret) ?? null},
             ${data.headers === undefined ? null : optionalSecret(JSON.stringify(data.headers)) ?? null},
-            ${data.secretSource ?? 'shared'}, ${data.headersSource ?? 'shared'})
+            ${data.secretSource ?? 'shared'}, ${data.headersSource ?? 'shared'},
+            ${data.quietMinutes ?? 10})
     RETURNING *
   `
   const row = rows[0]
@@ -241,6 +244,7 @@ export async function updateWebhook(id: string, data: WebhookPatch): Promise<Web
       "payload_style"     = COALESCE(${data.payloadStyle ?? null}, "payload_style"),
       "literal_body"      = CASE WHEN ${data.literalBody !== undefined} THEN ${data.literalBody ?? null} ELSE "literal_body" END,
       "include_body"      = COALESCE(${data.includeBody ?? null}, "include_body"),
+      "quiet_minutes"     = COALESCE(${data.quietMinutes ?? null}::int, "quiet_minutes"),
       "secret_encrypted"  = CASE WHEN ${secret !== undefined} THEN ${secret ?? null} ELSE "secret_encrypted" END,
       "headers_encrypted" = CASE WHEN ${headers !== undefined} THEN ${headers ?? null} ELSE "headers_encrypted" END,
       "secret_source"     = COALESCE(${data.secretSource ?? null}, "secret_source"),
@@ -269,6 +273,17 @@ export async function deleteWebhook(id: string): Promise<void> {
  * message_id) from 057: one subscription is told about one message once,
  * whichever event got there first - so post that arrived, then was handed to
  * its owner seconds later, is one delivery rather than two.
+ *
+ * AND THE QUIET PERIOD (migrations/058_webhook_quiet_period.sql). A
+ * subscription that queued a note in the last `quiet_minutes` gets nothing -
+ * not a later note, not a delayed one, nothing: whatever it set going is
+ * already working through the inbox and will find this too. The claim is the
+ * UPDATE, in the same statement as the insert, and the UPDATE's row lock is
+ * what makes it safe: a second mail check racing for the same subscription
+ * waits on the first, re-reads `last_queued_at` once it commits, and finds
+ * itself inside the window. A message the subscription has already been told
+ * about claims nothing, so a repeat never starts a fresh quiet period by
+ * itself.
  */
 export async function enqueueDeliveries(rows: {
   webhookId: string
@@ -280,10 +295,26 @@ export async function enqueueDeliveries(rows: {
   let queued = 0
   for (const row of rows) {
     queued += await prisma.$executeRaw`
+      WITH "claim" AS (
+        UPDATE "uin_webhooks" SET "last_queued_at" = CURRENT_TIMESTAMP
+         WHERE "id" = ${row.webhookId}
+           AND (
+             "quiet_minutes" <= 0
+             OR "last_queued_at" IS NULL
+             OR "last_queued_at" <= CURRENT_TIMESTAMP - ("quiet_minutes" * INTERVAL '1 minute')
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM "uin_webhook_deliveries" d
+              WHERE d."webhook_id" = ${row.webhookId}
+                AND d."message_id" = ${row.messageId}
+           )
+        RETURNING "id"
+      )
       INSERT INTO "uin_webhook_deliveries"
         ("webhook_id", "event", "message_id", "thread_id", "payload")
-      VALUES (${row.webhookId}, ${row.event}, ${row.messageId}, ${row.threadId},
-              ${JSON.stringify(row.payload)}::jsonb)
+      SELECT "id", ${row.event}, ${row.messageId}, ${row.threadId},
+             ${JSON.stringify(row.payload)}::jsonb
+        FROM "claim"
       ON CONFLICT DO NOTHING
     `
   }

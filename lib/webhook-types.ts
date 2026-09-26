@@ -43,6 +43,9 @@ export type Webhook = {
   payloadStyle: 'event' | 'literal'
   literalBody: string | null
   includeBody: boolean
+  /** Minutes after queueing a note during which nothing else is sent to this
+   *  subscription at all. 0 is off. See migrations/058_webhook_quiet_period.sql. */
+  quietMinutes: number
   /** Whether this subscription has one of its OWN stored - which is a different
    *  question from whether a delivery will carry one. See the source below. */
   hasSecret: boolean
@@ -66,6 +69,7 @@ export type WebhookInput = {
   payloadStyle: 'event' | 'literal'
   literalBody?: string | null
   includeBody?: boolean
+  quietMinutes?: number
   secret?: string | null
   headers?: Record<string, string> | null
   secretSource?: CredentialSource

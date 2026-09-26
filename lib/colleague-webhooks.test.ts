@@ -23,6 +23,7 @@ function scoped(
     payloadStyle: 'event',
     literalBody: null,
     includeBody: false,
+    quietMinutes: 0,
     hasSecret: false,
     hasHeaders: false,
     secretSource: 'none',

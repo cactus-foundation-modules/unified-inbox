@@ -186,6 +186,9 @@ describe.runIf(shouldRun)('colleague webhooks against a real database', () => {
       payloadStyle: 'event',
       secretSource: 'none',
       headersSource: 'none',
+      // Off here: these cases are about who hears what, and queue several notes
+      // to one subscription inside a minute. The quiet period has its own below.
+      quietMinutes: 0,
     })).id
     bobHook = await hook('bob', bobInbox, ['message.received', 'discussion.received', 'mention.received', 'conversation.assigned'])
     carolHook = await hook('carol', carolInbox, ['mention.received', 'conversation.assigned'])
@@ -312,5 +315,76 @@ describe.runIf(shouldRun)('colleague webhooks against a real database', () => {
       webhookId: bobHook, event: 'mention.received', messageId: firstEmail, threadId: emailThread, payload: {},
     }])
     expect(inserted).toBe(0)
+  })
+
+  describe('the quiet period after each note', () => {
+    let quiet: string
+
+    const email = async (n: number) => inbound(emailThread, `Quiet ${n}`, `2026-09-26 11:${String(n).padStart(2, '0')}:00`)
+
+    it('sends the first and drops the rest inside the window', async () => {
+      quiet = (await hooks.createWebhook({
+        name: 'quiet',
+        inboxId: bobInbox,
+        url: 'https://example.com/quiet',
+        events: ['message.received'],
+        payloadStyle: 'event',
+        secretSource: 'none',
+        headersSource: 'none',
+      })).id
+      // Ten minutes unless told otherwise.
+      expect((await hooks.getWebhook(quiet))?.quietMinutes).toBe(10)
+
+      const first = await email(1)
+      const second = await email(2)
+      // Bob's own subscription has no quiet period and hears both.
+      expect(await arrival.queueMessageWebhooks(first)).toBe(2)
+      expect(await arrival.queueMessageWebhooks(second)).toBe(1)
+      expect((await queued(quiet)).map((r) => r.message_id)).toEqual([first])
+    })
+
+    it('sends again once the window has passed', async () => {
+      await db.$executeRawUnsafe(
+        `UPDATE "uin_webhooks" SET "last_queued_at" = CURRENT_TIMESTAMP - INTERVAL '11 minutes' WHERE "id" = $1`,
+        quiet,
+      )
+      const third = await email(3)
+      expect(await arrival.queueMessageWebhooks(third)).toBe(2)
+      expect((await queued(quiet)).at(-1)!.message_id).toBe(third)
+    })
+
+    it('does not start a fresh window for a message it has already been told about', async () => {
+      await db.$executeRawUnsafe(
+        `UPDATE "uin_webhooks" SET "last_queued_at" = CURRENT_TIMESTAMP - INTERVAL '11 minutes' WHERE "id" = $1`,
+        quiet,
+      )
+      const told = (await queued(quiet)).at(-1)!.message_id!
+      expect(await hooks.enqueueDeliveries([{
+        webhookId: quiet, event: 'message.received', messageId: told, threadId: emailThread, payload: {},
+      }])).toBe(0)
+      const rows = await db.$queryRawUnsafe<{ fresh: boolean }[]>(
+        `SELECT "last_queued_at" <= CURRENT_TIMESTAMP - INTERVAL '10 minutes' AS fresh FROM "uin_webhooks" WHERE "id" = $1`,
+        quiet,
+      )
+      expect(rows[0]!.fresh).toBe(true)
+    })
+
+    it('lets exactly one of two racing checks through', async () => {
+      const a = await email(4)
+      const b = await email(5)
+      const [x, y] = await Promise.all([a, b].map((messageId) => hooks.enqueueDeliveries([{
+        webhookId: quiet, event: 'message.received', messageId, threadId: emailThread, payload: {},
+      }])))
+      expect((x ?? 0) + (y ?? 0)).toBe(1)
+    })
+
+    it('sends every one when set to 0, and refuses more than a day', async () => {
+      await hooks.updateWebhook(quiet, { quietMinutes: 0 })
+      expect(await arrival.queueMessageWebhooks(await email(6))).toBe(2)
+      expect(await arrival.queueMessageWebhooks(await email(7))).toBe(2)
+      await expect(db.$executeRawUnsafe(
+        `UPDATE "uin_webhooks" SET "quiet_minutes" = 2000 WHERE "id" = $1`, quiet,
+      )).rejects.toThrow()
+    })
   })
 })

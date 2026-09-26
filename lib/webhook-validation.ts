@@ -22,6 +22,7 @@ export const WebhookBody = z.object({
   payloadStyle: z.enum(['event', 'literal']),
   literalBody: z.string().max(10_000).nullable().optional(),
   includeBody: z.boolean().optional(),
+  quietMinutes: z.number().int().min(0).max(1440).optional(),
   /** Empty string clears it, absent leaves it alone. */
   secret: z.string().max(500).nullable().optional(),
   headers: Headers.nullable().optional(),

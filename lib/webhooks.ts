@@ -5,11 +5,12 @@ import {
   claimDueDeliveries,
   enqueueDeliveries,
   getEffectiveWebhookSecrets,
+  mapWebhook,
   recordWebhookOutcome,
   settleDelivery,
   webhooksForInbox,
 } from './webhooks-db'
-import type { CredentialSource, MessageReceivedPayload, Webhook, WebhookEvent } from './webhook-types'
+import type { MessageReceivedPayload, Webhook, WebhookEvent } from './webhook-types'
 
 // ---------------------------------------------------------------------------
 // Telling something else when the post arrives.
@@ -398,27 +399,7 @@ export async function deliverPending(options: { deadline: number }): Promise<{
     const row = rows[0]
     if (!row) continue
 
-    const webhook: Webhook = {
-      id: row.id as string,
-      name: row.name as string,
-      inboxId: (row.inbox_id as string | null) ?? null,
-      url: row.url as string,
-      enabled: !!row.enabled,
-      events: ((row.events as string[] | null) ?? []) as WebhookEvent[],
-      payloadStyle: row.payload_style as 'event' | 'literal',
-      literalBody: (row.literal_body as string | null) ?? null,
-      includeBody: !!row.include_body,
-      hasSecret: !!row.secret_encrypted,
-      hasHeaders: !!row.headers_encrypted,
-      secretSource: (row.secret_source as CredentialSource | null) ?? 'none',
-      headersSource: (row.headers_source as CredentialSource | null) ?? 'none',
-      lastStatus: null,
-      lastAttemptAt: null,
-      lastError: null,
-      consecutiveFailures: Number(row.consecutive_failures ?? 0),
-      autoDisabledAt: (row.auto_disabled_at as Date | null) ?? null,
-      createdAt: row.created_at as Date,
-    }
+    const webhook = mapWebhook(row)
 
     const result = await deliverOnce(webhook, bodyFor(webhook, delivery.payload))
 
