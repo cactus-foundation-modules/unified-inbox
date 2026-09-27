@@ -20,7 +20,7 @@ import {
 function blankConnection() {
   return {
     label: '', imapHost: '', imapPort: 993, imapUsername: '', imapPassword: '', imapTls: true, extraFolders: '',
-    foldersOnly: false, discardUnrouted: false,
+    foldersOnly: false, discardUnrouted: false, pushChecks: false,
   }
 }
 
@@ -56,6 +56,53 @@ export function connectionHealth(connection: Connection): { tone: 'ok' | 'bad' |
   if (connection.lastSyncStatus === 'error') return { tone: 'bad', label: 'Not working' }
   if (!connection.lastSyncAt) return { tone: 'plain', label: 'Not checked yet' }
   return { tone: 'ok', label: 'Working' }
+}
+
+/** When a push account's provider was last heard from, in words. */
+export function pushStatus(connection: Connection): string {
+  if (connection.pushRequestedAt) {
+    return `Your provider last said mail had arrived at ${new Date(connection.pushRequestedAt).toLocaleString('en-GB')}.`
+  }
+  if (connection.hasPushSecret) return 'Your provider has been in touch, and has not had any mail to announce yet.'
+  return 'Your provider has not been in touch yet, so this account is checked every six hours until it is.'
+}
+
+/** The address to give the provider, and how to give it to Zoho. Open until
+ *  the provider has been in touch, folded away after. */
+function PushSetup({ connection }: { connection: Connection }) {
+  const [copied, setCopied] = useState(false)
+  const url = connection.pushUrl
+  if (!url) return null
+  const heard = connection.hasPushSecret || !!connection.pushRequestedAt
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(url!)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard refused; the address is in a box that can be selected by hand.
+    }
+  }
+
+  return (
+    <details open={!heard} style={{ marginTop: '0.5rem' }}>
+      <summary style={{ ...MUTED, fontSize: 'var(--text-sm)', cursor: 'pointer' }}>{pushStatus(connection)}</summary>
+      <div style={{ marginTop: '0.5rem', display: 'grid', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', minWidth: 0 }}>
+          <input readOnly value={url} onFocus={(e) => e.currentTarget.select()} aria-label="Address your provider rings" style={{ flex: 1, minWidth: 0 }} />
+          <button type="button" className="btn btn-secondary btn-sm" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>
+        </div>
+        <div className="field-hint">
+          In Zoho Mail, signed in as {connection.imapUsername}: Settings, Integrations, Developer Space,
+          Outgoing Webhooks, then Add new configuration. Paste this address in as the webhook URL, choose
+          Mail, and set the condition to cover all mail. Ticking Limited Data List is fine - nothing but the
+          nudge is used, and the mail itself is still read from the mailbox. Keep this address to yourself:
+          anybody holding it can make the site check your mail.
+        </div>
+      </div>
+    </details>
+  )
 }
 
 export function ConnectionsPanel({ connections, collection, busy, call, setMessage, reload }: {
@@ -94,6 +141,7 @@ export function ConnectionsPanel({ connections, collection, busy, call, setMessa
       extraFolders: connection.extraFolders.join(', '),
       foldersOnly: connection.foldersOnly,
       discardUnrouted: connection.discardUnrouted,
+      pushChecks: connection.pushChecks,
     })
     setEditing(connection.id)
   }
@@ -109,6 +157,7 @@ export function ConnectionsPanel({ connections, collection, busy, call, setMessa
       extraFolders,
       foldersOnly: draft.foldersOnly,
       discardUnrouted: draft.discardUnrouted,
+      pushChecks: draft.pushChecks,
       ...(draft.imapPassword ? { imapPassword: draft.imapPassword } : {}),
     }
     const result = editing === 'new'
@@ -233,6 +282,18 @@ export function ConnectionsPanel({ connections, collection, busy, call, setMessa
           />
         </FieldGroup>
 
+        <FieldGroup
+          title="When to check"
+          hint="Normally the mail is checked every hour, and every minute or so while somebody has the inbox open. Zoho Mail can instead tell the site the moment something arrives."
+        >
+          <CheckField
+            label="Check when my mail provider says new mail has arrived, not on the hour"
+            checked={draft.pushChecks}
+            onChange={(pushChecks) => setDraft({ ...draft, pushChecks })}
+            hint="Save with this ticked and the account shows an address to give your provider. Until it rings, the account is still checked every six hours, and Check now always works."
+          />
+        </FieldGroup>
+
         <FormActions>
           <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>Save mail account</button>
           <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
@@ -270,7 +331,10 @@ export function ConnectionsPanel({ connections, collection, busy, call, setMessa
           <ListRow key={connection.id}>
             <ListRowHeader
               title={connection.label}
-              badges={<Chip tone={health.tone}>{health.label}</Chip>}
+              badges={<>
+                <Chip tone={health.tone}>{health.label}</Chip>
+                {connection.pushChecks && <Chip tone="info">Checked on arrival</Chip>}
+              </>}
               subtitle={connection.imapUsername}
               meta={connection.lastSyncAt
                 // Whatever the mail server said is deliberately not repeated
@@ -292,6 +356,7 @@ export function ConnectionsPanel({ connections, collection, busy, call, setMessa
               </>}
             />
             <CollectionProgress stat={stats.get(connection.id)} />
+            {connection.pushChecks && <PushSetup connection={connection} />}
             {folders.length > 0 && (
               // Folded away: a mailbox with thirty folders in it used to print
               // all thirty across the row, and none of them are news.

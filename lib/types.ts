@@ -192,6 +192,16 @@ export type Connection = {
   lastSyncAt: Date | null
   lastSyncStatus: SyncStatus | null
   lastSyncError: string | null
+  /** Collected when its provider rings rather than on the hourly schedule. */
+  pushChecks: boolean
+  /** The random part of the address the provider rings; null until the switch
+   *  is first turned on. */
+  pushToken: string | null
+  /** Whether the provider has handed over its signing key yet - which is also
+   *  how the screen knows the webhook was set up at all. */
+  hasPushSecret: boolean
+  /** When the provider last rang. */
+  pushRequestedAt: Date | null
   createdAt: Date
   updatedAt: Date
 }

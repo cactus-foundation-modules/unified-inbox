@@ -4,6 +4,7 @@ import { prisma } from '@/lib/db/prisma'
 import { encryptSecret, tryDecryptSecret } from '@/lib/crypto/secrets'
 import { emailEngagementFor, emptyEngagement, type EmailEngagement } from '@/lib/email/tracking/events'
 import { normaliseAddress } from './addresses'
+import { mintPushToken } from './push-checks'
 import { normaliseSubject, type ThreadRef } from './threading'
 import { mergedHomeInboxId, mergedStatus, mergedUnread, validateMerge } from './thread-merge'
 import type { OutboundCandidate } from './relay-copy'
@@ -113,6 +114,10 @@ function mapConnection(r: Record<string, unknown>): Connection {
     lastSyncAt: (r.last_sync_at as Date | null) ?? null,
     lastSyncStatus: (r.last_sync_status as SyncStatus | null) ?? null,
     lastSyncError: (r.last_sync_error as string | null) ?? null,
+    pushChecks: !!r.push_checks,
+    pushToken: (r.push_token as string | null) ?? null,
+    hasPushSecret: !!r.push_hook_secret_encrypted,
+    pushRequestedAt: (r.push_requested_at as Date | null) ?? null,
     createdAt: r.created_at as Date,
     updatedAt: r.updated_at as Date,
   }
@@ -151,15 +156,18 @@ export async function createConnection(data: {
   extraFolders?: string[]
   foldersOnly?: boolean
   discardUnrouted?: boolean
+  pushChecks?: boolean
 }): Promise<Connection> {
+  const pushChecks = data.pushChecks ?? false
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     INSERT INTO "uin_connections"
       ("label", "imap_host", "imap_port", "imap_username", "imap_password_encrypted", "imap_tls", "extra_folders",
-       "folders_only", "discard_unrouted")
+       "folders_only", "discard_unrouted", "push_checks", "push_token")
     VALUES (${data.label}, ${data.imapHost}, ${data.imapPort}, ${data.imapUsername},
             ${encryptSecret(data.imapPassword)}, ${data.imapTls ?? true},
             ${data.extraFolders ?? []}::text[],
-            ${data.foldersOnly ?? false}, ${data.discardUnrouted ?? false})
+            ${data.foldersOnly ?? false}, ${data.discardUnrouted ?? false},
+            ${pushChecks}, ${pushChecks ? mintPushToken() : null})
     RETURNING *
   `
   return mapConnection(rows[0]!)
@@ -175,6 +183,7 @@ export async function updateConnection(id: string, data: {
   extraFolders?: string[]
   foldersOnly?: boolean
   discardUnrouted?: boolean
+  pushChecks?: boolean
 }): Promise<Connection | null> {
   const sets: Prisma.Sql[] = []
   if (data.label !== undefined) sets.push(Prisma.sql`"label" = ${data.label}`)
@@ -185,6 +194,12 @@ export async function updateConnection(id: string, data: {
   if (data.extraFolders !== undefined) sets.push(Prisma.sql`"extra_folders" = ${data.extraFolders}::text[]`)
   if (data.foldersOnly !== undefined) sets.push(Prisma.sql`"folders_only" = ${data.foldersOnly}`)
   if (data.discardUnrouted !== undefined) sets.push(Prisma.sql`"discard_unrouted" = ${data.discardUnrouted}`)
+  if (data.pushChecks !== undefined) {
+    sets.push(Prisma.sql`"push_checks" = ${data.pushChecks}`)
+    // Minted once and kept: switching off and on again must not break a
+    // webhook already set up at the provider's end.
+    if (data.pushChecks) sets.push(Prisma.sql`"push_token" = COALESCE("push_token", ${mintPushToken()})`)
+  }
   const secret = optionalSecret(data.imapPassword)
   if (secret !== undefined) sets.push(Prisma.sql`"imap_password_encrypted" = ${secret}`)
   if (sets.length === 0) return getConnection(id)
@@ -899,6 +914,67 @@ export async function acquireConnectionLock(connectionId: string, holdMs: number
 export async function releaseConnectionLock(connectionId: string): Promise<void> {
   await prisma.$executeRaw`
     UPDATE "uin_connections" SET "locked_until" = NULL WHERE "id" = ${connectionId}
+  `
+}
+
+// ---------------------------------------------------------------------------
+// Push checks - the provider rings, the account is read. See lib/push-checks.ts.
+// ---------------------------------------------------------------------------
+
+/** The account a ring is for, by the token in the address it rang. */
+export async function connectionByPushToken(token: string): Promise<Connection | null> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_connections" WHERE "push_token" = ${token}
+  `
+  return rows[0] ? mapConnection(rows[0]) : null
+}
+
+/** The signing key the provider handed over on its first request, decrypted.
+ *  Server only. */
+export async function getPushHookSecret(connectionId: string): Promise<string | null> {
+  const rows = await prisma.$queryRaw<{ push_hook_secret_encrypted: string | null }[]>`
+    SELECT "push_hook_secret_encrypted" FROM "uin_connections" WHERE "id" = ${connectionId}
+  `
+  const stored = rows[0]?.push_hook_secret_encrypted
+  return stored ? tryDecryptSecret(stored) : null
+}
+
+export async function savePushHookSecret(connectionId: string, secret: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "uin_connections"
+       SET "push_hook_secret_encrypted" = ${encryptSecret(secret)}, "updated_at" = now()
+     WHERE "id" = ${connectionId}
+  `
+}
+
+/** Records a ring and hands back its time, on the database's clock - the only
+ *  clock every function that reads it agrees with. */
+export async function recordPushRing(connectionId: string): Promise<Date | null> {
+  const rows = await prisma.$queryRaw<{ push_requested_at: Date }[]>`
+    UPDATE "uin_connections" SET "push_requested_at" = now()
+     WHERE "id" = ${connectionId}
+    RETURNING "push_requested_at"
+  `
+  return rows[0]?.push_requested_at ?? null
+}
+
+/** The newest ring, and the newest one a finished check has covered. */
+export async function pushRingState(
+  connectionId: string
+): Promise<{ requestedAt: Date | null; answeredAt: Date | null }> {
+  const rows = await prisma.$queryRaw<{ push_requested_at: Date | null; push_answered_at: Date | null }[]>`
+    SELECT "push_requested_at", "push_answered_at" FROM "uin_connections" WHERE "id" = ${connectionId}
+  `
+  return { requestedAt: rows[0]?.push_requested_at ?? null, answeredAt: rows[0]?.push_answered_at ?? null }
+}
+
+/** A check has read every folder since the ring at `seen`. Only ever moves
+ *  forward, so a slow check finishing late cannot un-answer a newer ring. */
+export async function markPushAnswered(connectionId: string, seen: Date): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "uin_connections"
+       SET "push_answered_at" = GREATEST(COALESCE("push_answered_at", ${seen}), ${seen})
+     WHERE "id" = ${connectionId}
   `
 }
 

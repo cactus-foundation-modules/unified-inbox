@@ -17,6 +17,9 @@ const Body = z.object({
   extraFolders: z.array(z.string().min(1)).optional(),
   foldersOnly: z.boolean().optional(),
   discardUnrouted: z.boolean().optional(),
+  // Collected when the provider rings rather than on the hour. See
+  // lib/push-checks.ts.
+  pushChecks: z.boolean().optional(),
 })
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {

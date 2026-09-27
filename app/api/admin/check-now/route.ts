@@ -15,6 +15,7 @@ import { runPeoplePass } from '@/modules/unified-inbox/lib/identity'
 import { syncAllProviders, PROVIDER_BUDGET_MS } from '@/modules/unified-inbox/lib/provider-sync'
 import { deliverPending, WEBHOOK_BUDGET_MS } from '@/modules/unified-inbox/lib/webhooks'
 import { cooldownFor, dueForCheck } from '@/modules/unified-inbox/lib/check-cooldown'
+import { dueOnSchedule } from '@/modules/unified-inbox/lib/push-checks'
 import { runDueScheduledSends } from '@/modules/unified-inbox/lib/scheduled-send'
 
 // Check now. Same engine as the hourly job, a bigger slice of clock (E9): this
@@ -47,13 +48,20 @@ export async function POST(request: Request) {
   // A round the page ran on its own, rather than one somebody pressed for.
   const automatic = body?.auto === true
 
-  const connections = connectionId
+  const listed = connectionId
     ? [await getConnection(connectionId)].filter((c): c is NonNullable<typeof c> => !!c)
     : await listConnections()
 
-  if (connections.length === 0) {
+  if (listed.length === 0) {
     return errorResponse('There is no mail account set up yet.', 400)
   }
+
+  // An account whose provider rings when mail arrives is already up to date,
+  // so a round the page ran on its own leaves it alone - bar the same safety
+  // net the hourly job keeps (lib/push-checks.ts). Somebody pressing the
+  // button is always given a real look.
+  const now = Date.now()
+  const connections = automatic ? listed.filter((c) => dueOnSchedule(c, now)) : listed
 
   const { due, restedSeconds } = dueForCheck(connections, cooldownFor(automatic))
 
@@ -72,7 +80,9 @@ export async function POST(request: Request) {
   // Every account was opened moments ago, so there is nothing worth opening
   // again. The answer is still a good one - the screen reloads on the back of
   // it and shows whatever that check brought in.
-  if (due.length === 0) {
+  // With every account left to its provider there is nothing to rest, and the
+  // round carries on to the other channels with no mailbox to open.
+  if (due.length === 0 && connections.length > 0) {
     const ago = restedSeconds ?? 0
     return NextResponse.json({
       ok: true,

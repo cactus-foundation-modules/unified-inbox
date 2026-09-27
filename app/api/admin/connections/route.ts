@@ -23,6 +23,7 @@ const Body = z.object({
   extraFolders: z.array(z.string().min(1)).default([]),
   foldersOnly: z.boolean().default(false),
   discardUnrouted: z.boolean().default(false),
+  pushChecks: z.boolean().default(false),
 })
 
 export async function POST(request: NextRequest) {

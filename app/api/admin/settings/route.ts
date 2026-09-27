@@ -22,13 +22,15 @@ import { allProviderChannels } from '@/modules/unified-inbox/lib/provider-regist
 import { reconcileBrevoWebhooks } from '@/modules/unified-inbox/lib/brevo-webhooks'
 import { clashMessage, mailboxClashes } from '@/modules/unified-inbox/lib/reply-catcher-guard'
 import { retentionPreview } from '@/modules/unified-inbox/lib/retention'
+import { pushUrl } from '@/modules/unified-inbox/lib/push-checks'
+import { getSiteUrlOrNull } from '@/lib/config/env'
 
 // Everything the settings screen draws, in one request: the mail accounts, the
 // inboxes hanging off them, who may read which, the module's own settings, and
 // the staff list the access editor picks from. Secrets are already booleans by
 // the time they leave lib/db.ts.
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const user = await getSessionFromCookie()
   if (!user) return errorResponse('Not authenticated', 401)
   if (!await hasPermission(user, 'unifiedinbox.manage')) return errorResponse('Forbidden', 403)
@@ -54,8 +56,16 @@ export async function GET() {
     listBlockedSenders(),
   ])
 
+  // The address a provider rings to say mail has arrived, for the accounts
+  // switched over to that. The site's own address where it knows it, so the
+  // one pasted into the provider is not a preview or a localhost.
+  const siteUrl = getSiteUrlOrNull() ?? request.nextUrl.origin
+
   return NextResponse.json({
-    connections,
+    connections: connections.map((c) => ({
+      ...c,
+      pushUrl: c.pushToken ? pushUrl(siteUrl, c.pushToken) : null,
+    })),
     inboxes,
     access,
     // Whose own address each one is. Drawn on the same screen as the guest

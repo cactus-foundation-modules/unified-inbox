@@ -324,7 +324,33 @@ conversation.
    catch-all so nothing goes missing.
 
 Mail is collected on a schedule rather than the moment it arrives: about once an
-hour on a paid hosting plan, and once a day on the free one.
+hour on a paid hosting plan, and once a day on the free one - unless your mail
+provider can say when something has arrived (below).
+
+### Collecting mail the moment it arrives (Zoho Mail)
+
+Edit the mail account and tick **Check when my mail provider says new mail has
+arrived, not on the hour**, then save. The account shows an address to give your
+provider. In Zoho Mail, signed in as that account: Settings, Integrations,
+Developer Space, Outgoing Webhooks, **Add new configuration**, paste the address
+in as the webhook URL, choose Mail and set the condition to cover all mail.
+**Limited Data List** is fine: the request is only a nudge, and the mail is still
+read from the mailbox exactly as a scheduled check reads it.
+
+From then on:
+
+- the hourly job and the admin page's own timer leave that account alone, and
+  it is opened when Zoho rings, or when somebody presses **Check now**;
+- a check that is already running when Zoho rings goes back round the folders,
+  so mail that lands mid-check is not left for later;
+- as a safety net the account is still checked if nothing has opened it for six
+  hours - Zoho switches a webhook off by itself if the address stops answering,
+  and does not say so. The account's row shows when Zoho last rang.
+
+Zoho signs every request. Its first one carries the signing key, which is kept
+(encrypted) and every request after that must match it. Keep the address to
+yourself: it is what lets a request in at all. Anything else that can POST to
+an address when mail lands works the same way, held to the address alone.
 
 ## Permissions
 
@@ -349,7 +375,8 @@ with it, so it can tell the message really came from your site. Extra headers go
 in the same place, for an address that wants a key.
 
 Notes go out on the same schedule as the mail check rather than the instant a
-message lands, and an address that does not answer is tried again a few times
+message lands (on an account its provider rings for, that is the instant it
+lands), and an address that does not answer is tried again a few times
 over the next twelve hours before it is left alone.
 
 ## Tables

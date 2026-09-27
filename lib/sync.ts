@@ -29,6 +29,8 @@ import {
   listConnections,
   listInboxes,
   markLocationProcessed,
+  markPushAnswered,
+  pushRingState,
   recordAuthFailure,
   recordDeliveryEvent,
   recordConnectionSync,
@@ -54,6 +56,7 @@ import { readReadReceipt } from './receipts'
 import { readBounce } from './bounces'
 import { clashMessage, mailboxClashes } from './reply-catcher-guard'
 import { credentialsForConnection, explainImapError, listFolders, openMailbox } from './imap'
+import { PUSH_MAX_ROUNDS, dueOnSchedule, rangAgain } from './push-checks'
 import {
   BATCH_SIZE,
   applyUidValidity,
@@ -151,9 +154,13 @@ function authFailed(err: unknown): boolean {
     || message.includes('[authenticationfailed]')
 }
 
+/** Every account the hourly job should open: all of them, bar the ones whose
+ *  provider rings when mail arrives - those only once the safety net says they
+ *  have gone unchecked too long (lib/push-checks.ts). */
 export async function syncAllConnections(opts: { budgetMs: number }): Promise<ConnectionOutcome[]> {
   const deadline = makeDeadline(opts.budgetMs)
-  const connections = await listConnections()
+  const now = Date.now()
+  const connections = (await listConnections()).filter((c) => dueOnSchedule(c, now))
   const outcomes: ConnectionOutcome[] = []
   for (const connection of connections) {
     if (outOfTime(deadline)) break
@@ -268,27 +275,62 @@ export async function syncConnection(
       ? await ownPostOwners(allInboxes)
       : new Map<string, string>()
 
-    for (const folder of folders) {
-      if (outOfTime(deadline)) break
-      const result = await syncFolder({
-        client,
-        connectionId,
-        folder,
-        deadline,
-        floor,
-        routing,
-        folderInboxId: folderOwners.get(folder.path.toLowerCase()) ?? null,
-        ownAddresses,
-        discardUnrouted: connection.discardUnrouted,
-        siteSendingAddress,
-        blockedSenders,
-        ownPostOwners: ownPost,
-      })
-      outcome.folders.push(result)
-      outcome.stored += result.stored
+    // An account its provider rings for (lib/push-checks.ts). The newest ring
+    // is noted BEFORE the folders are read, so any mail it announced is already
+    // there to be found; a ring that comes in while they are being read sends
+    // the check back round, since its mail may have landed in a folder this
+    // pass had already finished with. Every check does this, not only the one
+    // a ring started: a ring that finds the account busy waits for whoever
+    // holds it to say it has been covered.
+    const rings = connection.pushToken !== null
+    let ringSeen = rings ? (await pushRingState(connectionId)).requestedAt : null
+
+    for (let round = 1; ; round++) {
+      for (const folder of folders) {
+        if (outOfTime(deadline)) break
+        const result = await syncFolder({
+          client,
+          connectionId,
+          folder,
+          deadline,
+          floor,
+          routing,
+          folderInboxId: folderOwners.get(folder.path.toLowerCase()) ?? null,
+          ownAddresses,
+          discardUnrouted: connection.discardUnrouted,
+          siteSendingAddress,
+          blockedSenders,
+          ownPostOwners: ownPost,
+        })
+        // A second round reports into the first round's line for the folder,
+        // so the outcome still has one entry per folder.
+        const earlier = round > 1 ? outcome.folders.find((f) => f.folder === result.folder) : undefined
+        if (earlier) {
+          earlier.scanned += result.scanned
+          earlier.stored += result.stored
+          earlier.duplicates += result.duplicates
+          earlier.discarded += result.discarded
+          earlier.backfillComplete = result.backfillComplete
+          if (result.error) earlier.error = result.error
+        } else {
+          outcome.folders.push(result)
+        }
+        outcome.stored += result.stored
+      }
+      if (!rings || outOfTime(deadline)) break
+      const latest = (await pushRingState(connectionId)).requestedAt
+      if (!rangAgain(ringSeen, latest) || round >= PUSH_MAX_ROUNDS) break
+      ringSeen = latest
+      // The folder read last is still selected, and a selected folder's next
+      // UID is only refreshed by selecting it again - so let it go, or a
+      // one-folder account would go round again and see nothing new.
+      await client.mailboxClose().catch(() => {})
     }
 
     await recordConnectionSync(connectionId, 'ok', null)
+    // Only said once every folder has been read since that ring: a check the
+    // clock cut short has not covered it, and the ring's own wait carries on.
+    if (ringSeen && !outOfTime(deadline)) await markPushAnswered(connectionId, ringSeen)
     return outcome
   } catch (err) {
     const message = explainImapError(err)

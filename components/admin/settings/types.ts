@@ -26,6 +26,15 @@ export type Connection = {
   lastSyncAt: string | null
   lastSyncStatus: 'ok' | 'error' | null
   lastSyncError: string | null
+  /** Collected when its provider rings to say mail has arrived, rather than on
+   *  the hourly schedule. */
+  pushChecks: boolean
+  /** The address the provider rings, once the switch has been turned on. */
+  pushUrl: string | null
+  /** Whether the provider has been in touch and handed over its signing key. */
+  hasPushSecret: boolean
+  /** When the provider last rang. */
+  pushRequestedAt: string | null
 }
 
 export type SignatureKind = 'markdown' | 'html' | 'puck'
