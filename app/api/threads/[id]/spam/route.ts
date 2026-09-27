@@ -20,6 +20,7 @@ import { errorResponse } from '@/lib/utils'
 import { canOpenThread } from '@/modules/unified-inbox/lib/access'
 import { getInbox, getThreadDetail, setThreadBlocked } from '@/modules/unified-inbox/lib/db'
 import { markThreadSpam, spamOwnerFor, unmarkThreadSpam } from '@/modules/unified-inbox/lib/spam'
+import { markReadOnDiscard } from '@/modules/unified-inbox/lib/provider-read'
 import { ThreadSpamBody } from '@/modules/unified-inbox/lib/validation'
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -46,7 +47,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const inbox = thread.inboxId ? await getInbox(thread.inboxId) : null
   const owner = spamOwnerFor({ pressedByUserId: user.id, inbox })
 
-  if (parsed.data.spam) await markThreadSpam(id, owner)
+  if (parsed.data.spam) {
+    await markThreadSpam(id, owner)
+    // Junk is dealt with - see markReadOnDiscard.
+    await markReadOnDiscard(thread)
+  }
   else {
     await unmarkThreadSpam(id, owner)
     // And the site's own stamp with it, where the conversation is one the

@@ -2416,6 +2416,34 @@ export async function fileThreadInInboxes(threadId: string, inboxIds: string[]):
   `
 }
 
+/**
+ * List a conversation the reader has just filed under more of the site's
+ * addresses as well as its own - a customer's email that was sent to hi@ with
+ * emma@ copied in belongs in both tabs (see namedInboxIds in lib/addresses.ts).
+ *
+ * The conversation's own address is read from the row rather than passed in,
+ * because `effectiveInboxIds` reads this table INSTEAD of `inbox_id` once it is
+ * not empty: leaving the home address out would take the conversation out of
+ * the tab it was filed in. Only ever adds - a merge, an un-merge or a move that
+ * already wrote rows here is not second-guessed, and a conversation that lost
+ * a merge, or has no home address to anchor the list to, is left alone.
+ */
+export async function alsoFileThreadIn(threadId: string, inboxIds: string[]): Promise<void> {
+  const ids = [...new Set(inboxIds)]
+  if (ids.length === 0) return
+  await prisma.$executeRaw`
+    INSERT INTO "uin_thread_inboxes" ("thread_id", "inbox_id")
+    SELECT t."id", x
+      FROM "uin_threads" t,
+           unnest(ARRAY[t."inbox_id"] || ${ids}::text[]) AS x
+     WHERE t."id" = ${threadId}
+       AND t."inbox_id" IS NOT NULL
+       AND t."merged_into_id" IS NULL
+       AND EXISTS (SELECT 1 FROM unnest(${ids}::text[]) AS y WHERE y <> t."inbox_id")
+    ON CONFLICT DO NOTHING
+  `
+}
+
 /** Starts a conversation that begins with us writing to somebody (D12). */
 export async function createOutboundThread(data: {
   inboxId: string

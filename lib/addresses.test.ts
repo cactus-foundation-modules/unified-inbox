@@ -3,6 +3,7 @@ import {
   addressDomain,
   internalSides,
   isValidAddress,
+  namedInboxIds,
   normaliseAddress,
   parseAddressList,
   placeMessage,
@@ -448,5 +449,33 @@ describe('internalSides', () => {
       { inboxId: 'chris', direction: 'out' },
       { inboxId: 'marcus', direction: 'in' },
     ])
+  })
+})
+
+describe('namedInboxIds', () => {
+  const emma = { id: 'emma', address: 'emma@deskwell.co.uk', isCatchAll: false }
+  const marcus = { id: 'marcus', address: 'marcus@deskwell.co.uk', isCatchAll: false }
+  const hi = { id: 'hi', address: 'hi@deskwell.co.uk', isCatchAll: true }
+  const inboxes = [emma, marcus, hi]
+
+  it('names every one of our addresses on the email, To before Cc', () => {
+    // The live case: a customer wrote to hi@ and copied Emma in.
+    expect(namedInboxIds({ to: ['hi@deskwell.co.uk'], cc: ['Emma@Deskwell.co.uk'] }, inboxes)).toEqual(['hi', 'emma'])
+  })
+
+  it('puts Delivered-To first, which is where a Bcc shows up', () => {
+    expect(namedInboxIds({ deliveredTo: ['marcus@deskwell.co.uk'], to: ['hi@deskwell.co.uk'] }, inboxes)).toEqual(['marcus', 'hi'])
+  })
+
+  it('counts an address once however many headers repeat it', () => {
+    expect(namedInboxIds({
+      deliveredTo: ['emma@deskwell.co.uk'],
+      to: ['emma@deskwell.co.uk'],
+      cc: ['"Emma" <emma@deskwell.co.uk>'],
+    }, inboxes)).toEqual(['emma'])
+  })
+
+  it('never lets the catch-all claim mail that did not name it', () => {
+    expect(namedInboxIds({ to: ['someone@elsewhere.com'], cc: ['nobody@deskwell.co.uk'] }, inboxes)).toEqual([])
   })
 })

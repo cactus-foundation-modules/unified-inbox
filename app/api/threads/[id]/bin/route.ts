@@ -24,6 +24,7 @@ import { errorResponse } from '@/lib/utils'
 import { canOpenThread } from '@/modules/unified-inbox/lib/access'
 import { getInbox, getThreadDetail } from '@/modules/unified-inbox/lib/db'
 import { binOwnerForThread, markThreadBinned, unmarkThreadBinned } from '@/modules/unified-inbox/lib/bin'
+import { markReadOnDiscard } from '@/modules/unified-inbox/lib/provider-read'
 import { ThreadBinBody } from '@/modules/unified-inbox/lib/validation'
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -51,7 +52,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const inbox = thread.inboxId ? await getInbox(thread.inboxId) : null
   const owner = binOwnerForThread({ pressedByUserId: user.id, inbox, channel: thread.channel })
 
-  if (parsed.data.bin) await markThreadBinned(id, owner)
+  if (parsed.data.bin) {
+    await markThreadBinned(id, owner)
+    // Deleted is dealt with - see markReadOnDiscard.
+    await markReadOnDiscard(thread)
+  }
   else await unmarkThreadBinned(id, owner)
 
   // `owner` goes back so the screen can say whose bin it landed in when that is

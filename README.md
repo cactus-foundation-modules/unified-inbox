@@ -41,6 +41,9 @@ the same human collapse into one story.
   is the only version of that promise worth making. Nothing is converted by an
   update: every address on an existing site stays shared until somebody says
   otherwise.
+- **Copied in means copied in.** A customer's email to one address with a
+  colleague copied in shows in both of their tabs as one conversation - one
+  unread mark, one reply - rather than only in whichever address came first.
 - **Their own post, on their own desk.** Anything arriving at an address that
   belongs to one colleague is handed to that colleague as it lands, and so is
   anything they send from it, so it stops counting as work nobody has picked up

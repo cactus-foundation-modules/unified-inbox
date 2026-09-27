@@ -57,6 +57,7 @@ if (shouldRun) {
 const CORE_SCHEMA = path.join(process.cwd(), 'prisma/migrations/20260626000000_init/migration.sql')
 const MODULE_MIGRATIONS = path.join(process.cwd(), 'modules/unified-inbox/migrations')
 const MIGRATION_020 = path.join(MODULE_MIGRATIONS, '020_internal_threads.sql')
+const MIGRATION_062 = path.join(MODULE_MIGRATIONS, '062_named_addresses.sql')
 
 const KEY = 'a'.repeat(64)
 
@@ -345,5 +346,97 @@ describe.runIf(shouldRun)('colleague mail on both conversations, against a real 
     const byFolder = new Map(rows.map((r) => [r.folder, Number(r.last_seen_uid)]))
     expect(byFolder.get('Deskwell/Marcus Ashford')).toBe(27)
     expect(byFolder.get('INBOX')).toBe(21858)
+  })
+
+  // -------------------------------------------------------------------------
+  // A customer's email to one of us with a colleague copied in: one
+  // conversation, listed in both tabs. Live on 27 September 2026 - "to: hi@,
+  // cc: emma@" showed in General Enquiries and not in Emma's.
+  // -------------------------------------------------------------------------
+
+  const customerThread = async (inboxId: string, messageId: string, cc: string[]): Promise<string> => {
+    const thread = await lib.createThread({
+      inboxId,
+      subject: 'Desk sizes',
+      subjectNormalised: 'desk sizes',
+      preview: 'Do you do a 1400?',
+      lastMessageAt: SENT_AT,
+      lastDirection: 'in',
+      unread: true,
+    })
+    await lib.insertMessage(message({
+      threadId: thread,
+      messageIdHeader: messageId,
+      fromName: 'A Customer',
+      fromAddress: 'customer@example.com',
+      toAddresses: ['chris@deskwell.co.uk'],
+      ccAddresses: cc,
+      subject: 'Desk sizes',
+      imapFolder: 'INBOX',
+      imapUid: 30000 + Math.floor(Math.random() * 10000),
+    }))
+    return thread
+  }
+
+  const listedIn = async (inboxId: string): Promise<string[]> =>
+    (await lib.listThreads({
+      viewerUserId: 'user-viewer',
+      inboxIds: [inboxId],
+      includeUnrouted: false,
+      inboxId,
+      status: 'all',
+      page: 1,
+      perPage: 200,
+    })).map((row) => row.id)
+
+  it('lists a copied-in conversation in the colleague tab as well as its own', async () => {
+    const thread = await customerThread(chrisInbox, 'copied-in@example.com', ['marcus@deskwell.co.uk'])
+    expect(await listedIn(marcusInbox)).not.toContain(thread)
+
+    await lib.alsoFileThreadIn(thread, [chrisInbox, marcusInbox])
+
+    // In both, and still at home - the home address is written alongside, or
+    // effectiveInboxIds would read the list without it.
+    expect(await listedIn(marcusInbox)).toContain(thread)
+    expect(await listedIn(chrisInbox)).toContain(thread)
+
+    // A second copy of the same email adds nothing twice.
+    await lib.alsoFileThreadIn(thread, [marcusInbox, chrisInbox])
+    const rows = await db.$queryRawUnsafe<{ inbox_id: string }[]>(
+      `SELECT "inbox_id" FROM "uin_thread_inboxes" WHERE "thread_id" = $1 ORDER BY "inbox_id"`, thread,
+    )
+    expect(rows.map((r) => r.inbox_id)).toEqual([chrisInbox, marcusInbox].sort())
+  })
+
+  it('writes nothing when the only address named is the one it already lives at', async () => {
+    const thread = await customerThread(chrisInbox, 'just-chris@example.com', [])
+    await lib.alsoFileThreadIn(thread, [chrisInbox])
+    const rows = await db.$queryRawUnsafe<{ n: bigint }[]>(
+      `SELECT count(*) AS n FROM "uin_thread_inboxes" WHERE "thread_id" = $1`, thread,
+    )
+    expect(Number(rows[0]!.n)).toBe(0)
+  })
+
+  it('back-fills conversations already collected, and leaves a moved one where it was put', async () => {
+    const collected = await customerThread(chrisInbox, 'collected@example.com', ['Marcus@Deskwell.co.uk'])
+    const moved = await customerThread(chrisInbox, 'moved@example.com', ['marcus@deskwell.co.uk'])
+    await lib.recordEvent(moved, null, 'moved', { from: marcusInbox, to: chrisInbox })
+    const alone = await customerThread(chrisInbox, 'alone@example.com', [])
+
+    await applyFile(MIGRATION_062)
+    await applyFile(MIGRATION_062)
+
+    const filed = async (thread: string): Promise<string[]> =>
+      (await db.$queryRawUnsafe<{ inbox_id: string }[]>(
+        `SELECT "inbox_id" FROM "uin_thread_inboxes" WHERE "thread_id" = $1 ORDER BY "inbox_id"`, thread,
+      )).map((r) => r.inbox_id)
+
+    expect(await filed(collected)).toEqual([chrisInbox, marcusInbox].sort())
+    expect(await filed(moved)).toEqual([])
+    expect(await filed(alone)).toEqual([])
+
+    // Colleague mail is split into a conversation per side, never listed twice.
+    expect(await filed(marcusThread)).toEqual([])
+    expect(await filed(chrisThread)).toEqual([])
   })
 })

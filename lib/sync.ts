@@ -4,6 +4,7 @@ import { simpleParser, type ParsedMail } from 'mailparser'
 import { upsertAlert, clearAlert } from '@/lib/notifications/alerts'
 import {
   internalSides,
+  namedInboxIds,
   normaliseAddress,
   parseAddressList,
   placeMessage,
@@ -12,6 +13,7 @@ import {
 } from './addresses'
 import {
   acquireConnectionLock,
+  alsoFileThreadIn,
   assignThreadIfUnassigned,
   candidateThreads,
   clearAuthFailures,
@@ -750,11 +752,28 @@ async function fileMessage(
     ? await threadsHoldingIdentity(ctx.connectionId, identity, internalKey)
     : null
 
+  // An outsider's email that names more than one of our addresses - "to: hi@,
+  // cc: emma@" - is still one email and one conversation, but it is post for
+  // every address it names, so the conversation is listed under each of them.
+  // Colleague mail is not this: it is split into a conversation per side above.
+  // Only when two or more are named, so a reply naming just the one address a
+  // conversation lives at never undoes somebody having moved it elsewhere.
+  const alsoNamed = !internal && !(fromAddress && ctx.ownAddresses.has(fromAddress))
+    ? namedInboxIds({ deliveredTo, to, cc }, ctx.routing)
+    : []
+  const fileUnderNamed = async (threadId: string): Promise<void> => {
+    if (alsoNamed.length > 1) await alsoFileThreadIn(threadId, alsoNamed)
+  }
+
   const existing = await findMessageByIdentity(ctx.connectionId, identity)
   if (existing && !internal) {
     // Already held - found in another folder, or moved between folders since we
     // last looked. Same message. Record the location so we do not read it again
     // and move on (E2, E3).
+    //
+    // The copy in the other folder can name an address the first one did not:
+    // a Bcc only ever shows up in the Delivered-To of the copy made for it.
+    await fileUnderNamed(existing.threadId)
     await markLocationProcessed({
       connectionId: ctx.connectionId,
       folder: ctx.folder.path,
@@ -1175,6 +1194,11 @@ async function fileMessage(
   // Two ticks raced for the same message and the other one won. The unique
   // index did its job; the location is noted and there is nothing else to do.
   if (!messageId) return { stored: false, sentAt }
+
+  // Before the webhooks are queued, so that a subscription on a copied-in
+  // address hears about it too. Not for post the site refused: it is out of
+  // every list already, and listing it in more of them says nothing.
+  if (!junk) await fileUnderNamed(threadId)
 
   // Last, and only once the message is safely filed and its location recorded:
   // note down anybody who asked to be told. Queueing only - the sending happens

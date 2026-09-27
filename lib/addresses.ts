@@ -281,6 +281,35 @@ export function internalSides(input: {
   return sides.length > 1 ? sides : []
 }
 
+/**
+ * Every one of our inboxes an email names outright, in the order the headers
+ * name them: Delivered-To, then To, then Cc.
+ *
+ * For a customer's email that names more than one of them - "to: hi@, cc:
+ * emma@" - which the routing above answers with a single inbox, because a
+ * conversation has one home and replies go from it. The others still had the
+ * email land in their mailbox, and a colleague who was copied in and then finds
+ * nothing in their own tab reasonably concludes it never arrived. So the reader
+ * files the one conversation under every inbox this returns, the same way a
+ * merged conversation or a discussion put to several colleagues is filed.
+ *
+ * Matched by address only. The catch-all's own address counts when somebody
+ * wrote to it; its sweeping up of mail nobody here was named on does not,
+ * because that would add the catch-all to every email on the account.
+ */
+export function namedInboxIds(
+  headers: { deliveredTo?: string[]; to?: string[]; cc?: string[] },
+  inboxes: RoutableInbox[],
+): string[] {
+  const byAddress = new Map(inboxes.map((i) => [normaliseAddress(i.address), i.id]))
+  const out: string[] = []
+  for (const address of [...(headers.deliveredTo ?? []), ...(headers.to ?? []), ...(headers.cc ?? [])]) {
+    const id = byAddress.get(normaliseAddress(address))
+    if (id && !out.includes(id)) out.push(id)
+  }
+  return out
+}
+
 function withoutSender(
   headers: { deliveredTo?: string[]; to?: string[]; cc?: string[] },
   sender: string,
