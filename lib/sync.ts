@@ -49,6 +49,7 @@ import {
   type StoredMessageRef,
 } from './db'
 import { blockedSenderSet, shouldJunkSender } from './blocked-senders'
+import { unbinOnReply } from './bin'
 import { ownPostAssignee, ownPostOwners } from './own-post'
 import { prepareInboundHtml, htmlToText } from './html'
 import { chooseRelayCopy, RELAY_COPY_WINDOW_MS } from './relay-copy'
@@ -1134,6 +1135,10 @@ async function fileMessage(
     if (!automated && !junk) {
       const was = await reopenOnReply(thread)
       if (was) await recordEvent(thread, null, 'woken', { was, direction: input.direction })
+      // And out of the bin, for the same reason: nobody threw THIS away. See
+      // unbinOnReply.
+      const bins = await unbinOnReply(thread)
+      if (bins > 0) await recordEvent(thread, null, 'unbinned', { bins, direction: input.direction })
     }
 
     // They wrote first. Anything we had set to go out to this person is stood

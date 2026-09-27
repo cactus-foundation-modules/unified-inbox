@@ -615,6 +615,7 @@ function unattendedEvent(event: ThreadEventRow, staffById: Record<string, string
       ? `It went out, so it comes back to ${author} if nobody replies`
       : 'It went out, so it comes back if nobody replies'
   }
+  if (event.kind === 'unbinned') return 'A reply arrived, so it came back out of the bin'
   if (event.kind !== 'woken') return null
   // Worth saying which it was: coming back early from a snooze is mildly
   // surprising, and something you had marked done reopening is the sort of

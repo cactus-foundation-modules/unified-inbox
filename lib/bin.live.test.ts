@@ -62,6 +62,9 @@ import {
 //      gravestone - and the watermark the next collection asks its question
 //      from counts the gravestone, or emptying a bin winds it backwards and
 //      re-lists weeks of settled ground.
+//   9. A REPLY COMES BACK OUT OF THE BIN. Mail arriving on a conversation
+//      somebody had deleted is words nobody chose to throw away, so it leaves
+//      every bin it was in - or the next "Empty bin" destroys it unread.
 //
 // A real throwaway database on the Postgres VPS, built from the core schema and
 // this module's own migrations. Named `cactus_rt_*` and dropped afterwards; the
@@ -317,6 +320,32 @@ describe.runIf(shouldRun)('the bin, against a real database', () => {
     expect(await spamOf(emma, emma)).not.toContain(id)
     expect(await binOf(emma, emma)).toContain(id)
     expect(await listFor(emma)).not.toContain(id)
+  })
+
+  it('takes a conversation out of every bin when a reply arrives, and leaves a purged row alone', async () => {
+    const id = await threadIn(team, 'Eight desks 9')
+    await bin.markThreadBinned(id, emma)
+    await bin.markThreadBinned(id, marcus)
+    // A row stamped purged is a discussion out of an emptied bin, and stays
+    // stamped: this is only ever about post nobody has had the chance to read.
+    const kept = await threadIn(team, 'Eight desks 10')
+    await bin.markThreadBinned(kept, emma)
+    await db.$executeRawUnsafe(
+      `UPDATE "uin_thread_bin" SET "purged_at" = now() WHERE "thread_id" = $1`, kept,
+    )
+
+    // Claim 9: a reply is words nobody chose to throw away. Out of both bins,
+    // back on both lists, and the count says how many bins it left.
+    expect(await bin.unbinOnReply(id)).toBe(2)
+    expect(await binOf(emma, emma)).not.toContain(id)
+    expect(await binOf(marcus, marcus)).not.toContain(id)
+    expect(await listFor(emma)).toContain(id)
+    expect(await listFor(marcus)).toContain(id)
+
+    // Twice is once: nothing left to take out, nothing to write on the timeline.
+    expect(await bin.unbinOnReply(id)).toBe(0)
+    expect(await bin.unbinOnReply(kept)).toBe(0)
+    expect(await bin.threadIsBinnedFor(kept, emma)).toBe(true)
   })
 
   it('drops what a bin holds out of the numbers on the rail', async () => {

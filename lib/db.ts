@@ -3743,6 +3743,9 @@ export type ThreadEventKind =
    *  where to, by id and by name - the name because a mailbox can be deleted and
    *  the log should still say where the conversation had been. */
   | 'moved'
+  /** A reply arrived on a conversation somebody had put in the bin, so it came
+   *  back out. `detail.bins` is how many people's bins it left. */
+  | 'unbinned'
 
 /**
  * Move a conversation to another mailbox.

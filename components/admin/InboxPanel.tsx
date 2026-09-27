@@ -2167,49 +2167,57 @@ export async function UnifiedInboxPanel({
               />
             ) : listing || params.searchPage ? null : (
               <>
-                <Filters
-                  base={base}
-                  params={carried}
-                  unreadOnly={params.unreadOnly}
-                  assignee={params.assignee}
-                  search={params.search}
-                  narrowed={{
-                    from: params.fromText,
-                    to: params.toText,
-                    subject: params.subjectText,
-                    withAttachment: params.withAttachment,
-                    after: params.after,
-                    before: params.before,
-                  }}
-                  staff={staff}
-                  oldestFirst={params.oldestFirst}
-                  /* Their own address, where "who is this on" has one answer
-                     all the way down and the menu is a switch instead. */
-                  ownInbox={!!pinnedInboxId && params.inboxId === pinnedInboxId}
-                  /* The Spam folder, and only for somebody who may read the
-                     site's settings - which is the grant the list itself takes,
-                     because who is blocked is a fact about how the site is set
-                     up and it names colleagues. Letting one back in is the
-                     other grant, the same one shutting the door takes, so the
-                     two are asked separately. */
-                  blockedAddresses={params.spamOnly && canManage ? { canUnblock: canSendOut } : null}
-                  /* The Bin, and only where there is something to empty and
-                     somebody allowed to empty it. `manage` rather than the
-                     grant that fills a bin, and deliberately stricter: putting
-                     a conversation in a bin hides it from one screen and undoes
-                     itself with the same press, while emptying takes it away
-                     from every colleague who could read it and nothing brings
-                     it back. The route asks the same question again - this only
-                     decides whether the button is drawn. */
-                  emptyBin={params.binOnly && canManage && total > 0
-                    ? {
-                        inboxId: folderInbox?.id ?? null,
-                        ownerName: folderOwnerName,
-                        count: total,
-                        closeHref: inboxHref(base, carried, { id: null }),
-                      }
-                    : null}
-                />
+                {/* In a box of its own so a phone can move it. On a wide
+                    screen the box is not drawn at all (display: contents) and
+                    the bar sits in the head exactly where it always has; on a
+                    phone it goes to the foot of the list, where a thumb
+                    reaches it without the whole hand shuffling up the screen.
+                    See .uin-col-find in inbox.css. */}
+                <div className="uin-col-find">
+                  <Filters
+                    base={base}
+                    params={carried}
+                    unreadOnly={params.unreadOnly}
+                    assignee={params.assignee}
+                    search={params.search}
+                    narrowed={{
+                      from: params.fromText,
+                      to: params.toText,
+                      subject: params.subjectText,
+                      withAttachment: params.withAttachment,
+                      after: params.after,
+                      before: params.before,
+                    }}
+                    staff={staff}
+                    oldestFirst={params.oldestFirst}
+                    /* Their own address, where "who is this on" has one answer
+                       all the way down and the menu is a switch instead. */
+                    ownInbox={!!pinnedInboxId && params.inboxId === pinnedInboxId}
+                    /* The Spam folder, and only for somebody who may read the
+                       site's settings - which is the grant the list itself takes,
+                       because who is blocked is a fact about how the site is set
+                       up and it names colleagues. Letting one back in is the
+                       other grant, the same one shutting the door takes, so the
+                       two are asked separately. */
+                    blockedAddresses={params.spamOnly && canManage ? { canUnblock: canSendOut } : null}
+                    /* The Bin, and only where there is something to empty and
+                       somebody allowed to empty it. `manage` rather than the
+                       grant that fills a bin, and deliberately stricter: putting
+                       a conversation in a bin hides it from one screen and undoes
+                       itself with the same press, while emptying takes it away
+                       from every colleague who could read it and nothing brings
+                       it back. The route asks the same question again - this only
+                       decides whether the button is drawn. */
+                    emptyBin={params.binOnly && canManage && total > 0
+                      ? {
+                          inboxId: folderInbox?.id ?? null,
+                          ownerName: folderOwnerName,
+                          count: total,
+                          closeHref: inboxHref(base, carried, { id: null }),
+                        }
+                      : null}
+                  />
+                </div>
                 {showStatusTabs && (
                   <StatusTabs
                     base={base}

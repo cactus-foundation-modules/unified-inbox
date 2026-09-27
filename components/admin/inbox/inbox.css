@@ -4541,3 +4541,122 @@
   color: var(--color-text-muted);
 }
 .uin-history-detail { font-size: 0.75rem; color: var(--color-text-secondary); overflow-wrap: anywhere; }
+
+/* ---- on a phone: swiping, and the search at the thumb's end ------------- */
+/* Four things only a phone gets, kept together so they are read as one set.
+   "A phone" is 768px and under, the width core folds its own sidebar at and
+   the frame goes edge to edge (see the top of this file) - and the same number
+   swipe.ts asks the window about, so the gestures and the drawing agree.
+
+   THE SEARCH BAR ABOVE A LIST, everywhere but a phone, is not a box of its own:
+   `display: contents` hands its insides to the head exactly as they were before
+   there was a box. */
+.uin-col-find { display: contents; }
+
+/* THE ROW'S TWO TRAYS. Not drawn at all off a phone - a mouse does not swipe,
+   and the bar above the list already has all four. */
+.uin-swipe-tray { display: none; }
+
+@media (max-width: 768px) {
+  /* The list of mailboxes a third narrower than it is on a tablet. It is a
+     column of names with a number beside each, and at full width on a phone
+     it covered the whole list it was being opened from - which is the list
+     somebody is usually choosing between. Later than the tablet rule and the
+     same weight, so this one wins. */
+  .uin-rail-scroll { width: min(13.4rem, 58vw); }
+
+  /* THE SEARCH, FILTER AND SORT GO TO THE FOOT OF THE LIST. The head stops
+     being a box (display: contents) so what was in it becomes part of the
+     column itself, and the flex order sends the search to the end: the list
+     first, and the bar under it where a thumb already is. The tabs and the
+     folder's title stay at the top - they say what the list IS, and that is
+     read before the list, not after it. Only where the head holds the bar at
+     all: every other head on this screen is left exactly as it was. */
+  .uin-col-head:has(> .uin-col-find) { display: contents; }
+  .uin-col-head:has(> .uin-col-find) > :not(.uin-col-find) {
+    flex: none;
+    margin: 0.5rem 0.625rem 0;
+  }
+  .uin-col-head:has(> .uin-col-find) ~ .uin-col-scroll {
+    order: 1;
+    margin-top: 0.5rem;
+    border-top: 1px solid var(--color-border);
+  }
+  .uin-col-find {
+    order: 2;
+    flex: none;
+    display: grid;
+    gap: 0.5rem;
+    padding: 0.5rem 0.625rem;
+    /* Clear of the bar a phone draws along its own bottom edge. */
+    padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--color-border);
+    background: var(--color-surface);
+  }
+
+  /* THE ROW SLIDES; THE TRAYS WAIT UNDERNEATH IT. The item clips so a row
+     pushed sideways does not widen the page, and the row sits above the trays
+     on its own ground, so a shut tray is simply covered. --uin-swipe-start and
+     --uin-swipe-end are the two trays' widths, written on the item by
+     SwipeRow, so an open row stops exactly where its buttons end. */
+  .uin-list-item {
+    --uin-swipe-btn: 76px;
+    position: relative;
+    overflow: hidden;
+  }
+  .uin-list-item > .uin-row {
+    z-index: 1;
+    transition: transform 0.2s ease-out;
+    touch-action: pan-y;
+  }
+  /* Under a finger it follows the finger, with nothing easing it behind. */
+  .uin-list-item[data-dragging="true"] > .uin-row { transition: none; }
+  .uin-list-item[data-swiped="start"] > .uin-row { transform: translateX(var(--uin-swipe-start)); }
+  .uin-list-item[data-swiped="end"] > .uin-row { transform: translateX(calc(-1 * var(--uin-swipe-end))); }
+
+  .uin-swipe-tray {
+    position: absolute;
+    inset-block: 0;
+    display: flex;
+  }
+  .uin-swipe-tray[data-side="start"] { left: 0; }
+  .uin-swipe-tray[data-side="end"] { right: 0; }
+  /* The snooze button is a menu, and its wrapper is what sits in the tray. */
+  .uin-swipe-tray > .uin-dropdown { display: flex; }
+
+  /* One button: a drawing over a word, the full height of the row. The
+     colours are the pairs the row's own Done and Snoozed tags already wear,
+     and the failed tag's for Delete - each measured at AA or better on its own
+     ground in both themes. Junk is plain text on the page's ground, which is
+     the one pairing that reads as different from the row in both themes (see
+     the note at the top of this file). */
+  .uin-swipe-btn {
+    width: var(--uin-swipe-btn);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25rem;
+    margin: 0;
+    padding: 0 0.25rem;
+    border: 0;
+    font: inherit;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .uin-swipe-btn svg { width: 1.25rem; height: 1.25rem; }
+  .uin-swipe-btn:disabled { opacity: 0.6; cursor: default; }
+  .uin-swipe-btn:focus-visible {
+    outline: 2px solid var(--color-border-focus);
+    outline-offset: -3px;
+  }
+  .uin-swipe-done { background: var(--color-success-bg); color: var(--color-success); }
+  .uin-swipe-snooze { background: var(--color-warning-bg); color: var(--color-warning); }
+  .uin-swipe-open { background: var(--color-primary-subtle); color: var(--color-text); }
+  .uin-swipe-junk { background: var(--color-bg); color: var(--color-text); }
+  .uin-swipe-delete { background: var(--color-error-bg); color: var(--color-destructive-hover); }
+}
+@media (max-width: 768px) and (prefers-reduced-motion: reduce) {
+  .uin-list-item > .uin-row { transition: none; }
+}

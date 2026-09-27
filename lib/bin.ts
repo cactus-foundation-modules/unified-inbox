@@ -100,6 +100,33 @@ export async function unmarkThreadBinned(threadId: string, userId: string): Prom
   `
 }
 
+/**
+ * Somebody has written on a conversation that was in the bin, so it comes back
+ * out of every bin it was in - the same courtesy reopenOnReply pays a
+ * conversation marked done, and for the same reason.
+ *
+ * The bin is a decision about what had been said WHEN the button was pressed.
+ * A reply arriving afterwards is words nobody has seen, let alone chosen to
+ * throw away, and migration 052 is plain that a bin holds only what somebody
+ * put in it. Left where it was, the reply sat unread in a folder nobody opens -
+ * and the next "Empty bin" would have destroyed it without anybody having read
+ * a word of it, which is the one outcome this module exists to make impossible.
+ *
+ * Every person's bin, not one: nobody chose to throw away THIS message. Rows
+ * already stamped purged are left alone - only a discussion survives an emptied
+ * bin (purgeDiscussionsFromBin), and discussions never come through the
+ * collecting pass that calls this.
+ *
+ * Returns how many bins it came out of, so the caller writes a timeline entry
+ * only when something actually moved.
+ */
+export async function unbinOnReply(threadId: string): Promise<number> {
+  return prisma.$executeRaw`
+    DELETE FROM "uin_thread_bin"
+     WHERE "thread_id" = ${threadId} AND "purged_at" IS NULL
+  `
+}
+
 /** Whether it is in a given person's bin. Asked when a conversation is opened,
  *  so the button in the header offers the right one of the two rather than
  *  making somebody press it to find out - and asked about the OWNER rather than

@@ -20,6 +20,7 @@ import {
   upsertProviderThread,
 } from './db'
 import { blockedSenderSet } from './blocked-senders'
+import { unbinOnReply } from './bin'
 import { ownPostOwners } from './own-post'
 import { allConversationProviders } from './provider-registry'
 import { normaliseSubject } from './threading'
@@ -409,6 +410,8 @@ export async function syncProvider(
       // belongs in Open, whether it was snoozed or marked done.
       const was = await reopenOnReply(threadId)
       if (was) await recordEvent(threadId, null, 'woken', { was, providerModule: channelKey })
+      const bins = await unbinOnReply(threadId)
+      if (bins > 0) await recordEvent(threadId, null, 'unbinned', { bins, providerModule: channelKey })
     }
   }
 

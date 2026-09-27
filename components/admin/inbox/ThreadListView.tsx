@@ -31,6 +31,7 @@ import { Dropdown } from './Dropdown'
 import { useRegisterRows, useSelection, type PickedRow } from './Selection'
 import { beginThreadDrag, draggedIds, endThreadDrag } from './thread-drag'
 import { SnoozePanel } from './SnoozePanel'
+import { SwipeRow, type SwipeSide } from './SwipeRow'
 import { useOfferUndo } from './UndoProvider'
 
 // The list of conversations. Every state it can be in - filtered to nothing,
@@ -145,6 +146,18 @@ function ChannelBadge({ channel }: { channel: string }) {
   )
 }
 
+/** Everybody a set of rows could be blocked on - see `blockable` in the list,
+ *  which says why discussions and anything without an `@` are left out. */
+function blockableOf(rows: ThreadListRow[]): string[] {
+  const found = new Set<string>()
+  for (const row of rows) {
+    if (row.startedByUserId) continue
+    const address = normaliseAddress(row.participantAddress ?? '')
+    if (address.includes('@')) found.add(address)
+  }
+  return [...found]
+}
+
 export function ThreadListView({
   base, params, rows, total, page, openThreadId, staffById, meId, inboxNames, showAvatars,
   neverSynced, spam, spamOwnerName, bin, binOwnerName, canManage, canBlock, searching, now, timezone,
@@ -255,28 +268,22 @@ export function ThreadListView({
    *  to save one line of a dialog is not a trade worth making. Blocking is
    *  written with ON CONFLICT DO NOTHING, so anybody already turned away simply
    *  stays that way, and the dialog says so. */
-  const blockable = useMemo(() => {
-    const found = new Set<string>()
-    for (const row of pickedRows) {
-      if (row.startedByUserId) continue
-      const address = normaliseAddress(row.participantAddress ?? '')
-      if (address.includes('@')) found.add(address)
-    }
-    return [...found]
-  }, [pickedRows])
+  const blockable = useMemo(() => blockableOf(pickedRows), [pickedRows])
+
+  // Which row on a phone has been swiped open to show its buttons, and which
+  // side. One at a time, the way every mail program on a phone does it: opening
+  // a second shuts the first. See SwipeRow.
+  const [swiped, setSwiped] = useState<{ id: string; side: SwipeSide } | null>(null)
+  // Which conversations the junk question is about. Null means the picked pile,
+  // which is what the bar's button asks about; a swiped row asks about itself
+  // alone, and must not sweep up whatever else happens to be ticked.
+  const [junkIds, setJunkIds] = useState<string[] | null>(null)
+  const junkTargets = junkIds ?? picked
 
   const clearPicked = useCallback(() => {
     anchorRef.current = null
     dropSelection()
   }, [dropSelection])
-
-  /** Whether the conversation open beside the list is one of the picked ones.
-   *  Asked before a run rather than after it: the bar empties itself on the way
-   *  out, and by then nothing is picked. */
-  const openIsPicked = useCallback(
-    () => !!openThreadId && picked.includes(openThreadId),
-    [openThreadId, picked],
-  )
 
   /** Back to the list with nothing open on it. */
   const closePane = useCallback(
@@ -379,18 +386,21 @@ export function ThreadListView({
    *  single-conversation SpamButton holds its own leaving. */
   const runOnPicked = useCallback(async (
     send: (id: string) => Promise<Response>,
-    { refresh = true, closes = false }: { refresh?: boolean; closes?: boolean } = {},
+    { refresh = true, closes = false, ids }: { refresh?: boolean; closes?: boolean; ids?: string[] } = {},
   ): Promise<boolean> => {
-    if (picked.length === 0) return false
-    const count = picked.length
+    // The picked pile, unless one row has been named - a row swiped open on a
+    // phone acts on itself, and leaves whatever is ticked exactly as it was.
+    const targets = ids ?? picked
+    if (targets.length === 0) return false
+    const count = targets.length
     // Whether the conversation open beside the list is one of the ones about to
     // change. Asked BEFORE the run, because the answer decides where the reader
     // ends up and `picked` is emptied on the way out.
-    const openWasPicked = closes && refresh && !!openThreadId && picked.includes(openThreadId)
+    const openWasPicked = closes && refresh && !!openThreadId && targets.includes(openThreadId)
     setBusy(true)
     setError('')
     try {
-      const results = await Promise.allSettled(picked.map((id) =>
+      const results = await Promise.allSettled(targets.map((id) =>
         send(id).then((r) => { if (!r.ok) throw new Error('refused') })
       ))
       const failed = results.filter((r) => r.status === 'rejected').length
@@ -399,7 +409,8 @@ export function ThreadListView({
           ? 'None of those could be changed.'
           : `${failed} of ${count} could not be changed. The rest were.`)
       }
-      clearPicked()
+      if (!ids) clearPicked()
+      setSwiped(null)
       // A pile that has just been filed, put to sleep or binned has left the
       // list, and the conversation open beside it may have been in the pile - in
       // which case the pane is showing something the list no longer holds. It
@@ -423,7 +434,7 @@ export function ThreadListView({
    *  one for the pile, because a pile picked off an All list is rarely all in
    *  the same state - and a snooze needs the date it was due back or the API
    *  refuses it. */
-  const whereTheyStood = useCallback(() => pickedRows.map((row) => ({
+  const whereTheyStood = useCallback((those: ThreadListRow[] = pickedRows) => those.map((row) => ({
     id: row.id,
     to: row.status === 'snoozed' && row.snoozeUntil
       ? { status: 'snoozed', snoozeUntil: row.snoozeUntil.toISOString() }
@@ -483,20 +494,20 @@ export function ThreadListView({
    *  conversation anywhere, both undo themselves with the button sitting next to
    *  them, and a toast after every press on a bar is a toast people learn to
    *  ignore before they need one. */
-  const closePicked = useCallback(async (body: Record<string, unknown>, said: string) => {
-    const back = whereTheyStood()
+  const closePicked = useCallback(async (body: Record<string, unknown>, said: string, ids?: string[]) => {
+    const back = whereTheyStood(ids ? rows.filter((row) => ids.includes(row.id)) : undefined)
     if (!(await runOnPicked((id) => fetch(`/api/m/unified-inbox/threads/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    }), { closes: true }))) return
+    }), { closes: true, ids }))) return
     offerUndo({ message: said, undo: putBack(back) })
-  }, [offerUndo, putBack, runOnPicked, whereTheyStood])
+  }, [offerUndo, putBack, rows, runOnPicked, whereTheyStood])
 
   /** The whole picked pile into the bin. Sent by three different presses now -
    *  the button itself where there is nothing to ask, and both of the answers
    *  that are not Cancel - so it lives here rather than three times over. */
-  const spamPicked = useCallback((opts?: { refresh?: boolean }) => runOnPicked((id) =>
+  const spamPicked = useCallback((opts?: { refresh?: boolean; ids?: string[] }) => runOnPicked((id) =>
     fetch(`/api/m/unified-inbox/threads/${id}/spam`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -514,13 +525,13 @@ export function ThreadListView({
    *  every one of those is a dialog people learn to dismiss without reading,
    *  which is how the one that matters gets dismissed too. The press that
    *  genuinely throws things away is "Empty bin", in the folder, and it asks. */
-  const deletePicked = useCallback(async () => {
-    const ids = [...picked]
+  const deletePicked = useCallback(async (only?: string[]) => {
+    const ids = [...(only ?? picked)]
     if (!(await runOnPicked((id) => fetch(`/api/m/unified-inbox/threads/${id}/bin`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ bin: true }),
-    }), { closes: true }))) return
+    }), { closes: true, ids: only }))) return
     offerUndo({
       message: `${ids.length} ${them(ids.length)} moved to the bin.`,
       undo: takeOutOfBin(ids),
@@ -530,13 +541,13 @@ export function ThreadListView({
   /** And back out again, which is the only bulk press the Bin folder offers.
    *  A bin somebody can fill fifty at a time and empty one at a time is a bin
    *  people stop putting things in. */
-  const restorePicked = useCallback(async () => {
-    const ids = [...picked]
+  const restorePicked = useCallback(async (only?: string[]) => {
+    const ids = [...(only ?? picked)]
     if (!(await runOnPicked((id) => fetch(`/api/m/unified-inbox/threads/${id}/bin`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ bin: false }),
-    }), { closes: true }))) return
+    }), { closes: true, ids: only }))) return
     offerUndo({
       message: `${ids.length} ${them(ids.length)} put back.`,
       undo: async () => {
@@ -562,20 +573,27 @@ export function ThreadListView({
    *  is asked even when there is nobody in the pile to block: that case has no
    *  door to offer, but it wants the way out just as much. */
   const markPickedSpam = useCallback(() => {
+    setJunkIds(null)
     setBlocking(canBlock ? blockable : [])
   }, [blockable, canBlock])
+
+  /** The same question about one swiped row, and only that row. */
+  const markRowSpam = useCallback((row: ThreadListRow) => {
+    setJunkIds([row.id])
+    setBlocking(canBlock ? blockableOf([row]) : [])
+  }, [canBlock])
 
   /** The middle answer: junk the pile and leave the front door alone. Also the
    *  only answer on a question with nobody to block in it. */
   const movePickedOnly = useCallback(async () => {
-    const ids = [...picked]
+    const ids = [...junkTargets]
     setBlocking(null)
-    if (!(await spamPicked())) return
+    if (!(await spamPicked({ ids: junkIds ?? undefined }))) return
     offerUndo({
       message: `${ids.length} ${them(ids.length)} moved to spam.`,
       undo: takeOutOfSpam(ids),
     })
-  }, [offerUndo, picked, spamPicked, takeOutOfSpam, them])
+  }, [junkIds, junkTargets, offerUndo, spamPicked, takeOutOfSpam, them])
 
   /** The yes: move them, then shut the door on all of them. One request per
    *  address rather than a list, for the same reason as the move, and settled
@@ -584,14 +602,14 @@ export function ThreadListView({
   const moveAndBlockAll = useCallback(async () => {
     const addresses = blocking ?? []
     if (addresses.length === 0) return
-    const ids = [...picked]
+    const ids = [...junkTargets]
     // Where the reader ends up, decided before the run empties the bar.
-    const wasOpen = openIsPicked()
+    const wasOpen = !!openThreadId && ids.includes(openThreadId)
     // No redraw while the dialog is still up: it pulls this whole panel through
     // a fresh server render and takes the dialog with it (see runOnPicked).
     // Which is also why the pane is not shut here - the navigation would do the
     // same thing to the dialog. It happens at the end, with the redraw.
-    const moved = await spamPicked({ refresh: false })
+    const moved = await spamPicked({ refresh: false, ids: junkIds ?? undefined })
     // Nothing moved, so there is nothing to shut a door behind. The run has
     // already said so on the screen.
     if (!moved) { setBlocking(null); router.refresh(); return }
@@ -639,7 +657,7 @@ export function ThreadListView({
       if (wasOpen) closePane()
       else router.refresh()
     }
-  }, [blocking, closePane, offerUndo, openIsPicked, picked, router, spamPicked, takeOutOfSpam, them])
+  }, [blocking, closePane, junkIds, junkTargets, offerUndo, openThreadId, router, spamPicked, takeOutOfSpam, them])
 
   /** What merging the picked rows would do, worked out before anybody is asked
    *  to agree to it: which conversation the rest fold into, and whether doing it
@@ -954,8 +972,75 @@ export function ThreadListView({
           // before it had a To line to go on at all.
           const other = otherEnd === who ? null : otherEnd
           const ticked = pickedSet.has(row.id)
+          const only = [row.id]
           return (
-            <li key={row.id} className="uin-list-item" data-selected={ticked ? 'true' : undefined}>
+            <SwipeRow
+              key={row.id}
+              className="uin-list-item"
+              selected={ticked}
+              open={swiped?.id === row.id ? swiped.side : null}
+              onOpen={(side) => setSwiped(side ? { id: row.id, side } : null)}
+              /* Swiping left: what is done WITH it. The same two words and
+                 the same clock the bar above uses, so a phone and a desk say
+                 one thing one way. Done turns into Reopen on something already
+                 done, as the bar's pair does. */
+              end={[
+                row.status === 'done' ? (
+                  <button key="open" type="button" className="uin-swipe-btn uin-swipe-open" disabled={busy}
+                          onClick={() => void closePicked({ status: 'open' }, 'Opened again.', only)}>
+                    {RestoreIcon}<span>Reopen</span>
+                  </button>
+                ) : (
+                  <button key="done" type="button" className="uin-swipe-btn uin-swipe-done" disabled={busy}
+                          onClick={() => void closePicked({ status: 'done' }, 'Marked as done.', only)}>
+                    {TickIcon}<span>Done</span>
+                  </button>
+                ),
+                <Dropdown
+                  key="snooze"
+                  className="uin-swipe-btn uin-swipe-snooze"
+                  label={<>{AlarmIcon}<span>Snooze</span></>}
+                  ariaLabel="Snooze - set when this comes back"
+                  align="end"
+                  width={280}
+                  disabled={busy}
+                  panelClassName="uin-menu-snooze"
+                >
+                  <SnoozePanel
+                    timezone={timezone}
+                    busy={busy}
+                    title="Snooze this one"
+                    onSnooze={(until) => void closePicked(
+                      { status: 'snoozed', snoozeUntil: until.toISOString() },
+                      'Snoozed.',
+                      only,
+                    )}
+                  />
+                </Dropdown>,
+              ]}
+              /* Swiping right: getting rid of it. Junk is left off in the two
+                 folders where it would mean nothing (see the bar), and in the
+                 Bin the basket turns round and puts it back. */
+              start={[
+                ...(!spam && !bin ? [
+                  <button key="junk" type="button" className="uin-swipe-btn uin-swipe-junk" disabled={busy}
+                          onClick={() => markRowSpam(row)}>
+                    {SpamIcon}<span>Junk</span>
+                  </button>,
+                ] : []),
+                bin ? (
+                  <button key="restore" type="button" className="uin-swipe-btn uin-swipe-open" disabled={busy}
+                          onClick={() => void restorePicked(only)}>
+                    {RestoreIcon}<span>Put back</span>
+                  </button>
+                ) : (
+                  <button key="delete" type="button" className="uin-swipe-btn uin-swipe-delete" disabled={busy}
+                          onClick={() => void deletePicked(only)}>
+                    {BinIcon}<span>Delete</span>
+                  </button>
+                ),
+              ]}
+            >
               <Link
                 className={`uin-row${row.unread ? ' uin-row-unread' : ''}`}
                 href={inboxHref(base, params, { id: row.id })}
@@ -1068,7 +1153,7 @@ export function ThreadListView({
                   </span>
                 </span>
               </Link>
-            </li>
+            </SwipeRow>
           )
         })}
       </ul>
@@ -1135,7 +1220,7 @@ export function ThreadListView({
         open={blocking !== null}
         title={askedAbout.length > 0
           ? (askedAbout.length > 1 ? `Block all ${askedAbout.length} of them as well?` : 'Block them as well?')
-          : (picked.length > 1 ? `Move ${picked.length} conversations to spam?` : 'Move it to the spam folder?')}
+          : (junkTargets.length > 1 ? `Move ${junkTargets.length} conversations to spam?` : 'Move it to the spam folder?')}
         body={<>
           {/* Whose bin each one lands in is worked out per conversation on the
               server, and a pile picked off one list can span several addresses -
@@ -1143,10 +1228,10 @@ export function ThreadListView({
               cannot know. "Moved to your spam" would be a plain untruth over a
               colleague's own post. */}
           <p>
-            {picked.length > 1 ? 'They will go' : 'It will go'} into a spam folder: your own, or
+            {junkTargets.length > 1 ? 'They will go' : 'It will go'} into a spam folder: your own, or
             the colleague&rsquo;s where the address is theirs rather than the team&rsquo;s.
             Nothing is deleted, and nobody else&rsquo;s view of
-            {picked.length > 1 ? ' them changes.' : ' it changes.'}
+            {junkTargets.length > 1 ? ' them changes.' : ' it changes.'}
           </p>
           {askedAbout.length > 0 ? (
             <p>
@@ -1171,7 +1256,7 @@ export function ThreadListView({
         </>}
         confirmLabel={askedAbout.length > 0
           ? (askedAbout.length > 1 ? 'Block them all' : 'Block them')
-          : (picked.length > 1 ? 'Move them' : 'Move it')}
+          : (junkTargets.length > 1 ? 'Move them' : 'Move it')}
         other={askedAbout.length > 0
           ? { label: 'No, just move them', onClick: movePickedOnly }
           : undefined}

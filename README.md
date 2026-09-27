@@ -130,6 +130,8 @@ the same human collapse into one story.
   the screen that genuinely throws something away - it takes the conversations
   away from everybody who could see them, there is no way back, and it takes the
   permission that looks after the site rather than the one that reads it.
+  Somebody writing on a deleted conversation brings it back out of every bin,
+  unread, so a reply can never be emptied away before anybody has read it.
   **Nothing is ever deleted from your mail account.** Whatever arrived by email
   is still sitting in the mailbox it arrived in; this only clears what is held
   here. And an emptied bin stays empty: a chat, an enquiry, a call or a text is

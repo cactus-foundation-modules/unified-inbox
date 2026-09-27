@@ -21,6 +21,7 @@ import { CheckNowButton, type CheckNowNotice } from './CheckNowButton'
 import { NewMailNotifier } from './NewMailNotifier'
 import { InboxSearch } from './InboxSearch'
 import { ComposeMenu, type ComposeMenuEntry } from './ComposeMenu'
+import { COMMIT_PX, DECIDE_PX, EDGE_PX, isPhone } from './swipe'
 
 // Everywhere you can go, down the left.
 //
@@ -727,6 +728,68 @@ export function NavRail({
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [closePlaces, placesOpen])
+  // On a phone the drawer also comes out the way a phone's own menus do: a
+  // swipe in from the left-hand edge of the screen pulls it out, and a swipe
+  // back to the left puts it away again. The button on the bar still works;
+  // this is for the thumb that is already at the edge of the screen.
+  //
+  // Only from the very edge (see swipe.ts): anywhere else, a swipe to the right
+  // belongs to the row under the finger, which slides open to show Junk and
+  // Delete. And it snaps rather than following the finger - the drawer already
+  // slides in on its own, and a half-dragged drawer is a second thing to get
+  // right for no gain anybody would notice.
+  //
+  // On the document rather than on the rail, because the edge of the screen is
+  // not part of the rail: on a phone the rail is the bar across the top. Not
+  // passive, because a swipe that has been taken as this must stop the page
+  // scrolling sideways underneath it.
+  const placesOpenNow = useRef(placesOpen)
+  useEffect(() => { placesOpenNow.current = placesOpen }, [placesOpen])
+  useEffect(() => {
+    let x0 = 0
+    let y0 = 0
+    let want: 'open' | 'close' | null = null
+    let decided = false
+    const onStart = (event: TouchEvent) => {
+      want = null
+      decided = false
+      if (!isPhone() || event.touches.length !== 1) return
+      const touch = event.touches[0]!
+      x0 = touch.clientX
+      y0 = touch.clientY
+      if (placesOpenNow.current) want = 'close'
+      else if (x0 < EDGE_PX) want = 'open'
+    }
+    const onMove = (event: TouchEvent) => {
+      if (!want) return
+      const touch = event.touches[0]
+      if (!touch) return
+      const dx = touch.clientX - x0
+      const dy = touch.clientY - y0
+      if (!decided) {
+        if (Math.abs(dx) < DECIDE_PX && Math.abs(dy) < DECIDE_PX) return
+        // Up and down is somebody scrolling the list - or the drawer itself -
+        // and the gesture stands aside for the rest of this touch.
+        if (Math.abs(dy) >= Math.abs(dx)) { want = null; return }
+        decided = true
+      }
+      event.preventDefault()
+      if (want === 'open' && dx >= COMMIT_PX) { want = null; setPlacesOpen(true) }
+      else if (want === 'close' && dx <= -COMMIT_PX) { want = null; closePlaces() }
+    }
+    const onEnd = () => { want = null }
+    document.addEventListener('touchstart', onStart, { passive: true })
+    document.addEventListener('touchmove', onMove, { passive: false })
+    document.addEventListener('touchend', onEnd)
+    document.addEventListener('touchcancel', onEnd)
+    return () => {
+      document.removeEventListener('touchstart', onStart)
+      document.removeEventListener('touchmove', onMove)
+      document.removeEventListener('touchend', onEnd)
+      document.removeEventListener('touchcancel', onEnd)
+    }
+  }, [closePlaces])
+
   // Picking a place shuts the drawer. Read off the click rather than wired into
   // every Entry: a link is a link, and the drawer is the one that cares.
   const onDrawerClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {

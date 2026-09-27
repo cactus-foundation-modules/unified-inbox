@@ -27,6 +27,8 @@ const markProviderContentRead = vi.hoisted(() => vi.fn())
 // database, because collecting a channel now asks the site's block list once per
 // pass and this suite has no database at all.
 const blockedSenderSet = vi.hoisted(() => vi.fn(async (): Promise<Set<string>> => new Set()))
+// In nobody's bin by default, for the same reason as reopenOnReply above.
+const unbinOnReply = vi.hoisted(() => vi.fn(async (): Promise<number> => 0))
 
 vi.mock('./db', () => ({
   providerThreadState,
@@ -42,6 +44,7 @@ vi.mock('./db', () => ({
 }))
 vi.mock('./provider-registry', () => ({ allConversationProviders }))
 vi.mock('./blocked-senders', () => ({ blockedSenderSet }))
+vi.mock('./bin', () => ({ unbinOnReply }))
 
 const { syncProvider, syncAllProviders } = await import('./provider-sync')
 
@@ -101,6 +104,7 @@ beforeEach(() => {
   markProviderContentRead.mockReset().mockResolvedValue(undefined)
   allConversationProviders.mockReset().mockResolvedValue([])
   blockedSenderSet.mockReset().mockResolvedValue(new Set())
+  unbinOnReply.mockReset().mockResolvedValue(0)
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
@@ -168,6 +172,18 @@ describe('syncProvider', () => {
     )
   })
 
+  it('takes it back out of the bin when the party writes on it again', async () => {
+    unbinOnReply.mockResolvedValue(1)
+    const thread = vi.fn().mockResolvedValue({ summary: summary(), messages: [message()] })
+
+    await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }))
+
+    expect(unbinOnReply).toHaveBeenCalledWith('t1')
+    expect(recordEvent).toHaveBeenCalledWith(
+      't1', null, 'unbinned', { bins: 1, providerModule: 'live-chat' },
+    )
+  })
+
   it('leaves it where it is when the conversation had nothing new in it', async () => {
     // Everything on it is already held - the ordinary answer on a settled
     // channel, and not somebody writing.
@@ -177,6 +193,7 @@ describe('syncProvider', () => {
     await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }))
 
     expect(reopenOnReply).not.toHaveBeenCalled()
+    expect(unbinOnReply).not.toHaveBeenCalled()
   })
 
   it('writes no timeline entry when it was open all along', async () => {
