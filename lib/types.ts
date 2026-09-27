@@ -378,6 +378,13 @@ export type UnifiedInboxSettings = {
    *  unassigned work - it only counted as some. See lib/own-post.ts for the
    *  four things it checks and what it deliberately leaves alone. */
   autoAssignOwnPost: boolean
+  /** Whether somebody who pays for a shop order becomes a contact, with the
+   *  name, number, company and billing address they gave at the checkout. On
+   *  by default: nothing leaves the site, it is one of its own tables copied
+   *  into another. Only ever read where the shop is installed; see
+   *  lib/shop-customer-sync.ts for what it fills in and what it never
+   *  overwrites. */
+  shopCustomerContacts: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -385,12 +392,13 @@ export type UnifiedInboxSettings = {
 // organisation their mail domain belongs to. Nothing else - see D15.
 // ---------------------------------------------------------------------------
 
-/** Where a record came from: worked out from the post, typed in by hand, or
- *  brought in from a file. Worth knowing - a contact somebody typed is one they
- *  meant, and one the mail pass invented from a From line is a guess. */
-export type ContactOrigin = 'mail' | 'hand' | 'import'
+/** Where a record came from: worked out from the post, typed in by hand,
+ *  brought in from a file, or given at the shop's checkout by somebody paying
+ *  for an order. Worth knowing - a contact somebody typed is one they meant, and
+ *  one the mail pass invented from a From line is a guess. */
+export type ContactOrigin = 'mail' | 'hand' | 'import' | 'order'
 
-export const CONTACT_ORIGINS: readonly ContactOrigin[] = ['mail', 'hand', 'import']
+export const CONTACT_ORIGINS: readonly ContactOrigin[] = ['mail', 'hand', 'import', 'order']
 
 /** A postal address, in the parts a British envelope has. Shared by a person
  *  and an organisation, which have the same one. */

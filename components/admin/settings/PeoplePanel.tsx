@@ -18,11 +18,13 @@ function linesToList(value: string): string[] {
   )]
 }
 
-export function PeoplePanel({ settings, inboxes, counts, categories, busy, call }: {
+export function PeoplePanel({ settings, inboxes, counts, categories, shopInstalled, busy, call }: {
   settings: Settings
   inboxes: Inbox[]
   counts: { people: number; organisations: number }
   categories: ContactCategoryRow[]
+  /** Whether there is a shop whose customers could become contacts. */
+  shopInstalled: boolean
   busy: boolean
   call: Caller
 }) {
@@ -34,6 +36,7 @@ export function PeoplePanel({ settings, inboxes, counts, categories, busy, call 
   const [po, setPo] = useState(settings.poNumberPattern ?? '')
   const [quote, setQuote] = useState(settings.quoteNumberPattern ?? '')
   const [avatars, setAvatars] = useState(settings.showAvatars)
+  const [shopContacts, setShopContacts] = useState(settings.shopCustomerContacts)
   // A pattern that cannot be searched for used to be accepted here and only fall
   // over later, out of sight.
   const [patternError, setPatternError] = useState<string | null>(null)
@@ -47,6 +50,7 @@ export function PeoplePanel({ settings, inboxes, counts, categories, busy, call 
     setPo(settings.poNumberPattern ?? '')
     setQuote(settings.quoteNumberPattern ?? '')
     setAvatars(settings.showAvatars)
+    setShopContacts(settings.shopCustomerContacts)
   }
 
   // What the module will treat as one of your own domains if you leave it to
@@ -83,6 +87,9 @@ export function PeoplePanel({ settings, inboxes, counts, categories, busy, call 
         poNumberPattern: po.trim() === '' ? null : po,
         quoteNumberPattern: quote.trim() === '' ? null : quote,
         showAvatars: avatars,
+        // Sent as it stands whether or not the shop is here: unchanged is
+        // unchanged, and a shop installed later finds the answer already given.
+        shopCustomerContacts: shopContacts,
       }),
     }, 'People settings saved.')
   }
@@ -161,6 +168,28 @@ export function PeoplePanel({ settings, inboxes, counts, categories, busy, call 
           </>}
         />
       </FieldGroup>
+
+      {shopInstalled && (
+        <FieldGroup
+          title="Customers from the shop"
+          hint="Somebody who pays for an order has already told you who they are. This saves typing it in again."
+        >
+          <CheckField
+            label="Add everybody who pays for an order to your contacts"
+            checked={shopContacts}
+            onChange={setShopContacts}
+            hint={<>
+              Their name, email address, phone number, company and billing address, as they gave
+              them at the checkout, filed under the <strong>Customers</strong> category (made the
+              first time it is needed). Somebody already in your contacts is filled in rather than
+              copied: an empty box gets the answer from the order, and anything already written on
+              their card is left exactly as it is. An order waiting on a bank transfer adds its
+              customer once the payment is marked as received. Colleagues testing the checkout
+              from a work address are never added.
+            </>}
+          />
+        </FieldGroup>
+      )}
 
       <CategoriesSection categories={categories} busy={busy} call={call} />
 

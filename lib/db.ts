@@ -687,6 +687,7 @@ const DEFAULT_SETTINGS: UnifiedInboxSettings = {
   hiddenChannelModules: [],
   channelOrder: [],
   autoAssignOwnPost: true,
+  shopCustomerContacts: true,
 }
 
 export async function getSettings(): Promise<UnifiedInboxSettings> {
@@ -760,6 +761,11 @@ export async function getSettings(): Promise<UnifiedInboxSettings> {
     // this one only decides whose name goes beside a conversation that nobody
     // but its owner can open anyway.
     autoAssignOwnPost: r.auto_assign_own_post === undefined ? true : !!r.auto_assign_own_post,
+    // ON for a row written before the column existed, the same answer a fresh
+    // install gets, and for the same reason as the one above: nothing is sent
+    // anywhere. It copies what a paying customer typed at this site's own
+    // checkout into this site's own address book.
+    shopCustomerContacts: r.shop_customer_contacts === undefined ? true : !!r.shop_customer_contacts,
   }
 }
 
@@ -790,6 +796,7 @@ export async function updateSettings(data: Partial<UnifiedInboxSettings>): Promi
   if (data.hiddenChannelModules !== undefined) sets.push(Prisma.sql`"hidden_channel_modules" = ${data.hiddenChannelModules}`)
   if (data.channelOrder !== undefined) sets.push(Prisma.sql`"channel_order" = ${data.channelOrder}::text[]`)
   if (data.autoAssignOwnPost !== undefined) sets.push(Prisma.sql`"auto_assign_own_post" = ${data.autoAssignOwnPost}`)
+  if (data.shopCustomerContacts !== undefined) sets.push(Prisma.sql`"shop_customer_contacts" = ${data.shopCustomerContacts}`)
   if (sets.length === 0) return getSettings()
 
   await prisma.$executeRaw`
@@ -1356,21 +1363,36 @@ export async function createThread(data: {
  * finished. The SENDER stays blocked either way: letting one conversation
  * through is a different decision from opening the front door, and it is a
  * different button in a different place.
+ *
+ * Returns whether the stamp actually moved - put on for the first time, or
+ * taken off one that was there - so the caller writes a timeline line only
+ * when something happened.
  */
-export async function setThreadBlocked(threadId: string, blocked: boolean): Promise<void> {
+export async function setThreadBlocked(threadId: string, blocked: boolean): Promise<boolean> {
   if (blocked) {
-    await prisma.$executeRaw`
-      UPDATE "uin_threads"
-         SET "blocked_at" = COALESCE("blocked_at", now()),
+    // Whether this is the FIRST stamp, read before the write under the row's
+    // lock: the timeline says "went straight to junk" once, not once for every
+    // message a blocked sender sends.
+    const rows = await prisma.$queryRaw<{ fresh: boolean }[]>`
+      WITH "before" AS (
+        SELECT "id", "blocked_at" IS NULL AS "fresh"
+          FROM "uin_threads"
+         WHERE "id" = ${threadId}
+           FOR UPDATE
+      )
+      UPDATE "uin_threads" t
+         SET "blocked_at" = COALESCE(t."blocked_at", now()),
              "status" = 'done',
              "snooze_until" = NULL,
              "unread" = true,
              "updated_at" = now()
-       WHERE "id" = ${threadId}
+        FROM "before"
+       WHERE t."id" = "before"."id"
+      RETURNING "before"."fresh" AS "fresh"
     `
-    return
+    return rows[0]?.fresh === true
   }
-  await prisma.$executeRaw`
+  const changed = await prisma.$executeRaw`
     UPDATE "uin_threads"
        SET "blocked_at" = NULL,
            "status" = 'open',
@@ -1378,6 +1400,7 @@ export async function setThreadBlocked(threadId: string, blocked: boolean): Prom
            "updated_at" = now()
      WHERE "id" = ${threadId} AND "blocked_at" IS NOT NULL
   `
+  return changed > 0
 }
 
 export type InsertMessageInput = {
@@ -2253,6 +2276,11 @@ export async function newestMessageOnThread(
     : await prisma.$queryRaw<Record<string, unknown>[]>`
         SELECT * FROM "uin_messages"
          WHERE "thread_id" = ${threadId} AND "direction" <> 'note'
+           -- A text carries no address, so answering one by email would have
+           -- nobody to go to. It sits on an email conversation when somebody
+           -- texted the customer from it (lib/text-links.ts); the email reply
+           -- answers the newest EMAIL instead.
+           AND "channel" <> 'sms'
          ORDER BY "sent_at" DESC LIMIT 1
       `
   return rows[0] ? mapQuotable(rows[0]) : null
@@ -2313,6 +2341,9 @@ export async function getQuotableMessage(
     SELECT * FROM "uin_messages"
      WHERE "id" = ${id}
        AND "direction" <> 'note'
+       -- Nor a text, for the reason newestMessageOnThread gives: it has no
+       -- address to answer, and quoting it falls back to the newest email.
+       AND "channel" <> 'sms'
        ${threadId ? Prisma.sql`AND "thread_id" = ${threadId}` : Prisma.empty}
   `
   return rows[0] ? mapQuotable(rows[0]) : null
@@ -2654,6 +2685,19 @@ export type ThreadListFilters = {
    *  of the British year and would quietly drop the first message of a day. */
   after?: Date | null
   before?: Date | null
+  /** Only conversations an incoming message has REACHED THE SITE in since
+   *  `since` - by when it was collected, never by the date written on it. The
+   *  two are minutes apart for all mail and hours apart for some, and a
+   *  question asked of the written date misses whatever was collected later
+   *  than the question looks back. What the new-mail nudges ask.
+   *
+   *  `writtenAfter` is the other half: a message dated before it is history,
+   *  however recently it was collected - a mail account connected this morning
+   *  brings years of it in at once, and none of it is news. Automated mail (an
+   *  out-of-office, a bounce) never counts: nobody has said anything. */
+  arrivedSince?: { since: Date; writtenAfter: Date } | null
+  /** Only these conversations. An empty list means none, not all. */
+  threadIds?: string[] | null
   /** Which end of the list to start at. Newest first is what a mail program
    *  does; oldest first is for working a backlog off the bottom, which is the
    *  only way to clear one without the top moving under you. */
@@ -3128,6 +3172,22 @@ function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
   // somebody is looking at rather than a column they cannot see.
   if (f.after) where.push(Prisma.sql`t."last_message_at" >= ${f.after}`)
   if (f.before) where.push(Prisma.sql`t."last_message_at" < ${f.before}`)
+  if (f.arrivedSince) {
+    // Correlated, and cheap for the same reason the search clause is: it is
+    // asked only of conversations that are already unread, open and readable,
+    // and uin_messages_arrived_idx keeps the site's own sent mail out of it.
+    where.push(Prisma.sql`EXISTS (
+      SELECT 1 FROM "uin_messages" ma
+       WHERE ma."thread_id" = t."id"
+         AND ma."direction" = 'in'
+         AND ma."auto_kind" IS NULL
+         AND ma."created_at" >= ${f.arrivedSince.since}
+         AND ma."sent_at" >= ${f.arrivedSince.writtenAfter}
+    )`)
+  }
+  if (f.threadIds) {
+    where.push(f.threadIds.length > 0 ? Prisma.sql`t."id" = ANY(${f.threadIds}::text[])` : Prisma.sql`false`)
+  }
   return where
 }
 
@@ -3530,6 +3590,11 @@ export type ThreadMessageRow = {
   remoteImages: number
   snippet: string | null
   sentAt: Date
+  /** When this site first held it, as opposed to the date written on it. The
+   *  timeline places a line by what was already on the screen when it was
+   *  written, and a message dated ten o'clock that was collected at five past
+   *  was not there at two minutes past. */
+  createdAt: Date
   hasAttachments: boolean
   autoKind: string | null
   deliveryStatus: string | null
@@ -3583,6 +3648,7 @@ function mapThreadMessage(r: Record<string, unknown>): ThreadMessageRow {
     remoteImages: showableRemoteImageUrls(readableHtml(html)).length,
     snippet: (r.snippet as string | null) ?? null,
     sentAt: r.sent_at as Date,
+    createdAt: r.created_at as Date,
     hasAttachments: !!r.has_attachments,
     autoKind: (r.auto_kind as string | null) ?? null,
     deliveryStatus: (r.delivery_status as string | null) ?? null,
@@ -3744,8 +3810,25 @@ export type ThreadEventKind =
    *  the log should still say where the conversation had been. */
   | 'moved'
   /** A reply arrived on a conversation somebody had put in the bin, so it came
-   *  back out. `detail.bins` is how many people's bins it left. */
+   *  back out. `detail.bins` is how many people's bins it left. With a person
+   *  on it, somebody took it back out by hand - `detail.ownerUserId` is whose
+   *  bin, which is not always theirs (see binOwnerFor). */
   | 'unbinned'
+  /** Somebody put it in a bin. Whose is `detail.ownerUserId`. A bin is one
+   *  person's view of a conversation, so the line says whose rather than
+   *  implying it went for everybody. */
+  | 'binned'
+  /** Somebody moved it to junk, or took it back out. Whose junk is
+   *  `detail.ownerUserId`, for the same reason as the bin. */
+  | 'junked'
+  | 'unjunked'
+  /** Post from a sender the site refuses arrived on it, so the collecting pass
+   *  put it in junk for everybody. Written the first time only. */
+  | 'blocked'
+  /** A message somebody had set to go out on its own was refused when its time
+   *  came. It stays a draft; `detail.reason` is the sentence it was refused
+   *  with and `detail.authorUserId` whose it was. */
+  | 'scheduled_failed'
 
 /**
  * Move a conversation to another mailbox.
@@ -3812,6 +3895,62 @@ export type ThreadEventRow = {
   kind: string
   detail: Record<string, unknown> | null
   createdAt: Date
+}
+
+/** How long after a press its opposite still counts as taking it back. The
+ *  toast offers five seconds; the Bin folder's Put back and the header's own
+ *  buttons are slower hands, and a minute and a half covers them without
+ *  swallowing a change of mind somebody had over lunch. */
+export const UNDO_WINDOW_MS = 90_000
+
+/**
+ * Take a line back out of the timeline, because the press it records has just
+ * been undone.
+ *
+ * Bin, then Undo on the toast, is two presses that between them did nothing -
+ * and two lines saying "put it in the bin" and "took it out again" three
+ * seconds apart is a timeline recording somebody's mis-click rather than
+ * anything that happened to the conversation. So the reverse press removes the
+ * line instead of adding a second one, but only while every one of these holds:
+ *
+ *   - it is the NEWEST line on the conversation (nothing has been said or done
+ *     since, so taking it out leaves no gap anybody saw filled),
+ *   - the same person wrote it, and inside UNDO_WINDOW_MS,
+ *   - it is one of `kinds`, and its detail contains `detailMatch` - for a
+ *     status change that is "what it was before is what it is going back to",
+ *   - and no message has landed on the conversation since.
+ *
+ * One statement, so the checks and the delete cannot be separated by another
+ * press. True when a line went; the caller writes its own line otherwise.
+ */
+export async function withdrawUndoneEvent(input: {
+  threadId: string
+  userId: string
+  kinds: ThreadEventKind[]
+  detailMatch: Record<string, unknown>
+}): Promise<boolean> {
+  const { threadId, userId, kinds, detailMatch } = input
+  const removed = await prisma.$executeRaw`
+    WITH "latest" AS (
+      SELECT "id", "user_id", "kind", "detail", "created_at"
+        FROM "uin_events"
+       WHERE "thread_id" = ${threadId}
+       ORDER BY "created_at" DESC, "id" DESC
+       LIMIT 1
+    )
+    DELETE FROM "uin_events" e
+     USING "latest"
+     WHERE e."id" = "latest"."id"
+       AND "latest"."user_id" = ${userId}
+       AND "latest"."kind" = ANY(${kinds}::text[])
+       AND "latest"."detail" @> ${JSON.stringify(detailMatch)}::jsonb
+       AND "latest"."created_at" > now() - (${UNDO_WINDOW_MS} * interval '1 millisecond')
+       AND NOT EXISTS (
+         SELECT 1 FROM "uin_messages" m
+          WHERE m."thread_id" = ${threadId} AND m."created_at" > "latest"."created_at"
+       )
+  `
+  return removed > 0
 }
 
 export async function listThreadEvents(threadId: string): Promise<ThreadEventRow[]> {
@@ -3932,12 +4071,34 @@ export async function threadSleep(
 }
 
 /** Conversations whose snooze has elapsed, opened again. Cheap enough to run
- *  on the way into the list, which is the only moment anybody would notice. */
+ *  on the way into the list, which is the only moment anybody would notice.
+ *
+ *  Each one says so in its own timeline, stamped with the moment it was DUE
+ *  rather than the moment somebody next happened to open the list: a snooze
+ *  that ran out on Thursday morning and was noticed on Friday afternoon ran out
+ *  on Thursday morning, and the line has to sit between the right messages.
+ *
+ *  One statement, so the waking and the saying cannot come apart. The due time
+ *  is read in the first CTE because RETURNING would hand back the NULL just
+ *  written, and FOR UPDATE is what stops two lists opening at once from writing
+ *  the line twice: the second waits, re-reads a row that is open now, and
+ *  matches nothing. Returns how many woke. */
 export async function wakeDueThreads(): Promise<number> {
   return prisma.$executeRaw`
-    UPDATE "uin_threads"
-       SET "status" = 'open', "snooze_until" = NULL, "updated_at" = now()
-     WHERE "status" = 'snoozed' AND "snooze_until" IS NOT NULL AND "snooze_until" <= now()
+    WITH "due" AS (
+      SELECT "id", "snooze_until"
+        FROM "uin_threads"
+       WHERE "status" = 'snoozed' AND "snooze_until" IS NOT NULL AND "snooze_until" <= now()
+         FOR UPDATE
+    ), "woke" AS (
+      UPDATE "uin_threads" t
+         SET "status" = 'open', "snooze_until" = NULL, "updated_at" = now()
+        FROM "due"
+       WHERE t."id" = "due"."id"
+      RETURNING t."id", "due"."snooze_until" AS "due_at"
+    )
+    INSERT INTO "uin_events" ("thread_id", "user_id", "kind", "detail", "created_at")
+    SELECT "id", NULL, 'woken', '{"was":"snoozed","cause":"time"}'::jsonb, "due_at" FROM "woke"
   `
 }
 
@@ -5275,6 +5436,41 @@ export async function releaseStaleScheduledClaims(before: Date): Promise<number>
  *  with no state on it is an ordinary draft to every other query in this file,
  *  which is exactly what a stood-down message is. */
 export async function holdScheduledDraftsFor(address: string, threadId: string): Promise<Draft[]> {
+  return holdScheduledDrafts({ threadId, address, sameThread: false, exceptAuthorUserId: null })
+}
+
+/**
+ * The general form of the above: everything that should stop waiting because
+ * something has just been said on `threadId`.
+ *
+ * Two ways in, either or both:
+ *
+ *   `address` - somebody outside wrote, so anything set to go TO them stands
+ *   down, on whichever conversation it was written in. The rule above.
+ *
+ *   `sameThread` - something was said on THIS conversation, so a reply waiting
+ *   on it stands down whoever it is addressed to. A reply from a Cc'd colleague
+ *   of the customer, or from the customer's other address, has answered the
+ *   question just as surely as one from the address on the To line - and a
+ *   chat or a text has no address to match at all, so for those this is the
+ *   whole of the rule. A forward is left alone: it is going to somebody else
+ *   about something already said, and a new message from the customer does not
+ *   answer it.
+ *
+ * `exceptAuthorUserId` is for our own side speaking. A colleague answering on a
+ *   conversation stands down other people's waiting replies, never the ones
+ *   they wrote themselves - they knew about those. Null when who spoke is not
+ *   known (an answer sent from somebody's phone, or from the channel's own
+ *   screens), which stands down everybody's.
+ */
+export async function holdScheduledDrafts(input: {
+  threadId: string
+  address: string | null
+  sameThread: boolean
+  exceptAuthorUserId: string | null
+}): Promise<Draft[]> {
+  const { threadId, address, sameThread, exceptAuthorUserId } = input
+  if (!address && !sameThread) return []
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     UPDATE "uin_drafts" d
        SET "send_state"        = NULL,
@@ -5284,10 +5480,14 @@ export async function holdScheduledDraftsFor(address: string, threadId: string):
            "held_at"           = now(),
            "updated_at"        = now()
      WHERE d."send_state" = 'scheduled'
-       AND EXISTS (
-         SELECT 1 FROM unnest(d."to_addresses") AS "recipient"
-          WHERE lower("recipient") = lower(${address})
+       AND (
+         (${address}::text IS NOT NULL AND EXISTS (
+            SELECT 1 FROM unnest(d."to_addresses") AS "recipient"
+             WHERE lower("recipient") = lower(${address}::text)
+         ))
+         OR (${sameThread} AND d."thread_id" = ${threadId} AND d."mode" <> 'forward')
        )
+       AND (${exceptAuthorUserId}::text IS NULL OR d."author_user_id" <> ${exceptAuthorUserId}::text)
     RETURNING *
   `
   return rows.map(mapDraft)
@@ -7928,7 +8128,7 @@ export async function threadsForMerge(ids: string[]): Promise<MergeThreadRow[]> 
 
 /** The transaction handle Prisma hands an interactive transaction. Named so the
  *  helpers below can say what they take without repeating the type. */
-type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0]
+export type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0]
 
 /**
  * A message the winner already holds, in any of the three senses a unique index
@@ -7958,7 +8158,7 @@ const MESSAGE_ALREADY_ON_WINNER = (winnerId: string): Prisma.Sql => Prisma.sql`
 /** Everything a conversation says about itself that is really a summary of its
  *  messages, worked out again from the messages. Called on both sides of a
  *  merge and of an undo, because both sides change. */
-async function recomputeThreadCounters(tx: Tx, threadId: string): Promise<void> {
+export async function recomputeThreadCounters(tx: Tx, threadId: string): Promise<void> {
   await tx.$executeRaw`
     UPDATE "uin_threads" t
        SET "message_count" = COALESCE(s."count", 0),

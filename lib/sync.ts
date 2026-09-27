@@ -44,12 +44,12 @@ import {
   touchThread,
   reopenOnReply,
   setThreadBlocked,
-  holdScheduledDraftsFor,
   recordEvent,
   type StoredMessageRef,
 } from './db'
 import { blockedSenderSet, shouldJunkSender } from './blocked-senders'
 import { unbinOnReply } from './bin'
+import { standDownScheduled } from './stand-down'
 import { ownPostAssignee, ownPostOwners } from './own-post'
 import { prepareInboundHtml, htmlToText } from './html'
 import { chooseRelayCopy, RELAY_COPY_WINDOW_MS } from './relay-copy'
@@ -1108,7 +1108,17 @@ async function fileMessage(
     // to land the same way as the first one did. Idempotent: the date is only
     // ever written once, so a nuisance who writes six times is one conversation
     // stamped with the day they first got through.
-    if (junk) await setThreadBlocked(thread, true)
+    //
+    // Said in the timeline once, before the message that caused it: the first
+    // time a conversation is refused, whether it was born refused (createThread
+    // stamps a new one itself) or an existing one has just been reached by a
+    // sender the site now turns away.
+    if (junk) {
+      const fresh = await setThreadBlocked(thread, true)
+      if (fresh || !input.threadMatch.threadId) {
+        await recordEvent(thread, null, 'blocked', { messageId: written })
+      }
+    }
 
     // Somebody has written on it, so it goes back in Open - whether it was
     // asleep until Thursday or marked done a fortnight ago.
@@ -1132,33 +1142,46 @@ async function fileMessage(
     // pass has just put in the bin would undo the line above it in the same
     // function, and the two would then race on every message a blocked sender
     // sent.
+    //
+    // Each line carries the message that caused it, so the conversation shows
+    // "a reply arrived, so it is no longer snoozed" directly above the reply -
+    // not wherever the clock on the collecting pass happened to put it.
     if (!automated && !junk) {
       const was = await reopenOnReply(thread)
-      if (was) await recordEvent(thread, null, 'woken', { was, direction: input.direction })
+      if (was) await recordEvent(thread, null, 'woken', { was, direction: input.direction, messageId: written })
       // And out of the bin, for the same reason: nobody threw THIS away. See
       // unbinOnReply.
       const bins = await unbinOnReply(thread)
-      if (bins > 0) await recordEvent(thread, null, 'unbinned', { bins, direction: input.direction })
+      if (bins > 0) await recordEvent(thread, null, 'unbinned', { bins, direction: input.direction, messageId: written })
     }
 
-    // They wrote first. Anything we had set to go out to this person is stood
-    // down before it can ask a question they have just answered - the writing
-    // is kept, the departure time is not, and this conversation says so.
+    // The conversation has moved on, so anything waiting to go out on it - or,
+    // when they wrote, anything waiting to go out TO them - is stood down
+    // before it can say something that has just been overtaken. The writing is
+    // kept, the departure time is not, and the conversation says so. See
+    // lib/stand-down.ts for the whole rule.
     //
-    // Inbound and not the mail system talking: an out-of-office is not somebody
+    // Both directions: an outbound message here is one this hub did not send - a
+    // colleague answering from their phone or from Outlook - and who that was
+    // is not known, so nobody's waiting reply is spared.
+    //
+    // Never for the mail system talking: an out-of-office is not somebody
     // writing back, and standing a quote down because a supplier is on holiday
-    // is the opposite of helpful. An outbound copy found in Sent is us, and
-    // holding our own messages against ourselves would stand down every
-    // scheduled message the moment a colleague answered on their phone.
+    // is the opposite of helpful. And never for a blocked sender: standing
+    // down a quote because somebody the site refuses has written in is letting
+    // them reach into the business through a door that is supposed to be shut.
     //
-    // And not for a blocked sender. Standing down a quote because somebody the
-    // site refuses has written in is letting them reach into the business
-    // through a door that is supposed to be shut.
-    if (!automated && !junk && input.direction === 'in' && fromAddress) {
-      const held = await holdScheduledDraftsFor(fromAddress, thread)
-      if (held.length > 0) {
-        await recordEvent(thread, null, 'held', { count: held.length, address: fromAddress })
-      }
+    // And only for post arriving now. The backfill reads history, and a reply
+    // from last March being read in for the first time has not overtaken
+    // anything anybody wrote this morning.
+    if (!automated && !junk && pass === 'forward') {
+      await standDownScheduled({
+        threadId: thread,
+        messageId: written,
+        direction: input.direction,
+        fromAddress: input.direction === 'in' ? fromAddress ?? null : null,
+        senderUserId: null,
+      })
     }
 
     // Post at somebody's own address is theirs, so it arrives on their desk

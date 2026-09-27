@@ -10,9 +10,11 @@ import {
   attributionLine, forwardHeaderRows, forwardSubject as forwardSubjectOf, replySubject as replySubjectOf,
 } from '@/modules/unified-inbox/lib/compose'
 import { normaliseSubject } from '@/modules/unified-inbox/lib/threading'
+import { isSideText } from '@/modules/unified-inbox/lib/text-rules'
 import type { QuotedPreview } from '@/modules/unified-inbox/lib/quoted-preview'
 import { describeSendAt } from '@/modules/unified-inbox/lib/scheduled'
-import { AtIcon, BackIcon, ClockIcon, CloseIcon, InboundIcon, NoteIcon, OutboundIcon, PaperclipIcon, TickIcon } from './icons'
+import { describeEvents, weaveTimeline, type TimelineEvent, type TimelineLine } from '@/modules/unified-inbox/lib/timeline'
+import { AtIcon, BackIcon, ClockIcon, CloseIcon, InboundIcon, NoteIcon, OutboundIcon, PaperclipIcon, PhoneIcon, TickIcon } from './icons'
 import { Avatar } from './Avatar'
 import { MessageBody } from './MessageBody'
 import { MessageText } from './MessageText'
@@ -154,6 +156,9 @@ type Props = {
    *  this conversation arrived. Almost always empty; when it is not, it is the
    *  most important thing on the screen. */
   heldDrafts: HeldDraftView[]
+  /** Whoever is reading. A discussion's done and bin are each colleague's own,
+   *  and so are the lines in the conversation that record them. */
+  viewerUserId: string
   /** What colleagues have started writing under this conversation and not sent.
    *  Read-only, every one of them: see OthersDrafts. */
   othersDrafts: OtherDraftView[]
@@ -190,6 +195,11 @@ type Props = {
    *  on whether the conversation was unread when it was opened - which stops
    *  being true the moment it is. */
   scrollToMessageId: string | null
+  /** The mobile on the contact card of whoever this is with, when the site can
+   *  send texts and this reader may answer - which puts "Send text message" on
+   *  every message's dots. Null otherwise, and always on anything that is not
+   *  an email conversation. See lib/text-links.ts. */
+  textTo: string | null
 }
 
 /** One ask, in the little the banner needs. Dates are already words by the time
@@ -267,8 +277,11 @@ function MessageWhen({ at, now, timezone }: { at: Date | string | null; now: Dat
  * shop, an address nobody has been matched to - keeps its initials, which is
  * what the circle has always been.
  */
-function MessageHeader({ message, personId, showAvatars, staffById, now, timezone, tools }: {
+function MessageHeader({ message, sideText, personId, showAvatars, staffById, now, timezone, tools }: {
   message: ThreadMessageView
+  /** A text carried on an email conversation, which says so: without it a
+   *  customer's text reads as an email with no address on it. */
+  sideText: boolean
   personId: string | null
   showAvatars: boolean
   staffById: Record<string, string>
@@ -310,21 +323,26 @@ function MessageHeader({ message, personId, showAvatars, staffById, now, timezon
         <div className="uin-msg-head-lines">
           <div className="uin-msg-head-line">
             <span className="sr-only">Sent by</span>
-            <span className="uin-msg-who">{author ? `${author} replied` : 'Sent from here'}</span>
+            <span className="uin-msg-who">
+              {sideText
+                ? (author ? `${author} sent a text` : 'A text was sent')
+                : (author ? `${author} replied` : 'Sent from here')}
+            </span>
+            {sideText && <span className="uin-msg-dir">{PhoneIcon} Text message</span>}
             {message.fromAddress ? <AddressLine text={`<${message.fromAddress}>`} /> : null}
           </div>
           {/* A live chat or a web form has no email address to have been sent
               to, so there is nothing missing to report and no second line.
               Saying "nobody recorded" there invented an absence, and read as a
-              fault. */}
-          <ToLine addresses={message.toAddresses} />
+              fault. A text has a number instead, which is what it went to. */}
+          <ToLine addresses={sideText && message.fromPhone ? [message.fromPhone] : message.toAddresses} />
         </div>
         <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
         {tools}
       </div>
     )
   }
-  const named = (message.fromName || message.fromAddress || '').trim() || null
+  const named = (message.fromName || message.fromAddress || (sideText ? message.fromPhone : '') || '').trim() || null
   return (
     <div className="uin-msg-head">
       <Avatar src={picture('person', personId)} title={named ?? undefined}>
@@ -346,6 +364,7 @@ function MessageHeader({ message, personId, showAvatars, staffById, now, timezon
           {message.fromName && message.fromAddress
             ? <AddressLine text={`<${message.fromAddress}>`} />
             : null}
+          {sideText && <span className="uin-msg-dir">{PhoneIcon} Text message</span>}
         </div>
         <ToLine addresses={message.toAddresses} />
       </div>
@@ -383,8 +402,10 @@ function isRecording(file: { externalUrl: string | null; contentType: string | n
     && (!!file.contentType?.startsWith('audio/') || /\.(mp3|wav|ogg|m4a)$/i.test(file.filename))
 }
 
-function Message({ message, threadSubject, personId, showAvatars, staffById, now, timezone, canDelete, tools }: {
+function Message({ message, sideText, threadSubject, personId, showAvatars, staffById, now, timezone, canDelete, tools }: {
   message: ThreadMessageView
+  /** A text carried on an email conversation - see MessageHeader. */
+  sideText: boolean
   /** What the conversation is called, so a message called something else can
    *  say so. */
   threadSubject: string | null
@@ -417,6 +438,7 @@ function Message({ message, threadSubject, personId, showAvatars, staffById, now
     <article id={messageDomId(message.id)} className={`uin-msg uin-msg-${kind}`}>
       <MessageHeader
         message={message}
+        sideText={sideText}
         personId={personId}
         showAvatars={showAvatars}
         staffById={staffById}
@@ -552,79 +574,51 @@ function Message({ message, threadSubject, personId, showAvatars, staffById, now
   )
 }
 
-const EVENT_WORDS: Record<string, string> = {
-  assigned: 'handed it on',
-  snoozed: 'set it to come back later',
-  status: 'changed where it stands',
-  note: 'left a note',
-  mentioned: 'asked somebody to look',
-  linked: 'linked a record to it',
-  unlinked: 'removed a link',
-  merged: 'merged it with another',
-  unmerged: 'separated one back out again',
-  moved: 'moved it to another mailbox',
-  message_deleted: 'deleted a message from it',
-  message_split: 'moved a message out to its own conversation',
-  split_from: 'moved a message here out of another conversation',
-}
-
-/** What one entry says the person did. Named where naming them is the point:
- *  "asked somebody to look" is the one line in this log where the interesting
- *  half is who was asked rather than who asked, and it was the half being
- *  thrown away. */
-function eventWords(event: ThreadEventRow, staffById: Record<string, string>): string {
-  if (event.kind === 'mentioned') {
-    const wanted = typeof event.detail?.userId === 'string' ? staffById[event.detail.userId] : null
-    return wanted ? `asked ${wanted} to look` : 'asked somebody to look'
-  }
-  // A waking with a name on it is one of ours: somebody answered a conversation
-  // that had been marked done. The unattended version of the same line says a
-  // reply arrived, which is the other half of the same rule and is somebody
-  // else's doing - see unattendedEvent.
-  if (event.kind === 'woken') return 'answered it, so it was opened again'
-  // Where from and where to, off the names recorded at the time: a mailbox can be
-  // renamed or deleted since, and the log should still say where this had been.
-  if (event.kind === 'moved') {
-    const from = typeof event.detail?.fromName === 'string' ? event.detail.fromName : null
-    const to = typeof event.detail?.toName === 'string' ? event.detail.toName : null
-    if (from && to) return `moved it from ${from} to ${to}`
-    if (to) return `moved it to ${to}`
-  }
-  return EVENT_WORDS[event.kind] ?? 'changed something'
-}
-
-/** Entries nobody did. The rest of the log reads "<name> <did something>", and
- *  putting "Somebody" in front of an automatic one invents a colleague who was
- *  never there - so these carry their own whole sentence instead.
+/** One line in the conversation saying what happened to it, between the
+ *  messages it happened between. Quiet on purpose - a rule either side and
+ *  small words - because it is punctuation in the story, not a message in it.
  *
- *  Returns null for anything with a person behind it, which is most of it. */
-function unattendedEvent(event: ThreadEventRow, staffById: Record<string, string>): string | null {
-  if (event.userId) return null
-  if (event.kind === 'held') {
-    const count = typeof event.detail?.count === 'number' ? event.detail.count : 1
-    return count > 1
-      ? `They wrote first, so ${count} messages waiting to go out to them were held`
-      : 'They wrote first, so a message waiting to go out to them was held'
-  }
-  if (event.kind === 'awaiting') {
-    // Named, because the chase was handed to whoever WROTE the message rather
-    // than to whoever sent it, and a conversation that reappears on somebody
-    // else's list needs to say why it is theirs.
-    const author = typeof event.detail?.userId === 'string' ? staffById[event.detail.userId] : null
-    return author
-      ? `It went out, so it comes back to ${author} if nobody replies`
-      : 'It went out, so it comes back if nobody replies'
-  }
-  if (event.kind === 'unbinned') return 'A reply arrived, so it came back out of the bin'
-  if (event.kind !== 'woken') return null
-  // Worth saying which it was: coming back early from a snooze is mildly
-  // surprising, and something you had marked done reopening is the sort of
-  // thing you want an explanation for before you go looking for one.
-  return event.detail?.was === 'done'
-    ? 'A reply arrived, so it was opened again'
-    : 'A reply arrived, so it stopped being snoozed'
+ *  The one line that can be acted on is a merge that can still be taken apart:
+ *  the way out of it sits on the end of the line that records it. A merge
+ *  already separated, or one this reader could not undo anyway, is a line with
+ *  nothing on the end - the list of undoable merges is empty in both cases. */
+function EventLine({ line, merges, now, timezone }: {
+  line: TimelineLine
+  merges: ThreadMergeView[]
+  now: Date
+  timezone: string
+}) {
+  const undoable = undoableFromEvent(line.event, merges)
+  return (
+    <div className="uin-event-line">
+      <p className="uin-event-line-said">
+        <span>{line.text}</span>{' '}
+        <span className="uin-event-line-when" title={formatFull(line.event.createdAt, timezone)}>
+          {formatWhen(line.event.createdAt, now, timezone)}
+        </span>
+      </p>
+      {undoable.map((merge) => (
+        <UnmergeButton key={merge.id} merge={merge} />
+      ))}
+    </div>
+  )
 }
 
+/** Why a message of this reader's stopped waiting, as the opening of a
+ *  sentence, read off the line that recorded it. Rows written before the cause
+ *  was recorded - and a draft held with no line at all - read as the rule was
+ *  then: they wrote first. */
+function heldBecause(draftId: string, events: ThreadEventRow[], staffById: Record<string, string>): string {
+  const held = [...events].reverse().find((event) =>
+    event.kind === 'held'
+    && Array.isArray(event.detail?.draftIds)
+    && event.detail.draftIds.includes(draftId))
+  if (held?.detail?.cause === 'colleague') {
+    const by = held.userId ? staffById[held.userId] : null
+    return by ? `${by} replied first` : 'A reply was sent from outside the inbox first'
+  }
+  return 'They wrote to you first'
+}
 
 /** The merges one log entry recorded that could still be taken apart.
  *
@@ -632,7 +626,7 @@ function unattendedEvent(event: ThreadEventRow, staffById: Record<string, string
  *  undoable and that this reader is allowed to undo. The intersection is what
  *  gets a button - so a merge already separated out, or one on a conversation
  *  this reader may read but not manage, quietly has none. */
-function undoableFromEvent(event: ThreadEventRow, merges: ThreadMergeView[]): ThreadMergeView[] {
+function undoableFromEvent(event: TimelineEvent, merges: ThreadMergeView[]): ThreadMergeView[] {
   if (event.kind !== 'merged' || merges.length === 0) return []
   const made = event.detail?.mergeIds
   if (!Array.isArray(made)) return []
@@ -664,8 +658,8 @@ export function ThreadPane({
   canReply, cannotReplyReason, style, destinationLine,
   replyTo, replyAllTo, replySubject, forwardSubject, draft,
   canAddProducts, draftProducts, canSuggestReplies, newestFirst,
-  canDeleteMessages, canManage, blockState, spamState, binState, now, timezone, heldDrafts, othersDrafts, focusDraft = null, showAvatars,
-  context, asked, merges, otherInboxNames, scrollToMessageId,
+  canDeleteMessages, canManage, blockState, spamState, binState, now, timezone, heldDrafts, viewerUserId, othersDrafts, focusDraft = null, showAvatars,
+  context, asked, merges, otherInboxNames, scrollToMessageId, textTo,
 }: Props) {
   // The list arrives oldest first. Reversing a copy rather than sorting again:
   // the query already decided the order, and this only says which end to read
@@ -674,7 +668,15 @@ export function ThreadPane({
   // A deleted message used to be hidden from this list by client-side state,
   // which is why the count under the subject went on disagreeing with it. The
   // delete button refreshes instead, so this is server truth again.
-  const ordered = newestFirst ? [...messages].reverse() : messages
+  //
+  // What has happened to the conversation is woven in between the messages -
+  // snoozed, woken, binned, a scheduled reply stood down - each line where it
+  // happened, and the one caused by a message directly before it. See
+  // lib/timeline.ts. Reversed as a whole for newest first, so a line still sits
+  // between the same two messages.
+  const lines = describeEvents(events, { staffById, timezone, viewerUserId })
+  const woven = weaveTimeline(messages, lines)
+  const ordered = newestFirst ? [...woven].reverse() : woven
 
   /** Colleagues' unsent replies, placed where a reply sits - beside the newest
    *  message - so they read as part of the conversation rather than a note
@@ -747,8 +749,10 @@ export function ThreadPane({
   // Notes are left out. One is written for colleagues on this screen and is
   // never quoted into anything that goes anywhere, which is also what the send
   // route's own lookup refuses to do.
+  // Texts are left out for the same reason: one has no address and no
+  // subject, and quoting a text into an email says something odd to both.
   const quotedPreviews: QuotedPreview[] = messages
-    .filter((message) => message.direction !== 'note')
+    .filter((message) => message.direction !== 'note' && !isSideText(message, thread.channel))
     .map((message) => ({
       id: message.id,
       sentAtMs: message.sentAt.getTime(),
@@ -919,7 +923,8 @@ export function ThreadPane({
             <strong>A message to them was waiting to go out.</strong>{' '}
             {heldDraft.subject?.trim() ? `"${heldDraft.subject.trim()}" was set to go out` : 'It was set to go out'}
             {heldDraft.sendAt ? ` ${describeSendAt(heldDraft.sendAt, now, timezone)}` : ''}
-            . They wrote to you first, so it was held and nothing was sent.{' '}
+            . {heldBecause(heldDraft.id, events, staffById)}, so it was cancelled and saved as a
+            draft - nothing was sent.{' '}
             <Link href={draftHref(base, params, heldDraft)}>Open it</Link> to send it as it is,
             change it, or throw it away.
           </div>
@@ -969,20 +974,34 @@ export function ThreadPane({
           />
         )}
 
-        {messages.length === 0 ? (
-          !thread.providerModule && (
-            <div className="uin-empty">
-              <strong>There is nothing to read in this one</strong>
-              No messages are being kept against this conversation. It may have been cleared
-              out, or it may go back further than this inbox does.
-            </div>
-          )
-        ) : (
+        {messages.length === 0 && !thread.providerModule && (
+          <div className="uin-empty">
+            <strong>There is nothing to read in this one</strong>
+            No messages are being kept against this conversation. It may have been cleared
+            out, or it may go back further than this inbox does.
+          </div>
+        )}
+        {ordered.length > 0 && (
           <div className="uin-messages">
-            {ordered.map((message) => (
+            {ordered.map((entry) => {
+              if (entry.type === 'line') {
+                return (
+                  <EventLine
+                    key={`line-${entry.line.event.id}`}
+                    line={entry.line}
+                    merges={merges}
+                    now={now}
+                    timezone={timezone}
+                  />
+                )
+              }
+              const message = entry.message
+              const sideText = isSideText(message, thread.channel)
+              return (
               <Message
                 key={message.id}
                 message={message}
+                sideText={sideText}
                 threadSubject={thread.subject}
                 personId={thread.personId}
                 showAvatars={showAvatars}
@@ -990,16 +1009,17 @@ export function ThreadPane({
                 now={now}
                 timezone={timezone}
                 canDelete={canDeleteMessages}
-                tools={(
+                /* No arrow and no dots on an internal note. A note is
+                   written for colleagues on this screen: there is nothing in
+                   it to answer, forward or text anybody about, and the arrow
+                   on it answered some other message entirely. */
+                tools={message.direction === 'note' ? null : (
                   <MessageMenu
                     threadId={thread.id}
                     /* An answer quotes the message it was asked for, so the
-                       arrow carries which one it sits on. A note is never
-                       quoted into anything that leaves the site, so it carries
-                       nothing and the send falls back to the newest message. */
-                    messageId={message.direction === 'note' ? null : message.id}
-                    /* Which message the last two entries act ON, which is this
-                       one whatever it is - a note included. */
+                       arrow carries which one it sits on. */
+                    messageId={message.id}
+                    /* Which message the last entries act ON. */
                     actOn={message.id}
                     canReply={canReply}
                     canReplyAll={canReply && replyAllTo.length > replyTo.length}
@@ -1009,7 +1029,7 @@ export function ThreadPane({
                        it at the phone company as well, and two controls a few
                        pixels apart that both say Delete and mean different
                        things is how somebody deletes the wrong thing. */
-                    canDeleteHere={canManage && !(canDeleteMessages && message.source === 'provider')}
+                    canDeleteHere={canManage && (sideText || !(canDeleteMessages && message.source === 'provider'))}
                     /* A channel's message is a copy of something the owning
                        module still holds and would hand back on the next
                        collection, so it is not ours to move - and the only
@@ -1017,12 +1037,18 @@ export function ThreadPane({
                        The route refuses both again; this is so the entry is
                        not drawn for somebody to press and be told no. */
                     canSplit={canManage && message.source !== 'provider' && messages.length > 1}
+                    textTo={canReply ? textTo : null}
+                    isText={sideText}
+                    /* Their reply, filed here because somebody texted them from
+                       this conversation. The route checks the rest. */
+                    canMoveToPhone={canReply && sideText && message.direction === 'in'}
                     base={base}
                     params={params}
                   />
                 )}
               />
-            ))}
+              )
+            })}
           </div>
         )}
 
@@ -1050,35 +1076,6 @@ export function ThreadPane({
             canSuggestReplies={canSuggestReplies}
             timezone={timezone}
           />
-        )}
-
-        {events.length > 0 && (
-          <details>
-            <summary className="uin-chip uin-summary">What has been done to this</summary>
-            <ul className="uin-log">
-              {events.map((event) => (
-                <li key={event.id}>
-                  <span>
-                    {unattendedEvent(event, staffById) ?? (
-                      <>
-                        {(event.userId && staffById[event.userId]) || 'Somebody'}{' '}
-                        {eventWords(event, staffById)}
-                      </>
-                    )}
-                    {' - '}
-                    {formatFull(event.createdAt, timezone)}
-                  </span>
-                  {/* The one line in the log that can be acted on. A merge that
-                      has already been taken apart, or one this reader could not
-                      undo anyway, is a line with nothing on the end of it - the
-                      list of undoable merges is empty in both cases. */}
-                  {undoableFromEvent(event, merges).map((merge) => (
-                    <UnmergeButton key={merge.id} merge={merge} />
-                  ))}
-                </li>
-              ))}
-            </ul>
-          </details>
         )}
       </div>
 

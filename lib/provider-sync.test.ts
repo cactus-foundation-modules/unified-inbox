@@ -29,6 +29,14 @@ const markProviderContentRead = vi.hoisted(() => vi.fn())
 const blockedSenderSet = vi.hoisted(() => vi.fn(async (): Promise<Set<string>> => new Set()))
 // In nobody's bin by default, for the same reason as reopenOnReply above.
 const unbinOnReply = vi.hoisted(() => vi.fn(async (): Promise<number> => 0))
+const standDownScheduled = vi.hoisted(() => vi.fn(async (): Promise<unknown[]> => []))
+const touchThread = vi.hoisted(() => vi.fn())
+// Nobody has been texted from an email conversation unless a test says so -
+// see lib/text-links.ts. Mocked for the same reason as everything above.
+const textLinksFor = vi.hoisted(() => vi.fn(async (): Promise<Map<string, unknown>> => new Map()))
+const heldChannelMessages = vi.hoisted(() => vi.fn(async (): Promise<Map<string, string>> => new Map()))
+const claimSentText = vi.hoisted(() => vi.fn(async (): Promise<boolean> => false))
+const markTextLinkRead = vi.hoisted(() => vi.fn())
 
 vi.mock('./db', () => ({
   providerThreadState,
@@ -41,10 +49,13 @@ vi.mock('./db', () => ({
   reopenOnReply,
   recordEvent,
   markProviderContentRead,
+  touchThread,
 }))
+vi.mock('./text-links', () => ({ textLinksFor, heldChannelMessages, claimSentText, markTextLinkRead }))
 vi.mock('./provider-registry', () => ({ allConversationProviders }))
 vi.mock('./blocked-senders', () => ({ blockedSenderSet }))
 vi.mock('./bin', () => ({ unbinOnReply }))
+vi.mock('./stand-down', () => ({ standDownScheduled }))
 
 const { syncProvider, syncAllProviders } = await import('./provider-sync')
 
@@ -105,6 +116,12 @@ beforeEach(() => {
   allConversationProviders.mockReset().mockResolvedValue([])
   blockedSenderSet.mockReset().mockResolvedValue(new Set())
   unbinOnReply.mockReset().mockResolvedValue(0)
+  standDownScheduled.mockReset().mockResolvedValue([])
+  touchThread.mockReset().mockResolvedValue(undefined)
+  textLinksFor.mockReset().mockResolvedValue(new Map())
+  heldChannelMessages.mockReset().mockResolvedValue(new Map())
+  claimSentText.mockReset().mockResolvedValue(false)
+  markTextLinkRead.mockReset().mockResolvedValue(undefined)
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
@@ -155,9 +172,10 @@ describe('syncProvider', () => {
     await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }))
 
     expect(reopenOnReply).toHaveBeenCalledWith('t1')
-    // Nobody did this, so nobody's name goes on it.
+    // Nobody did this, so nobody's name goes on it - and it carries the
+    // message that woke it, so the line sits directly above that message.
     expect(recordEvent).toHaveBeenCalledWith(
-      't1', null, 'woken', { was: 'snoozed', providerModule: 'live-chat' },
+      't1', null, 'woken', { was: 'snoozed', providerModule: 'live-chat', messageId: 'msg1', direction: 'in' },
     )
   })
 
@@ -168,7 +186,7 @@ describe('syncProvider', () => {
     await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }))
 
     expect(recordEvent).toHaveBeenCalledWith(
-      't1', null, 'woken', { was: 'done', providerModule: 'live-chat' },
+      't1', null, 'woken', { was: 'done', providerModule: 'live-chat', messageId: 'msg1', direction: 'in' },
     )
   })
 
@@ -180,8 +198,45 @@ describe('syncProvider', () => {
 
     expect(unbinOnReply).toHaveBeenCalledWith('t1')
     expect(recordEvent).toHaveBeenCalledWith(
-      't1', null, 'unbinned', { bins: 1, providerModule: 'live-chat' },
+      't1', null, 'unbinned', { bins: 1, providerModule: 'live-chat', messageId: 'msg1', direction: 'in' },
     )
+  })
+
+  it('stands down a reply waiting to go out on it when the party writes', async () => {
+    providerThreadState.mockResolvedValue({
+      id: 't1', lastMessageAt: new Date('2026-08-28T09:00:00Z'), messageCount: 3, contentAt: new Date('2026-08-28T09:00:00Z'),
+    })
+    const thread = vi.fn().mockResolvedValue({ summary: summary(), messages: [message()] })
+
+    await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }))
+
+    // Never matched by the address a chat visitor typed - see provider-sync.ts.
+    expect(standDownScheduled).toHaveBeenCalledWith({
+      threadId: 't1', messageId: 'msg1', direction: 'in', fromAddress: null, senderUserId: null,
+    })
+  })
+
+  it('stands down replies waiting on it when a colleague answers in the channel itself', async () => {
+    providerThreadState.mockResolvedValue({
+      id: 't1', lastMessageAt: new Date('2026-08-28T09:00:00Z'), messageCount: 3, contentAt: new Date('2026-08-28T09:00:00Z'),
+    })
+    const thread = vi.fn().mockResolvedValue({ summary: summary(), messages: [message({ direction: 'out', authorName: 'Sam' })] })
+
+    await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }))
+
+    expect(standDownScheduled).toHaveBeenCalledWith({
+      threadId: 't1', messageId: 'msg1', direction: 'out', fromAddress: null, senderUserId: null,
+    })
+  })
+
+  it('stands nothing down on the pass that first copies a conversation across', async () => {
+    // Everything in it is history, and nothing can have been written against a
+    // conversation this hub did not hold yet.
+    const thread = vi.fn().mockResolvedValue({ summary: summary(), messages: [message()] })
+
+    await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }))
+
+    expect(standDownScheduled).not.toHaveBeenCalled()
   })
 
   it('leaves it where it is when the conversation had nothing new in it', async () => {
@@ -518,5 +573,146 @@ describe('syncAllProviders', () => {
   it('does nothing at all on a site with no other channels', async () => {
     expect(await syncAllProviders()).toEqual([])
     expect(providerWatermarks).not.toHaveBeenCalled()
+  })
+})
+
+describe('syncProvider, texts filed on an email conversation', () => {
+  // A number somebody texted from an email conversation (lib/text-links.ts).
+  // What is under test is where each message GOES: texts from the moment the
+  // first one was sent to the email conversation, everything else - calls,
+  // and texts from before - to the phone conversation as always.
+  const PHONE = '+447700900123'
+  const SINCE = new Date('2026-09-20T09:00:00Z')
+  const link = (over: Partial<Record<string, unknown>> = {}) => ({
+    phone: PHONE,
+    threadId: 'email-thread',
+    since: SINCE,
+    endedAt: null,
+    providerModule: 'twilio',
+    externalId: PHONE,
+    seenThrough: null,
+    ...over,
+  })
+  const phoneSummary = (lastMessageAt: Date) => summary({
+    id: PHONE,
+    channel: 'phone',
+    subject: `Phone: ${PHONE}`,
+    participant: { name: null, email: null, phone: PHONE },
+    lastMessageAt,
+    unread: false,
+  })
+  const telephony = (over: Partial<ConversationProvider>): ResolvedConversationProvider => ({
+    moduleName: 'twilio',
+    id: 'twilio',
+    provider: {
+      label: 'Phone',
+      channel: 'phone',
+      capabilities: { reply: true, markRead: false, byIdentity: true },
+      list: vi.fn(),
+      thread: vi.fn(),
+      ...over,
+    } as ConversationProvider,
+  })
+
+  it('files their text reply on the email conversation and wakes it, as an email would', async () => {
+    textLinksFor.mockResolvedValue(new Map([[PHONE, link()]]))
+    reopenOnReply.mockResolvedValue('done')
+    insertProviderMessage.mockResolvedValue('text-in')
+    const at = new Date('2026-09-20T10:00:00Z')
+    const thread = vi.fn().mockResolvedValue({
+      summary: phoneSummary(at),
+      messages: [message({ id: 'sms:SM1', text: 'Tuesday is fine', sentAt: at, medium: 'text', authorName: PHONE })],
+    })
+
+    await syncProvider(telephony({ list: vi.fn().mockResolvedValue({ items: [phoneSummary(at)] }), thread }))
+
+    // Not a phone conversation at all: nothing was left for one.
+    expect(upsertProviderThread).not.toHaveBeenCalled()
+    expect(insertProviderMessage).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: 'email-thread', channel: 'sms', direction: 'in', fromPhone: PHONE, fromAddress: null,
+    }))
+    expect(touchThread).toHaveBeenCalledWith('email-thread', expect.objectContaining({ markUnread: true }))
+    expect(reopenOnReply).toHaveBeenCalledWith('email-thread')
+    expect(standDownScheduled).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: 'email-thread', messageId: 'text-in', direction: 'in',
+    }))
+    expect(markTextLinkRead).toHaveBeenCalledWith(expect.objectContaining({ phone: PHONE, externalId: PHONE }))
+  })
+
+  it('leaves calls, and texts from before the first one was sent, on the phone conversation', async () => {
+    textLinksFor.mockResolvedValue(new Map([[PHONE, link()]]))
+    const earlier = new Date('2026-09-19T15:00:00Z')
+    const after = new Date('2026-09-20T11:00:00Z')
+    const thread = vi.fn().mockResolvedValue({
+      summary: phoneSummary(after),
+      messages: [
+        message({ id: 'sms:SM0', text: 'Old text', sentAt: earlier, medium: 'text' }),
+        message({ id: 'call:CA1', text: 'Missed call', sentAt: after, medium: 'call' }),
+      ],
+    })
+
+    await syncProvider(telephony({ list: vi.fn().mockResolvedValue({ items: [phoneSummary(after)] }), thread }))
+
+    expect(upsertProviderThread).toHaveBeenCalledWith(expect.objectContaining({ externalId: PHONE, lastMessageAt: after }))
+    const threads = insertProviderMessage.mock.calls.map((call) => (call[0] as { threadId: string }).threadId)
+    expect(threads).toEqual(['t1', 't1'])
+    expect(touchThread).not.toHaveBeenCalled()
+  })
+
+  it('matches our own text to the one written when it was sent, rather than filing it twice', async () => {
+    textLinksFor.mockResolvedValue(new Map([[PHONE, link()]]))
+    claimSentText.mockResolvedValue(true)
+    const at = new Date('2026-09-20T09:00:05Z')
+    const thread = vi.fn().mockResolvedValue({
+      summary: phoneSummary(at),
+      messages: [message({ id: 'sms:SM2', direction: 'out', text: 'Are you in on Tuesday?', sentAt: at, medium: 'text', authorName: null })],
+    })
+
+    await syncProvider(telephony({ list: vi.fn().mockResolvedValue({ items: [phoneSummary(at)] }), thread }))
+
+    expect(claimSentText).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: 'email-thread', providerModule: 'twilio', providerMessageId: 'sms:SM2',
+    }))
+    expect(insertProviderMessage).not.toHaveBeenCalled()
+  })
+
+  it('never files again a text already held on another conversation', async () => {
+    // Moved out to the Phone channel, or filed on the email conversation on an
+    // earlier pass: either way the ordinary per-conversation check cannot see it.
+    textLinksFor.mockResolvedValue(new Map([[PHONE, link({ endedAt: new Date('2026-09-21T09:00:00Z') })]]))
+    heldChannelMessages.mockResolvedValue(new Map([['sms:SM1', 'email-thread']]))
+    const at = new Date('2026-09-20T10:00:00Z')
+    const thread = vi.fn().mockResolvedValue({
+      summary: phoneSummary(at),
+      messages: [message({ id: 'sms:SM1', text: 'Tuesday is fine', sentAt: at, medium: 'text' })],
+    })
+
+    await syncProvider(telephony({ list: vi.fn().mockResolvedValue({ items: [phoneSummary(at)] }), thread }))
+
+    expect(insertProviderMessage).not.toHaveBeenCalled()
+    expect(upsertProviderThread).not.toHaveBeenCalled()
+  })
+
+  it('sends texts to the phone conversation again once the note has been ended', async () => {
+    textLinksFor.mockResolvedValue(new Map([[PHONE, link({ endedAt: new Date('2026-09-21T09:00:00Z') })]]))
+    const at = new Date('2026-09-22T10:00:00Z')
+    const thread = vi.fn().mockResolvedValue({
+      summary: phoneSummary(at),
+      messages: [message({ id: 'sms:SM9', text: 'Running late', sentAt: at, medium: 'text' })],
+    })
+
+    await syncProvider(telephony({ list: vi.fn().mockResolvedValue({ items: [phoneSummary(at)] }), thread }))
+
+    expect(insertProviderMessage).toHaveBeenCalledWith(expect.objectContaining({ threadId: 't1', providerMessageId: 'sms:SM9' }))
+  })
+
+  it('does not open a linked number again once it has read everything on it', async () => {
+    const at = new Date('2026-09-20T10:00:00Z')
+    textLinksFor.mockResolvedValue(new Map([[PHONE, link({ seenThrough: at })]]))
+    const thread = vi.fn()
+
+    await syncProvider(telephony({ list: vi.fn().mockResolvedValue({ items: [phoneSummary(at)] }), thread }))
+
+    expect(thread).not.toHaveBeenCalled()
   })
 })

@@ -59,6 +59,7 @@ const ownPost = vi.hoisted(() => ({
 
 const append = vi.hoisted(() => ({ appendToSent: vi.fn() }))
 const mime = vi.hoisted(() => ({ buildRawMessage: vi.fn() }))
+const standDown = vi.hoisted(() => ({ standDownScheduled: vi.fn(async (): Promise<unknown[]> => []) }))
 const media = vi.hoisted(() => ({
   downloadMedia: vi.fn(),
   getActiveMediaProvider: vi.fn(),
@@ -73,6 +74,7 @@ vi.mock('./transport', async () => {
 vi.mock('./own-post', () => ownPost)
 vi.mock('./append', () => append)
 vi.mock('./mime', () => mime)
+vi.mock('./stand-down', () => standDown)
 vi.mock('./attachments', () => ({ loadAttachmentBytes: vi.fn(), cacheAttachment: vi.fn() }))
 vi.mock('@/lib/media/upload', () => ({ downloadMedia: media.downloadMedia }))
 vi.mock('@/lib/config/env', () => ({
@@ -229,6 +231,7 @@ describe('sendMessage - something finished with, answered', () => {
     expect(db.recordEvent).toHaveBeenCalledWith('thread-1', 'user-1', 'woken', {
       was: 'done',
       ours: true,
+      messageId: 'msg-out-1',
     })
   })
 
@@ -256,6 +259,36 @@ describe('sendMessage - something finished with, answered', () => {
     await sendMessage(baseRequest({ threadId: undefined, inboxId: 'inbox-1', mode: 'new', to: ['jane@customer.com'], subject: 'Chairs' }))
 
     expect(db.reopenOnOurReply).not.toHaveBeenCalled()
+    // Nothing can be waiting on a conversation that did not exist.
+    expect(standDown.standDownScheduled).not.toHaveBeenCalled()
+  })
+})
+
+describe('sendMessage - a colleague answering first', () => {
+  it('stands down anybody else\'s reply waiting on the conversation, never the sender\'s own', async () => {
+    await sendMessage(baseRequest())
+
+    expect(standDown.standDownScheduled).toHaveBeenCalledWith({
+      threadId: 'thread-1',
+      messageId: 'msg-out-1',
+      direction: 'out',
+      fromAddress: null,
+      senderUserId: 'user-1',
+    })
+  })
+
+  it('leaves them alone for a forward, which told the customer nothing', async () => {
+    await sendMessage(baseRequest({ mode: 'forward', to: ['supplier@example.com'] }))
+
+    expect(standDown.standDownScheduled).not.toHaveBeenCalled()
+  })
+
+  it('only once the message has genuinely gone', async () => {
+    transport.deliver.mockResolvedValue({ ok: false, error: 'The mail server refused it.' })
+
+    await sendMessage(baseRequest())
+
+    expect(standDown.standDownScheduled).not.toHaveBeenCalled()
   })
 })
 

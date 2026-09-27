@@ -1,20 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import {
+  inboxBase,
+  listHrefFor,
   MAX_LOOKBACK_MS,
   notificationCopy,
+  nudgeFor,
   parseSince,
   readPreference,
   senderLabel,
   shouldPoll,
   storageKey,
+  TALLY_TAG,
+  threadHrefFor,
   writePreference,
   type Arrival,
 } from './notify'
 
 const NOW = Date.parse('2026-09-07T12:00:00.000Z')
 
-function arrival(from: string | null, subject: string | null, threadId = 't1'): Arrival {
-  return { threadId, subject, from, at: new Date(NOW).toISOString() }
+function arrival(from: string | null, subject: string | null, threadId = 't1', inbox: string | null = null): Arrival {
+  return { threadId, subject, from, at: new Date(NOW).toISOString(), inbox, href: `/hq/inbox?id=${threadId}` }
 }
 
 describe('parseSince', () => {
@@ -64,29 +69,43 @@ describe('senderLabel', () => {
 })
 
 describe('notificationCopy', () => {
-  it('reads like a message when one thing has landed', () => {
-    expect(notificationCopy([arrival('Ada Lovelace', 'Chair quote')], 1, 'Sales')).toEqual({
+  it('reads like a message when one thing has landed, with the address it landed in', () => {
+    expect(notificationCopy([arrival('Ada Lovelace', 'Chair quote', 't1', 'Sales')], 1)).toEqual({
       title: 'Ada Lovelace',
-      body: 'Chair quote',
+      body: 'Chair quote - in Sales',
     })
   })
 
+  it('leaves the address off when the reader may not see it', () => {
+    expect(notificationCopy([arrival('Ada Lovelace', 'Chair quote')], 1).body).toBe('Chair quote')
+  })
+
   it('says so rather than leaving the line blank on a channel with no subject', () => {
-    expect(notificationCopy([arrival('07700 900123', null)], 1, null).body).toBe('No subject')
+    expect(notificationCopy([arrival('07700 900123', null)], 1).body).toBe('No subject')
   })
 
   it('counts them when several have landed', () => {
     const copy = notificationCopy(
-      [arrival('Ada', 'One', 't1'), arrival('Bob', 'Two', 't2')],
+      [arrival('Ada', 'One', 't1', 'Purchasing'), arrival('Bob', 'Two', 't2', 'Purchasing')],
       2,
-      'Purchasing',
     )
     expect(copy.title).toBe('2 new messages')
     expect(copy.body).toBe('Ada, Bob - in Purchasing')
   })
 
-  it('leaves the address out when the reader has no address of their own', () => {
-    const copy = notificationCopy([arrival('Ada', 'One', 't1'), arrival('Bob', 'Two', 't2')], 2, null)
+  it('names both addresses when post landed in two, and counts them past that', () => {
+    // Somebody reading their own post, sales@ and a colleague's while they are
+    // away needs to know which piles have something on them.
+    const two = notificationCopy([arrival('Ada', 'x', 't1', 'Chris'), arrival('Bob', 'y', 't2', 'Sales')], 2)
+    expect(two.body).toBe('Ada, Bob - in Chris and Sales')
+    const three = notificationCopy([
+      arrival('Ada', 'x', 't1', 'Chris'), arrival('Bob', 'y', 't2', 'Sales'), arrival('Cai', 'z', 't3', 'Accounts'),
+    ], 3)
+    expect(three.body).toBe('Ada, Bob, Cai - in 3 inboxes')
+  })
+
+  it('leaves the address out when none of them can be named', () => {
+    const copy = notificationCopy([arrival('Ada', 'One', 't1'), arrival('Bob', 'Two', 't2')], 2)
     expect(copy.body).toBe('Ada, Bob')
   })
 
@@ -94,25 +113,64 @@ describe('notificationCopy', () => {
     const copy = notificationCopy(
       [arrival('Ada', 'One', 't1'), arrival('Ada', 'Two', 't2'), arrival('Ada', 'Three', 't3')],
       3,
-      null,
     )
     expect(copy.body).toBe('Ada')
   })
 
   it('counts the rest once the names would run off the line', () => {
     const many = ['Ada', 'Bob', 'Cai', 'Dee', 'Eve'].map((n, i) => arrival(n, 'x', `t${i}`))
-    expect(notificationCopy(many, 5, null).body).toBe('Ada, Bob, Cai and 2 others')
+    expect(notificationCopy(many, 5).body).toBe('Ada, Bob, Cai and 2 others')
   })
 
   it('counts what actually landed rather than what fitted in the round', () => {
     // The round caps how many it fetches. The tally must still be honest about
     // how many there were, or a busy morning reads as five.
     const capped = ['Ada', 'Bob'].map((n, i) => arrival(n, 'x', `t${i}`))
-    expect(notificationCopy(capped, 19, null).title).toBe('19 new messages')
+    expect(notificationCopy(capped, 19).title).toBe('19 new messages')
   })
 
   it('tallies rather than singles out when one arrival stands for many', () => {
-    expect(notificationCopy([arrival('Ada', 'One')], 6, null).title).toBe('6 new messages')
+    expect(notificationCopy([arrival('Ada', 'One')], 6).title).toBe('6 new messages')
+  })
+})
+
+describe('nudgeFor', () => {
+  const reply = { listHref: '/hq/inbox?tab=unified-inbox', icon: '/web-app-manifest-512x512.png' }
+
+  it('says nothing when nothing landed', () => {
+    expect(nudgeFor({ ...reply, arrivals: [], total: 0 })).toBeNull()
+  })
+
+  it('opens the one conversation, and gives it a tag of its own', () => {
+    const nudge = nudgeFor({ ...reply, arrivals: [arrival('Ada', 'Chair quote', 't9', 'Sales')], total: 1 })
+    expect(nudge).toEqual({
+      title: 'Ada',
+      body: 'Chair quote - in Sales',
+      href: '/hq/inbox?id=t9',
+      tag: 'uin-thread-t9',
+      icon: '/web-app-manifest-512x512.png',
+    })
+  })
+
+  it('opens the list for a tally, under the one tag every tally shares', () => {
+    const nudge = nudgeFor({ ...reply, arrivals: [arrival('Ada', 'x', 't1'), arrival('Bob', 'y', 't2')], total: 2 })
+    expect(nudge?.href).toBe(reply.listHref)
+    expect(nudge?.tag).toBe(TALLY_TAG)
+  })
+})
+
+describe('where a nudge points', () => {
+  it('follows the admin path the site is set to, and the default when it has none', () => {
+    expect(inboxBase('hq')).toBe('/hq/inbox')
+    expect(inboxBase('/office/')).toBe('/office/inbox')
+    expect(inboxBase(null)).toBe('/cactus-admin/inbox')
+    expect(inboxBase('  ')).toBe('/cactus-admin/inbox')
+  })
+
+  it('opens a conversation in the address it landed in', () => {
+    expect(threadHrefFor('/hq/inbox', 't 1', 'inbox-2')).toBe('/hq/inbox?tab=unified-inbox&inbox=inbox-2&id=t+1')
+    expect(threadHrefFor('/hq/inbox', 't1', null)).toBe('/hq/inbox?tab=unified-inbox&id=t1')
+    expect(listHrefFor('/hq/inbox')).toBe('/hq/inbox?tab=unified-inbox')
   })
 })
 
@@ -160,7 +218,7 @@ describe('the preference this browser holds', () => {
 })
 
 describe('shouldPoll', () => {
-  const on = { enabled: true, permission: 'granted' as const, focused: false }
+  const on = { enabled: true, permission: 'granted' as const, focused: false, pushed: false }
 
   it('asks while the window is behind something else', () => {
     expect(shouldPoll(on)).toBe(true)
@@ -177,5 +235,9 @@ describe('shouldPoll', () => {
     expect(shouldPoll({ ...on, permission: 'default' })).toBe(false)
     expect(shouldPoll({ ...on, permission: 'denied' })).toBe(false)
     expect(shouldPoll({ ...on, permission: 'unsupported' })).toBe(false)
+  })
+
+  it('asks nothing of a browser the site pushes to, which hears about every arrival already', () => {
+    expect(shouldPoll({ ...on, pushed: true })).toBe(false)
   })
 })

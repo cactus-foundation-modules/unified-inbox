@@ -145,9 +145,30 @@ export async function applyFollowUpAfterSend(
       await recordEvent(threadId, null, 'awaiting', {
         minutes: draft.followUpMinutes,
         userId: draft.authorUserId,
+        until: plan.until.toISOString(),
+      })
+    } else if (!sameSleep(was, plan.until)) {
+      // A sleep asked for on the draft itself ("send it Monday, and I do not
+      // want to see this again until Friday"), carried out now the message has
+      // gone. Said in the timeline, because a conversation that goes quiet with
+      // nobody having pressed anything is one somebody goes looking for. A
+      // sleep the conversation was already having, merely put back, is not
+      // news and says nothing.
+      await recordEvent(threadId, null, 'snoozed', {
+        until: plan.until.toISOString(),
+        afterSend: true,
+        userId: draft.authorUserId,
       })
     }
   } catch (err) {
     console.error('[unified-inbox] the message went out but could not be set to come back', err)
   }
+}
+
+/** Whether the conversation was already asleep until exactly this moment - in
+ *  which case applying the plan only put back what was there. */
+function sameSleep(was: ThreadSleep, until: Date): boolean {
+  return was?.status === 'snoozed'
+    && !!was.snoozeUntil
+    && was.snoozeUntil.getTime() === until.getTime()
 }

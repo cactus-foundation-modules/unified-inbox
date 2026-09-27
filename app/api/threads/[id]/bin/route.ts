@@ -22,7 +22,7 @@ import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { canOpenThread } from '@/modules/unified-inbox/lib/access'
-import { getInbox, getThreadDetail } from '@/modules/unified-inbox/lib/db'
+import { getInbox, getThreadDetail, recordEvent, withdrawUndoneEvent } from '@/modules/unified-inbox/lib/db'
 import { binOwnerForThread, markThreadBinned, unmarkThreadBinned } from '@/modules/unified-inbox/lib/bin'
 import { markReadOnDiscard } from '@/modules/unified-inbox/lib/provider-read'
 import { ThreadBinBody } from '@/modules/unified-inbox/lib/validation'
@@ -52,12 +52,27 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const inbox = thread.inboxId ? await getInbox(thread.inboxId) : null
   const owner = binOwnerForThread({ pressedByUserId: user.id, inbox, channel: thread.channel })
 
+  // Said in the timeline, for everybody who can read the conversation - worded
+  // as whose bin it went into, because a bin is one person's and the line must
+  // not read as though it went for everybody. A discussion's is the exception,
+  // like its done: it is the presser's own business and only they see it.
+  //
+  // Only when something moved, and an undo takes the line back out rather than
+  // writing its opposite underneath (withdrawUndoneEvent).
+  const own = thread.channel === 'discussion' ? { forUserOnly: true } : {}
   if (parsed.data.bin) {
-    await markThreadBinned(id, owner)
+    const added = await markThreadBinned(id, owner)
     // Deleted is dealt with - see markReadOnDiscard.
     await markReadOnDiscard(thread)
+    if (added && !(await withdrawUndoneEvent({ threadId: id, userId: user.id, kinds: ['unbinned'], detailMatch: { ownerUserId: owner } }))) {
+      await recordEvent(id, user.id, 'binned', { ownerUserId: owner, ...own })
+    }
   }
-  else await unmarkThreadBinned(id, owner)
+  else if (await unmarkThreadBinned(id, owner)) {
+    if (!(await withdrawUndoneEvent({ threadId: id, userId: user.id, kinds: ['binned'], detailMatch: { ownerUserId: owner } }))) {
+      await recordEvent(id, user.id, 'unbinned', { ownerUserId: owner, ...own })
+    }
+  }
 
   // `owner` goes back so the screen can say whose bin it landed in when that is
   // not the presser's - "Moved to Sam's bin" is a different sentence from

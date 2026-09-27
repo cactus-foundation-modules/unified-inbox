@@ -24,6 +24,7 @@ import { clashMessage, mailboxClashes } from '@/modules/unified-inbox/lib/reply-
 import { retentionPreview } from '@/modules/unified-inbox/lib/retention'
 import { pushUrl } from '@/modules/unified-inbox/lib/push-checks'
 import { getSiteUrlOrNull } from '@/lib/config/env'
+import { existingTables, installedModuleNames } from '@/modules/unified-inbox/lib/installed'
 
 // Everything the settings screen draws, in one request: the mail accounts, the
 // inboxes hanging off them, who may read which, the module's own settings, and
@@ -35,7 +36,7 @@ export async function GET(request: NextRequest) {
   if (!user) return errorResponse('Not authenticated', 401)
   if (!await hasPermission(user, 'unifiedinbox.manage')) return errorResponse('Forbidden', 403)
 
-  const [connections, inboxes, access, defaults, settings, collection, unrouted, people, categories, clashes, retention, users, channels, blockedSenders] = await Promise.all([
+  const [connections, inboxes, access, defaults, settings, collection, unrouted, people, categories, clashes, retention, users, channels, blockedSenders, installed, shopTables] = await Promise.all([
     listConnections(),
     listInboxes(),
     listAllInboxAccess(),
@@ -54,6 +55,8 @@ export async function GET(request: NextRequest) {
     }),
     allProviderChannels(),
     listBlockedSenders(),
+    installedModuleNames(),
+    existingTables(['shp_orders']),
   ])
 
   // The address a provider rings to say mail has arrived, for the accounts
@@ -117,6 +120,10 @@ export async function GET(request: NextRequest) {
       blockedByUserId: row.blockedByUserId,
       createdAt: row.createdAt.toISOString(),
     })),
+    // Whether there is a shop whose paying customers could become contacts.
+    // Without one the switch for it would be a question about nothing, so the
+    // screen leaves it out.
+    shopInstalled: installed.has('shop') && shopTables.has('shp_orders'),
     // Without a site encryption key there is nowhere safe to put a mailbox
     // password, so the screen says so rather than saving one in the clear.
     encryptionReady: isEncryptionKeyUsable(),
@@ -165,6 +172,7 @@ const Body = z.object({
   // un-hide its channel.
   hiddenChannelModules: z.array(z.string().trim().min(1).max(100)).max(50).optional(),
   autoAssignOwnPost: z.boolean().optional(),
+  shopCustomerContacts: z.boolean().optional(),
 })
 
 export async function PATCH(request: NextRequest) {

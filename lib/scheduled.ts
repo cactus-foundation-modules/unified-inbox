@@ -111,7 +111,8 @@ export function scheduleLabel(
   draft: {
     sendAt: Date | string | null
     sendState: DraftSendState
-    /** Set when mail from the recipient stood it down. Read only for a draft
+    /** Set when the conversation moved on before it went - they wrote, or a
+     *  colleague answered first - and it was stood down. Read only for a draft
      *  with no state left on it, which is what standing one down leaves. */
     heldByThreadId?: string | null
   },
@@ -121,7 +122,9 @@ export function scheduleLabel(
   // A stood-down message is an ordinary draft again, so it has no state to
   // switch on - and saying nothing about it would put it back in the list
   // looking like something nobody ever finished.
-  if (!draft.sendState && draft.heldByThreadId) return 'Held - they wrote first'
+  // Which of the two it was lives in the conversation's own line; the list
+  // only needs to say why this is a draft again rather than a scheduled one.
+  if (!draft.sendState && draft.heldByThreadId) return 'Held - somebody replied first'
   switch (draft.sendState) {
     case 'scheduled':
       return `Goes out ${describeSendAt(draft.sendAt, now, timezone)}`

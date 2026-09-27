@@ -52,6 +52,7 @@ import { htmlToText } from './html'
 import { buildRawMessage } from './mime'
 import { appendToSent } from './append'
 import { ownPostOwnerOf } from './own-post'
+import { standDownScheduled } from './stand-down'
 import { chooseSignatureSource, renderInboxSignature } from './signature'
 import { deliver, replyToWorthSending, sendingIdentity, transportForInbox, type SendableMessage } from './transport'
 
@@ -502,7 +503,22 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
   // is the whole reason the scheduled sender reads it either side of one. See
   // reopenOnOurReply. Credited to whoever sent it, because somebody did.
   if (prepared.threadId && await reopenOnOurReply(threadId)) {
-    await recordEvent(threadId, request.authorUserId, 'woken', { was: 'done', ours: true })
+    await recordEvent(threadId, request.authorUserId, 'woken', { was: 'done', ours: true, messageId: row.id })
+  }
+
+  // A colleague has answered, so anybody ELSE'S reply waiting to go out on this
+  // conversation is stood down before it answers the same thing twice. Never
+  // the sender's own - they knew it was there. Not for a forward: that went to
+  // somebody else, and the customer has been told nothing new. See
+  // lib/stand-down.ts.
+  if (prepared.threadId && request.mode !== 'forward') {
+    await standDownScheduled({
+      threadId,
+      messageId: row.id,
+      direction: 'out',
+      fromAddress: null,
+      senderUserId: request.authorUserId,
+    })
   }
 
   await copyToSentFolder({

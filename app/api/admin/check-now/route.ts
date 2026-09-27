@@ -14,6 +14,7 @@ import {
 import { runPeoplePass } from '@/modules/unified-inbox/lib/identity'
 import { syncAllProviders, PROVIDER_BUDGET_MS } from '@/modules/unified-inbox/lib/provider-sync'
 import { deliverPending, WEBHOOK_BUDGET_MS } from '@/modules/unified-inbox/lib/webhooks'
+import { NUDGE_BUDGET_MS, sendPushNudges } from '@/modules/unified-inbox/lib/push-nudges'
 import { cooldownFor, dueForCheck } from '@/modules/unified-inbox/lib/check-cooldown'
 import { dueOnSchedule } from '@/modules/unified-inbox/lib/push-checks'
 import { runDueScheduledSends } from '@/modules/unified-inbox/lib/scheduled-send'
@@ -112,6 +113,11 @@ export async function POST(request: Request) {
     : await syncAllProviders({
         deadline: Math.min(Date.now() + PROVIDER_BUDGET_MS, started + MANUAL_TICK_DEADLINE_MS),
       })
+
+  // Nudges for whatever that filed, to everybody who asked for them - the
+  // admin page's own timer comes through here, so on most sites this is where
+  // a nudge is sent from.
+  await sendPushNudges({ deadline: Date.now() + NUDGE_BUDGET_MS })
 
   // Same people pass the hourly job runs, with the bigger slice this route has.
   await runPeoplePass({ deadline: started + MANUAL_PEOPLE_DEADLINE_MS })

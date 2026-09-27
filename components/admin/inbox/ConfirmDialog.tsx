@@ -91,6 +91,10 @@ export type ConfirmDialogProps = {
    *  button, in the quiet clothes, because on these questions it is the one
    *  that throws something away. */
   other?: { label: string; destructive?: boolean; onClick: () => void }
+  /** Where the keyboard starts, when that is not one of the answers - the box
+   *  on a dialog that asks somebody to write something. A selector inside the
+   *  card. */
+  initialFocus?: string
 }
 
 /** Everything the keyboard can land on. Used to work out where the ends of the
@@ -117,6 +121,7 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
   other,
+  initialFocus,
 }: ConfirmDialogProps) {
   const cardRef = useRef<HTMLDivElement | null>(null)
   const returnTo = useRef<HTMLElement | null>(null)
@@ -132,7 +137,7 @@ export function ConfirmDialog({
 
   /** The answer the keyboard should be on: the safe one when something is about
    *  to be lost, so a stray Return does the harmless thing. */
-  const startSelector = destructive ? '[data-uin-cancel]' : '[data-uin-confirm]'
+  const startSelector = initialFocus ?? (destructive ? '[data-uin-cancel]' : '[data-uin-confirm]')
 
   useEffect(() => {
     if (!open) return

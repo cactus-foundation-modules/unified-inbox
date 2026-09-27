@@ -64,10 +64,13 @@ the same human collapse into one story.
   inbox and the folders you file things into, so a message read on a phone is
   still here.
 - **A nudge when post arrives.** The first time somebody opens the hub they are
-  offered browser notifications for their own address, and the bell at the foot
-  of the rail turns them on and off after that. The answer is kept in their own
-  browser, because the permission is; nothing is sent while they are looking at
-  the list, and nothing at all once every tab is shut.
+  offered browser notifications for everything they can read - their own
+  address, the shared ones they are on and colleagues' they have been let into -
+  and the bell at the foot of the rail turns them on and off after that. They
+  come through the browser's own push service, so they arrive with the tab
+  closed, on a Mac and on an iPhone or iPad from the Home Screen app, with the
+  site's own icon on them. A browser without push falls back to asking from an
+  open tab.
 - **On a phone or a tablet.** The same mail program, one pane at a time: the
   rail becomes a bar along the top that says where you are, and pressing it
   slides the whole list of places in from the left. Dialogs and menus come up
@@ -225,9 +228,11 @@ the same human collapse into one story.
   puts a conversation to sleep. It can carry a follow-up with it: once it has
   gone, the conversation goes quiet until whenever you said and comes back if
   nobody has answered. A reply cancels the chase on its own, so you only see it
-  when there was nothing to see. And if the person it is addressed to writes to
-  you before it leaves, the message is held rather than sent - their
-  conversation says so, with a link to what was waiting.
+  when there was nothing to see. And if the conversation moves on before it
+  leaves - they write, on it or anywhere else, or a colleague answers them
+  first - the message is cancelled and kept as a draft rather than sent, on
+  email, chat, WhatsApp and texts alike. The conversation says so in a line
+  just above whatever overtook it, with a link to what was waiting.
 - **A picked time is not lost.** Choosing a time off the alarm clock and then
   clicking away, or closing the box, sets it going rather than quietly handing
   you back an ordinary draft - closing says so first, naming the time.
@@ -255,6 +260,13 @@ the same human collapse into one story.
   rather than a person, and leaves it where it was - which is what stops a
   mailing list dragging a finished conversation back every week. Your own reply,
   sent from here, does the same.
+- **What happened to it, said in it.** Snoozed, back from a snooze (and why),
+  done, opened again, binned, junked, a scheduled reply cancelled because
+  somebody replied first or refused when its time came, handed on, moved,
+  merged: each is a small line in the conversation between the messages it
+  happened between, and one caused by a message sits directly above it. Bin and
+  junk lines say whose, since those are one person's. An undo takes its line
+  back out rather than adding its opposite.
 - **Finding something.** Two boxes for two jobs. The one in the head of the list
   makes what is in front of you shorter. The magnifier at the top of the rail -
   **Ctrl K**, or **Cmd K** on a Mac - looks everywhere you can read at any
@@ -296,7 +308,21 @@ the same human collapse into one story.
   several things at once. Renaming and removing them is under **Settings ->
   Unified Inbox -> People**, and removing one keeps everybody who was in it -
   they simply stop showing the label. It is not a pipeline: nothing moves
-  between them on its own and nothing else on the site reads them.
+  between them on its own and nothing else on the site reads them. The one
+  label anything puts on for you is **Customers**, and only where the shop is
+  installed - see below.
+- **Shop customers, filed for you.** Where the shop is installed too, somebody
+  who pays for an order becomes a contact: their name, email address, phone
+  number, company and billing address as they gave them at the checkout, filed
+  under a **Customers** category that is made the first time it is needed.
+  Somebody already here - because they emailed first, or bought before - is
+  filled in rather than copied: a blank box gets the order's answer, anything
+  already written stays exactly as it is, and they gain the Customers label
+  without losing any other. An order waiting on a bank transfer adds its
+  customer when the payment is marked as received, and a colleague testing the
+  checkout from a work address is never added. On unless you switch it off, under
+  **Settings -> Unified Inbox -> People**. Nothing about the shop changes; this
+  module listens for the shop's own "order paid" news and does the rest.
 - **Bringing an address book in.** Point it at a CSV out of Outlook, Google
   Contacts, a spreadsheet or whatever the contacts are in now, and it shows you
   each column with its best guess at what it is - change any of them, leave out
@@ -398,3 +424,11 @@ somebody has thrown away, holding nothing but where it came from and its own
 identity. Both exist for the same reason - collecting the post is a question
 asked over and over, and without a line drawn somewhere the answer keeps putting
 back what somebody has just deleted.
+
+`uin_push_subscriptions` is one row per browser that has said yes to nudges:
+the address its push service gave it and the key the nudge is sealed with, so
+Apple, Google or Mozilla carry a subject line they cannot read. The site's own
+signing pair for those services sits in `uin_settings`, its private half
+encrypted with `ENCRYPTION_KEY`. `uin_push_nudged` is a two-day ledger of which
+incoming messages a nudge has already gone out about, which is what keeps one
+message to one nudge when two mail checks finish at the same moment.

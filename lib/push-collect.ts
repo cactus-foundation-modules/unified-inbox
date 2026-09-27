@@ -4,6 +4,7 @@ import { PUSH_WAIT_POLL_MS, ringAnswered } from './push-checks'
 import { syncConnection } from './sync'
 import { makeDeadline, outOfTime } from './sync-plan'
 import { deliverPending, WEBHOOK_BUDGET_MS } from './webhooks'
+import { NUDGE_BUDGET_MS, sendPushNudges } from './push-nudges'
 
 // What a ring does once the provider has been thanked. See lib/push-checks.ts.
 
@@ -50,6 +51,12 @@ export async function collectOnPush(
     if (!outcome.ok) result.error = outcome.error
     break
   }
+
+  // The whole point of the provider ringing is that somebody hears about it
+  // now, so the nudges go first. Run whether or not this check filed anything:
+  // a check that found the account busy waited for the one that did, and the
+  // round claims whatever that one filed.
+  await sendPushNudges({ deadline: Math.min(Date.now() + NUDGE_BUDGET_MS, deadline) })
 
   // Same passes the hourly job and Check now run after the mail, so whoever
   // is told about new post hears about it now rather than on the hour.

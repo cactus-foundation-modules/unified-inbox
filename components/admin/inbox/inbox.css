@@ -2157,6 +2157,46 @@
 .uin-log-undo { font-size: 0.6875rem; }
 .uin-log-error { color: var(--color-destructive-hover); }
 
+/* What happened to a conversation, said in the conversation: a line between the
+   messages it happened between - snoozed, woken by a reply, binned, a scheduled
+   reply stood down. Punctuation in the story rather than a message in it, so it
+   is small, centred and ruled off either side, with nothing to click except a
+   merge that can still be taken apart. The words in secondary text and the time
+   in muted, both of which clear AA for small text (5:1 or better) on the page
+   ground and on a surface, light and dark - "a reply arrived, so it is no
+   longer snoozed" is a sentence people need to be able to read. */
+.uin-event-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem 0.5rem;
+  padding: 0.15rem 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+.uin-event-line::before,
+.uin-event-line::after {
+  content: '';
+  flex: 1 1 1.5rem;
+  min-width: 1rem;
+  border-top: 1px solid var(--color-border);
+}
+.uin-event-line-said {
+  margin: 0;
+  max-width: 40rem;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.uin-event-line-when {
+  white-space: nowrap;
+  color: var(--color-text-muted);
+}
+.uin-event-line-when::before { content: '\00b7\00a0'; }
+
 /* ---- composer ----------------------------------------------------------- */
 /* The box you write a reply in, under the conversation it answers. One outline
    and a quiet ground: it is a part of the thread, not a form that has landed on
@@ -2472,6 +2512,28 @@
    on their own strip at the bottom so the question above them is never mistaken
    for one of them. */
 .uin-modal-card-confirm { width: min(28rem, 100%); }
+/* The one of these that asks for writing rather than a yes: a text to the
+   person a conversation is with. The box sits in the body copy, so it takes the
+   body's ground and a border of its own; the focus ring is the modal's own. */
+.uin-text-dialog-box {
+  display: block;
+  width: 100%;
+  margin-top: 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 0.375rem);
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 0.5rem 0.625rem;
+  font: inherit;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  resize: vertical;
+}
+.uin-text-dialog-count {
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
 .uin-confirm-body {
   margin: 0;
   font-size: 0.875rem;

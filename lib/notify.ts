@@ -7,11 +7,22 @@
 // not want to keep a tab in front of them to find out an order query came in
 // twenty minutes ago.
 //
-// WHOSE POST. Their own address, when they have been given one - which is the
-// same address the rail pins to the top and opens on. Somebody who has not
-// been given one is nudged about everything they may read, because for them
-// "their mailbox" IS the lot; a feature that does nothing at all until an
-// administrator sets a preference is a feature nobody discovers.
+// WHOSE POST. Every address this person may read: their own, the shared ones
+// they are on the guest list of, and the colleagues' addresses they have been
+// let into - the Yours, Shared and Team inboxes sections of the rail, which is
+// the same list the access rule (E17) already draws. Somebody covering
+// accounts@ this week wants to know accounts@ has post in it, not only their
+// own. The channels another module owns (chat, calls, texts) are not mail and
+// bring their own alerts; they stay out.
+//
+// HOW IT GETS THERE. Two ways, the better one first:
+//   - a push through the browser's own push service (lib/web-push.ts), sent by
+//     the site the moment mail is collected. Arrives with the tab closed, and
+//     is the ONLY way a phone is ever told anything: an iPhone runs no page in
+//     the background at all, and exposes notifications only to the Home
+//     Screen app.
+//   - the older round of asking, from an open tab that is behind something
+//     else, for the browsers that cannot be pushed to.
 //
 // WHERE THE PREFERENCE LIVES: the browser, not the database. The permission
 // itself is granted per browser per site by the browser, and nobody can grant
@@ -27,6 +38,13 @@
 // already seen before it arrived, and a machine four minutes slow would
 // announce the same message twice. Every round hands back the server's own
 // "now", the browser keeps that verbatim, and hands it back next time.
+//
+// AND IT IS WHEN THE SITE GOT IT, not the date written on the mail. They are
+// minutes apart for every message there is - mail is collected on a timer, on
+// the hour, or when the provider rings - and asking "dated since I last looked"
+// of a round a minute wide meant anything collected more than a minute after
+// it was written was never announced at all. Which, on a site collecting every
+// few minutes, was very nearly everything.
 // ---------------------------------------------------------------------------
 
 /** One thing that has landed since the browser last looked. Deliberately flat
@@ -43,6 +61,14 @@ export type Arrival = {
   from: string | null
   /** When it landed, as the server tells it. */
   at: string
+  /** Which address it landed in, by name, so somebody reading three of them
+   *  can tell the customer's reply from the supplier's invoice. Null when the
+   *  reader may not see the address it is filed under. */
+  inbox: string | null
+  /** Where pressing the nudge goes: the conversation, opened in the address it
+   *  landed in. Built by the server, which is the end that knows the admin
+   *  area's address. */
+  href: string
 }
 
 export type ArrivalsReply = {
@@ -56,7 +82,36 @@ export type ArrivalsReply = {
   arrivals: Arrival[]
   /** How many landed in all, including any past the cap. What the copy counts. */
   total: number
+  /** Where a nudge about several goes: the list itself. */
+  listHref: string
+  /** The site's own hi-res app icon, rather than a 32px tab icon blown up: an
+   *  address on this origin that the core routes to whatever the admin set
+   *  under Branding (BRANDING_DEFAULTS.icon512), handed over by the server
+   *  because that is the end allowed to read the core's branding. Chrome, Edge
+   *  and Firefox draw it; Safari on a Mac and on an iPhone draw the site's own
+   *  app icon of their own accord, which is the same Branding set. */
+  icon: string
 }
+
+/** What one nudge says and does, whichever road it travels: drawn by the page
+ *  itself on the older road, and sealed into the push payload on the newer. */
+export type Nudge = {
+  title: string
+  body: string
+  href: string
+  /** Which notification this one replaces. One per conversation, so a second
+   *  reply on the same thread updates the first rather than stacking; the
+   *  tally has one of its own. */
+  tag: string
+  icon: string
+}
+
+/** The oldest a message's own date may be and still be news when it reaches
+ *  the site. Covers the slowest collection there is (the six-hourly safety net
+ *  behind an account whose provider rings) with room to spare, and keeps a
+ *  newly connected account's years of history - all of it collected "now" -
+ *  from arriving as one enormous nudge. */
+export const MAX_ARRIVAL_AGE_MS = 24 * 60 * 60_000
 
 /** How many arrivals are described one by one before the copy gives up and
  *  counts them instead. One is named; a handful is a number. */
@@ -98,30 +153,50 @@ export function senderLabel(from: string | null): string {
   return trimmed && trimmed.length > 0 ? trimmed : 'Someone new'
 }
 
+/** Which addresses a set of arrivals landed in, named once each, in the order
+ *  they first appear. */
+function inboxNames(arrivals: Arrival[]): string[] {
+  const names: string[] = []
+  for (const arrival of arrivals) {
+    const name = arrival.inbox?.trim()
+    if (name && !names.includes(name)) names.push(name)
+  }
+  return names
+}
+
+/** "in Sales", "in Sales and Accounts", "in 3 inboxes". */
+function whereLabel(names: string[]): string | null {
+  if (names.length === 0) return null
+  if (names.length === 1) return `in ${names[0]}`
+  if (names.length === 2) return `in ${names[0]} and ${names[1]}`
+  return `in ${names.length} inboxes`
+}
+
 /**
  * The two lines of the notification itself.
  *
  * One arrival reads like a message, because it is one: who it is from on top,
  * what it is about underneath - the shape every mail program has used for
- * thirty years, and therefore the one nobody has to read twice.
+ * thirty years, and therefore the one nobody has to read twice - with the
+ * address it landed in after it, because somebody reading their own post, the
+ * shared sales@ and a colleague's while they are away needs to know which pile
+ * it is on before they get up.
  *
  * Several read like a tally, because a nudge that arrives while somebody is on
  * a call is glanced at rather than read: "4 new messages" answers the whole
  * question, and the names underneath are there for whoever wants them.
- *
- * The scope is named on the tally and not on the single, where the sender's own
- * name is the more useful thing to give the line to.
  */
 export function notificationCopy(
   arrivals: Arrival[],
   total: number,
-  scopeName: string | null,
 ): { title: string; body: string } {
   const one = arrivals[0]
+  const where = whereLabel(inboxNames(arrivals))
   if (total <= 1 && arrivals.length === 1 && one) {
+    const subject = one.subject?.trim() || 'No subject'
     return {
       title: senderLabel(one.from),
-      body: one.subject?.trim() || 'No subject',
+      body: where ? `${subject} - ${where}` : subject,
     }
   }
   const names: string[] = []
@@ -134,8 +209,49 @@ export function notificationCopy(
   const who = rest > 0 ? `${listed} and ${rest} other${rest === 1 ? '' : 's'}` : listed
   return {
     title: `${total} new messages`,
-    body: scopeName ? `${who} - in ${scopeName}` : who,
+    body: where ? `${who} - ${where}` : who,
   }
+}
+
+/** The one tag every tally shares, so a morning away comes back to the latest
+ *  count rather than to a stack of them. */
+export const TALLY_TAG = 'uin-new-mail'
+
+/** Everything a notification needs, from one round's answer. Null when nothing
+ *  landed. */
+export function nudgeFor(reply: Pick<ArrivalsReply, 'arrivals' | 'total' | 'listHref' | 'icon'>): Nudge | null {
+  const first = reply.arrivals[0]
+  if (!first) return null
+  const { title, body } = notificationCopy(reply.arrivals, reply.total)
+  const single = reply.total <= 1 && reply.arrivals.length === 1
+  return {
+    title,
+    body,
+    href: single ? first.href : reply.listHref,
+    tag: single ? `uin-thread-${first.threadId}` : TALLY_TAG,
+    icon: reply.icon,
+  }
+}
+
+/** The admin area's inbox screen, given the admin path the site is set to. A
+ *  site that has never set one is on the default. */
+export function inboxBase(adminPath: string | null | undefined): string {
+  const path = adminPath?.trim().replace(/^\/+|\/+$/g, '') || 'cactus-admin'
+  return `/${path}/inbox`
+}
+
+/** The list a tally opens on. */
+export function listHrefFor(base: string): string {
+  return `${base}?tab=unified-inbox`
+}
+
+/** One conversation, opened in the address it landed in - or on its own, when
+ *  the reader may not see that address, in which case the screen picks. */
+export function threadHrefFor(base: string, threadId: string, inboxId: string | null): string {
+  const params = new URLSearchParams({ tab: 'unified-inbox' })
+  if (inboxId) params.set('inbox', inboxId)
+  params.set('id', threadId)
+  return `${base}?${params.toString()}`
 }
 
 /** Where the answer is kept, per person. Keyed by user id so a machine two
@@ -182,16 +298,18 @@ export function writePreference(
 /**
  * Whether this browser should be asking the site what has arrived.
  *
- * ONLY while the window is not the one being used. Somebody reading the list
- * can see what has landed in it - the list IS the notification - so a round of
- * polling while they are looking at it buys nothing and costs the site a
- * function call a minute per open tab. Away from it, in another window or
- * behind another tab, is exactly the case this feature exists for.
+ * ONLY while the window is not the one being used, and only when the site
+ * cannot push to it. Somebody reading the list can see what has landed in it -
+ * the list IS the notification - so a round of polling while they are looking
+ * at it buys nothing and costs the site a function call a minute per open tab.
+ * And a browser the site pushes to hears about every arrival already; asking
+ * as well would only tell it twice.
  */
 export function shouldPoll(state: {
   enabled: boolean
   permission: NotificationPermission | 'unsupported'
   focused: boolean
+  pushed: boolean
 }): boolean {
-  return state.enabled && state.permission === 'granted' && !state.focused
+  return state.enabled && state.permission === 'granted' && !state.focused && !state.pushed
 }

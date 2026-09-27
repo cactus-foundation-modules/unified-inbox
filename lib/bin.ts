@@ -82,22 +82,26 @@ export async function purgeDiscussionsFromBin(threadIds: string[], ownerUserId: 
 }
 
 /** Put a conversation in somebody's bin. Pressing it twice is pressing it once
- *  - the pair is the primary key, so this is safe to repeat and safe to race. */
-export async function markThreadBinned(threadId: string, userId: string): Promise<void> {
-  await prisma.$executeRaw`
+ *  - the pair is the primary key, so this is safe to repeat and safe to race.
+ *  True when it went in just now, so a second press writes no second line in
+ *  the timeline. */
+export async function markThreadBinned(threadId: string, userId: string): Promise<boolean> {
+  const added = await prisma.$executeRaw`
     INSERT INTO "uin_thread_bin" ("thread_id", "user_id")
     VALUES (${threadId}, ${userId})
     ON CONFLICT ("thread_id", "user_id") DO NOTHING
   `
+  return added > 0
 }
 
 /** Take it back out again. Also safe to repeat: taking something out of a bin
- *  it is not in is not an error. */
-export async function unmarkThreadBinned(threadId: string, userId: string): Promise<void> {
-  await prisma.$executeRaw`
+ *  it is not in is not an error. True when it was in there. */
+export async function unmarkThreadBinned(threadId: string, userId: string): Promise<boolean> {
+  const removed = await prisma.$executeRaw`
     DELETE FROM "uin_thread_bin"
      WHERE "thread_id" = ${threadId} AND "user_id" = ${userId}
   `
+  return removed > 0
 }
 
 /**

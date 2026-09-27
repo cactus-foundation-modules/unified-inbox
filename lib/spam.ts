@@ -75,22 +75,25 @@ export function spamOwnerFor(input: {
 
 /** Mark a conversation as junk, for one person. Pressing it twice is pressing
  *  it once - the pair is the primary key, so this is safe to repeat and safe to
- *  race. */
-export async function markThreadSpam(threadId: string, userId: string): Promise<void> {
-  await prisma.$executeRaw`
+ *  race. True when it went in just now. */
+export async function markThreadSpam(threadId: string, userId: string): Promise<boolean> {
+  const added = await prisma.$executeRaw`
     INSERT INTO "uin_thread_spam" ("thread_id", "user_id")
     VALUES (${threadId}, ${userId})
     ON CONFLICT ("thread_id", "user_id") DO NOTHING
   `
+  return added > 0
 }
 
 /** Take it back out again. Also safe to repeat: taking something out of a
- *  folder it is not in is not an error, it is a Tuesday. */
-export async function unmarkThreadSpam(threadId: string, userId: string): Promise<void> {
-  await prisma.$executeRaw`
+ *  folder it is not in is not an error, it is a Tuesday. True when it was in
+ *  there, so the timeline only hears about a change. */
+export async function unmarkThreadSpam(threadId: string, userId: string): Promise<boolean> {
+  const removed = await prisma.$executeRaw`
     DELETE FROM "uin_thread_spam"
      WHERE "thread_id" = ${threadId} AND "user_id" = ${userId}
   `
+  return removed > 0
 }
 
 /** Whether it is in a given person's bin. Asked when a conversation is opened,

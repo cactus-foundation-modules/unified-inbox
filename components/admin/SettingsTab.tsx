@@ -180,6 +180,7 @@ export function UnifiedInboxSettingsTab() {
           <CollectingPanel
             settings={data.settings}
             inboxes={data.inboxes}
+            connections={data.connections}
             retention={data.retention ?? null}
             blockedSenders={data.blockedSenders ?? []}
             users={data.users}
@@ -196,6 +197,7 @@ export function UnifiedInboxSettingsTab() {
             inboxes={data.inboxes}
             counts={data.people}
             categories={data.categories}
+            shopInstalled={data.shopInstalled}
             busy={busy}
             call={call}
           />

@@ -18,6 +18,7 @@ import type { ProductRef } from './products/types'
 import type { ConversationTextStyles } from '@/lib/conversations/types'
 import { pushProviderRead } from './provider-read'
 import { providerForKey } from './provider-registry'
+import { standDownScheduled } from './stand-down'
 import { buildSnippet } from './threading'
 
 // Answering a conversation somebody else's module owns.
@@ -226,8 +227,18 @@ export async function sendProviderReply(input: {
   // to say so - and narrowed the same way: only something marked done, never a
   // sleep this side asked for. See reopenOnOurReply.
   if (await reopenOnOurReply(thread.id)) {
-    await recordEvent(thread.id, input.authorUserId, 'woken', { was: 'done', ours: true })
+    await recordEvent(thread.id, input.authorUserId, 'woken', { was: 'done', ours: true, messageId })
   }
+
+  // And anybody else's reply waiting to go out on it stops waiting: a
+  // colleague has just answered. See lib/stand-down.ts.
+  await standDownScheduled({
+    threadId: thread.id,
+    messageId,
+    direction: 'out',
+    fromAddress: null,
+    senderUserId: input.authorUserId,
+  })
 
   return { ok: true, messageId }
 }

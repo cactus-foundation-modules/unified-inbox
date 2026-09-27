@@ -148,7 +148,7 @@ describe('a held message in the list', () => {
       now,
       LONDON,
     )
-    expect(label).toBe('Held - they wrote first')
+    expect(label).toBe('Held - somebody replied first')
   })
 
   it('still says when a waiting one goes, held or not', () => {

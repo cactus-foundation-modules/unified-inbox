@@ -108,6 +108,8 @@ export type Settings = {
   hiddenChannelModules: string[]
   /** Whether post arriving at a colleague's own address is handed to them. */
   autoAssignOwnPost: boolean
+  /** Whether somebody who pays for a shop order becomes a contact. */
+  shopCustomerContacts: boolean
 }
 
 export type StaffMember = { id: string; name: string; email: string }
@@ -164,6 +166,8 @@ export type Payload = {
   /** Everybody the site refuses, newest first. This screen is the only place a
    *  block can be lifted - the button that makes one is on a conversation. */
   blockedSenders: BlockedSenderRow[]
+  /** Whether the shop is here, so the switch for its customers is worth showing. */
+  shopInstalled: boolean
   encryptionReady: boolean
 }
 

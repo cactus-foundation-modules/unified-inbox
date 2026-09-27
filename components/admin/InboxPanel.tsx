@@ -72,6 +72,8 @@ import { isSmsAvailable } from '@/lib/sms/send'
 import { canSuggestReplies } from '@/lib/conversations/reply-suggestions'
 import { callerNumbers, firstDialler } from '@/lib/dialler/registry'
 import { siteDiallingCode } from '@/lib/phone.server'
+import { threadTextNumber } from '@/modules/unified-inbox/lib/text-links'
+import { isSideText } from '@/modules/unified-inbox/lib/text-rules'
 import { attachableKinds, loadContext, loadHints } from '@/modules/unified-inbox/lib/adapters'
 import { defaultLinkKind } from '@/modules/unified-inbox/lib/link-kinds'
 import { modulesForInbox } from '@/modules/unified-inbox/lib/module-senders'
@@ -1131,7 +1133,11 @@ export async function UnifiedInboxPanel({
           ?? messages[messages.length - 1]
           ?? null
 
-      const newest = [...messages].reverse().find((m) => m.direction !== 'note') ?? null
+      // Never a text, which has no address to reply to: a customer's text
+      // filed here (lib/text-links.ts) is answered with a text from its own
+      // arrow, and the email reply goes on answering the newest email.
+      const newest = [...messages].reverse()
+        .find((m) => m.direction !== 'note' && !isSideText(m, thread.channel)) ?? null
       const ownAddresses = allInboxes.map((i) => i.address)
       const reply = newest
         ? replyRecipients(
@@ -1234,7 +1240,11 @@ export async function UnifiedInboxPanel({
       // this module (E13): a sender who nominated a Reply-To is telling us which
       // of the two addresses is actually theirs, and it is the one a reply would
       // have gone to.
-      const lastInbound = [...messages].reverse().find((m) => m.direction === 'in') ?? null
+      //
+      // A text they sent in (lib/text-links.ts) is passed over: it has a number
+      // and no address, and would leave nobody to refuse.
+      const lastInbound = [...messages].reverse()
+        .find((m) => m.direction === 'in' && !isSideText(m, thread.channel)) ?? null
       const spamSender = lastInbound
         ? normaliseAddress(lastInbound.replyTo || lastInbound.fromAddress || '')
         : ''
@@ -1275,7 +1285,7 @@ export async function UnifiedInboxPanel({
       // the hints and the public links are asked of what comes back here.
       const [
         canReply, blockState, isSpam, isBinned, senderBlocked, ask,
-        links, kindOptions, senderModules, merges, contextQuery, canSuggest,
+        links, kindOptions, senderModules, merges, contextQuery, canSuggest, textTo,
       ] = await Promise.all([
         canReplyHere,
         blockStateAsked,
@@ -1301,6 +1311,15 @@ export async function UnifiedInboxPanel({
         // core's lib/conversations/reply-suggestions.ts - and there is no point
         // asking on a conversation this reader may not answer anyway.
         canReplyHere.then((allowed) => (allowed ? canSuggestReplies() : false)),
+        // The mobile on their contact card, which puts "Send text message" on
+        // the dots beside Reply. Only on an email conversation somebody may
+        // answer, on a site that can send texts at all - smsReady is the cheap
+        // question round one already asked.
+        smsReady && !isDiscussion && !thread.providerModule && thread.personId
+          ? canReplyHere.then(async (allowed) => (
+              allowed ? threadTextNumber(thread, await siteDiallingCode()) : null
+            ))
+          : Promise.resolve(null),
       ])
 
       // HOW this one is answered, as against whether it may be. An email is
@@ -1398,8 +1417,8 @@ export async function UnifiedInboxPanel({
           inboxName={threadInbox?.name ?? null}
           otherInboxNames={otherInboxNames}
           /* Only the id and what it was called: who did it and when are the
-             log's own words, and the log is where the way out of a merge lives
-             now. */
+             merge's own line in the conversation, and the way out of a merge
+             sits on the end of that line. */
           merges={merges.map((merge) => ({ id: merge.id, subject: merge.loserSubject }))}
           messages={view}
           events={events}
@@ -1410,6 +1429,7 @@ export async function UnifiedInboxPanel({
           taggable={taggable}
           staffById={staffById}
           canReply={canReply}
+          textTo={textTo}
           cannotReplyReason={cannotReplyReason}
           style={style}
           destinationLine={destinationLine}
@@ -1470,6 +1490,7 @@ export async function UnifiedInboxPanel({
             sendAt: other.sendAt ? other.sendAt.toISOString() : null,
             waiting: other.sendState === 'scheduled' || other.sendState === 'sending',
           }))}
+          viewerUserId={user.id}
           heldDrafts={heldDrafts.map((held) => ({
             id: held.id,
             threadId: held.threadId,

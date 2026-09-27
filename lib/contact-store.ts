@@ -80,7 +80,7 @@ export type SaveContactOutcome = {
  * quietly claim every future correspondent at that domain for whichever company
  * somebody happened to type first.
  */
-async function resolveOrganisation(
+export async function resolveOrganisation(
   name: string | null,
   origin: ContactOrigin,
 ): Promise<{ id: string | null; created: boolean }> {
@@ -91,7 +91,7 @@ async function resolveOrganisation(
 }
 
 /** Attach an address and a number, and say which of them somebody else had. */
-async function attachContactIdentities(
+export async function attachContactIdentities(
   personId: string,
   draft: ContactDraft,
   source: string,

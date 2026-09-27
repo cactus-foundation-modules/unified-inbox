@@ -18,6 +18,7 @@ const reopenOnOurReply = vi.hoisted(() => vi.fn())
 const recordEvent = vi.hoisted(() => vi.fn())
 const providerForKey = vi.hoisted(() => vi.fn())
 const resolveProducts = vi.hoisted(() => vi.fn())
+const standDownScheduled = vi.hoisted(() => vi.fn())
 
 vi.mock('./db', () => ({
   getThreadDetail,
@@ -31,6 +32,7 @@ vi.mock('./db', () => ({
 }))
 vi.mock('./provider-registry', () => ({ providerForKey }))
 vi.mock('./products', () => ({ resolveProducts }))
+vi.mock('./stand-down', () => ({ standDownScheduled }))
 
 const { replyWords, sendProviderReply } = await import('./provider-send')
 
@@ -118,6 +120,7 @@ beforeEach(() => {
   reopenOnOurReply.mockReset().mockResolvedValue(false)
   recordEvent.mockReset().mockResolvedValue(undefined)
   resolveProducts.mockReset().mockResolvedValue([])
+  standDownScheduled.mockReset().mockResolvedValue([])
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 
@@ -297,7 +300,15 @@ describe('sendProviderReply', () => {
     reopenOnOurReply.mockResolvedValue(true)
     await sendProviderReply({ threadId: 't1', body: { text: 'hi' }, authorUserId: 'u1', authorName: null })
     expect(reopenOnOurReply).toHaveBeenCalledWith('t1')
-    expect(recordEvent).toHaveBeenCalledWith('t1', 'u1', 'woken', { was: 'done', ours: true })
+    // Carrying the message that did it, so the line sits directly above it.
+    expect(recordEvent).toHaveBeenCalledWith('t1', 'u1', 'woken', { was: 'done', ours: true, messageId: 'm1' })
+  })
+
+  it('stands down anybody else\'s reply waiting to go out on it, never the sender\'s own', async () => {
+    await sendProviderReply({ threadId: 't1', body: { text: 'hi' }, authorUserId: 'u1', authorName: null })
+    expect(standDownScheduled).toHaveBeenCalledWith({
+      threadId: 't1', messageId: 'm1', direction: 'out', fromAddress: null, senderUserId: 'u1',
+    })
   })
 
   it('with nothing said on the timeline when there was nothing to reopen', async () => {
@@ -310,6 +321,8 @@ describe('sendProviderReply', () => {
     send.mockRejectedValue(new Error('Chatwoot 502'))
     await sendProviderReply({ threadId: 't1', body: { text: 'hi' }, authorUserId: 'u1', authorName: null })
     expect(reopenOnOurReply).not.toHaveBeenCalled()
+    // Nothing went, so nothing anybody else has waiting has been overtaken.
+    expect(standDownScheduled).not.toHaveBeenCalled()
   })
 
   it('stamps its own row so the far end’s copy can be told apart later', async () => {

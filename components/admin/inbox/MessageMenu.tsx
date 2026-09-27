@@ -7,6 +7,7 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { Dropdown, MenuItem } from './Dropdown'
 import { useComposerOpen } from './ComposerOpen'
 import { MoreIcon, ReplyIcon } from './icons'
+import { SendTextDialog } from './SendTextDialog'
 
 // Answering a message, from the message - and the two things that can be done
 // to one message rather than to the whole conversation.
@@ -82,6 +83,17 @@ type Props = {
   canDeleteHere: boolean
   /** Whether it can be moved out onto a conversation of its own. */
   canSplit: boolean
+  /** The mobile on the contact card of whoever this conversation is with, when
+   *  the site can send texts and this reader may answer the conversation. Puts
+   *  "Send text message" on the menu; null leaves it off. */
+  textTo: string | null
+  /** This message is a text carried on an email conversation rather than an
+   *  email. It has no address, so there is nothing to reply to all of or
+   *  forward, and the arrow answers it with a text rather than an email. */
+  isText: boolean
+  /** Whether this text can be moved out to the Phone channel: one the person
+   *  sent in, filed here because somebody texted them from this conversation. */
+  canMoveToPhone: boolean
   /** Where the screen is, so the browser can be sent to the new conversation
    *  once a message has been moved onto it. The pane is rendered from the query
    *  string, so this is the whole of what "which conversation is open" means. */
@@ -91,12 +103,13 @@ type Props = {
 
 export function MessageMenu({
   threadId, messageId, actOn, canReply, canReplyAll, canForward,
-  canDeleteHere, canSplit, base, params,
+  canDeleteHere, canSplit, textTo, isText, canMoveToPhone, base, params,
 }: Props) {
   const router = useRouter()
   const { toggle } = useComposerOpen()
   const [busy, setBusy] = useState(false)
-  const [asking, setAsking] = useState<'delete' | 'split' | null>(null)
+  const [asking, setAsking] = useState<'delete' | 'split' | 'to-phone' | null>(null)
+  const [texting, setTexting] = useState(false)
   const [error, setError] = useState('')
 
   /** Back to unread, so it is still waiting tomorrow. A conversation-wide
@@ -170,6 +183,36 @@ export function MessageMenu({
     }
   }, [actOn, base, params, router])
 
+  const toPhone = useCallback(async () => {
+    setBusy(true)
+    setError('')
+    try {
+      const response = await fetch(`/api/m/unified-inbox/messages/${actOn}/to-phone`, {
+        method: 'POST',
+      })
+      const body = (await response.json().catch(() => null)) as
+        { error?: string; threadId?: string } | null
+      if (!response.ok || !body?.threadId) {
+        setError(refusal(response.status, body?.error ?? null))
+        return
+      }
+      setAsking(null)
+      // Stays on this conversation, which is the one somebody was working: the
+      // text has gone from it, and the Phone channel is one click away.
+      router.refresh()
+    } catch {
+      setError('The site could not be reached, so nothing was moved.')
+    } finally {
+      setBusy(false)
+    }
+  }, [actOn, router])
+
+  // A text is answered with a text, when there is a number to send one to.
+  // Without one there is no arrow on it at all: an email reply to a text has
+  // nobody to go to.
+  const replyByText = isText && textTo !== null
+  const showReply = canReply && (!isText || replyByText)
+
   return (
     <span className="uin-msg-tools">
       <Dropdown
@@ -181,8 +224,11 @@ export function MessageMenu({
         width={230}
         disabled={busy}
       >
-        {canReplyAll && <MenuItem onClick={() => toggle('reply-all', messageId)}>Reply all</MenuItem>}
-        {canForward && <MenuItem onClick={() => toggle('forward', messageId)}>Forward</MenuItem>}
+        {canReplyAll && !isText && <MenuItem onClick={() => toggle('reply-all', messageId)}>Reply all</MenuItem>}
+        {canForward && !isText && <MenuItem onClick={() => toggle('forward', messageId)}>Forward</MenuItem>}
+        {textTo && (
+          <MenuItem onClick={() => { setError(''); setTexting(true) }}>Send text message</MenuItem>
+        )}
         {/* Only where there is no arrow beside these dots. On a conversation
             that CAN be answered, the full note box is one press of the arrow
             and one chip away, and a fourth entry here would be a second door
@@ -192,7 +238,12 @@ export function MessageMenu({
             mention nobody. */}
         {!canReply && <MenuItem onClick={() => toggle('note')}>Internal note</MenuItem>}
         <MenuItem onClick={() => void markUnread()}>Mark as unread</MenuItem>
-        {(canSplit || canDeleteHere) && <div className="uin-menu-sep" role="separator" />}
+        {(canSplit || canDeleteHere || canMoveToPhone) && <div className="uin-menu-sep" role="separator" />}
+        {canMoveToPhone && (
+          <MenuItem onClick={() => { setError(''); setAsking('to-phone') }}>
+            Move to the Phone channel
+          </MenuItem>
+        )}
         {canSplit && (
           <MenuItem onClick={() => { setError(''); setAsking('split') }}>
             Move to its own conversation
@@ -205,16 +256,27 @@ export function MessageMenu({
         )}
       </Dropdown>
 
-      {canReply && (
+      {showReply && (
         <button
           type="button"
           className="uin-icon-btn"
-          title="Reply"
-          aria-label="Reply to this message"
-          onClick={() => toggle('reply', messageId)}
+          title={replyByText ? 'Reply with a text' : 'Reply'}
+          aria-label={replyByText ? 'Reply to this text with a text' : 'Reply to this message'}
+          onClick={() => {
+            if (replyByText) { setError(''); setTexting(true) } else toggle('reply', messageId)
+          }}
         >
           {ReplyIcon}
         </button>
+      )}
+
+      {textTo && (
+        <SendTextDialog
+          open={texting}
+          threadId={threadId}
+          to={textTo}
+          onClose={() => setTexting(false)}
+        />
       )}
 
       {/* Beside the dots, in the header row they sit in. Same colour as the
@@ -243,6 +305,28 @@ export function MessageMenu({
         busy={busy}
         onCancel={() => { if (!busy) { setAsking(null); setError('') } }}
         onConfirm={() => void split()}
+      />
+
+      <ConfirmDialog
+        open={asking === 'to-phone'}
+        title="Move this text to the Phone channel?"
+        body={
+          <>
+            <p>
+              It leaves this conversation and goes into the phone conversation with their
+              number, which is started for it if there is not one yet. Nothing is sent to
+              anybody.
+            </p>
+            <p>
+              Their texts stop arriving here as well, from now on. Send them another text from
+              this conversation and they start again.
+            </p>
+          </>
+        }
+        confirmLabel="Move it"
+        busy={busy}
+        onCancel={() => { if (!busy) { setAsking(null); setError('') } }}
+        onConfirm={() => void toPhone()}
       />
 
       <ConfirmDialog

@@ -3,6 +3,7 @@ import { errorResponse } from '@/lib/utils'
 import { sweepAbandonedUploads, sweepRetention, sweepStalledSends } from '@/modules/unified-inbox/lib/retention'
 import { sweepAttachmentFiling } from '@/modules/unified-inbox/lib/attachment-backfill'
 import { pruneDeliveries } from '@/modules/unified-inbox/lib/webhooks-db'
+import { pruneNudgeLedger } from '@/modules/unified-inbox/lib/push-db'
 import { getSettings, wakeDueMentions } from '@/modules/unified-inbox/lib/db'
 import { pruneCampaignLogs } from '@/modules/unified-inbox/lib/campaigns/store'
 import { reconcileBrevoWebhooks } from '@/modules/unified-inbox/lib/brevo-webhooks'
@@ -57,6 +58,10 @@ export async function GET(request: NextRequest) {
   // and a log nobody prunes is a table nobody meant to create.
   const webhookAttempts = await pruneDeliveries(30)
 
+  // Which messages a new-mail nudge has already been sent about. Only has to
+  // outlive the half hour a nudge round looks back over; two days is plenty.
+  const nudgeLedger = await pruneNudgeLedger(new Date(Date.now() - 2 * 24 * 60 * 60_000))
+
   // Files dragged onto a message that was then never sent and never saved. Only
   // the ones nothing at all points at, and only once they are a week old - a
   // draft holding one keeps it for as long as the draft lives.
@@ -106,6 +111,7 @@ export async function GET(request: NextRequest) {
     stalledSends,
     wokenMentions,
     webhookAttempts,
+    nudgeLedger,
     abandonedUploads: uploads.removed,
     abandonedUploadFailures: uploads.failures,
     campaignRows,

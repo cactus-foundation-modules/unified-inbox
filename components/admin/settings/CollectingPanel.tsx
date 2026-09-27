@@ -1,7 +1,7 @@
 'use client'
 
 import { useId, useState } from 'react'
-import type { BlockedSenderRow, Caller, Inbox, RetentionForecast, Settings, StaffMember } from './types'
+import type { BlockedSenderRow, Caller, Connection, Inbox, RetentionForecast, Settings, StaffMember } from './types'
 import { BlockedSendersSection } from './BlockedSendersSection'
 import { CheckField, FieldGroup, FieldRow, FormActions, MUTED, Panel } from './ui'
 
@@ -10,9 +10,12 @@ import { CheckField, FieldGroup, FieldRow, FormActions, MUTED, Panel } from './u
 // reads once it is here.
 // ---------------------------------------------------------------------------
 
-export function CollectingPanel({ settings, inboxes, retention, blockedSenders, users, busy, call }: {
+export function CollectingPanel({ settings, inboxes, connections, retention, blockedSenders, users, busy, call }: {
   settings: Settings
   inboxes: Inbox[]
+  /** For how mail reaches the site: on the hour, or the moment a provider
+   *  rings (lib/push-checks.ts). The copy below says whichever is true. */
+  connections: Connection[]
   retention: RetentionForecast | null
   /** Everybody the site turns away at the door. On this tab because it is the
    *  same question the rest of it answers - what gets collected - and because
@@ -44,6 +47,14 @@ export function CollectingPanel({ settings, inboxes, retention, blockedSenders, 
   // saying so is a setting somebody reports as broken.
   const hasIndividual = inboxes.some((i) => i.kind === 'individual')
 
+  // Accounts whose provider rings when mail lands are left alone by both the
+  // hourly job and the timer below, so talking about "the schedule" to a site
+  // where every account is one of those describes something that no longer
+  // happens.
+  const pushed = connections.filter((c) => c.pushChecks).length
+  const allPushed = connections.length > 0 && pushed === connections.length
+  const somePushed = pushed > 0 && !allPushed
+
   async function save() {
     await call('/settings', {
       method: 'PATCH',
@@ -64,11 +75,20 @@ export function CollectingPanel({ settings, inboxes, retention, blockedSenders, 
   return (
     <Panel
       title="What gets collected, and how long it is kept"
-      blurb={<>
-        Mail is gathered on a schedule rather than the second it arrives - about once an hour on a
-        paid hosting plan, and once a day on the free one. There is a Check now button on each mail
-        account for when you cannot wait.
-      </>}
+      blurb={allPushed
+        ? <>
+            Mail arrives the moment your provider says it has landed - every mail account is set up
+            that way under Mail accounts. There is a Check now button on each one should you ever
+            doubt it.
+          </>
+        : <>
+            Mail is gathered on a schedule rather than the second it arrives - about once an hour on a
+            paid hosting plan, and once a day on the free one.
+            {somePushed
+              ? ' Accounts set to be checked when your provider says mail has arrived are the exception, and arrive straight away.'
+              : ''}{' '}
+            There is a Check now button on each mail account for when you cannot wait.
+          </>}
     >
       <FieldGroup first title="Starting out">
         <FieldRow>
@@ -173,7 +193,9 @@ export function CollectingPanel({ settings, inboxes, retention, blockedSenders, 
         />
         <FieldRow>
           <div className="field">
-            <label htmlFor={`${fid}-autocheck`}>Check for new mail while the inbox is open</label>
+            <label htmlFor={`${fid}-autocheck`}>
+              {allPushed ? 'Refresh the inbox while it is open' : 'Check for new mail while the inbox is open'}
+            </label>
             <select
               id={`${fid}-autocheck`}
               value={draft.autoCheckSeconds === null ? '' : String(draft.autoCheckSeconds)}
@@ -182,7 +204,11 @@ export function CollectingPanel({ settings, inboxes, retention, blockedSenders, 
                 autoCheckSeconds: e.target.value === '' ? null : Number(e.target.value),
               })}
             >
-              <option value="">No - only on the schedule, or when I press the button</option>
+              <option value="">
+                {allPushed
+                  ? 'No - only when I move around the inbox or press the button'
+                  : 'No - only on the schedule, or when I press the button'}
+              </option>
               <option value="60">Every minute</option>
               <option value="120">Every 2 minutes</option>
               <option value="300">Every 5 minutes</option>
@@ -190,6 +216,11 @@ export function CollectingPanel({ settings, inboxes, retention, blockedSenders, 
               <option value="1800">Every half hour</option>
             </select>
             <span className="field-hint">
+              {allPushed
+                ? 'Your mail arrives on its own, so this never opens a mailbox: it redraws the list so new mail appears without you moving, and collects live chat, texts and calls. '
+                : somePushed
+                  ? 'Accounts checked when your provider says mail has arrived are left out of this. '
+                  : ''}
               This pace is only kept while somebody has the inbox open in the tab they are looking
               at, and only for people who look after the mail accounts. Anywhere else in the admin
               area, or in a tab left behind another window, it checks every 5 minutes instead (or at

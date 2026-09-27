@@ -936,11 +936,6 @@ export function NavRail({
       ...changes,
     })
 
-  // What the address a nudge is about is called. Null when this person has not
-  // been given one of their own, where the honest answer is "everything you can
-  // read" and naming an address would be a plain untruth.
-  const ownInboxName = inboxes.find((inbox) => inbox.id === defaultInboxId)?.name ?? null
-
   // The three lists whose order is the SITE's - the shared addresses, the
   // colleagues' inboxes, the channels. One arrangement everybody opens, so
   // arranging them is a job for whoever looks after the place. Yours is the
@@ -1677,13 +1672,7 @@ export function NavRail({
             {canCheckNow && (
               <span className="uin-rail-updated">Updated: {updatedLabel(checkedAt, timezone)}</span>
             )}
-            <NewMailNotifier
-              userId={me.id}
-              scopeName={ownInboxName}
-              listHref={link(defaultInboxId)}
-              threadHref={(threadId) => link(defaultInboxId, { id: threadId })}
-              onAvailable={setBellShown}
-            />
+            <NewMailNotifier userId={me.id} onAvailable={setBellShown} />
             {canCheckNow && (
               <CheckNowButton
                 onResult={showNotice}

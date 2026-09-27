@@ -18,7 +18,7 @@ import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { canOpenThread } from '@/modules/unified-inbox/lib/access'
-import { getInbox, getThreadDetail, setThreadBlocked } from '@/modules/unified-inbox/lib/db'
+import { getInbox, getThreadDetail, recordEvent, setThreadBlocked, withdrawUndoneEvent } from '@/modules/unified-inbox/lib/db'
 import { markThreadSpam, spamOwnerFor, unmarkThreadSpam } from '@/modules/unified-inbox/lib/spam'
 import { markReadOnDiscard } from '@/modules/unified-inbox/lib/provider-read'
 import { ThreadSpamBody } from '@/modules/unified-inbox/lib/validation'
@@ -47,13 +47,19 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const inbox = thread.inboxId ? await getInbox(thread.inboxId) : null
   const owner = spamOwnerFor({ pressedByUserId: user.id, inbox })
 
+  // Said in the timeline, worded as whose junk - the same rule and the same
+  // reasons as the bin beside it. Only when something moved; an undo takes the
+  // line back out rather than writing its opposite underneath.
   if (parsed.data.spam) {
-    await markThreadSpam(id, owner)
+    const added = await markThreadSpam(id, owner)
     // Junk is dealt with - see markReadOnDiscard.
     await markReadOnDiscard(thread)
+    if (added && !(await withdrawUndoneEvent({ threadId: id, userId: user.id, kinds: ['unjunked'], detailMatch: { ownerUserId: owner } }))) {
+      await recordEvent(id, user.id, 'junked', { ownerUserId: owner })
+    }
   }
   else {
-    await unmarkThreadSpam(id, owner)
+    const removed = await unmarkThreadSpam(id, owner)
     // And the site's own stamp with it, where the conversation is one the
     // collecting pass put in the bin because its sender is blocked. Nobody
     // pressed anything to get it in there, so nothing but this would ever take
@@ -70,7 +76,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     // changes what everybody receives for ever and takes `reply`. Rescuing one
     // conversation the reader can already open changes one conversation, and
     // the door it came through is exactly where it was.
-    await setThreadBlocked(id, false)
+    const unblocked = await setThreadBlocked(id, false)
+    // A blocked sender's conversation has no row of anybody's to remove - the
+    // site put it there - so letting it back through counts as taking it out.
+    if ((removed || unblocked) && !(await withdrawUndoneEvent({ threadId: id, userId: user.id, kinds: ['junked'], detailMatch: { ownerUserId: owner } }))) {
+      await recordEvent(id, user.id, 'unjunked', { ownerUserId: owner, ...(unblocked ? { unblocked: true } : {}) })
+    }
   }
 
   // `owner` goes back so the screen can say whose bin it landed in when that is

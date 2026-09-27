@@ -26,7 +26,8 @@ type Props = {
   /** When the conversation stays asleep until once this has gone, as an ISO
    *  stamp, or null for one nobody asked that of. */
   snoozeUntil: string | null
-  /** Whether mail from the recipient took the timer off before it could go. */
+  /** Whether the conversation moved on - they wrote, or a colleague answered -
+   *  and took the timer off before it could go. */
   held: boolean
   /** The site's zone, which is the one every time on the screen is stamped in. */
   timezone: string
@@ -62,9 +63,9 @@ export function ScheduleNotice({
           was going out at a particular time. */}
       {held && !scheduled && (
         <div className="alert alert-info" role="status">
-          They wrote to you {sendAt ? `before this went out ${describeSendAt(sendAt, new Date(), timezone)}` : 'before this went out'},
-          so the timer came off it and nothing was sent. Read what they said, then send this,
-          change it or throw it away.
+          Somebody replied {sendAt ? `before this went out ${describeSendAt(sendAt, new Date(), timezone)}` : 'before this went out'},
+          so it was cancelled and kept as a draft - nothing was sent. The conversation says who.
+          Read what was said, then send this, change it or throw it away.
         </div>
       )}
 

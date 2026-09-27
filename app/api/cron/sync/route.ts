@@ -6,6 +6,7 @@ import { runPeoplePass } from '@/modules/unified-inbox/lib/identity'
 import { syncAllProviders, PROVIDER_BUDGET_MS } from '@/modules/unified-inbox/lib/provider-sync'
 import { sweepStalledSends } from '@/modules/unified-inbox/lib/retention'
 import { deliverPending, WEBHOOK_BUDGET_MS } from '@/modules/unified-inbox/lib/webhooks'
+import { NUDGE_BUDGET_MS, sendPushNudges } from '@/modules/unified-inbox/lib/push-nudges'
 
 // The scheduled mail check.
 //
@@ -52,6 +53,11 @@ export async function GET(request: NextRequest) {
     deadline: Math.min(Date.now() + PROVIDER_BUDGET_MS, started + CRON_TICK_DEADLINE_MS),
   })
 
+  // Then tell the people it is for, while it is still news: a browser that
+  // said yes to nudges hears about what was just filed now, rather than after
+  // the slower passes below. Cheap when nothing arrived - one indexed insert.
+  const nudges = await sendPushNudges({ deadline: Date.now() + NUDGE_BUDGET_MS })
+
   // Then, with whatever is left of the slice: work out whose conversations the
   // new ones are, and attach the records they mention. Everything above is
   // already committed, so this stopping early costs a conversation one more
@@ -70,6 +76,7 @@ export async function GET(request: NextRequest) {
     channels: channels.length,
     channelMessages: channels.reduce((total, c) => total + c.messages, 0),
     stalledSends,
+    nudges,
     people: people.people,
     linked: people.links,
     outcomes,

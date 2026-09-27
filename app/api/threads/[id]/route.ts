@@ -12,6 +12,7 @@ import {
   recordEvent,
   setThreadRead,
   setThreadStatus,
+  withdrawUndoneEvent,
 } from '@/modules/unified-inbox/lib/db'
 import { queueAssignmentWebhooks } from '@/modules/unified-inbox/lib/colleague-webhooks'
 import { pushProviderRead } from '@/modules/unified-inbox/lib/provider-read'
@@ -75,26 +76,83 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       if (body.status === 'done') {
         await closeDiscussionFor(id, user.id)
         await settleOwnMentionOn(id, user.id)
-        await recordEvent(id, user.id, 'status', { status: 'done', forUserOnly: true })
+        await noteStatusChange({ threadId: id, userId: user.id, status: 'done', until: null, was: 'open', wasUntil: null, forUserOnly: true })
         return NextResponse.json({ ok: true, thread: await getThreadDetail(id, user.id) })
       }
       await reopenDiscussionFor(id, user.id)
       // Nothing shared to change when it is already open for everybody - the
       // person was only reopening their own.
       if (body.status === 'open' && thread.status === 'open') {
-        await recordEvent(id, user.id, 'status', { status: 'open', forUserOnly: true })
+        await noteStatusChange({ threadId: id, userId: user.id, status: 'open', until: null, was: 'done', wasUntil: null, forUserOnly: true })
         return NextResponse.json({ ok: true, thread: await getThreadDetail(id, user.id) })
       }
     }
 
-    await setThreadStatus(id, body.status, until)
-    // Finished with the conversation is finished with being asked about it.
+    // Asked to be where it already is - an undo putting back a state that was
+    // never left, or two tabs pressing the same button. Nothing changes, so
+    // nothing is written: a timeline that says "marked it done" twice in a
+    // row is recording presses, not the conversation.
+    const wasUntil = thread.snoozeUntil ? thread.snoozeUntil.toISOString() : null
+    const untilIso = until ? until.toISOString() : null
+    const unchanged = body.status === thread.status && (body.status !== 'snoozed' || untilIso === wasUntil)
+    // Finished with the conversation is finished with being asked about it -
+    // even when somebody else had already marked it done, which is exactly when
+    // the person asked to look presses Done to say they have.
     if (body.status === 'done') await settleOwnMentionOn(id, user.id)
-    await recordEvent(id, user.id, body.status === 'snoozed' ? 'snoozed' : 'status', {
-      status: body.status,
-      until: until ? until.toISOString() : null,
-    })
+    if (!unchanged) {
+      await setThreadStatus(id, body.status, until)
+      await noteStatusChange({
+        threadId: id,
+        userId: user.id,
+        status: body.status,
+        until: untilIso,
+        was: thread.status,
+        wasUntil,
+        forUserOnly: false,
+      })
+    }
   }
 
   return NextResponse.json({ ok: true, thread: await getThreadDetail(id, user.id) })
+}
+
+/**
+ * A line in the timeline for a change of where the conversation stands - or,
+ * when this press is plainly taking back the one just made, the removal of
+ * that line instead (see withdrawUndoneEvent).
+ *
+ * "Taking back" is read off the line itself: it records where the conversation
+ * was before, and a change that puts it back exactly there, by the same person,
+ * moments later, with nothing in between, is an undo whether it came from the
+ * toast or from pressing the other button. Where it WAS is stored for that
+ * reason and for the wording - "brought it back before its snooze ran out"
+ * needs to know it had been snoozed.
+ */
+async function noteStatusChange(input: {
+  threadId: string
+  userId: string
+  status: 'open' | 'snoozed' | 'done'
+  until: string | null
+  was: string
+  wasUntil: string | null
+  forUserOnly: boolean
+}): Promise<void> {
+  const own = input.forUserOnly ? { forUserOnly: true } : {}
+  const goingBackTo = input.status === 'snoozed'
+    ? { was: 'snoozed', wasUntil: input.until }
+    : { was: input.status }
+  const withdrawn = await withdrawUndoneEvent({
+    threadId: input.threadId,
+    userId: input.userId,
+    kinds: ['status', 'snoozed'],
+    detailMatch: { ...goingBackTo, ...own },
+  })
+  if (withdrawn) return
+  await recordEvent(input.threadId, input.userId, input.status === 'snoozed' ? 'snoozed' : 'status', {
+    status: input.status,
+    until: input.until,
+    was: input.was,
+    wasUntil: input.wasUntil,
+    ...own,
+  })
 }

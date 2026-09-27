@@ -3,6 +3,7 @@ import {
   deleteDraft,
   failScheduledDraft,
   getThread,
+  recordEvent,
   releaseScheduledClaims,
   releaseStaleScheduledClaims,
   threadSleep,
@@ -118,6 +119,22 @@ export async function runDueScheduledSends(options?: {
     } else {
       failed += 1
       await failScheduledDraft(draft.id, outcome.reason)
+      // Said on the conversation too, where the people waiting on it will look.
+      // The draft keeps the same sentence for whoever opens it; this is so a
+      // colleague reading the conversation is not left expecting a message that
+      // is never coming. A message starting a conversation has none to say it on.
+      if (draft.threadId) {
+        try {
+          await recordEvent(draft.threadId, null, 'scheduled_failed', {
+            draftId: draft.id,
+            authorUserId: draft.authorUserId,
+            reason: outcome.reason,
+            reply: draft.mode === 'reply' || draft.mode === 'reply-all',
+          })
+        } catch (err) {
+          console.error('[unified-inbox] a scheduled message failed and the conversation could not be told', err)
+        }
+      }
     }
   }
 

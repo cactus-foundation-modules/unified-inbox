@@ -17,13 +17,17 @@ import {
   recordEvent,
   recountProviderThread,
   reopenOnReply,
+  touchThread,
   upsertProviderThread,
 } from './db'
 import { blockedSenderSet } from './blocked-senders'
 import { unbinOnReply } from './bin'
+import { standDownScheduled } from './stand-down'
 import { ownPostOwners } from './own-post'
 import { allConversationProviders } from './provider-registry'
 import { normaliseSubject } from './threading'
+import { claimSentText, heldChannelMessages, markTextLinkRead, textLinksFor } from './text-links'
+import { isTextChannel, linkSettled, redirectsTo, type TextLink } from './text-rules'
 
 // Collecting the channels somebody else owns.
 //
@@ -252,6 +256,16 @@ export async function syncProvider(
     ? await ownPostOwners(ourInboxes)
     : new Map<string, string>()
 
+  // Numbers somebody has texted from an email conversation, whose texts are
+  // filed there rather than on the phone conversation - see lib/text-links.ts.
+  // One read for the whole pass, and only for the numbers on offer; a channel
+  // that carries no texts asks nothing at all.
+  const textLinks = await textLinksFor(
+    summaries
+      .filter((summary) => isTextChannel(channelOf(summary.channel, provider.channel)))
+      .map((summary) => partyOf(summary).phone ?? ''),
+  )
+
   for (const summary of summaries) {
     if (outOfTime() || opened >= PROVIDER_THREAD_LIMIT) break
 
@@ -285,8 +299,27 @@ export async function syncProvider(
     const floor = buried.get(summary.id) ?? null
     if (floor && lastMessageAt.getTime() <= floor.getTime()) continue
 
-    const existing = await providerThreadState(channelKey, summary.id)
     const inboxId = addressedInbox(summary, ourInboxIds)
+
+    // Texts with this number belong on an email conversation from some point
+    // on, so where each message goes has to be decided before any
+    // conversation is touched - otherwise the phone one is filed, bumped to
+    // the top and marked unread for a text that then goes somewhere else.
+    const link = isTextChannel(channel) && party.phone ? textLinks.get(party.phone) : undefined
+    if (link) {
+      if (linkSettled(link, lastMessageAt, contentAt)) continue
+      const linked = await collectLinkedConversation({
+        provider, channelKey, summary, link, channel, subject, party, floor,
+        lastMessageAt, contentAt, inboxId,
+      })
+      if (linked === null) continue
+      opened += 1
+      outcome.conversations += 1
+      outcome.messages += linked.stored
+      continue
+    }
+
+    const existing = await providerThreadState(channelKey, summary.id)
 
     const { id: threadId } = await upsertProviderThread({
       providerModule: channelKey,
@@ -341,6 +374,12 @@ export async function syncProvider(
     await markProviderContentRead(channelKey, summary.id, contentAt)
 
     let stored = 0
+    // The first new message each way, which is what the timeline's lines sit
+    // in front of: "a reply arrived, so it is no longer snoozed" belongs above
+    // the reply, not wherever the collecting pass's clock put it.
+    let firstIn: string | null = null
+    let firstOut: string | null = null
+    let firstAny: string | null = null
     for (const message of messages) {
       if (!message || typeof message.id !== 'string' || message.id.trim() === '') continue
       const sentAt = whenOf(message.sentAt)
@@ -397,21 +436,25 @@ export async function syncProvider(
       if (id) {
         stored += 1
         await queueMessageWebhooks(id)
+        firstAny ??= id
+        if (direction === 'in') firstIn ??= id
+        if (direction === 'out') firstOut ??= id
       }
     }
 
     if (stored > 0) {
       outcome.messages += stored
       await recountProviderThread(threadId)
-      // Somebody has written on it since it was put away, so it comes back out.
-      // A reply typed in this hub is claimed above and never counted here, so
-      // anything left is the party, or a colleague answering them in the module
-      // that owns the channel - either way the conversation is live again and
-      // belongs in Open, whether it was snoozed or marked done.
-      const was = await reopenOnReply(threadId)
-      if (was) await recordEvent(threadId, null, 'woken', { was, providerModule: channelKey })
-      const bins = await unbinOnReply(threadId)
-      if (bins > 0) await recordEvent(threadId, null, 'unbinned', { bins, providerModule: channelKey })
+      // Somebody has written on it since it was put away, so it comes back out,
+      // and anything waiting to go out on it stops waiting. A reply typed in
+      // this hub is claimed above and never counted here, so anything left is
+      // the party, or a colleague answering them in the module that owns the
+      // channel - either way the conversation is live again.
+      //
+      // Stand-down only on a conversation this hub already held. The first
+      // time one is copied across, every message in it is history and nothing
+      // can have been written against it yet.
+      await wakeOnArrival(threadId, channelKey, { firstIn, firstOut, firstAny }, existing !== null)
     }
   }
 
@@ -431,6 +474,275 @@ async function messagesFor(
     return null
   }
 }
+
+type Firsts = { firstIn: string | null; firstOut: string | null; firstAny: string | null }
+
+/**
+ * What a new message does to the conversation it lands on, whichever
+ * conversation that is: the channel's own, or the email conversation a text
+ * was redirected to.
+ *
+ * Out of the bin and back into Open, whether it was snoozed or marked done.
+ * Each line carries the message that caused it, so "a reply arrived, so it is
+ * no longer snoozed" sits above the reply rather than wherever the collecting
+ * pass's clock put it.
+ *
+ * And anything waiting to go out on it stops waiting - the same rule an email
+ * follows (lib/stand-down.ts): a reply set for nine o'clock must not go out at
+ * nine whatever the customer said at five past eight. Never matched by address:
+ * the email a chat visitor typed into a widget is their say-so, and letting it
+ * stand down messages to that address on other conversations would let anybody
+ * who knew a customer's email reach into the queue.
+ */
+async function wakeOnArrival(
+  threadId: string,
+  channelKey: string,
+  { firstIn, firstOut, firstAny }: Firsts,
+  standDown: boolean,
+): Promise<void> {
+  const cause = firstIn ?? firstOut ?? firstAny
+  const facing = firstIn ? 'in' : firstOut ? 'out' : undefined
+  const was = await reopenOnReply(threadId)
+  if (was) {
+    await recordEvent(threadId, null, 'woken', {
+      was, providerModule: channelKey, messageId: cause, ...(facing ? { direction: facing } : {}),
+    })
+  }
+  const bins = await unbinOnReply(threadId)
+  if (bins > 0) {
+    await recordEvent(threadId, null, 'unbinned', {
+      bins, providerModule: channelKey, messageId: cause, ...(facing ? { direction: facing } : {}),
+    })
+  }
+
+  if (!standDown) return
+  if (firstIn) {
+    await standDownScheduled({
+      threadId, messageId: firstIn, direction: 'in', fromAddress: null, senderUserId: null,
+    })
+  }
+  // A colleague answering in the channel's own screens. Who, this hub cannot
+  // tell, so nobody's waiting reply is spared.
+  if (firstOut) {
+    await standDownScheduled({
+      threadId, messageId: firstOut, direction: 'out', fromAddress: null, senderUserId: null,
+    })
+  }
+}
+
+type Party = ReturnType<typeof partyOf>
+
+/**
+ * One phone conversation whose number has been texted from an email
+ * conversation (lib/text-links.ts): each message goes where it belongs, and
+ * only then is either conversation touched.
+ *
+ *   Already held anywhere - left where it is. A text redirected to an email
+ *   conversation, or moved out of one, is not on the conversation the ordinary
+ *   duplicate check looks at, so without this it would be filed a second time.
+ *   One held on the phone conversation itself is re-read there as usual, so a
+ *   revision still arrives.
+ *
+ *   A text, on or after the moment the first one was sent, while the note
+ *   stands - to the email conversation, landing there exactly as an email
+ *   would: unread, woken, out of the bin, scheduled replies stood down.
+ *
+ *   Everything else - calls, voicemail, texts from before - to the phone
+ *   conversation, as it always went.
+ *
+ * Settled against the note's own mark rather than the phone conversation's,
+ * because the phone conversation deliberately does not move for a text that
+ * went elsewhere, and would otherwise be opened on every pass for ever.
+ */
+async function collectLinkedConversation(input: {
+  provider: ResolvedConversationProvider['provider']
+  channelKey: string
+  summary: ConversationSummary
+  link: TextLink
+  channel: string
+  subject: string | null
+  party: Party
+  floor: Date | null
+  lastMessageAt: Date
+  contentAt: Date
+  inboxId: string | null
+}): Promise<{ stored: number } | null> {
+  const { provider, channelKey, summary, link, channel, party, floor } = input
+
+  const messages = await messagesFor(provider, summary.id, channelKey)
+  if (messages === null) return null
+  const existing = await providerThreadState(channelKey, summary.id)
+
+  type Item = { message: ConversationMessage; sentAt: Date }
+  const usable: Item[] = []
+  for (const message of messages) {
+    if (!message || typeof message.id !== 'string' || message.id.trim() === '') continue
+    const sentAt = whenOf(message.sentAt)
+    if (Number.isNaN(sentAt.getTime())) continue
+    if (floor && sentAt.getTime() <= floor.getTime()) continue
+    usable.push({ message, sentAt })
+  }
+  usable.sort((a, b) => a.sentAt.getTime() - b.sentAt.getTime())
+
+  const held = await heldChannelMessages(channelKey, usable.map((item) => item.message.id))
+  const stay: Item[] = []
+  const redirected: Item[] = []
+  for (const item of usable) {
+    const heldOn = held.get(item.message.id)
+    if (heldOn !== undefined) {
+      if (existing && heldOn === existing.id) stay.push(item)
+      continue
+    }
+    if (redirectsTo(link, item.message, item.sentAt, channel)) redirected.push(item)
+    else stay.push(item)
+  }
+
+  let stored = 0
+
+  // ---- the phone conversation: what was not redirected ------------------
+  if (stay.length > 0) {
+    const newest = stay[stay.length - 1]!
+    const { id: threadId } = await upsertProviderThread({
+      providerModule: channelKey,
+      externalId: summary.id,
+      channel,
+      subject: input.subject,
+      subjectNormalised: normaliseSubject(input.subject ?? ''),
+      // What is actually ON it, not the channel's summary - which describes
+      // the newest message anywhere, and that is the text that went elsewhere.
+      preview: snippetOf(typeof newest.message.text === 'string' ? newest.message.text : null),
+      lastMessageAt: newest.sentAt,
+      lastDirection: 'in',
+      unread: summary.unread === true,
+      inboxId: input.inboxId,
+      sourceLabel: sourceLabelOf(summary),
+    })
+
+    const firsts: Firsts = { firstIn: null, firstOut: null, firstAny: null }
+    let here = 0
+    for (const { message, sentAt } of stay) {
+      const direction = messageDirection(message)
+      const text = typeof message.text === 'string' ? message.text : null
+      if (
+        direction === 'out' && text &&
+        (await claimLocalOutbound({ threadId, bodyText: text, sentAt, providerMessageId: message.id }))
+      ) {
+        continue
+      }
+      const id = await insertProviderMessage({
+        threadId,
+        providerModule: channelKey,
+        providerMessageId: message.id,
+        direction,
+        channel,
+        fromName: direction === 'in' ? (message.authorName ?? party.name) : (message.authorName ?? null),
+        fromAddress: direction === 'in' ? party.email : null,
+        fromPhone: direction === 'in' ? party.phone : null,
+        subject: input.subject,
+        bodyText: text,
+        bodyHtml: typeof message.html === 'string' && message.html.trim() ? message.html : null,
+        snippet: snippetOf(text),
+        sentAt,
+        attachments: attachmentsOf(message),
+      })
+      if (!id) continue
+      here += 1
+      await queueMessageWebhooks(id)
+      firsts.firstAny ??= id
+      if (direction === 'in') firsts.firstIn ??= id
+      if (direction === 'out') firsts.firstOut ??= id
+    }
+    if (here > 0) {
+      stored += here
+      await recountProviderThread(threadId)
+      await wakeOnArrival(threadId, channelKey, firsts, existing !== null)
+    }
+    await markProviderContentRead(channelKey, summary.id, input.contentAt)
+  }
+
+  // ---- the email conversation: the texts that answer it ------------------
+  const firsts: Firsts = { firstIn: null, firstOut: null, firstAny: null }
+  let there = 0
+  for (const { message, sentAt } of redirected) {
+    const direction = messageDirection(message)
+    const text = typeof message.text === 'string' ? message.text : null
+    if (direction === 'out' && text) {
+      // Our own text coming back with the channel's id on it - written on the
+      // email conversation when it was sent, so one message, not two.
+      if (await claimSentText({
+        threadId: link.threadId, bodyText: text, sentAt,
+        providerModule: channelKey, providerMessageId: message.id,
+      })) continue
+      // Or one somebody typed on the phone conversation itself, which is where
+      // they chose to put it.
+      if (existing && await claimLocalOutbound({
+        threadId: existing.id, bodyText: text, sentAt, providerMessageId: message.id,
+      })) continue
+    }
+    const snippet = snippetOf(text)
+    const id = await insertProviderMessage({
+      threadId: link.threadId,
+      providerModule: channelKey,
+      providerMessageId: message.id,
+      direction,
+      channel: 'sms',
+      fromName: message.authorName ?? null,
+      fromAddress: null,
+      // The other party's number in both directions: on an email conversation
+      // it is the only thing that says who a text was with.
+      fromPhone: party.phone,
+      subject: null,
+      bodyText: text,
+      bodyHtml: null,
+      snippet,
+      sentAt,
+      attachments: attachmentsOf(message),
+    })
+    if (!id) continue
+    there += 1
+    await queueMessageWebhooks(id)
+    // Landing as an email does: to the top of the list, and unread when it
+    // was them.
+    await touchThread(link.threadId, {
+      sentAt,
+      direction,
+      preview: snippet,
+      subject: null,
+      subjectNormalised: '',
+      markUnread: direction === 'in',
+      inboxId: null,
+      arrivedNow: true,
+    })
+    firsts.firstAny ??= id
+    if (direction === 'in') firsts.firstIn ??= id
+    if (direction === 'out') firsts.firstOut ??= id
+  }
+  if (there > 0) {
+    stored += there
+    await wakeOnArrival(link.threadId, channelKey, firsts, true)
+  }
+
+  // Last, and only once everything above is filed: a pass that stopped part
+  // way must not leave a mark saying it had caught up.
+  await markTextLinkRead({
+    phone: link.phone,
+    providerModule: channelKey,
+    externalId: summary.id,
+    through: new Date(Math.max(input.lastMessageAt.getTime(), input.contentAt.getTime())),
+  })
+
+  return { stored }
+}
+
+function attachmentsOf(message: ConversationMessage): ProviderMessageAttachments {
+  return message.attachments?.map((att) => ({
+    filename: att.filename,
+    url: att.url,
+    contentType: att.contentType ?? null,
+  }))
+}
+
+type ProviderMessageAttachments = Array<{ filename: string; url: string; contentType: string | null }> | undefined
 
 /**
  * Every channel on the site, one pass each.
