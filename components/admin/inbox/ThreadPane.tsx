@@ -20,6 +20,7 @@ import { MessageBody } from './MessageBody'
 import { MessageText } from './MessageText'
 import { RetryButton } from './RetryButton'
 import { ThreadActions } from './ThreadActions'
+import { ThreadSubject } from './ThreadSubject'
 import { DeleteMessageButton } from './MessageActions'
 import { ProviderAudio, type ProviderAudioFile } from './ProviderAudio'
 import { BlockParticipant } from './BlockParticipant'
@@ -792,11 +793,8 @@ export function ThreadPane({
             the far edge, and shutting a conversation is how the list comes back
             whole - which there was previously no way at all to do. */}
         <div className="uin-thread-top">
-          {/* Two lines, then an ellipsis - so the whole of it goes in the
-              title, where a subject cut short can still be read. */}
-          <h2 className="uin-thread-subject" title={thread.subject || '(no subject)'}>
-            {thread.subject || '(no subject)'}
-          </h2>
+          {/* Pressing the name renames the conversation - see ThreadSubject. */}
+          <ThreadSubject threadId={thread.id} subject={thread.subject} />
           {/* What can be done TO the conversation, on the subject's own line and
               hard against the way out of it. Answering is not up here: the arrow
               lives on the message being answered, which is the one thing this

@@ -206,6 +206,9 @@ export const ThreadPatchBody = z.object({
   snoozeUntil: z.string().datetime().nullable().optional(),
   /** A user id, or null to hand it back to nobody in particular. */
   assigneeUserId: z.string().min(1).nullable().optional(),
+  /** A new name for the conversation. Blank is refused rather than read as
+   *  "no subject": clearing the box is far more likely a slip than a wish. */
+  subject: z.string().trim().min(1).max(300).optional(),
 })
 
 /** Junk, as one person sees it. One boolean, because there are exactly two
@@ -535,6 +538,9 @@ export const SuppressionBody = z.object({
  *  over-long list is turned away before a database is opened. */
 export const ThreadMergeBody = z.object({
   loserIds: z.array(z.string().min(1).max(200)).min(1).max(20),
+  /** Which of the conversations' subjects the merged one keeps. Checked against
+   *  them on the server, so the cap is only a sanity bound. */
+  subject: z.string().max(2000).optional(),
 })
 
 /** A base64url value that decodes to exactly `bytes` bytes. The keys a browser

@@ -456,6 +456,62 @@ describe.runIf(shouldRun)('merging conversations, against a real database', () =
     expect(rows.map((r) => r.id)).toContain(loser)
   })
 
+  it('keeps the subject picked from a loser, and undoing that merge puts the old one back', async () => {
+    const winner = await conversation({ inboxId: chrisInbox, subject: 'Quote' })
+    const other = await conversation({ inboxId: chrisInbox, subject: 'Standing desks for the Leeds office', sentAt: LATER })
+    const third = await conversation({ inboxId: chrisInbox, subject: 'Re: Quote', sentAt: LATER })
+
+    const refused = await lib.mergeThreads(winner, [other, third], null, 'Something nobody wrote')
+    expect(refused).toHaveProperty('error')
+
+    const result = await lib.mergeThreads(winner, [other, third], null, 'Standing desks for the Leeds office')
+    if ('error' in result) throw new Error(result.error)
+    expect((await lib.getThreadDetail(winner))?.subject).toBe('Standing desks for the Leeds office')
+
+    // Undoing the merge whose subject was NOT taken leaves the name alone.
+    const thirdMerge = result.mergeIds[1]!
+    expect(await lib.undoThreadMerge(thirdMerge, null)).not.toHaveProperty('error')
+    expect((await lib.getThreadDetail(winner))?.subject).toBe('Standing desks for the Leeds office')
+
+    // Undoing the one it came from puts the conversation's own name back.
+    expect(await lib.undoThreadMerge(result.mergeIds[0]!, null)).not.toHaveProperty('error')
+    expect((await lib.getThreadDetail(winner))?.subject).toBe('Quote')
+    const stamp = await db.$queryRawUnsafe<{ at: Date | null }[]>(
+      `SELECT "subject_edited_at" AS at FROM "uin_threads" WHERE "id" = $1`, winner,
+    )
+    expect(stamp[0]?.at).toBeNull()
+  })
+
+  it('merging with the winner\'s own subject, or none, renames nothing', async () => {
+    const winner = await conversation({ inboxId: chrisInbox, subject: 'Chairs' })
+    const loser = await conversation({ inboxId: chrisInbox, subject: 'Stools', sentAt: LATER })
+    const result = await lib.mergeThreads(winner, [loser], null, 'Chairs')
+    if ('error' in result) throw new Error(result.error)
+    expect((await lib.getThreadDetail(winner))?.subject).toBe('Chairs')
+  })
+
+  it('a renamed conversation keeps its name when its module collects it again, and still threads on the old subject', async () => {
+    const first = await lib.upsertProviderThread({
+      providerModule: 'test-texts', externalId: 'phone-1', channel: 'sms',
+      subject: '+44 7700 900123', subjectNormalised: '+44 7700 900123',
+      preview: 'Hello', lastMessageAt: SENT_AT, lastDirection: 'in', unread: true,
+      inboxId: null, sourceLabel: null,
+    })
+    await lib.renameThread(first.id, 'Mrs Patel - delivery')
+    const again = await lib.upsertProviderThread({
+      providerModule: 'test-texts', externalId: 'phone-1', channel: 'sms',
+      subject: '+44 7700 900123', subjectNormalised: '+44 7700 900123',
+      preview: 'Still there?', lastMessageAt: LATER, lastDirection: 'in', unread: true,
+      inboxId: null, sourceLabel: null,
+    })
+    expect(again.id).toBe(first.id)
+    const row = await db.$queryRawUnsafe<{ subject: string; subject_normalised: string }[]>(
+      `SELECT "subject", "subject_normalised" FROM "uin_threads" WHERE "id" = $1`, first.id,
+    )
+    expect(row[0]?.subject).toBe('Mrs Patel - delivery')
+    expect(row[0]?.subject_normalised).toBe('+44 7700 900123')
+  })
+
   it('refuses to undo the same merge twice', async () => {
     const winner = await conversation({ inboxId: chrisInbox, subject: 'Pedestals' })
     const loser = await conversation({ inboxId: chrisInbox, subject: 'Pedestal', sentAt: LATER })

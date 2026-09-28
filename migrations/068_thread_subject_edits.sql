@@ -1,0 +1,25 @@
+-- ---------------------------------------------------------------------------
+-- A conversation's name, as somebody here chose it.
+--
+-- The subject a conversation shows is normally whatever it started with. Two
+-- things now let a person change that: clicking the name at the head of the
+-- conversation and typing a better one, and picking which of the subjects
+-- survives when several conversations are merged into one.
+--
+-- An email conversation keeps a chosen name without help - nothing that
+-- arrives later overwrites it. A conversation that another module keeps (texts,
+-- calls, the live chat) is different: every collection writes that module's
+-- idea of the subject back over the top, so a name somebody typed this morning
+-- would be gone by lunch. This stamp says "a person named this one", and the
+-- collection leaves the subject alone while it is set.
+--
+-- The matching form of the subject ("subject_normalised") is deliberately NOT
+-- changed by a rename: it is what the threading rules compare the next email's
+-- subject against, and the customer's next reply still carries the old one.
+--
+-- Idempotent, no dollar-quoted blocks anywhere in the file (the backup
+-- round-trip harness skips any module whose migrations contain one), and only
+-- TIMESTAMP(3), which the core backup serialiser already stores.
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE "uin_threads" ADD COLUMN IF NOT EXISTS "subject_edited_at" TIMESTAMP(3);

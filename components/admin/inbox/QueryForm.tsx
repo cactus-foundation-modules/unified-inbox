@@ -22,11 +22,29 @@ type Props = {
    *  fields. The field this form is about is left out by the caller. */
   hidden: Record<string, string>
   className?: string
+  /** A field whose emptying should take effect straight away, without Enter:
+   *  the search box, once a search is on. Clearing the words is plainly asking
+   *  for the search to come off, and leaving its chip under an empty box says
+   *  the list is narrowed by something nobody can see in the box any more.
+   *  Only set it while that field is actually in the address, or clearing a
+   *  box that was never searched would redraw the list for nothing. */
+  applyWhenEmptied?: string
   children: ReactNode
 }
 
-export function QueryForm({ base, hidden, className, children }: Props) {
+export function QueryForm({ base, hidden, className, applyWhenEmptied, children }: Props) {
   const router = useRouter()
+
+  const apply = (form: HTMLFormElement) => {
+    const params = new URLSearchParams()
+    for (const [key, value] of new FormData(form).entries()) {
+      // A file has no business in a query string, and an empty box means
+      // "not chosen" rather than "chosen as nothing".
+      if (typeof value === 'string' && value) params.set(key, value)
+    }
+    const query = params.toString()
+    router.push(query ? `${base}?${query}` : base)
+  }
 
   return (
     <form
@@ -35,14 +53,16 @@ export function QueryForm({ base, hidden, className, children }: Props) {
       className={className}
       onSubmit={(event) => {
         event.preventDefault()
-        const params = new URLSearchParams()
-        for (const [key, value] of new FormData(event.currentTarget).entries()) {
-          // A file has no business in a query string, and an empty box means
-          // "not chosen" rather than "chosen as nothing".
-          if (typeof value === 'string' && value) params.set(key, value)
+        apply(event.currentTarget)
+      }}
+      // Typing it away and the little cross a search box carries both arrive
+      // here, as a change to the field.
+      onChange={(event) => {
+        if (!applyWhenEmptied) return
+        const field = event.nativeEvent.target
+        if (field instanceof HTMLInputElement && field.name === applyWhenEmptied && field.value === '') {
+          apply(event.currentTarget)
         }
-        const query = params.toString()
-        router.push(query ? `${base}?${query}` : base)
       }}
     >
       {Object.entries(hidden).map(([key, value]) => (

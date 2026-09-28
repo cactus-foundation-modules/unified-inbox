@@ -173,6 +173,9 @@ export function ThreadListView({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [merging, setMerging] = useState(false)
+  /** The subject picked in the merge dialog, where the conversations disagree.
+   *  Null until somebody picks one, which means the winner's own. */
+  const [mergeSubject, setMergeSubject] = useState<string | null>(null)
   // Which conversation has been CLICKED but whose pane has not arrived yet, and
   // what the address said at the moment of the press. Both halves, because the
   // second is how this knows when it has stopped being true: once the address
@@ -669,9 +672,19 @@ export function ThreadListView({
     if (!winner) return null
     const losers = chosen.filter((row) => row.id !== winner.id)
     const names = new Map(Object.entries(inboxNames))
+    // Every different subject on the table, the winner's first because it is
+    // the one kept unless somebody says otherwise. Compared trimmed and as
+    // typed: "Re: Quote" and "Quote" read as different names to a person, and
+    // the person is who is choosing.
+    const subjects: string[] = []
+    for (const row of [winner, ...losers]) {
+      const subject = row.subject?.trim()
+      if (subject && !subjects.includes(subject)) subjects.push(subject)
+    }
     return {
       winner,
       losers,
+      subjects,
       warning: widenedAccessWarning({ winner, losers, inboxNames: names }),
     }
   }, [picked, rows, inboxNames])
@@ -680,13 +693,14 @@ export function ThreadListView({
    *  the server and half a merge is not a thing anybody wants to be left with. */
   const merge = useCallback(async () => {
     if (!mergePlan) return
+    const keep = mergeSubject && mergeSubject !== mergePlan.winner.subject?.trim() ? mergeSubject : undefined
     setBusy(true)
     setError('')
     try {
       const response = await fetch(`/api/m/unified-inbox/threads/${mergePlan.winner.id}/merge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ loserIds: mergePlan.losers.map((row) => row.id) }),
+        body: JSON.stringify({ loserIds: mergePlan.losers.map((row) => row.id), subject: keep }),
       })
       if (!response.ok) {
         setError((await response.json().catch(() => null))?.error ?? 'They could not be merged.')
@@ -699,7 +713,7 @@ export function ThreadListView({
     } finally {
       setBusy(false)
     }
-  }, [mergePlan, router, setSelected])
+  }, [mergePlan, mergeSubject, router, setSelected])
 
   if (rows.length === 0) {
     return (
@@ -917,7 +931,7 @@ export function ThreadListView({
           {canManage && picked.length > 1 && (
             <AdminTooltip body="Merge them into one conversation">
               <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
-                      onClick={() => setMerging(true)}>
+                      onClick={() => { setMergeSubject(null); setMerging(true) }}>
                 {MergeIcon}
                 <span className="sr-only">Fold the {picked.length} picked conversations into one</span>
               </button>
@@ -1204,6 +1218,31 @@ export function ThreadListView({
               which is the one that started it. Nothing is thrown away, and you can
               put it back from the conversation itself afterwards.
             </p>
+            {/* Only where they disagree. A choice of one is not a choice, and
+                most merges are two halves of the same subject line. */}
+            {mergePlan.subjects.length > 1 && (
+              <fieldset className="uin-merge-subjects">
+                <legend>Which subject should it keep?</legend>
+                {mergePlan.subjects.map((subject, index) => {
+                  const chosen = (mergeSubject ?? mergePlan.subjects[0]) === subject
+                  return (
+                    <label key={subject} className={chosen ? 'uin-merge-subject is-chosen' : 'uin-merge-subject'}>
+                      <input
+                        type="radio"
+                        name="uin-merge-subject"
+                        value={subject}
+                        checked={chosen}
+                        onChange={() => setMergeSubject(subject)}
+                      />
+                      <span>
+                        {subject}
+                        {index === 0 && <span className="uin-merge-subject-note"> - the one it started with</span>}
+                      </span>
+                    </label>
+                  )
+                })}
+              </fieldset>
+            )}
             {mergePlan.warning && <p><strong>{mergePlan.warning}</strong></p>}
           </>
         )}

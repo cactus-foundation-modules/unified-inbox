@@ -3896,6 +3896,9 @@ async function withInlineImages(messageId: string, html: string | null): Promise
 
 export type ThreadEventKind =
   | 'assigned'
+  /** Somebody gave it a different name. `detail` carries what it was called
+   *  before and after, as typed. */
+  | 'renamed'
   | 'snoozed'
   | 'woken'
   | 'status'
@@ -3995,6 +3998,23 @@ export async function recordEvent(
   await prisma.$executeRaw`
     INSERT INTO "uin_events" ("thread_id", "user_id", "kind", "detail")
     VALUES (${threadId}, ${userId}, ${kind}, ${detail === null ? Prisma.DbNull : detail}::jsonb)
+  `
+}
+
+/**
+ * Give a conversation a different name.
+ *
+ * Only the name people read. The matching form of the subject is left as it
+ * was, because the customer's next reply still carries the old subject and the
+ * threading rules have to recognise it as belonging here. Stamped as edited so
+ * a module that re-collects its own conversations does not write its subject
+ * back over this one - see migrations/068_thread_subject_edits.sql.
+ */
+export async function renameThread(threadId: string, subject: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "uin_threads"
+       SET "subject" = ${subject}, "subject_edited_at" = now(), "updated_at" = now()
+     WHERE "id" = ${threadId}
   `
 }
 
@@ -6978,7 +6998,12 @@ export async function upsertProviderThread(data: ProviderThreadInput): Promise<{
     ON CONFLICT ("provider_module", "external_id")
       WHERE "provider_module" IS NOT NULL AND "external_id" IS NOT NULL
       DO UPDATE SET
-        "subject"            = EXCLUDED."subject",
+        -- Unless somebody here has named it (migrations/068_thread_subject_edits.sql):
+        -- a name typed this morning must not be put back by the next collection.
+        -- The matching form still follows the far end, since that is what the
+        -- threading rules compare against.
+        "subject"            = CASE WHEN "uin_threads"."subject_edited_at" IS NOT NULL
+                                    THEN "uin_threads"."subject" ELSE EXCLUDED."subject" END,
         "subject_normalised" = EXCLUDED."subject_normalised",
         "preview"            = EXCLUDED."preview",
         -- Filed once and then left alone. Where a conversation lives is this
@@ -8382,6 +8407,10 @@ export async function mergeThreads(
   winnerId: string,
   loserIdsIn: string[],
   userId: string | null,
+  /** The subject the merged conversation should carry, picked from those of
+   *  the conversations being merged. Omitted, or the winner's own, keeps the
+   *  winner's. */
+  subjectIn?: string,
 ): Promise<ThreadMergeResult | { error: string }> {
   const loserIds = [...new Set(loserIdsIn)].filter((id) => id !== winnerId)
   const found = await threadsForMerge([winnerId, ...loserIds])
@@ -8399,6 +8428,24 @@ export async function mergeThreads(
   // The one merge record that remembers it, so undoing THAT merge puts the
   // conversation back where it lived - and undoing a different one does not.
   const rehomingLoserId = rehomedTo ? losers.find((l) => l.inboxId === rehomedTo)?.id ?? null : null
+
+  // The name it keeps. Only ever one the merge already has in front of it - a
+  // loser's subject - so a request cannot rename a conversation to anything it
+  // likes by way of a merge. The loser it came from carries the record of it,
+  // so undoing THAT merge puts the old name back, and undoing another does not.
+  const pickedSubject = subjectIn?.trim() || null
+  const renameTo = pickedSubject && pickedSubject !== (winner.subject?.trim() ?? '') ? pickedSubject : null
+  const renamingLoserId = renameTo
+    ? losers.find((l) => l.subject?.trim() === renameTo)?.id ?? null
+    : null
+  if (renameTo && !renamingLoserId) {
+    return { error: 'That subject is not one of the conversations being merged.' }
+  }
+  const winnerEditedBefore = renameTo
+    ? (await prisma.$queryRaw<{ at: Date | null }[]>`
+        SELECT "subject_edited_at" AS at FROM "uin_threads" WHERE "id" = ${winnerId}
+      `)[0]?.at ?? null
+    : null
 
   return prisma.$transaction(async (tx) => {
     const mergeIds: string[] = []
@@ -8526,6 +8573,13 @@ export async function mergeThreads(
         ...(rehomedTo && loser.id === rehomingLoserId
           ? { rehomedToInboxId: rehomedTo, winnerInboxIdBefore: winner.inboxId }
           : {}),
+        ...(renameTo && loser.id === renamingLoserId
+          ? {
+              subjectSetTo: renameTo,
+              winnerSubjectBefore: winner.subject,
+              winnerSubjectEditedAtBefore: winnerEditedBefore ? winnerEditedBefore.toISOString() : null,
+            }
+          : {}),
       }
 
       const row = await tx.$queryRaw<{ id: string }[]>`
@@ -8545,6 +8599,14 @@ export async function mergeThreads(
       `
       await tx.$executeRaw`
         UPDATE "uin_drafts" SET "inbox_id" = ${rehomedTo} WHERE "thread_id" = ${winnerId}
+      `
+    }
+
+    if (renameTo) {
+      await tx.$executeRaw`
+        UPDATE "uin_threads"
+           SET "subject" = ${renameTo}, "subject_edited_at" = now(), "updated_at" = now()
+         WHERE "id" = ${winnerId}
       `
     }
 
@@ -8579,6 +8641,7 @@ export async function mergeThreads(
                 loserIds: losers.map((l) => l.id),
                 subjects: losers.map((l) => l.subject),
                 ...(rehomedTo ? { rehomedToInboxId: rehomedTo, fromInboxId: winner.inboxId } : {}),
+                ...(renameTo ? { subjectFrom: winner.subject, subjectTo: renameTo } : {}),
               })}::jsonb)
     `
 
@@ -8675,6 +8738,9 @@ export async function undoThreadMerge(
     repointedMergeIds?: string[]
     rehomedToInboxId?: string
     winnerInboxIdBefore?: string | null
+    subjectSetTo?: string
+    winnerSubjectBefore?: string | null
+    winnerSubjectEditedAtBefore?: string | null
   }
 
   const [winner, loser] = await Promise.all([getThreadDetail(winnerId), getThreadDetail(loserId)])
@@ -8765,6 +8831,21 @@ export async function undoThreadMerge(
         await tx.$executeRaw`UPDATE "uin_threads" SET "inbox_id" = ${before}, "updated_at" = now() WHERE "id" = ${winnerId}`
         await tx.$executeRaw`UPDATE "uin_drafts" SET "inbox_id" = ${before} WHERE "thread_id" = ${winnerId}`
       }
+    }
+    // This merge gave the conversation this loser's name. Put the old one back
+    // - again only if it still carries the name the merge gave it: somebody
+    // who has since renamed it chose that name themselves.
+    if (snapshot.subjectSetTo && winner.subject === snapshot.subjectSetTo) {
+      const editedBefore = snapshot.winnerSubjectEditedAtBefore
+        ? new Date(snapshot.winnerSubjectEditedAtBefore)
+        : null
+      await tx.$executeRaw`
+        UPDATE "uin_threads"
+           SET "subject" = ${snapshot.winnerSubjectBefore ?? null},
+               "subject_edited_at" = ${editedBefore},
+               "updated_at" = now()
+         WHERE "id" = ${winnerId}
+      `
     }
     // Marked undone BEFORE the addresses are recomputed: the recompute reads
     // live merge records for the address a merge re-homed the conversation out

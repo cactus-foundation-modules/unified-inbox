@@ -1736,6 +1736,46 @@
      one word wider than the column pushes the buttons off the end. */
   overflow-wrap: anywhere;
 }
+/* The conversation's own name, which renames it when pressed (ThreadSubject).
+   The clamp moves onto the button inside, since a line clamp on the heading
+   does not reach through to a button's text. The button looks exactly like the
+   heading did - no pencil, no underline - and only its hover and focus say it
+   can be pressed. */
+.uin-subject-editable { display: block; overflow: visible; }
+.uin-subject-button {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  width: 100%;
+  margin: 0;
+  padding: 0.05rem 0.25rem;
+  margin-inline-start: -0.25rem;
+  border: 0;
+  border-radius: 0.3rem;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: text;
+}
+.uin-subject-button:hover { background: var(--color-bg-subtle); }
+.uin-subject-button:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+.uin-subject-editing { display: block; overflow: visible; }
+.uin-subject-input {
+  width: 100%;
+  margin-inline-start: -0.25rem;
+  padding: 0.05rem 0.25rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.3rem;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+}
+.uin-subject-input:focus { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+.uin-subject-error { margin: 0.25rem 0 0; font-size: 0.8125rem; font-weight: 400; color: var(--color-danger); }
 .uin-thread-close {
   flex: none;
   display: inline-flex;
@@ -2540,6 +2580,38 @@
   line-height: 1.55;
   color: var(--color-text-secondary);
 }
+/* The choice of subject in the merge dialog, where the conversations being
+   merged do not agree on one. Rows with a hairline between, like the other
+   short lists of answers in here, and the chosen one tinted. */
+.uin-merge-subjects {
+  margin: 0.75rem 0;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 0.4rem;
+  overflow: hidden;
+}
+.uin-merge-subjects legend {
+  float: left;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  font-weight: 600;
+  color: var(--color-text);
+  border-bottom: 1px solid var(--color-border);
+}
+.uin-merge-subject {
+  clear: both;
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.55rem 0.75rem;
+  cursor: pointer;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+.uin-merge-subject + .uin-merge-subject { border-top: 1px solid var(--color-border); }
+.uin-merge-subject.is-chosen { background: var(--color-primary-subtle); }
+.uin-merge-subject input { margin-top: 0.25rem; flex: none; }
+.uin-merge-subject-note { color: var(--color-text-secondary); }
 .uin-modal-foot {
   display: flex;
   flex-wrap: wrap;

@@ -7,6 +7,7 @@ import {
   assignThread,
   closeDiscussionFor,
   getThreadDetail,
+  renameThread,
   reopenDiscussionFor,
   settleOwnMentionOn,
   recordEvent,
@@ -18,8 +19,8 @@ import { queueAssignmentWebhooks } from '@/modules/unified-inbox/lib/colleague-w
 import { pushProviderRead } from '@/modules/unified-inbox/lib/provider-read'
 import { ThreadPatchBody } from '@/modules/unified-inbox/lib/validation'
 
-// Working through a conversation: read it, hand it to somebody, put it to
-// sleep, mark it done, open it again.
+// Working through a conversation: read it, rename it, hand it to somebody, put
+// it to sleep, mark it done, open it again.
 //
 // Being able to READ an inbox is the bar here rather than being able to reply
 // to it. Somebody who is allowed to see accounts@ but not send from it can
@@ -51,6 +52,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     // marking it unread for one colleague is this hub's own bookkeeping rather
     // than a statement about the enquiry the far end is holding.
     if (!body.unread) await pushProviderRead(thread)
+  }
+
+  // A better name. The old one goes in the audit row, since "what was this
+  // called before somebody tidied it" is exactly what gets asked later.
+  if (body.subject !== undefined && body.subject !== (thread.subject ?? '').trim()) {
+    await renameThread(id, body.subject)
+    await recordEvent(id, user.id, 'renamed', { from: thread.subject, to: body.subject })
   }
 
   if (body.assigneeUserId !== undefined && body.assigneeUserId !== thread.assigneeUserId) {

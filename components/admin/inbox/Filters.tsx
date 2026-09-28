@@ -121,7 +121,7 @@ export function Filters({
   return (
     <>
       <div className="uin-search-row">
-        <QueryForm base={base} hidden={carry('q')} className="uin-search">
+        <QueryForm base={base} hidden={carry('q')} className="uin-search" applyWhenEmptied={search ? 'q' : undefined}>
           <label className="sr-only" htmlFor="uin-search">Search conversations you can see</label>
           <span className="uin-search-icon" aria-hidden="true">{SearchIcon}</span>
           <input

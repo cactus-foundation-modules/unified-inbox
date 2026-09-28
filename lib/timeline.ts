@@ -275,7 +275,15 @@ function lineFor(
       return `${who} moved it to another mailbox`
     }
 
-    case 'merged': return `${who} merged it with another`
+    case 'renamed': {
+      const to = str(d.to)
+      return to ? `${who} renamed it to “${to}”` : `${who} renamed it`
+    }
+
+    case 'merged': {
+      const to = str(d.subjectTo)
+      return to ? `${who} merged it with another and kept the subject “${to}”` : `${who} merged it with another`
+    }
     case 'unmerged': return `${who} separated one back out again`
     case 'message_deleted': return `${who} deleted a message from it`
     case 'message_split': return `${who} moved a message out to its own conversation`

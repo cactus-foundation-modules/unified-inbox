@@ -44,7 +44,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (!await canOpenThread(user, loser)) return errorResponse('Forbidden', 403)
   }
 
-  const result = await mergeThreads(id, parsed.data.loserIds, user.id)
+  const result = await mergeThreads(id, parsed.data.loserIds, user.id, parsed.data.subject)
   if ('error' in result) return errorResponse(result.error)
 
   // Said out loud, because it changes which address the next reply leaves from.
@@ -59,7 +59,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     mergeIds: result.mergeIds,
     rehomedToInboxId: result.rehomedToInboxId,
     message: `${mergeSummary(
-      { id: winner.id, inboxId: winner.inboxId, subject: winner.subject, status: winner.status, unread: winner.unread, createdAt: winner.createdAt },
+      { id: winner.id, inboxId: winner.inboxId, subject: parsed.data.subject?.trim() || winner.subject, status: winner.status, unread: winner.unread, createdAt: winner.createdAt },
       result.merged,
     )}${moved} You can put this back from the conversation itself if it was wrong.`,
   })

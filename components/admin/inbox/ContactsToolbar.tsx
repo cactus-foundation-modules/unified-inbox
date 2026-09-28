@@ -82,7 +82,7 @@ export function ContactsToolbar({
     <>
       <div className="uin-search-row">
         {showSearch && (
-          <QueryForm base={base} hidden={hidden} className="uin-search">
+          <QueryForm base={base} hidden={hidden} className="uin-search" applyWhenEmptied={search ? 'q' : undefined}>
             <label className="sr-only" htmlFor="uin-contact-search">Search the address book</label>
             <span className="uin-search-icon" aria-hidden="true">{SearchIcon}</span>
             <input

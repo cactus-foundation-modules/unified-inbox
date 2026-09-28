@@ -151,7 +151,15 @@ the same human collapse into one story.
   of your addresses is allowed and is the point of it - a conversation between
   four people spanning two inboxes becomes one - and it lets everybody on either
   address read the whole of it, which the confirmation says in as many words
-  before it happens. It stays merged when somebody replies.
+  before it happens. It stays merged when somebody replies. Where the
+  conversations have different subject lines, the confirmation lists them and
+  you pick the one the merged conversation keeps; separating out the one whose
+  subject you picked puts the old subject back.
+- **Renaming a conversation.** Click the subject at the head of a conversation
+  and type a better one; Enter keeps it, Escape leaves it as it was. Only the
+  name people here read changes - the customer's next reply still carries the
+  old subject and still lands in the right place - and texts, calls and chats
+  keep their new name when they are collected again.
 - **Tidying up one message.** The dots beside a message hold two entries for
   the times threading has guessed wrong, and both ask before they do anything.
   **Move to its own conversation** takes one message out and starts a fresh
