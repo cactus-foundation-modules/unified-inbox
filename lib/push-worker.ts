@@ -24,6 +24,12 @@ export const PUSH_WORKER_PATH = '/api/m/unified-inbox/push/worker'
  *  conversation, and what NewMailNotifier listens for. */
 export const OPEN_MESSAGE_TYPE = 'uin-open'
 
+/** What the worker posts to every open window of the site when a push lands,
+ *  so a list already on the screen redraws now rather than on its own next
+ *  round. The mail is filed before the nudge is sent (see push-nudges.ts), so
+ *  a redraw at this moment finds it. */
+export const ARRIVED_MESSAGE_TYPE = 'uin-arrived'
+
 export const PUSH_WORKER_SOURCE = `'use strict'
 // Unified Inbox: new-mail nudges. Served by the site (lib/push-worker.ts).
 
@@ -50,17 +56,32 @@ function readNudge(event) {
   }
 }
 
+// An open list hears about the post at the same moment the notification
+// appears, instead of a minute later on its own round. Best effort: a window
+// that misses it still catches up on its next round, so a failure here must
+// never stand between the push and its notification.
+function tellOpenWindows() {
+  return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (windows) {
+    for (var i = 0; i < windows.length; i++) {
+      try { windows[i].postMessage({ type: '${ARRIVED_MESSAGE_TYPE}' }) } catch (e) {}
+    }
+  }).catch(function () {})
+}
+
 self.addEventListener('push', function (event) {
   var nudge = readNudge(event)
-  event.waitUntil(self.registration.showNotification(nudge.title, {
-    body: nudge.body,
-    // One per conversation, and a second reply on it still makes a sound:
-    // without renotify a notification that replaces another arrives silently.
-    tag: nudge.tag,
-    renotify: true,
-    icon: nudge.icon,
-    data: { href: nudge.href }
-  }))
+  event.waitUntil(Promise.all([
+    self.registration.showNotification(nudge.title, {
+      body: nudge.body,
+      // One per conversation, and a second reply on it still makes a sound:
+      // without renotify a notification that replaces another arrives silently.
+      tag: nudge.tag,
+      renotify: true,
+      icon: nudge.icon,
+      data: { href: nudge.href }
+    }),
+    tellOpenWindows()
+  ]))
 })
 
 self.addEventListener('notificationclick', function (event) {

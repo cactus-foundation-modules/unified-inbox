@@ -1,6 +1,6 @@
 import { runInNewContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
-import { OPEN_MESSAGE_TYPE, PUSH_WORKER_SOURCE } from './push-worker'
+import { ARRIVED_MESSAGE_TYPE, OPEN_MESSAGE_TYPE, PUSH_WORKER_SOURCE } from './push-worker'
 
 // The worker runs in the browser as written, with no build step and no types,
 // so it is run here the same way: in a fresh context with a stand-in `self`
@@ -74,6 +74,13 @@ describe('the push worker', () => {
       icon: '/web-app-manifest-512x512.png',
       data: { href: '/hq/inbox?tab=unified-inbox&inbox=i1&id=t1' },
     })
+  })
+
+  it('tells every open window that post has arrived, so an open list redraws straight away', async () => {
+    const worker = boot([{ url: 'https://site.example/hq/inbox' }, { url: 'https://site.example/hq/orders' }])
+    await worker.push({ title: 'Ada Lovelace', href: '/hq/inbox' })
+    expect(worker.shown).toHaveLength(1)
+    expect(worker.clients.map((c) => c.posted)).toEqual([[{ type: ARRIVED_MESSAGE_TYPE }], [{ type: ARRIVED_MESSAGE_TYPE }]])
   })
 
   it('still shows something for a push it cannot read, because a silent push costs the permission', async () => {

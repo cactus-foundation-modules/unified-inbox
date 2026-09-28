@@ -11,7 +11,7 @@ import {
   writePreference,
   type ArrivalsReply,
 } from '@/modules/unified-inbox/lib/notify'
-import { OPEN_MESSAGE_TYPE, PUSH_WORKER_PATH } from '@/modules/unified-inbox/lib/push-worker'
+import { ARRIVED_MESSAGE_TYPE, OPEN_MESSAGE_TYPE, PUSH_WORKER_PATH } from '@/modules/unified-inbox/lib/push-worker'
 
 // The bell at the foot of the rail, and the offer that appears the first time
 // somebody opens the hub.
@@ -49,6 +49,9 @@ const POLL_MS = 60_000
 /** How long a window has to have been left alone before the first round. Alt-
  *  tabbing to a spreadsheet and back should cost the site nothing at all. */
 const SETTLE_MS = 15_000
+
+/** Pushes closer together than this share one redraw of the list. */
+const ARRIVED_REFRESH_GAP_MS = 2_000
 
 const SUBSCRIPTION_API = '/api/m/unified-inbox/push/subscription'
 
@@ -247,6 +250,10 @@ export function NewMailNotifier({ userId, onAvailable }: Props) {
     }
   }, [])
 
+  // When this window last redrew for a push, so five arriving together are one
+  // trip to the server and not five.
+  const lastArrivedRefresh = useRef(0)
+
   // A nudge pressed while the hub is open on some other conversation: the
   // worker brings this window forward and asks it to go there, rather than
   // opening a second copy of the admin area.
@@ -254,6 +261,16 @@ export function NewMailNotifier({ userId, onAvailable }: Props) {
     if (boot?.mode !== 'push') return
     const onMessage = (event: MessageEvent) => {
       const data = event.data as { type?: unknown; href?: unknown } | null
+      // A push has just landed: the post is already filed, so redraw the list
+      // now rather than leaving it for the next round of checking, which could
+      // be a minute off. A burst of pushes is one redraw.
+      if (data?.type === ARRIVED_MESSAGE_TYPE) {
+        const now = Date.now()
+        if (now - lastArrivedRefresh.current < ARRIVED_REFRESH_GAP_MS) return
+        lastArrivedRefresh.current = now
+        router.refresh()
+        return
+      }
       if (data?.type !== OPEN_MESSAGE_TYPE || typeof data.href !== 'string') return
       if (!data.href.startsWith('/') || data.href.startsWith('//')) return
       router.push(data.href)
