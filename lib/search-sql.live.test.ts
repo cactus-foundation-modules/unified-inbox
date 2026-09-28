@@ -361,6 +361,52 @@ describe.runIf(shouldRun)('the search queries, against a real database', () => {
     })).toEqual(['Invoice 4021 for the boardroom chairs'])
   })
 
+  it('finds half a word', async () => {
+    expect(await subjectsOf({ search: 'boardr' })).toEqual(['Invoice 4021 for the boardroom chairs'])
+    expect(await subjectsOf({ search: 'recep desk' })).toEqual(['Delivery slot for the reception desk'])
+    // A number is a prefix too, and only a prefix: 402 is the start of 4021.
+    expect(await subjectsOf({ search: '402' })).toEqual(['Invoice 4021 for the boardroom chairs'])
+  })
+
+  it('forgives a word spelt wrong, from words it collected itself', async () => {
+    // Every message above was written after the migrations ran, so none of
+    // their words were on the list until this search went and collected them.
+    expect(await subjectsOf({ search: 'boardrom' })).toEqual(['Invoice 4021 for the boardroom chairs'])
+    expect(await subjectsOf({ search: 'recepton' })).toEqual(['Delivery slot for the reception desk'])
+    expect(await subjectsOf({ search: 'pedestels' })).toEqual(['50% off storage until Friday'])
+    const left = await db.$queryRawUnsafe<{ n: bigint }[]>(
+      `SELECT count(*)::bigint AS n FROM "uin_messages" WHERE "search_terms_at" IS NULL`,
+    )
+    expect(Number(left[0]!.n)).toBe(0)
+  })
+
+  it('never guesses at a number', async () => {
+    // 4022 is one digit from 4021 and in an inbox this reader cannot open;
+    // 4023 exists nowhere. Neither may bring back the 4021 conversation.
+    expect(await subjectsOf({ search: '4023' })).toEqual([])
+    expect(await subjectsOf({ search: 'PO-4023' })).toEqual([])
+  })
+
+  it('guesses from the whole site and still shows only what this reader may open', async () => {
+    // "second" is only ever written in the accounts@ conversation. The guess
+    // finds it and the visibility clause then keeps that conversation out.
+    expect(await subjectsOf({ search: 'secnod' })).toEqual([])
+    expect(await queries.countThreads({ ...visible(), search: 'boardrom' })).toBe(1)
+  })
+
+  it('matches any part of a conversation\'s subject, for a fragment of a reference', async () => {
+    expect(await subjectsOf({ search: 'oice 40' })).toEqual(['Invoice 4021 for the boardroom chairs'])
+  })
+
+  it('keeps the search operators exact', async () => {
+    expect(await subjectsOf({ search: '"boardroom chairs"' })).toEqual(['Invoice 4021 for the boardroom chairs'])
+    // Loosened, the minus would turn into "anything starting with boardroom".
+    expect(await subjectsOf({ search: 'friday -boardroom' })).toEqual([
+      '50% off storage until Friday',
+      'Delivery slot for the reception desk',
+    ])
+  })
+
   it('counts the statuses behind a narrowed list without falling over', async () => {
     // The status tabs run the same clauses with the status left out. Nothing
     // else executes that combination, and a broken one takes the whole screen

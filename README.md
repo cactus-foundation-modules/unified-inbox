@@ -272,7 +272,8 @@ the same human collapse into one story.
   **Ctrl K**, or **Cmd K** on a Mac - looks everywhere you can read at any
   status, narrowed by who it is from, who it went to, the subject, whether
   anything is attached and between two dates, and it searches the address book
-  from the same box. Pressing Search lands on a screen of its own: the box
+  from the same box. It forgives half a word and a word spelt wrong, but never
+  guesses at a number. Pressing Search lands on a screen of its own: the box
   across the top of the results and the conversation both, every cut laid out
   underneath it to change on the spot, and a cross that puts you back on the
   list when you are done.

@@ -3113,11 +3113,16 @@ function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
     // E17: this is ANDed with the visibility clause inside one WHERE, so a
     // conversation in an inbox the reader cannot open is never fetched, never
     // counted and never paged.
-    where.push(Prisma.sql`EXISTS (
+    //
+    // The conversation's own subject is also matched on any part of it, so a
+    // fragment of a reference - "0025" of PO-00025 - still finds it. That half
+    // is asked of uin_threads alone, which is one row per conversation rather
+    // than one per message, and is cheap without an index of its own.
+    where.push(Prisma.sql`(EXISTS (
       SELECT 1 FROM "uin_messages" ms
        WHERE ms."thread_id" = t."id"
-         AND ${SEARCH_VECTOR} @@ websearch_to_tsquery('english', ${q})
-    )`)
+         AND ${SEARCH_VECTOR} @@ ${searchQuery(q)}
+    ) OR t."subject" ILIKE ${likeContains(q)})`)
   }
   // The narrower cuts, one EXISTS each. Separate rather than folded into one
   // subquery on purpose: "from the supplier" and "with something attached" are
@@ -3189,6 +3194,109 @@ function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
     where.push(f.threadIds.length > 0 ? Prisma.sql`t."id" = ANY(${f.threadIds}::text[])` : Prisma.sql`false`)
   }
   return where
+}
+
+/**
+ * What the search box asks the full-text index, forgiving of half a word and of
+ * a word spelt wrong (migrations/067_fuzzy_search.sql says why it is built this
+ * way round).
+ *
+ * Each word typed becomes "this, or anything starting with it", so "invoi"
+ * finds invoice. A word of letters that the site's mail never contains - which
+ * is what a misspelling looks like from here - also becomes any of the three
+ * words closest to it that it does contain, so "recieve" finds receive. A word
+ * the mail does contain is taken as meant, or "order" would start finding
+ * "border". Numbers and references are never guessed at: PO-00025 must not
+ * bring PO-00026 along with it. All the words must match, as before.
+ *
+ * Somebody who types the search operators - quotes round a phrase, a minus
+ * before a word, OR between two - is asking for something exact, and gets
+ * exactly the search it always was. Loosening "-invoice" into "anything
+ * starting with invoice" would turn it inside out.
+ *
+ * The list of words is the whole site's, not the reader's. It only ever widens
+ * what is asked of messages the reader may already see - the visibility clause
+ * is still ANDed round all of it (E17) - and nothing on it is ever shown.
+ */
+function searchQuery(q: string): Prisma.Sql {
+  const words = q.split(/\s+/).filter(Boolean)
+  const exact = words.some((w) => w.includes('"') || w.startsWith('-') || w.toLowerCase() === 'or')
+  if (exact) return Prisma.sql`websearch_to_tsquery('english', ${q})`
+  const parts = words.map((word) => {
+    // Anything that is not plain letters and digits - an address, a reference
+    // with a hyphen in it - goes through the parser as it stands, which is what
+    // the search did before and what finds PO-00025.
+    if (!/^[\p{L}\p{N}]+$/u.test(word)) return Prisma.sql`plainto_tsquery('english', ${word})`
+    // Letters and digits only, so the `:*` cannot meet anything to_tsquery
+    // would read as syntax.
+    const prefix = Prisma.sql`to_tsquery('english', ${`${word}:*`})`
+    const lower = word.toLowerCase()
+    if (!/^\p{L}{4,30}$/u.test(word)) return prefix
+    // No near neighbours - or a word spelt right - makes the guess null, and
+    // the coalesce falls back to the prefix alone. Not an empty tsquery ORed
+    // on instead: spelling one out has Postgres log a notice on every search.
+    return Prisma.sql`coalesce(${prefix} || (
+      SELECT to_tsquery('english', string_agg(near."term", ' | '))
+        FROM (
+          SELECT st."term" FROM "uin_search_terms" st
+           WHERE st."term" % ${lower}
+             AND NOT EXISTS (
+               SELECT 1 FROM "uin_search_terms" known
+                WHERE starts_with(known."term", ${lower})
+             )
+           ORDER BY st."term" <-> ${lower}
+           LIMIT 3
+        ) near
+    ), ${prefix})`
+  })
+  return Prisma.sql`(${Prisma.join(parts, ' && ')})`
+}
+
+/**
+ * Puts the words of any message not yet collected onto the list the forgiving
+ * search guesses from (migrations/067_fuzzy_search.sql).
+ *
+ * Run in front of a search rather than on every path that writes a message:
+ * there are several of those, and one that forgot would leave a gap nobody
+ * could see. Here it costs one lookup of a small partial index when there is
+ * nothing to do, which is nearly always. A batch at a time, and SKIP LOCKED, so
+ * two people searching at once neither wait for each other nor collect the same
+ * messages twice.
+ *
+ * Never allowed to stop a search. Without it the search is as forgiving as the
+ * list already is, and a word from the last few minutes' mail is simply not
+ * guessed at yet - so a failure is logged and the search goes on.
+ */
+async function collectSearchTerms(): Promise<void> {
+  try {
+    await prisma.$executeRaw`
+      WITH todo AS (
+        SELECT "id", "subject", "from_name", "body_text"
+          FROM "uin_messages"
+         WHERE "search_terms_at" IS NULL
+         ORDER BY "created_at"
+         LIMIT 500
+           FOR UPDATE SKIP LOCKED
+      ), words AS (
+        INSERT INTO "uin_search_terms" ("term")
+        SELECT DISTINCT w
+          FROM todo,
+               unnest(tsvector_to_array(to_tsvector('simple',
+                 coalesce(todo."subject", '') || ' ' ||
+                 coalesce(todo."from_name", '') || ' ' ||
+                 coalesce(todo."body_text", '')))) AS w
+         WHERE length(w) BETWEEN 4 AND 30
+           AND w !~ '[^[:alpha:]]'
+        ON CONFLICT ("term") DO NOTHING
+      )
+      UPDATE "uin_messages" m
+         SET "search_terms_at" = CURRENT_TIMESTAMP
+        FROM todo
+       WHERE m."id" = todo."id"
+    `
+  } catch (err) {
+    console.warn('[unified-inbox] could not collect search words', err)
+  }
 }
 
 /**
@@ -3337,6 +3445,7 @@ function mapThreadListRow(r: Record<string, unknown>): ThreadListRow {
 export async function listThreads(f: ThreadListFilters): Promise<ThreadListRow[]> {
   const visible = visibilityClause(f.inboxIds, f.includeUnrouted, f.providerModules ?? [])
   if (!visible) return []
+  if (f.search?.trim()) await collectSearchTerms()
   const where = [visible, ...filterClauses(f)]
   const offset = Math.max(0, (f.page - 1) * f.perPage)
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>(
@@ -6984,7 +7093,9 @@ async function refreshProviderMessage(data: ProviderMessageInput): Promise<strin
     UPDATE "uin_messages"
        SET "body_text" = ${data.bodyText},
            "body_html" = ${data.bodyHtml},
-           "snippet"   = ${data.snippet}
+           "snippet"   = ${data.snippet},
+           -- New words, perhaps, for the forgiving search to collect.
+           "search_terms_at" = NULL
      WHERE "thread_id" = ${data.threadId}
        AND "provider_message_id" = ${data.providerMessageId}
        AND "source" = 'provider'
