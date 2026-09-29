@@ -5445,3 +5445,34 @@
 .uin-bulk .uin-bulk-status svg { width: 19px; height: 19px; }
 .uin-bulk .uin-action-group .uin-bulk-status[aria-pressed="true"] { background: transparent; }
 .uin-bulk .uin-action-group .uin-bulk-status[aria-pressed="true"]:hover { background: var(--uin-fill); }
+
+/* ---- a conversation on a phone: its controls above its subject --------- */
+/* Below 640px the first line of an open conversation is the way back, then
+   the controls, then a cross that shuts it - and the subject takes the whole
+   of the line under them. Beside the chevron is where a thumb already is, and
+   a subject given the full width is a subject that can be read rather than
+   four ems of one. Last in the file so the glass rules above, which set the
+   cross's display at one class, do not win it back. */
+.uin-thread-close-end { display: none; }
+@media (max-width: 639px) {
+  .uin-thread-conv .uin-thread-top { align-items: center; }
+  .uin-thread-conv .uin-thread-top > .uin-thread-subject { order: 2; flex: 1 1 100%; }
+  /* Whatever went wrong still sits under the controls, not between the
+     subject and the message. */
+  .uin-thread-conv .uin-thread-top > .uin-thread-actions-error { order: 1; }
+  /* The row no longer takes the whole line, so the cross can stand beside it;
+     it still scrolls sideways if a long name in the assign capsule needs it. */
+  .uin-thread-conv .uin-thread-actions { flex: 0 1 auto; min-width: 0; }
+  .uin-thread-close-end {
+    display: inline-flex;
+    order: 0;
+    width: 2rem;
+    margin-left: 0;
+    padding: 0.2rem;
+  }
+  /* Searching and writing something new are things done FROM the list. With a
+     conversation filling the screen they were two buttons crowding its
+     header; Ctrl K still opens the search. */
+  .uin-app[data-open="1"] .uin-rail-search,
+  .uin-app[data-open="1"] .uin-compose-split { display: none; }
+}

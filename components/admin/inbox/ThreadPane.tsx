@@ -840,6 +840,14 @@ export function ThreadPane({
             binOwnerName={binState.ownerName}
             closeHref={inboxHref(base, params, { id: null })}
           />
+          {/* On a phone the controls take the first line, straight after the
+              back chevron, and a cross on the end of them shuts the
+              conversation the way the cross does on anything wider. Hidden
+              from 640px, where the link below is the only way out. */}
+          <Link className="uin-thread-close uin-thread-close-end" href={inboxHref(base, params, { id: null })}>
+            <span aria-hidden="true">{CloseIcon}</span>
+            <span className="sr-only">Close this conversation</span>
+          </Link>
           <Link className="uin-thread-close" href={inboxHref(base, params, { id: null })}>
             <span className="uin-back-phone" aria-hidden="true">{BackIcon}<span className="uin-back-words">Back</span></span>
             <span className="uin-back-wide" aria-hidden="true">{CloseIcon}</span>
