@@ -6,7 +6,10 @@ import { emailEngagementFor, emptyEngagement, type EmailEngagement } from '@/lib
 import { normaliseAddress } from './addresses'
 import { mintPushToken } from './push-checks'
 import { normaliseSubject, type ThreadRef } from './threading'
-import { mergedHomeInboxId, mergedStatus, mergedUnread, validateMerge } from './thread-merge'
+import {
+  mergeContactKey, mergeContacts, mergedHomeInboxId, mergedStatus, mergedUnread, validateMerge,
+  type MergeContact,
+} from './thread-merge'
 import type { OutboundCandidate } from './relay-copy'
 import { hasInlineImages, readableHtml, rewriteInlineImages } from './html'
 import { inlineImageHref, matchInlinePart, type InlineImagePart } from './inline-images'
@@ -2677,6 +2680,8 @@ export type ThreadListFilters = {
    *  different messages of the same conversation. */
   fromText?: string | null
   toText?: string | null
+  /** Anywhere on it: From, To or Cc of any message. */
+  withText?: string | null
   subjectText?: string | null
   withAttachment?: boolean
   /** The two ends of a date range, as instants. Worked out from the calendar
@@ -3153,6 +3158,24 @@ function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
          AND array_to_string(ms."to_addresses" || ms."cc_addresses", ' ') ILIKE ${to}
     )`)
   }
+  // Everybody on a message at once: whoever wrote it, and whoever it went or
+  // was copied to. The two cuts above in one, for "every conversation this
+  // customer is in", which is a question about a person rather than a
+  // direction.
+  //
+  // The whole address rather than part of one: it arrives from pressing an
+  // address, not from somebody typing half of one, and "sam@x.com" must not
+  // sweep in bigsam@x.com or sam@x.com.au.
+  const anywhere = f.withText?.trim().toLowerCase() || null
+  if (anywhere) {
+    where.push(Prisma.sql`EXISTS (
+      SELECT 1 FROM "uin_messages" ms
+       WHERE ms."thread_id" = t."id"
+         AND (lower(ms."from_address") = ${anywhere}
+              OR EXISTS (SELECT 1 FROM unnest(ms."to_addresses" || ms."cc_addresses") AS a(addr)
+                          WHERE lower(a.addr) = ${anywhere}))
+    )`)
+  }
   const subject = likeContains(f.subjectText)
   if (subject) {
     // The conversation's own subject as well as its messages': a thread carries
@@ -3381,6 +3404,7 @@ function threadListQuery(
            t."preview", ${statusFor(viewerUserId)} AS "status", t."snooze_until", t."assignee_user_id",
            t."last_message_at", t."last_direction", t."unread", t."message_count",
            t."created_at", t."started_by_user_id", t."to_user_ids",
+           t."contact_name", t."contact_address",
            COALESCE(
              ARRAY(SELECT ti."inbox_id" FROM "uin_thread_inboxes" ti WHERE ti."thread_id" = t."id"),
              ARRAY[]::text[]
@@ -3408,6 +3432,15 @@ function threadListQuery(
      ORDER BY ${order}`
 }
 
+/** The contact a merge was told to show, when one was - both halves, since a
+ *  name picked on its own still wants the address it came with rather than
+ *  one borrowed off whichever message arrived last. Null when nobody chose. */
+function chosenContact(r: Record<string, unknown>): { participantName: string | null; participantAddress: string | null } | null {
+  const name = (r.contact_name as string | null) ?? null
+  const address = (r.contact_address as string | null) ?? null
+  return name || address ? { participantName: name, participantAddress: address } : null
+}
+
 function mapThreadListRow(r: Record<string, unknown>): ThreadListRow {
   const direction = (r.last_direction_message as string | null) ?? null
   const to = (r.last_to as string[] | null) ?? []
@@ -3431,13 +3464,17 @@ function mapThreadListRow(r: Record<string, unknown>): ThreadListRow {
     absorbedInboxIds: (r.absorbed_inbox_ids as string[] | null) ?? [],
     startedByUserId: (r.started_by_user_id as string | null) ?? null,
     toUserIds: (r.to_user_ids as string[] | null) ?? [],
-    participantName: inbound ? ((r.last_from_name as string | null) ?? null) : null,
-    // A caller has a number where a correspondent has an address, and the row
-    // says whichever of the two there is - "Unknown sender" beside a phone
+    // Who somebody here said it is with, when a merge asked them (see
+    // migrations/069), and otherwise the newest message's other end. A caller
+    // has a number where a correspondent has an address, and the row says
+    // whichever of the two there is - "Unknown sender" beside a phone
     // conversation whose number we are holding would be a plain untruth.
-    participantAddress: inbound
-      ? ((r.last_from_address as string | null) ?? (r.last_from_phone as string | null) ?? null)
-      : (to[0] ?? (r.last_from_phone as string | null) ?? null),
+    ...(chosenContact(r) ?? {
+      participantName: inbound ? ((r.last_from_name as string | null) ?? null) : null,
+      participantAddress: inbound
+        ? ((r.last_from_address as string | null) ?? (r.last_from_phone as string | null) ?? null)
+        : (to[0] ?? (r.last_from_phone as string | null) ?? null),
+    }),
     hasAttachments: !!r.last_has_attachments,
   }
 }
@@ -3613,6 +3650,10 @@ export type ThreadDetail = {
   snoozeUntil: Date | null
   assigneeUserId: string | null
   personId: string | null
+  /** Who it is with, as chosen when it was merged - see migrations/069. Both
+   *  null when nobody chose, which is nearly every conversation. */
+  contactName: string | null
+  contactAddress: string | null
   unread: boolean
   messageCount: number
   lastMessageAt: Date | null
@@ -3647,6 +3688,8 @@ export async function getThreadDetail(id: string, viewerUserId: string | null = 
     snoozeUntil: (r.snooze_until as Date | null) ?? null,
     assigneeUserId: (r.assignee_user_id as string | null) ?? null,
     personId: (r.person_id as string | null) ?? null,
+    contactName: (r.contact_name as string | null) ?? null,
+    contactAddress: (r.contact_address as string | null) ?? null,
     unread: !!r.unread,
     messageCount: Number(r.message_count ?? 0),
     lastMessageAt: (r.last_message_at as Date | null) ?? null,
@@ -4444,10 +4487,12 @@ function mapMentionRow(r: Record<string, unknown>): MentionRow {
     inboxId: (r.inbox_id as string | null) ?? null,
     providerModule: (r.provider_module as string | null) ?? null,
     lastMessageAt: (r.last_message_at as Date | null) ?? null,
-    participantName: inbound ? ((r.last_from_name as string | null) ?? null) : null,
-    participantAddress: inbound
-      ? ((r.last_from_address as string | null) ?? (r.last_from_phone as string | null) ?? null)
-      : (to[0] ?? (r.last_from_phone as string | null) ?? null),
+    ...(chosenContact(r) ?? {
+      participantName: inbound ? ((r.last_from_name as string | null) ?? null) : null,
+      participantAddress: inbound
+        ? ((r.last_from_address as string | null) ?? (r.last_from_phone as string | null) ?? null)
+        : (to[0] ?? (r.last_from_phone as string | null) ?? null),
+    }),
   }
 }
 
@@ -4498,6 +4543,7 @@ export async function listMentions(f: {
     SELECT x."id", x."thread_id", x."status", x."snooze_until", x."note", x."by_user_id",
            x."created_at",
            t."subject", t."channel", t."inbox_id", t."provider_module", t."last_message_at",
+           t."contact_name", t."contact_address",
            lm."from_name"    AS "last_from_name",
            lm."from_address" AS "last_from_address",
            lm."from_phone"   AS "last_from_phone",
@@ -4568,6 +4614,7 @@ export async function mentionForThread(userId: string, threadId: string): Promis
     SELECT x."id", x."thread_id", x."status", x."snooze_until", x."note", x."by_user_id",
            x."created_at",
            t."subject", t."channel", t."inbox_id", t."provider_module", t."last_message_at",
+           t."contact_name", t."contact_address",
            NULL::text AS "last_from_name", NULL::text AS "last_from_address",
            NULL::text AS "last_from_phone", NULL::text[] AS "last_to",
            NULL::text AS "last_direction"
@@ -8228,6 +8275,32 @@ export type MergeThreadRow = {
   createdAt: Date
 }
 
+/** Which of the named conversations show this contact, as the list reads them. */
+async function mergeContactSources(ids: string[], contact: MergeContact): Promise<string[]> {
+  if (ids.length === 0) return []
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>(
+    threadListQuery([Prisma.sql`t."id" IN (${Prisma.join(ids)})`], ids.length, 0),
+  )
+  const key = mergeContactKey(contact)
+  return rows.map(mapThreadListRow)
+    .filter((row) => mergeContactKey({ name: row.participantName, address: row.participantAddress }) === key)
+    .map((row) => row.id)
+}
+
+/** Everybody the conversations in a merge are with, read exactly as the list
+ *  reads each row - see mergeContacts, which the dialog runs over the same
+ *  rows in the browser. */
+async function mergeContactOptions(ids: string[]): Promise<MergeContact[]> {
+  if (ids.length === 0) return []
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>(
+    threadListQuery([Prisma.sql`t."id" IN (${Prisma.join(ids)})`], ids.length, 0),
+  )
+  const mapped = rows.map(mapThreadListRow)
+  // The winner first, as the dialog lists them.
+  mapped.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id))
+  return mergeContacts(mapped)
+}
+
 /** The conversations named in a merge request, in one query. Anything asked for
  *  that no longer exists is simply absent, and validateMerge says so. */
 export async function threadsForMerge(ids: string[]): Promise<MergeThreadRow[]> {
@@ -8411,6 +8484,9 @@ export async function mergeThreads(
    *  the conversations being merged. Omitted, or the winner's own, keeps the
    *  winner's. */
   subjectIn?: string,
+  /** Who the merged conversation is with, picked from the people its halves
+   *  are with. Omitted leaves it reading the newest message, as ever. */
+  contactIn?: { name: string | null; address: string | null },
 ): Promise<ThreadMergeResult | { error: string }> {
   const loserIds = [...new Set(loserIdsIn)].filter((id) => id !== winnerId)
   const found = await threadsForMerge([winnerId, ...loserIds])
@@ -8441,6 +8517,31 @@ export async function mergeThreads(
   if (renameTo && !renamingLoserId) {
     return { error: 'That subject is not one of the conversations being merged.' }
   }
+  // Who it is with. Only ever one of the people the halves are already with -
+  // worked out here from the database, the same way the list works it out, so
+  // a request cannot hang any name it likes on a conversation. Carried on the
+  // first loser's record, so undoing THAT merge puts the old contact back.
+  const contactOptions = contactIn ? await mergeContactOptions([winnerId, ...loserIds]) : []
+  const pickedContact = contactIn
+    ? contactOptions.find((c) => mergeContactKey(c) === mergeContactKey(contactIn)) ?? null
+    : null
+  if (contactIn && !pickedContact) {
+    return { error: 'That contact is not one of the conversations being merged.' }
+  }
+  const winnerContactBefore = pickedContact
+    ? (await prisma.$queryRaw<{ name: string | null; address: string | null }[]>`
+        SELECT "contact_name" AS name, "contact_address" AS address FROM "uin_threads" WHERE "id" = ${winnerId}
+      `)[0] ?? { name: null, address: null }
+    : null
+  // Which merge record carries it: the loser the contact came from, so undoing
+  // THAT merge - the one that brought this person in - is what takes them back
+  // off. A contact picked off the winner itself came from no loser, so the first
+  // one carries it. Same rule the subject follows.
+  const contactLoserId = pickedContact
+    ? (await mergeContactSources([winnerId, ...loserIds], pickedContact)).find((id) => id !== winnerId && loserIds.includes(id))
+      ?? losers[0]?.id ?? null
+    : null
+
   const winnerEditedBefore = renameTo
     ? (await prisma.$queryRaw<{ at: Date | null }[]>`
         SELECT "subject_edited_at" AS at FROM "uin_threads" WHERE "id" = ${winnerId}
@@ -8580,6 +8681,17 @@ export async function mergeThreads(
               winnerSubjectEditedAtBefore: winnerEditedBefore ? winnerEditedBefore.toISOString() : null,
             }
           : {}),
+        ...(pickedContact && winnerContactBefore && loser.id === contactLoserId
+          ? {
+              contactSetTo: { name: pickedContact.name, address: pickedContact.address },
+              winnerContactBefore,
+              winnerPersonIdBefore: winner.personId,
+              // Which card the merge pointed it at, so undoing only puts the old
+              // one back while it still points there - see undoThreadMerge.
+              personSetTo: pickedContact.personId
+                ?? winner.personId ?? losers.find((l) => l.personId)?.personId ?? null,
+            }
+          : {}),
       }
 
       const row = await tx.$queryRaw<{ id: string }[]>`
@@ -8619,7 +8731,10 @@ export async function mergeThreads(
     // strength of the OTHER half having been dealt with.
     const status = mergedStatus([winner.status, ...losers.map((l) => l.status)])
     const unread = mergedUnread([winner.unread, ...losers.map((l) => l.unread)])
-    const personId = winner.personId ?? losers.find((l) => l.personId)?.personId ?? null
+    // The card of whoever it was said to be with, where that half had one;
+    // otherwise the winner's, or the first half that is matched to anybody.
+    const personId = pickedContact?.personId
+      ?? winner.personId ?? losers.find((l) => l.personId)?.personId ?? null
     const organisationId = winner.organisationId
       ?? losers.find((l) => l.organisationId)?.organisationId ?? null
     await tx.$executeRaw`
@@ -8632,6 +8747,13 @@ export async function mergeThreads(
              "updated_at" = now()
        WHERE "id" = ${winnerId}
     `
+    if (pickedContact) {
+      await tx.$executeRaw`
+        UPDATE "uin_threads"
+           SET "contact_name" = ${pickedContact.name}, "contact_address" = ${pickedContact.address}
+         WHERE "id" = ${winnerId}
+      `
+    }
 
     await tx.$executeRaw`
       INSERT INTO "uin_events" ("thread_id", "user_id", "kind", "detail")
@@ -8642,6 +8764,7 @@ export async function mergeThreads(
                 subjects: losers.map((l) => l.subject),
                 ...(rehomedTo ? { rehomedToInboxId: rehomedTo, fromInboxId: winner.inboxId } : {}),
                 ...(renameTo ? { subjectFrom: winner.subject, subjectTo: renameTo } : {}),
+                ...(pickedContact ? { contactTo: pickedContact.name ?? pickedContact.address } : {}),
               })}::jsonb)
     `
 
@@ -8741,6 +8864,10 @@ export async function undoThreadMerge(
     subjectSetTo?: string
     winnerSubjectBefore?: string | null
     winnerSubjectEditedAtBefore?: string | null
+    contactSetTo?: { name: string | null; address: string | null }
+    winnerContactBefore?: { name: string | null; address: string | null }
+    winnerPersonIdBefore?: string | null
+    personSetTo?: string | null
   }
 
   const [winner, loser] = await Promise.all([getThreadDetail(winnerId), getThreadDetail(loserId)])
@@ -8846,6 +8973,31 @@ export async function undoThreadMerge(
                "updated_at" = now()
          WHERE "id" = ${winnerId}
       `
+    }
+    // This merge said who the conversation is with. Put back whoever it said
+    // before - again only if nobody has changed it since - and the card it
+    // pointed at, where the merge moved that too.
+    const contactSet = snapshot.contactSetTo
+    if (contactSet && winner.contactName === contactSet.name && winner.contactAddress === contactSet.address) {
+      const before = snapshot.winnerContactBefore ?? { name: null, address: null }
+      await tx.$executeRaw`
+        UPDATE "uin_threads"
+           SET "contact_name" = ${before.name}, "contact_address" = ${before.address},
+               "updated_at" = now()
+         WHERE "id" = ${winnerId}
+      `
+      // The card, only while it is still the one the merge set - somebody who
+      // has linked the conversation to somebody else since chose that, and an
+      // undo is no reason to overrule them. Back to nobody, if nobody is what
+      // it was.
+      if (snapshot.personSetTo !== undefined) {
+        await tx.$executeRaw`
+          UPDATE "uin_threads"
+             SET "person_id" = ${snapshot.winnerPersonIdBefore ?? null}
+           WHERE "id" = ${winnerId}
+             AND "person_id" IS NOT DISTINCT FROM ${snapshot.personSetTo}
+        `
+      }
     }
     // Marked undone BEFORE the addresses are recomputed: the recompute reads
     // live merge records for the address a merge re-homed the conversation out

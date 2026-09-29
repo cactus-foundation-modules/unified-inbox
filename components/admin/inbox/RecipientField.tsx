@@ -1,7 +1,6 @@
 'use client'
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import { initialsFor } from '@/modules/unified-inbox/lib/list'
 
 // The To and Cc lines on a new message, with the addresses this inbox actually
 // deals with offered underneath.
@@ -221,9 +220,6 @@ export function RecipientField({
               onMouseEnter={() => setActive(index)}
               onMouseDown={(e) => { e.preventDefault(); choose(suggestion) }}
             >
-              <span className="uin-suggestion-avatar" aria-hidden="true">
-                {initialsFor(suggestion.name || suggestion.address)}
-              </span>
               <span className="uin-suggestion-text">
                 <span className="uin-suggestion-name">{suggestion.name || suggestion.address}</span>
                 <span className="uin-suggestion-meta">

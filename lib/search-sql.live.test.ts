@@ -314,6 +314,17 @@ describe.runIf(shouldRun)('the search queries, against a real database', () => {
     expect(await subjectsOf({ toText: 'builders.example' })).toEqual([])
   })
 
+  it('finds everything somebody is anywhere on, whether they wrote it or were sent it', async () => {
+    // Pressing an outsider's address on a message asks this: From, To and Cc
+    // all count, because "every conversation with Sally" does not care which
+    // way the post went.
+    expect(await subjectsOf({ withText: 'sally@supplier.example' }))
+      .toEqual(['Invoice 4021 for the boardroom chairs'])
+    expect(await subjectsOf({ withText: 'everyone@customers.example' }))
+      .toEqual(['50% off storage until Friday'])
+    expect(await subjectsOf({ withText: 'nobody@nowhere.example' })).toEqual([])
+  })
+
   it('takes a wildcard in the search box literally', async () => {
     // Unescaped, this matches every row in the table and the results are
     // nonsense. Escaped, it finds the one message with a percent sign in it.

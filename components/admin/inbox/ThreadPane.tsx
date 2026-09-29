@@ -4,7 +4,7 @@ import type { AttachmentRow, ThreadDetail, ThreadEventRow, ThreadMessageRow } fr
 import type { DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
 import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 import type { ReplyStyle } from '@/modules/unified-inbox/lib/channel-reply'
-import { avatarHref, channelLabel, formatFull, formatWhen, inboxHref, initialsFor, splitQuotedText } from '@/modules/unified-inbox/lib/list'
+import { channelLabel, formatFull, formatWhen, inboxHref, splitQuotedText } from '@/modules/unified-inbox/lib/list'
 import { draftHref } from '@/modules/unified-inbox/lib/drafts'
 import {
   attributionLine, forwardHeaderRows, forwardSubject as forwardSubjectOf, replySubject as replySubjectOf,
@@ -14,8 +14,7 @@ import { isSideText } from '@/modules/unified-inbox/lib/text-rules'
 import type { QuotedPreview } from '@/modules/unified-inbox/lib/quoted-preview'
 import { describeSendAt } from '@/modules/unified-inbox/lib/scheduled'
 import { describeEvents, weaveTimeline, type TimelineEvent, type TimelineLine } from '@/modules/unified-inbox/lib/timeline'
-import { AtIcon, BackIcon, ClockIcon, CloseIcon, InboundIcon, NoteIcon, OutboundIcon, PaperclipIcon, PhoneIcon, TickIcon } from './icons'
-import { Avatar } from './Avatar'
+import { AtIcon, BackIcon, ClockIcon, CloseIcon, NoteIcon, PaperclipIcon, PhoneIcon, TickIcon } from './icons'
 import { MessageBody } from './MessageBody'
 import { MessageText } from './MessageText'
 import { RetryButton } from './RetryButton'
@@ -59,6 +58,15 @@ type Props = {
   params: Record<string, string>
   thread: ThreadDetail
   inboxName: string | null
+  /** Who the conversation is with, by name or address - what the line under
+   *  the subject leads with. Null on a discussion, which says its channel. */
+  contactLabel: string | null
+  /** Where each outsider's address on these messages goes when pressed - every
+   *  conversation they are in - keyed by the address in lower case. Our own
+   *  addresses and colleagues' are never in it, so they stay plain text. */
+  outsiderLinks: Record<string, string>
+  /** Where the name under the subject goes when pressed, if anywhere. */
+  contactHref: string | null
   messages: ThreadMessageView[]
   events: ThreadEventRow[]
   /** Who this conversation can be HANDED to. Narrowed on somebody's own inbox,
@@ -147,9 +155,6 @@ type Props = {
     ownerName: string | null
   }
   now: Date
-  /** Whether to ask for people's own pictures. Off unless the site has switched
-   *  it on - see Settings, People. */
-  showAvatars: boolean
   /** The site's timezone. Every clock time on this pane is stamped in it: the
    *  server renders these, and its own clock is UTC. */
   timezone: string
@@ -269,23 +274,18 @@ function MessageWhen({ at, now, timezone }: { at: Date | string | null; now: Dat
 }
 
 /**
- * Who wrote a message, with their own picture where there is one to have.
- *
- * Which id to ask for depends on which way the message went, and only these two
- * are ever right: a colleague wrote everything that went OUT and every note, so
- * that is their staff account; everything that came IN was written by whoever
- * the conversation is with. A message with neither - automatic mail from a
- * shop, an address nobody has been matched to - keeps its initials, which is
- * what the circle has always been.
+ * Who wrote a message. Words only: the circle of initials that used to stand
+ * in front of it has gone from the whole inbox, since nobody here or among the
+ * customers has a picture to put in one and a column of initials was a column
+ * of decoration taking the width a narrow pane needs.
  */
-function MessageHeader({ message, sideText, personId, showAvatars, staffById, now, timezone, tools }: {
+function MessageHeader({ message, sideText, staffById, outsiderLinks, now, timezone, tools }: {
   message: ThreadMessageView
   /** A text carried on an email conversation, which says so: without it a
    *  customer's text reads as an email with no address on it. */
   sideText: boolean
-  personId: string | null
-  showAvatars: boolean
   staffById: Record<string, string>
+  outsiderLinks: Record<string, string>
   now: Date
   timezone: string
   /** The arrow and the dots, drawn at the trailing end of the header. Handed in
@@ -293,16 +293,10 @@ function MessageHeader({ message, sideText, personId, showAvatars, staffById, no
    *  the only part of a message that has to be interactive. */
   tools: ReactNode
 }) {
-  const picture = (kind: 'person' | 'user', id: string | null) =>
-    showAvatars ? avatarHref(kind, id) : null
-
   if (message.direction === 'note') {
     const author = message.authorUserId ? staffById[message.authorUserId] : null
     return (
       <div className="uin-msg-head">
-        <Avatar src={picture('user', message.authorUserId)} title={author ?? undefined}>
-          {author ? initialsFor(author) : NoteIcon}
-        </Avatar>
         <div className="uin-msg-head-lines">
           <div className="uin-msg-head-line">
             <span className="uin-msg-who">{author ?? 'Somebody here'}</span>
@@ -318,9 +312,6 @@ function MessageHeader({ message, sideText, personId, showAvatars, staffById, no
     const author = message.authorUserId ? staffById[message.authorUserId] : null
     return (
       <div className="uin-msg-head">
-        <Avatar src={picture('user', message.authorUserId)} title={author ?? undefined}>
-          {author ? initialsFor(author) : OutboundIcon}
-        </Avatar>
         <div className="uin-msg-head-lines">
           <div className="uin-msg-head-line">
             <span className="sr-only">Sent by</span>
@@ -336,7 +327,10 @@ function MessageHeader({ message, sideText, personId, showAvatars, staffById, no
               to, so there is nothing missing to report and no second line.
               Saying "nobody recorded" there invented an absence, and read as a
               fault. A text has a number instead, which is what it went to. */}
-          <ToLine addresses={sideText && message.fromPhone ? [message.fromPhone] : message.toAddresses} />
+          <ToLine
+            addresses={sideText && message.fromPhone ? [message.fromPhone] : message.toAddresses}
+            links={outsiderLinks}
+          />
         </div>
         <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
         {tools}
@@ -344,11 +338,10 @@ function MessageHeader({ message, sideText, personId, showAvatars, staffById, no
     )
   }
   const named = (message.fromName || message.fromAddress || (sideText ? message.fromPhone : '') || '').trim() || null
+  // An outsider's name and address open everything they are in.
+  const fromHref = message.fromAddress ? outsiderLinks[message.fromAddress.trim().toLowerCase()] ?? null : null
   return (
     <div className="uin-msg-head">
-      <Avatar src={picture('person', personId)} title={named ?? undefined}>
-        {named ? initialsFor(named) : InboundIcon}
-      </Avatar>
       <div className="uin-msg-head-lines">
         <div className="uin-msg-head-line">
           {/* The words "Received from" used to sit here in front of the
@@ -358,16 +351,26 @@ function MessageHeader({ message, sideText, personId, showAvatars, staffById, no
               a narrow column has to find. Kept for a screen reader, which has
               none of those three to go on. */}
           <span className="sr-only">Received from</span>
-          <span className="uin-msg-who">{named ?? 'Unknown sender'}</span>
+          {fromHref && named
+            ? (
+                <Link
+                  className="uin-msg-who uin-msg-with"
+                  href={fromHref}
+                  title={`Every conversation with ${message.fromAddress}`}
+                >
+                  {named}
+                </Link>
+              )
+            : <span className="uin-msg-who">{named ?? 'Unknown sender'}</span>}
           {/* Only where the name is a name: with no name to go on, the bold
               part is already the address, and showing it twice was never the
               idea. */}
           {message.fromName && message.fromAddress
-            ? <AddressLine text={`<${message.fromAddress}>`} />
+            ? <AddressLine text={`<${message.fromAddress}>`} parts={[{ text: `<${message.fromAddress}>`, href: fromHref }]} />
             : null}
           {sideText && <span className="uin-msg-dir">{PhoneIcon} Text message</span>}
         </div>
-        <ToLine addresses={message.toAddresses} />
+        <ToLine addresses={message.toAddresses} links={outsiderLinks} />
       </div>
       <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
       {tools}
@@ -379,12 +382,15 @@ function MessageHeader({ message, sideText, personId, showAvatars, staffById, no
  *  mail program has always laid a message out. Nothing at all where there is
  *  nobody to name, which is every message on a channel that has no addresses
  *  in it. */
-function ToLine({ addresses }: { addresses: string[] }) {
+function ToLine({ addresses, links }: { addresses: string[]; links: Record<string, string> }) {
   if (addresses.length === 0) return null
   return (
     <div className="uin-msg-head-line uin-msg-head-to">
       <span className="uin-msg-dir-label">To:</span>
-      <AddressLine text={addresses.join(', ')} />
+      <AddressLine
+        text={addresses.join(', ')}
+        parts={addresses.map((address) => ({ text: address, href: links[address.trim().toLowerCase()] ?? null }))}
+      />
     </div>
   )
 }
@@ -403,17 +409,15 @@ function isRecording(file: { externalUrl: string | null; contentType: string | n
     && (!!file.contentType?.startsWith('audio/') || /\.(mp3|wav|ogg|m4a)$/i.test(file.filename))
 }
 
-function Message({ message, sideText, threadSubject, personId, showAvatars, staffById, now, timezone, canDelete, tools }: {
+function Message({ message, sideText, threadSubject, staffById, outsiderLinks, now, timezone, canDelete, tools }: {
   message: ThreadMessageView
   /** A text carried on an email conversation - see MessageHeader. */
   sideText: boolean
   /** What the conversation is called, so a message called something else can
    *  say so. */
   threadSubject: string | null
-  /** Whoever the conversation is with, for the picture on an inbound message. */
-  personId: string | null
-  showAvatars: boolean
   staffById: Record<string, string>
+  outsiderLinks: Record<string, string>
   now: Date
   timezone: string
   /** Whether this reader may get rid of a message the channel owns. Decided on
@@ -440,9 +444,8 @@ function Message({ message, sideText, threadSubject, personId, showAvatars, staf
       <MessageHeader
         message={message}
         sideText={sideText}
-        personId={personId}
-        showAvatars={showAvatars}
         staffById={staffById}
+        outsiderLinks={outsiderLinks}
         now={now}
         timezone={timezone}
         tools={tools}
@@ -655,11 +658,11 @@ function productsTravel(channel: string): boolean {
 }
 
 export function ThreadPane({
-  base, params, thread, inboxName, messages, events, staff, taggable, staffById,
+  base, params, thread, inboxName, contactLabel, outsiderLinks, contactHref, messages, events, staff, taggable, staffById,
   canReply, cannotReplyReason, style, destinationLine,
   replyTo, replyAllTo, replySubject, forwardSubject, draft,
   canAddProducts, draftProducts, canSuggestReplies, newestFirst,
-  canDeleteMessages, canManage, blockState, spamState, binState, now, timezone, heldDrafts, viewerUserId, othersDrafts, focusDraft = null, showAvatars,
+  canDeleteMessages, canManage, blockState, spamState, binState, now, timezone, heldDrafts, viewerUserId, othersDrafts, focusDraft = null,
   context, asked, merges, otherInboxNames, scrollToMessageId, textTo,
 }: Props) {
   // The list arrives oldest first. Reversing a copy rather than sorting again:
@@ -830,7 +833,16 @@ export function ThreadPane({
           </Link>
         </div>
         <div className="uin-thread-meta">
-          <span>{channelLabel(thread.channel)}</span>
+          {/* Who it is with rather than how they got in touch - see the note
+              where InboxPanel works it out. The channel stays for a discussion,
+              which has nobody outside to name. */}
+          {contactHref && contactLabel
+            ? (
+                <Link className="uin-thread-with uin-msg-with" href={contactHref} title="Every conversation with them">
+                  {contactLabel}
+                </Link>
+              )
+            : <span className="uin-thread-with">{contactLabel ?? channelLabel(thread.channel)}</span>}
           {inboxName && <span>&middot; {inboxName}</span>}
           {otherInboxNames.map((name) => <span key={name}>&middot; {name}</span>)}
           <span>&middot; {messages.length} message{messages.length === 1 ? '' : 's'}</span>
@@ -1001,9 +1013,8 @@ export function ThreadPane({
                 message={message}
                 sideText={sideText}
                 threadSubject={thread.subject}
-                personId={thread.personId}
-                showAvatars={showAvatars}
                 staffById={staffById}
+                outsiderLinks={outsiderLinks}
                 now={now}
                 timezone={timezone}
                 canDelete={canDeleteMessages}

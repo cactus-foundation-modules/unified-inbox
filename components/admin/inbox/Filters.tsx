@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { formatCalendarDate, inboxHref } from '@/modules/unified-inbox/lib/list'
 import { BlockedAddresses } from './BlockedAddresses'
+import { ComposeMenu, type ComposeMenuEntry } from './ComposeMenu'
 import { EmptyBinButton } from './EmptyBinButton'
 import { FilterMenu } from './FilterMenu'
 import { QueryForm } from './QueryForm'
@@ -68,6 +69,7 @@ type Props = {
   narrowed: {
     from: string | null
     to: string | null
+    with: string | null
     subject: string | null
     withAttachment: boolean
     after: string | null
@@ -90,11 +92,18 @@ type Props = {
    *  emptying takes the conversations away from every colleague who could see
    *  them and nothing brings them back. See the route. */
   emptyBin: { inboxId: string | null; ownerName: string | null; count: number; closeHref: string } | null
+  /** The write button, again, for a phone. There the whole bar sits at the
+   *  foot of the list under a thumb, and the pen up in the bar at the top of
+   *  the screen is the one control that thumb cannot reach - so it is drawn
+   *  here too, on the far side of the search, and the stylesheet shows
+   *  whichever of the two suits the width. Null for anybody with nothing to
+   *  send from. */
+  compose: { href: string; entries: ComposeMenuEntry[] } | null
 }
 
 export function Filters({
   base, params, unreadOnly, assignee, search, narrowed, staff, oldestFirst, ownInbox,
-  blockedAddresses, emptyBin,
+  blockedAddresses, emptyBin, compose,
 }: Props) {
   // Any filter change starts again at page one and closes whatever was open,
   // since the conversation on screen may not survive the new filter. A person's
@@ -155,49 +164,63 @@ export function Filters({
             closeHref={emptyBin.closeHref}
           />
         )}
-        {/* On the reader's OWN address the menu is a menu of one, so it is not
-            a menu. Everything in that list is either post that came to them or
-            work handed to them; "whose desk is this on" has the same answer all
-            the way down, and a panel that has to be opened to find one tick is
-            two presses for a question with one answer. So the same button in
-            the same place becomes a plain switch: press it for the unread,
-            press it again for the lot. Everywhere else - a shared address, All,
-            a channel - the full menu stands, because there the assignee
-            question is the useful one. */}
-        {ownInbox ? (
+        {/* The filter and the order, as one pill of two halves: the shape a
+            Mac and a phone give the pair of controls that change what a list
+            shows rather than what is in it. On a phone the stylesheet moves it
+            to the near side of the search. */}
+        <div className="uin-list-tools" role="group" aria-label="Filter and order">
+          {/* On the reader's OWN address the menu is a menu of one, so it is not
+              a menu. Everything in that list is either post that came to them or
+              work handed to them; "whose desk is this on" has the same answer all
+              the way down, and a panel that has to be opened to find one tick is
+              two presses for a question with one answer. So the same button in
+              the same place becomes a plain switch: press it for the unread,
+              press it again for the lot. Everywhere else - a shared address, All,
+              a channel - the full menu stands, because there the assignee
+              question is the useful one. */}
+          {ownInbox ? (
+            <Link
+              className={unreadOnly ? 'uin-icon-btn uin-icon-btn-on' : 'uin-icon-btn'}
+              href={inboxHref(base, params, { unread: unreadOnly ? null : '1', ...reset })}
+              aria-pressed={unreadOnly}
+              title={unreadOnly ? 'Showing only what you have not read. Press to show everything.' : 'Show only what you have not read'}
+            >
+              {FilterIcon}
+              <span className="sr-only">
+                {unreadOnly ? 'Showing only what you have not read. Show everything.' : 'Show only what you have not read.'}
+              </span>
+            </Link>
+          ) : (
+            <FilterMenu
+              base={base}
+              params={params}
+              unreadOnly={unreadOnly}
+              assignee={assignee}
+              staff={staff}
+            />
+          )}
+          {/* Order, not contents. A link rather than a button because it is one
+              more thing in the address, like every other choice on this screen. */}
           <Link
-            className={unreadOnly ? 'uin-icon-btn uin-icon-btn-on' : 'uin-icon-btn'}
-            href={inboxHref(base, params, { unread: unreadOnly ? null : '1', ...reset })}
-            aria-pressed={unreadOnly}
-            title={unreadOnly ? 'Showing only what you have not read. Press to show everything.' : 'Show only what you have not read'}
+            className="uin-icon-btn"
+            href={inboxHref(base, params, { sort: oldestFirst ? null : 'oldest', ...reset })}
+            aria-pressed={oldestFirst}
+            title={oldestFirst ? 'Oldest first. Press for newest first.' : 'Newest first. Press for oldest first.'}
           >
-            {FilterIcon}
+            {SortIcon}
             <span className="sr-only">
-              {unreadOnly ? 'Showing only what you have not read. Show everything.' : 'Show only what you have not read.'}
+              {oldestFirst ? 'Showing oldest first. Show newest first.' : 'Showing newest first. Show oldest first.'}
             </span>
           </Link>
-        ) : (
-          <FilterMenu
-            base={base}
-            params={params}
-            unreadOnly={unreadOnly}
-            assignee={assignee}
-            staff={staff}
+        </div>
+        {compose && (
+          <ComposeMenu
+            composeHref={compose.href}
+            entries={compose.entries}
+            upward
+            className="uin-find-compose"
           />
         )}
-        {/* Order, not contents. A link rather than a button because it is one
-            more thing in the address, like every other choice on this screen. */}
-        <Link
-          className="uin-icon-btn"
-          href={inboxHref(base, params, { sort: oldestFirst ? null : 'oldest', ...reset })}
-          aria-pressed={oldestFirst}
-          title={oldestFirst ? 'Oldest first. Press for newest first.' : 'Newest first. Press for oldest first.'}
-        >
-          {SortIcon}
-          <span className="sr-only">
-            {oldestFirst ? 'Showing oldest first. Show newest first.' : 'Showing newest first. Show oldest first.'}
-          </span>
-        </Link>
       </div>
 
       {chips.length > 0 && (
@@ -237,6 +260,7 @@ function narrowedChips(narrowed: Props['narrowed']): Array<{ key: string; label:
   const chips: Array<{ key: string; label: string }> = []
   if (narrowed.from) chips.push({ key: 'from', label: `From “${narrowed.from}”` })
   if (narrowed.to) chips.push({ key: 'to', label: `To “${narrowed.to}”` })
+  if (narrowed.with) chips.push({ key: 'with', label: `Everything with “${narrowed.with}”` })
   if (narrowed.subject) chips.push({ key: 'subject', label: `Subject “${narrowed.subject}”` })
   if (narrowed.withAttachment) chips.push({ key: 'att', label: 'With something attached' })
   if (narrowed.after) chips.push({ key: 'after', label: `Since ${formatCalendarDate(narrowed.after)}` })

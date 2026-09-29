@@ -1,8 +1,7 @@
 import Link from 'next/link'
 import type { MentionRow } from '@/modules/unified-inbox/lib/db'
-import { channelLabel, formatFull, formatWhen, inboxHref, initialsFor, pageCount, PER_PAGE } from '@/modules/unified-inbox/lib/list'
-import { AtIcon, InboundIcon } from './icons'
-import { Avatar } from './Avatar'
+import { channelLabel, formatFull, formatWhen, inboxHref, pageCount, PER_PAGE } from '@/modules/unified-inbox/lib/list'
+import { AtIcon } from './icons'
 import { MentionActions } from './MentionActions'
 
 // Everything colleagues have tagged somebody in.
@@ -118,16 +117,6 @@ export function MentionListView({
                 href={inboxHref(base, params, { id: row.threadId })}
                 aria-current={open ? 'true' : undefined}
               >
-                <Avatar
-                  /* Never a picture: the circle here stands for whoever the
-                     conversation is with, and this list is opened to see who
-                     wanted YOU. Initials keep the rows the same height as the
-                     inbox's without a second thing to look at. */
-                  src={null}
-                  title={named ?? undefined}
-                >
-                  {named ? initialsFor(named) : InboundIcon}
-                </Avatar>
                 <span className="uin-row-main">
                   <span className="uin-row-who">
                     {row.status === 'open' && <span className="uin-row-dot" aria-hidden="true" />}
@@ -149,7 +138,9 @@ export function MentionListView({
                   <span className="uin-row-preview">
                     <span className="uin-ask-about">{AtIcon}</span>
                     {row.subject || `(no subject)`}
-                    <span className="uin-ask-channel"> &middot; {channelLabel(row.channel)}</span>
+                    {/* Who it is with rather than how they got in touch; the channel only
+                        where there is nobody to name, as on a discussion. */}
+                    <span className="uin-ask-channel"> &middot; {named ?? channelLabel(row.channel)}</span>
                   </span>
                 </span>
                 <span className="uin-row-meta">

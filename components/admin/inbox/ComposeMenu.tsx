@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import Link from 'next/link'
-import { ChevronDownIcon, NoteIcon, PenIcon, PhoneIcon, SmsIcon } from './icons'
+import { ChevronDownIcon, ChevronUpIcon, NoteIcon, PenIcon, PhoneIcon, SmsIcon } from './icons'
 import { LinkBusy } from './NavProgress'
 
 // Write a message, and the three other things you might have meant.
@@ -33,6 +33,12 @@ type Props = {
   /** Where the button itself goes: the ordinary new email. */
   composeHref: string
   entries: ComposeMenuEntry[]
+  /** Drawn at the foot of the list on a phone, beside the search, where the
+   *  menu has nowhere to go but up - so it opens upwards, always, and the arrow
+   *  on the button points the way it will open. */
+  upward?: boolean
+  /** Extra class on the outside, for the one place that draws it differently. */
+  className?: string
 }
 
 const ICONS: Record<string, React.ReactNode> = {
@@ -50,13 +56,15 @@ const MENU_WIDTH = 240
 const MENU_HEIGHT = 200
 const GAP = 6
 
-export function ComposeMenu({ composeHref, entries }: Props) {
+export function ComposeMenu({ composeHref, entries, upward = false, className }: Props) {
   const [open, setOpen] = useState(false)
   // Where to draw it, in window coordinates. Fixed rather than absolute inside
   // the rail, because the rail SCROLLS - a column on a wide window and a strip
   // with overflow hidden on a narrow one - and a menu positioned inside it is a
   // menu with its bottom half cut off on a phone.
-  const [at, setAt] = useState<{ top: number; left: number } | null>(null)
+  // Measured from the bottom of the window when it opens upwards, so it sits
+  // exactly on the button however many entries it turns out to hold.
+  const [at, setAt] = useState<{ top?: number; bottom?: number; left: number } | null>(null)
   const wrap = useRef<HTMLDivElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const menu = useRef<HTMLDivElement>(null)
@@ -64,14 +72,19 @@ export function ComposeMenu({ composeHref, entries }: Props) {
   const place = useCallback(() => {
     const box = trigger.current?.getBoundingClientRect()
     if (!box) return
+    const left = Math.max(GAP, Math.min(box.left, window.innerWidth - MENU_WIDTH - GAP))
+    if (upward) {
+      setAt({ bottom: window.innerHeight - box.top + GAP, left })
+      return
+    }
     const below = window.innerHeight - box.bottom
     setAt({
       top: below < MENU_HEIGHT + GAP && box.top > below
         ? Math.max(GAP, box.top - MENU_HEIGHT - GAP)
         : box.bottom + GAP,
-      left: Math.max(GAP, Math.min(box.left, window.innerWidth - MENU_WIDTH - GAP)),
+      left,
     })
-  }, [])
+  }, [upward])
 
   const close = useCallback((focusTrigger = false) => {
     setOpen(false)
@@ -133,7 +146,7 @@ export function ComposeMenu({ composeHref, entries }: Props) {
 
   if (entries.length === 0) {
     return (
-      <Link className="uin-rail-compose" href={composeHref} aria-label="Write a message">
+      <Link className={className ? `uin-rail-compose ${className}` : 'uin-rail-compose'} href={composeHref} aria-label="Write a message">
         {PenIcon}
         <LinkBusy />
       </Link>
@@ -141,7 +154,7 @@ export function ComposeMenu({ composeHref, entries }: Props) {
   }
 
   return (
-    <div className="uin-compose-split" ref={wrap}>
+    <div className={className ? `uin-compose-split ${className}` : 'uin-compose-split'} ref={wrap}>
       <Link className="uin-rail-compose uin-rail-compose-main" href={composeHref} aria-label="Write a message">
         {PenIcon}
         <LinkBusy />
@@ -158,7 +171,7 @@ export function ComposeMenu({ composeHref, entries }: Props) {
           setOpen((was) => !was)
         }}
       >
-        {ChevronDownIcon}
+        {upward ? ChevronUpIcon : ChevronDownIcon}
       </button>
 
       {/* Into the page itself, like every other panel in here that is drawn at
@@ -173,7 +186,8 @@ export function ComposeMenu({ composeHref, entries }: Props) {
           className="uin-compose-menu"
           role="menu"
           ref={menu}
-          style={{ top: at.top, left: at.left }}
+          data-upward={upward ? 'true' : undefined}
+          style={{ top: at.top, bottom: at.bottom, left: at.left }}
           onKeyDown={onMenuKeyDown}
         >
           {entries.map((entry) => (

@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import type { Draft } from '@/modules/unified-inbox/lib/types'
-import { formatFull, formatWhen, inboxHref, initialsFor } from '@/modules/unified-inbox/lib/list'
+import { formatFull, formatWhen, inboxHref } from '@/modules/unified-inbox/lib/list'
 import {
   draftBodyText,
   draftHref,
@@ -9,7 +9,7 @@ import {
   draftSubjectLabel,
 } from '@/modules/unified-inbox/lib/drafts'
 import { scheduleLabel } from '@/modules/unified-inbox/lib/scheduled'
-import { PaperclipIcon, PenIcon } from './icons'
+import { PaperclipIcon } from './icons'
 
 // The Drafts list: what you have started and not sent - and, with `scheduled`
 // on, the Scheduled list, which is the same rows drawn the same way, filtered
@@ -104,10 +104,6 @@ export function DraftListView({
         // itself - that one is no longer going anywhere on its own, so it is
         // here rather than next door.
         const going = scheduleLabel(draft, now, timezone)
-        // "No recipient yet" and "A reply" are sentences standing in for an
-        // address nobody has typed yet. Initials taken off the first of them put
-        // NR in a circle, which reads as a draft to somebody of that name.
-        const addressed = draft.to.length > 0
         // Which row is the one on the screen. A colleague's is always answered
         // by the draft's own id, because a colleague's row never navigates to
         // the conversation - the reading pane beside it is showing the DRAFT,
@@ -133,11 +129,6 @@ export function DraftListView({
               href={href}
               aria-current={open ? 'true' : undefined}
             >
-              <span className="uin-avatar-wrap">
-                <span className="uin-avatar" aria-hidden="true">
-                  {addressed ? initialsFor(who) : PenIcon}
-                </span>
-              </span>
               <span className="uin-row-main">
                 <span className="uin-row-who">
                   <span className="uin-row-name">{who}</span>

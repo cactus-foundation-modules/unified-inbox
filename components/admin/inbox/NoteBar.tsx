@@ -46,6 +46,9 @@ import { NoteIcon, SendIcon } from './icons'
  *  rather than a list to read, and another letter typed is quicker. */
 const TAG_SUGGESTIONS = 8
 
+/** How tall the note box may grow before it scrolls instead: about six lines. */
+const NOTE_MAX_PX = 140
+
 /** What is being typed after an @, if anything. Two words at most: the menu
  *  narrows on every letter, and "@sam can you look" would otherwise go on
  *  looking for a colleague called "sam can you look".
@@ -134,7 +137,7 @@ export function NoteBar({ threadId, staff }: Props) {
   const [asking, setAsking] = useState<{ query: string; from: number } | null>(null)
   /** Which suggestion the keyboard is on. */
   const [cursor, setCursor] = useState(0)
-  const box = useRef<HTMLInputElement>(null)
+  const box = useRef<HTMLTextAreaElement>(null)
   // Stops the browser asking twice: state has not come back round by the time a
   // second press lands in the same frame, so a disabled button is not on its
   // own enough. Same guard, and the same reason, as the composer's.
@@ -182,6 +185,16 @@ export function NoteBar({ threadId, staff }: Props) {
     }
   }, [asking, text])
 
+  /** The box grows a line at a time as the note does, up to a handful of lines
+   *  and then scrolls, so a note with a list in it is readable while it is
+   *  being written rather than one line sliding sideways. */
+  const fit = useCallback(() => {
+    const el = box.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, NOTE_MAX_PX)}px`
+  }, [])
+
   const save = useCallback(async () => {
     const note = text.trim()
     if (!note) {
@@ -204,6 +217,7 @@ export function NoteBar({ threadId, staff }: Props) {
         return
       }
       setText('')
+      window.requestAnimationFrame(fit)
       // The names go with the note they were attached to. Leaving them ticked
       // is how the next note - "no answer, will try Tuesday" - quietly asks
       // three people a second time.
@@ -219,14 +233,16 @@ export function NoteBar({ threadId, staff }: Props) {
       inFlight.current = false
       setBusy(false)
     }
-  }, [router, staff, tagged, text, threadId])
+  }, [fit, router, staff, tagged, text, threadId])
 
   return (
     <div className="uin-notebar">
       <span className="uin-notebar-icon" aria-hidden="true">{NoteIcon}</span>
-      <input
+      {/* A box that takes more than one line: Enter leaves the note, and
+          Shift+Enter starts a new line in it, as every chat box does. */}
+      <textarea
         ref={box}
-        type="text"
+        rows={1}
         className="uin-notebar-input"
         value={text}
         disabled={busy}
@@ -238,7 +254,7 @@ export function NoteBar({ threadId, staff }: Props) {
         role="combobox"
         aria-expanded={suggestions.length > 0}
         aria-controls="uin-notebar-names"
-        onChange={(event) => { setText(event.target.value); setError(''); readCaret() }}
+        onChange={(event) => { setText(event.target.value); setError(''); readCaret(); fit() }}
         onClick={readCaret}
         onBlur={() => {
           // After the click on a name has had its chance to land. A menu that
@@ -257,7 +273,7 @@ export function NoteBar({ threadId, staff }: Props) {
               setCursor((was) => (was - 1 + suggestions.length) % suggestions.length)
               return
             }
-            if (event.key === 'Enter' || event.key === 'Tab') {
+            if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
               const person = suggestions[cursor] ?? suggestions[0]
               if (person) {
                 event.preventDefault()
@@ -275,23 +291,29 @@ export function NoteBar({ threadId, staff }: Props) {
             }
           }
           // The arrows move the caret, which can move it in or out of an @.
-          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight'
+            || event.key === 'ArrowUp' || event.key === 'ArrowDown') {
             window.requestAnimationFrame(readCaret)
             return
           }
-          if (event.key !== 'Enter' || event.shiftKey) return
+          // Shift+Enter falls through to the box, which starts a new line. So
+          // does an Enter that is finishing a word in an input method - a
+          // Japanese or Chinese keyboard, or a phone's accented letters -
+          // which is choosing a character, not leaving the note.
+          if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
           event.preventDefault()
           void save()
         }}
       />
       <button
         type="button"
-        className="btn btn-secondary btn-sm uin-notebar-send"
+        className="uin-notebar-send"
+        title="Leave the note (Enter). Shift+Enter for a new line."
         disabled={busy || !text.trim()}
         onClick={() => void save()}
       >
         <span className="uin-notebar-send-icon" aria-hidden="true">{SendIcon}</span>
-        <span>{busy ? 'Saving...' : 'Note'}</span>
+        <span className="sr-only">{busy ? 'Saving the note' : 'Leave the note'}</span>
       </button>
 
       {/* The names, one under another, opening upwards out of the bar. The bar

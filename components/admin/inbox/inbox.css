@@ -384,7 +384,6 @@
   .uin-rail .uin-rail-drawer-head { display: flex; }
   /* Who is reading moves into the drawer's head; the bar is about where you
      are, not who you are. */
-  .uin-rail-me > .uin-avatar-wrap,
   .uin-rail-me > .uin-rail-me-name { display: none; }
   /* Two classes deep on purpose: the row's own rule is written further down
      this file at the same weight, and a later rule of equal weight wins. */
@@ -1190,15 +1189,16 @@
   border-color: var(--color-border-focus);
   box-shadow: 0 0 0 3px var(--color-primary-glow);
 }
-/* Three tracks: who it is beside, what it says, and the date with whatever
-   badges the row has earned under it. The last one is capped rather than left
+/* Two tracks: what it says, and the date with whatever badges the row has
+   earned under it - three while picking, when the circle stands in front (see
+   .uin-row-check). The faces that used to take the first track have gone. The last one is capped rather than left
    to size itself, because "auto" means "as wide as the widest badge in it" and
    a badge would happily take three hundred pixels off the subject line. A name
    on a badge is worth less than the subject of the message. */
 .uin-row {
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(0, auto);
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto);
   gap: 0 0.6rem;
   align-items: start;
   padding: 0.55rem 0.75rem 0.6rem;
@@ -1340,56 +1340,6 @@
   .uin-row[data-opening="true"]::after { animation: none; transform: scaleX(0); }
 }
 
-.uin-avatar-wrap { position: relative; flex: none; }
-.uin-avatar {
-  position: relative;
-  overflow: hidden;
-  width: 1.875rem; height: 1.875rem; border-radius: 999px;
-  display: grid; place-items: center;
-  background: var(--color-surface-raised);
-  border: 1px solid var(--color-border);
-  color: var(--color-text-secondary);
-  font-size: 0.625rem; font-weight: 700;
-}
-/* A picked row, wearing a tick in place of whoever wrote in. Filled rather than
-   outlined: this is the one thing on the row that is about what the reader has
-   done rather than about the message. */
-.uin-avatar-ticked {
-  background: var(--color-primary);
-  border-color: var(--color-primary);
-  color: var(--color-on-primary);
-}
-/* Somebody's own picture, laid over their initials rather than instead of them.
-   Absolute, so the row does not move when one arrives and there is no gap while
-   one is on its way; and if it never arrives - which is the common case, since
-   most people have never published one - the initials underneath were the whole
-   answer all along and nobody sees a broken image. */
-.uin-avatar-img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: inherit;
-}
-/* Which channel a conversation arrived by, on the corner of the circle. The
-   badge carries its name for a screen reader; it is never the only thing saying
-   what this is, since the conversation itself says so at the top. */
-.uin-avatar-badge {
-  position: absolute;
-  right: -0.15rem;
-  bottom: -0.15rem;
-  width: 0.9rem;
-  height: 0.9rem;
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  color: var(--color-text-secondary);
-}
-.uin-avatar-badge svg { width: 0.65rem; height: 0.65rem; }
-
 /* Three lines with the air taken out of them. A list is read down forty at a
    time, and every spare pixel of leading is a conversation somebody has to
    scroll for. The row still stands well over the 44px a thumb needs. */
@@ -1493,7 +1443,6 @@
    instead of a card: a hovered row, and an outbound message. One step further
    down, which is the only other tint that differs from raised in both themes.
    The status badges are left alone - they carry their own ground. */
-.uin-row:hover .uin-avatar,
 .uin-row:hover .uin-tag:not(.uin-tag-done):not(.uin-tag-snoozed):not(.uin-tag-failed),
 .uin-msg-out .uin-tag:not(.uin-tag-done):not(.uin-tag-snoozed):not(.uin-tag-failed) {
   background: var(--color-bg-subtle);
@@ -1694,8 +1643,10 @@
    width. It was unpinned on a phone when the whole page scrolled there and a
    band this tall would have taken a third of the screen; the pane is the
    screen now, so the band is kept short instead - see the phone rules under
-   the subject line. Opaque on purpose: messages passing behind a translucent
-   header are unreadable twice over. */
+   the subject line. Nearly opaque on purpose, and blurred (see the glass
+   layer at the end of this file): messages passing behind a plainly
+   translucent header are unreadable twice over, and frosting is what stops
+   that - the words behind become a wash of colour, not a second line of text. */
 .uin-thread-head {
   position: sticky;
   top: 0;
@@ -2037,7 +1988,6 @@
   padding: 0.5rem 0.75rem 0.35rem;
 }
 /* Tall enough to stand beside both lines rather than beside the first one. */
-.uin-msg-head .uin-avatar { width: 2rem; height: 2rem; font-size: 0.6875rem; flex: 0 0 auto; }
 /* The two lines: who it is from, then who it went to. Everything the header has
    to give is given from in here, which is why this is the item that flexes and
    the time and the tools beside it are the ones that do not. */
@@ -2783,19 +2733,6 @@
   min-width: 0;
 }
 .uin-suggestion[data-active='1'] { background: var(--color-primary-subtle); }
-.uin-suggestion-avatar {
-  flex: none;
-  width: 1.75rem;
-  height: 1.75rem;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--color-surface-raised);
-  border: 1px solid var(--color-border);
-  font-size: 0.625rem;
-  font-weight: 700;
-  color: var(--color-text-secondary);
-}
 .uin-suggestion-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.35; }
 .uin-suggestion-name {
   font-size: 0.8125rem;
@@ -4793,4 +4730,617 @@
 }
 @media (max-width: 768px) and (prefers-reduced-motion: reduce) {
   .uin-list-item > .uin-row { transition: none; }
+}
+
+/* ======================================================================== */
+/* ---- glass: the Mac and iPhone finish ------------------------------------ */
+/* ======================================================================== */
+/* Everything above decides where things go; this decides what they are made
+   of. Last in the file on purpose, so each rule here sits over the plainer one
+   it replaces at the same weight, and pulling the look back out again is one
+   block rather than a hundred edits scattered through the file.
+
+   The shape is Apple's: controls that change the list are pills and circles of
+   frosted glass rather than framed boxes, the choice that is on is filled in
+   rather than underlined, menus and dialogs float over a blur of what is behind
+   them, and a picked row is a rounded tint rather than a band across the pane.
+
+   STILL NOTHING BUT TOKENS. The glass is a token mixed with transparency
+   (color-mix), never a colour of its own, so it follows the admin into dark
+   mode exactly as everything above does. The fills are mixed off --color-text
+   because that is the one token guaranteed to stand off BOTH grounds in BOTH
+   themes - a dark wash on a light page and a light one on a dark page - which
+   sidesteps the surface / bg-subtle trap described at the top of this file. */
+.uin-page {
+  --uin-fill: color-mix(in srgb, var(--color-text) 7%, transparent);
+  --uin-fill-hover: color-mix(in srgb, var(--color-text) 12%, transparent);
+  --uin-fill-strong: color-mix(in srgb, var(--color-text) 16%, transparent);
+  --uin-edge: color-mix(in srgb, var(--color-text) 10%, transparent);
+  --uin-glass: color-mix(in srgb, var(--color-surface) 72%, transparent);
+  --uin-glass-thick: color-mix(in srgb, var(--color-surface) 86%, transparent);
+  --uin-shine: inset 0 1px 0 color-mix(in srgb, var(--color-surface-raised) 70%, transparent);
+  --uin-blur: blur(20px) saturate(180%);
+  --uin-pill-h: 2.25rem;
+  /* The system face on the machines that have one, which is the single largest
+     part of looking like a Mac: San Francisco. Everywhere else it falls back to
+     whatever the admin already uses. */
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, var(--font-sans, sans-serif);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The frame: softer corners, and a hairline that is a wash rather than a rule. */
+.uin-app {
+  border-color: var(--uin-edge);
+  border-radius: var(--radius-xl, 16px);
+}
+@media (max-width: 768px) {
+  .uin-app { border-radius: 0; }
+}
+
+/* ---- the search box ------------------------------------------------------ */
+/* A capsule of frosted glass with no frame: the magnifier, the words, nothing
+   else. Focus is a soft ring in the accent rather than a hard border. */
+.uin-search,
+.uin-find-box {
+  height: var(--uin-pill-h);
+  padding: 0 0.75rem;
+  gap: 0.45rem;
+  border: 0;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--uin-fill);
+  box-shadow: var(--uin-shine);
+  transition: background 0.15s ease-out, box-shadow 0.15s ease-out;
+}
+.uin-search:hover { background: var(--uin-fill-hover); }
+.uin-search:focus-within {
+  background: var(--uin-glass-thick);
+  box-shadow: 0 0 0 3px var(--color-primary-glow), var(--uin-shine);
+}
+.uin-search input { font-size: 0.875rem; padding: 0; }
+.uin-search input::placeholder { color: var(--color-text-muted); }
+.uin-search-icon svg { width: 15px; height: 15px; }
+
+/* ---- the row the search lives in ---------------------------------------- */
+.uin-search-row { gap: 0.5rem; }
+.uin-search-row > .uin-search { flex: 1 1 auto; }
+
+/* Round glass buttons, everywhere in the inbox that had a little framed square.
+   The framed variant in the head of a conversation and in the bar over a pick
+   keeps its own height but loses the box. */
+/* Only the ones in the bars at the head of the list and of a conversation, and
+   in the bar over a pick - the reply arrow and the dots on a message, the
+   writing box's tools and the calendar's arrows keep the size and the quiet
+   look they were given, since a filled circle on every message header is a
+   header full of buttons. */
+:is(.uin-search-row, .uin-find-head, .uin-thread-actions, .uin-bulk) .uin-icon-btn,
+.uin-rail-search {
+  width: var(--uin-pill-h);
+  height: var(--uin-pill-h);
+  border: 0;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--uin-fill);
+  box-shadow: var(--uin-shine);
+  color: var(--color-text-secondary);
+  transition: background 0.15s ease-out, color 0.15s ease-out;
+}
+:is(.uin-search-row, .uin-find-head, .uin-thread-actions, .uin-bulk) .uin-icon-btn:hover,
+.uin-rail-search:hover { background: var(--uin-fill-hover); color: var(--color-text); }
+:is(.uin-search-row, .uin-find-head, .uin-thread-actions, .uin-bulk) .uin-icon-btn:is([aria-pressed="true"], .uin-icon-btn-on) {
+  background: var(--uin-fill-strong);
+  color: var(--color-text);
+}
+:is(.uin-search-row, .uin-find-head, .uin-thread-actions, .uin-bulk) .uin-icon-btn svg,
+.uin-rail-search svg { width: 17px; height: 17px; }
+:is(.uin-thread-actions, .uin-bulk) .uin-icon-btn-framed {
+  width: 2rem;
+  height: 2rem;
+}
+
+/* The filter and the order, as one capsule of two halves - see Filters. The
+   halves give up their own glass to the capsule and keep only their hover, and
+   a hairline stands between them. */
+.uin-list-tools {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: var(--uin-pill-h);
+  padding: 0 0.15rem;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--uin-fill);
+  box-shadow: var(--uin-shine);
+}
+.uin-list-tools > .uin-dropdown { display: inline-flex; }
+.uin-list-tools .uin-icon-btn {
+  width: 2.35rem;
+  height: 1.9rem;
+  background: transparent;
+  box-shadow: none;
+}
+.uin-list-tools .uin-icon-btn:hover { background: var(--uin-fill); }
+.uin-list-tools .uin-icon-btn[aria-pressed="true"],
+.uin-list-tools .uin-icon-btn-on { background: var(--uin-fill-strong); }
+.uin-list-tools > * + * { position: relative; }
+.uin-list-tools > * + *::before {
+  content: "";
+  position: absolute;
+  left: -0.05rem;
+  top: 0.55rem;
+  bottom: 0.55rem;
+  width: 1px;
+  background: var(--uin-edge);
+  pointer-events: none;
+}
+
+/* The write button at the foot of the list, beside the search. A phone thing
+   only - on anything wider the pen is up in the rail where it has always been. */
+.uin-find-compose { display: none; }
+
+/* ---- where a conversation stands ---------------------------------------- */
+/* A row of separate pills, the way Mail on a phone draws its mailboxes: each
+   one an icon in frosted glass, and the one that is on filled in solid with its
+   name beside the icon. No colour in any of it - the one that is on is simply
+   the text colour turned into a ground, which reads in both themes. */
+.uin-tabs { gap: 0.45rem; padding: 0.05rem 0; }
+.uin-tab {
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-width: 2.9rem;
+  height: var(--uin-pill-h);
+  padding: 0 0.85rem;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--uin-fill);
+  box-shadow: var(--uin-shine);
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+  transition: background 0.15s ease-out, color 0.15s ease-out;
+}
+.uin-tab:hover { background: var(--uin-fill-hover); color: var(--color-text); }
+.uin-tab-icon { display: grid; place-items: center; }
+.uin-tab-icon svg { display: block; width: 18px; height: 18px; }
+.uin-tab[aria-current="true"],
+.uin-tab[aria-current="true"]:hover {
+  background: var(--color-text);
+  color: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  font-weight: 600;
+}
+.uin-tab[aria-current="true"] .uin-tab-count {
+  color: color-mix(in srgb, var(--color-surface) 78%, transparent);
+  font-size: 0.75rem;
+}
+
+/* ---- the list ------------------------------------------------------------ */
+/* The circle a row grows while picking: empty, or filled with a tick. */
+.uin-row:has(> .uin-row-check) {
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, auto);
+}
+.uin-row-check {
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: var(--radius-full, 9999px);
+  border: 1.5px solid var(--color-border-strong);
+  color: var(--color-on-primary);
+}
+.uin-row-check.is-on {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+}
+.uin-row-check svg { display: block; width: 0.85rem; height: 0.85rem; stroke-width: 2.4; }
+
+.uin-row-name { font-size: 0.875rem; font-weight: 600; }
+.uin-row-name-unread { font-weight: 700; }
+.uin-row-subject { font-size: 0.8125rem; }
+.uin-row-preview { font-size: 0.8125rem; }
+.uin-row-dot { width: 0.5rem; height: 0.5rem; }
+.uin-tag { border: 0; border-radius: var(--radius-full, 9999px); padding: 0.1rem 0.5rem; }
+
+/* On anything with a pointer, rows are rounded tints inset from the edges of
+   the pane, with the hairline between them drawn inset too - Mail on a Mac.
+   On a phone they stay full width and flat, as iOS draws a list, because a
+   row slides sideways there and a rounded one would show its corners doing it. */
+@media (min-width: 769px) {
+  .uin-list { padding: 0.3rem 0.4rem; }
+  .uin-row {
+    border-bottom: 0;
+    border-radius: var(--radius-lg, 12px);
+    background: transparent;
+  }
+  .uin-list-item + .uin-list-item > .uin-row::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0.75rem;
+    right: 0.75rem;
+    height: 1px;
+    background: var(--uin-edge);
+  }
+  .uin-list-item:has(> .uin-row:hover) > .uin-row::before,
+  .uin-list-item:has(> .uin-row[aria-current="true"]) > .uin-row::before,
+  .uin-list-item[data-selected="true"] > .uin-row::before,
+  .uin-list-item:has(> .uin-row:hover) + .uin-list-item > .uin-row::before,
+  .uin-list-item:has(> .uin-row[aria-current="true"]) + .uin-list-item > .uin-row::before,
+  .uin-list-item[data-selected="true"] + .uin-list-item > .uin-row::before { opacity: 0; }
+  .uin-row:hover { background: var(--uin-fill); }
+  .uin-row[aria-current="true"] {
+    background: var(--color-primary-subtle);
+    box-shadow: none;
+  }
+  .uin-list-item[data-selected="true"] > .uin-row { background: var(--color-primary-subtle); }
+}
+@media (max-width: 768px) {
+  /* A held row is about to be picked, not copied: no text selection and no
+     link preview under the finger. */
+  .uin-list-item > .uin-row {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
+
+/* The bar over a pick, and the head of an open conversation: glass laid over
+   whatever scrolls underneath, as a Mac draws its toolbars. */
+.uin-bulk,
+.uin-thread-head {
+  background: var(--uin-glass-thick);
+  -webkit-backdrop-filter: var(--uin-blur);
+  backdrop-filter: var(--uin-blur);
+  border-bottom-color: var(--uin-edge);
+}
+.uin-bulk { gap: 0.4rem; }
+/* Who the conversation is with leads the line under the subject, in the
+   weight of a name rather than the grey of a label. */
+.uin-thread-with { font-weight: 600; color: var(--color-text); }
+
+/* ---- the head of an open conversation ----------------------------------- */
+/* Whose it is, as a capsule of two halves: a person, or their name once
+   somebody has it, then a hairline, then the arrow that opens the list. */
+.uin-capsule {
+  display: inline-flex;
+  align-items: center;
+  height: 2rem;
+  max-width: 13rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--uin-fill);
+  box-shadow: var(--uin-shine);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease-out;
+}
+.uin-capsule:hover { background: var(--uin-fill-hover); }
+.uin-capsule[aria-expanded="true"] { background: var(--uin-fill-strong); }
+.uin-capsule:disabled { opacity: 0.6; cursor: default; }
+.uin-capsule-main {
+  min-width: 0;
+  padding: 0 0.6rem 0 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.uin-capsule-icon { display: grid; place-items: center; color: var(--color-text-secondary); }
+.uin-capsule-icon svg { display: block; width: 17px; height: 17px; }
+.uin-capsule-sep {
+  flex: none;
+  align-self: stretch;
+  width: 1px;
+  margin: 0.45rem 0;
+  background: var(--uin-edge);
+}
+.uin-capsule-arrow {
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 0 0.6rem 0 0.5rem;
+  color: var(--color-text-secondary);
+}
+.uin-capsule-arrow svg { display: block; width: 14px; height: 14px; }
+
+/* The bin, the junk sign and the clock, as one capsule of three with a
+   hairline between each - they give up their own glass to it. */
+.uin-action-group {
+  display: inline-flex;
+  align-items: center;
+  height: 2rem;
+  padding: 0 0.15rem;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--uin-fill);
+  box-shadow: var(--uin-shine);
+}
+.uin-action-group > * { position: relative; display: inline-flex; }
+.uin-action-group .uin-icon-btn {
+  width: 2.3rem;
+  height: 1.75rem;
+  background: transparent;
+  box-shadow: none;
+}
+.uin-action-group .uin-icon-btn:hover,
+.uin-action-group .uin-icon-btn[aria-expanded="true"] { background: var(--uin-fill); }
+.uin-action-group .uin-icon-btn[aria-pressed="true"] { background: var(--uin-fill-strong); }
+/* A refusal from the bin or the junk sign is drawn beside its button, which
+   puts it inside the capsule. It hangs under the capsule instead, and takes no
+   hairline. */
+.uin-action-group { position: relative; }
+.uin-action-group > .uin-thread-actions-error {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  width: max-content;
+  max-width: 18rem;
+  font-size: 0.75rem;
+  white-space: normal;
+}
+.uin-action-group > .uin-thread-actions-error::before { content: none; }
+.uin-action-group > * + *::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.4rem;
+  bottom: 0.4rem;
+  width: 1px;
+  background: var(--uin-edge);
+  pointer-events: none;
+}
+
+/* Where it stands, as a box to tick. The tick is the whole of the state, so
+   the pressed button keeps the ordinary glass rather than filling in as well. */
+.uin-done-toggle svg { width: 19px; height: 19px; }
+.uin-thread-actions .uin-done-toggle[aria-pressed="true"] { background: var(--uin-fill); color: var(--color-text); }
+.uin-thread-actions .uin-done-toggle[aria-pressed="true"]:hover { background: var(--uin-fill-hover); }
+
+/* An outsider's name or address on a message, which opens every conversation
+   they are in. Their own colour, not the link colour - a header full of blue
+   is a header shouting - with an underline under the pointer to say it goes
+   somewhere. */
+.uin-msg-with {
+  color: inherit;
+  text-decoration: none;
+  text-underline-offset: 2px;
+  border-radius: var(--radius-sm, 4px);
+}
+.uin-msg-with:hover,
+.uin-msg-with:focus-visible { color: var(--color-text); text-decoration: underline; }
+
+/* ---- the note bar -------------------------------------------------------- */
+/* Glass pinned to the foot of the conversation, the messages blurring past
+   underneath. The amber is kept to the pen-and-paper mark and a thin edge on
+   the box - it is still the one place on the screen whose words nobody outside
+   sees, and that should not need reading to be known. The box is a capsule
+   that grows a line at a time; the button is a round one with the arrow in
+   it, filled in solid once there is something to send, as Messages draws it. */
+.uin-notebar {
+  align-items: flex-end;
+  gap: 0.5rem;
+  padding: 0.55rem 1rem calc(0.55rem + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--uin-edge);
+  background: var(--uin-glass);
+  -webkit-backdrop-filter: var(--uin-blur);
+  backdrop-filter: var(--uin-blur);
+}
+.uin-notebar-icon {
+  align-self: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--color-warning-bg);
+}
+.uin-notebar-input {
+  display: block;
+  height: auto;
+  min-height: var(--uin-pill-h);
+  max-height: 140px;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--color-warning-border);
+  border-radius: 1.125rem;
+  background: var(--uin-fill);
+  box-shadow: var(--uin-shine);
+  font-size: 0.875rem;
+  line-height: 1.3;
+  resize: none;
+  overflow-y: auto;
+}
+.uin-notebar-input::placeholder { color: var(--color-text-muted); }
+.uin-notebar-input:focus {
+  border-color: var(--color-warning);
+  background: var(--uin-glass-thick);
+  box-shadow: 0 0 0 3px var(--color-warning-bg), var(--uin-shine);
+}
+.uin-notebar-send {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--uin-pill-h);
+  height: var(--uin-pill-h);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--color-text);
+  color: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: background 0.15s ease-out, color 0.15s ease-out, transform 0.1s ease-out;
+}
+.uin-notebar-send:hover:not(:disabled) { transform: scale(1.05); }
+.uin-notebar-send:active:not(:disabled) { transform: scale(0.96); }
+.uin-notebar-send:disabled {
+  background: var(--uin-fill);
+  color: var(--color-text-muted);
+  box-shadow: var(--uin-shine);
+  cursor: default;
+}
+.uin-notebar-send svg { display: block; width: 17px; height: 17px; }
+@media (prefers-reduced-motion: reduce) {
+  .uin-notebar-send { transition: none; }
+  .uin-notebar-send:hover:not(:disabled),
+  .uin-notebar-send:active:not(:disabled) { transform: none; }
+}
+
+/* ---- buttons, chips and menus -------------------------------------------- */
+.uin-page .btn-sm,
+.uin-modal .btn-sm { border-radius: var(--radius-full, 9999px); }
+.uin-page .btn-secondary,
+.uin-modal .btn-secondary {
+  border-color: transparent;
+  background: var(--uin-fill);
+  box-shadow: var(--uin-shine);
+}
+.uin-page .btn-secondary:hover,
+.uin-modal .btn-secondary:hover { background: var(--uin-fill-hover); border-color: transparent; }
+.uin-chip {
+  border-color: transparent;
+  background: var(--uin-fill);
+  padding: 0.25rem 0.65rem;
+}
+.uin-chip:hover { background: var(--uin-fill-hover); border-color: transparent; }
+
+/* Menus and dialogs are drawn into the page body rather than inside .uin-page
+   (see the portals), so they carry their own copy of the glass. */
+.uin-menu,
+.uin-compose-menu,
+.uin-modal-card {
+  --uin-fill: color-mix(in srgb, var(--color-text) 7%, transparent);
+  --uin-fill-hover: color-mix(in srgb, var(--color-text) 12%, transparent);
+  --uin-fill-strong: color-mix(in srgb, var(--color-text) 16%, transparent);
+  --uin-edge: color-mix(in srgb, var(--color-text) 10%, transparent);
+  --uin-shine: inset 0 1px 0 color-mix(in srgb, var(--color-surface-raised) 70%, transparent);
+  border-color: var(--uin-edge);
+  background: color-mix(in srgb, var(--color-surface) 84%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  box-shadow: var(--shadow-xl), var(--uin-shine);
+}
+.uin-menu,
+.uin-compose-menu,
+.uin-modal {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, var(--font-sans, sans-serif);
+}
+/* Off a phone only: below 600px every menu is a sheet along the bottom with
+   its own corners and its own padding round the home bar (see the sheet rule
+   further up), and this would undo both. */
+@media (min-width: 600px) {
+  .uin-menu,
+  .uin-compose-menu {
+    padding: 0.35rem;
+    border-radius: var(--radius-lg, 12px);
+  }
+}
+/* The one exception to the sheet: the write button at the foot of the list.
+   Its menu is a card floating just above the button, inset from both edges -
+   ComposeMenu measures the bottom for it - because a sheet sliding up from the
+   very edge the button sits on would cover the button it came out of. */
+@media (max-width: 599px) {
+  .uin-compose-menu[data-upward="true"] {
+    left: 0.5rem !important;
+    right: 0.5rem;
+    padding: 0.35rem;
+    border: 1px solid var(--uin-edge);
+    border-radius: var(--radius-xl, 16px);
+  }
+}
+.uin-modal-card { border-radius: var(--radius-xl, 16px); }
+.uin-menu-item,
+.uin-compose-menu-item { border-radius: var(--radius-md, 8px); }
+.uin-menu-item:hover,
+.uin-compose-menu-item:hover,
+.uin-compose-menu-item:focus-visible { background: var(--uin-fill-hover); }
+.uin-modal { -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.uin-merge-subject { border-radius: var(--radius-md, 8px); }
+
+/* ---- the rail ------------------------------------------------------------ */
+.uin-rail-item { border-radius: var(--radius-md, 8px); padding: 0.4rem 0.6rem; }
+.uin-rail-compose,
+.uin-rail-compose:hover { border-color: transparent; }
+.uin-rail-compose {
+  border-radius: var(--radius-full, 9999px);
+  width: var(--uin-pill-h);
+  height: var(--uin-pill-h);
+}
+.uin-rail-compose-main {
+  width: 2.1rem;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.uin-rail-compose-more {
+  width: 1.5rem;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left-color: color-mix(in srgb, var(--color-text) 14%, transparent);
+}
+
+/* Every address that opens out shows its arrow all the time rather than a
+   coloured dot that turns into one under the pointer - see Branch. */
+.uin-rail-twist .uin-rail-dot { visibility: hidden; }
+.uin-rail-twist .uin-rail-twist-icon { display: grid; color: var(--color-text-muted); }
+.uin-rail-branch:hover .uin-rail-twist-icon,
+.uin-rail-twist:focus-visible .uin-rail-twist-icon { color: var(--color-text); }
+
+/* ---- messages ------------------------------------------------------------ */
+.uin-msg { border-radius: var(--radius-lg, 12px); border-color: var(--uin-edge); }
+
+/* ---- on a phone ---------------------------------------------------------- */
+/* The bar at the foot of the list, in the order the thumb wants it: filter and
+   order on the left, the search in the middle, the pen on the right with its
+   arrow for the other three kinds of message. The pen in the bar at the top of
+   the screen goes, since this one is under the thumb and two is one too many -
+   only where this bar is on the screen, so the Drafts and Sent lists, which
+   have no bar, keep theirs. */
+@media (max-width: 768px) {
+  .uin-col-find {
+    background: var(--uin-glass);
+    -webkit-backdrop-filter: var(--uin-blur);
+    backdrop-filter: var(--uin-blur);
+    border-top-color: var(--uin-edge);
+  }
+  .uin-search-row { flex-wrap: nowrap; }
+  .uin-search-row > .uin-list-tools { order: -1; }
+  .uin-search-row > .uin-find-compose { display: inline-flex; order: 2; }
+  /* Only while the list is the thing on the screen: with a conversation open
+     the list's column is hidden but still in the markup, so without the
+     data-open guard a phone reading a conversation had no pen anywhere. */
+  .uin-app[data-open="0"]:has(.uin-find-compose) .uin-rail-me .uin-compose-split,
+  .uin-app[data-open="0"]:has(.uin-find-compose) .uin-rail-me > .uin-rail-compose { display: none; }
+  .uin-find-compose .uin-rail-compose,
+  .uin-find-compose.uin-rail-compose {
+    height: var(--uin-pill-h);
+    border-color: transparent;
+    background: var(--uin-fill);
+    box-shadow: var(--uin-shine);
+    color: var(--color-text);
+  }
+  .uin-find-compose .uin-rail-compose-main { width: 2.4rem; }
+  .uin-find-compose .uin-rail-compose-more { width: 1.9rem; }
+  .uin-find-compose.uin-rail-compose { width: var(--uin-pill-h); }
+  /* The tabs keep to one line and scroll sideways if they must. */
+  .uin-tabs { flex-wrap: nowrap; }
+}
+
+/* Where the pointer is a finger, the glass keeps the 40-44px targets the
+   block further up sets. Said again here because every rule in this layer is
+   later in the file than that one and would otherwise quietly shrink them. */
+@media (pointer: coarse) {
+  .uin-page { --uin-pill-h: 2.5rem; }
+  :is(.uin-thread-actions, .uin-bulk) .uin-icon-btn-framed,
+  .uin-capsule { height: 2.5rem; }
+  :is(.uin-thread-actions, .uin-bulk) .uin-icon-btn-framed { width: 2.5rem; }
+  .uin-list-tools { height: 2.75rem; }
+  .uin-list-tools .uin-icon-btn { width: 2.6rem; height: 2.5rem; }
+  .uin-rail-compose-main { width: 2.5rem; }
+  .uin-rail-compose-more { width: 1.6rem; }
+  .uin-action-group { height: 2.75rem; }
+  .uin-action-group .uin-icon-btn { width: 2.6rem; height: 2.5rem; }
+  .uin-find-compose .uin-rail-compose-main { width: 2.6rem; }
+  .uin-find-compose .uin-rail-compose-more { width: 2rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .uin-search, .uin-icon-btn, .uin-rail-search, .uin-tab, .uin-capsule { transition: none; }
 }

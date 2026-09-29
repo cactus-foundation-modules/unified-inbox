@@ -219,3 +219,54 @@ export function belongsToInbox(
   if (ids.length === 0) return inboxId === null
   return inboxId !== null && ids.includes(inboxId)
 }
+
+/** Somebody a merged conversation could be said to be WITH: the name and the
+ *  address or number a row in the list would show for one of the halves. */
+export type MergeContact = {
+  name: string | null
+  address: string | null
+  /** The contact card that half is matched to, if it is. Picking this contact
+   *  points the merged conversation at the same card. */
+  personId: string | null
+}
+
+/** Two contacts are the same contact when they say the same thing, letter case
+ *  and stray spaces aside. "Sam Jones <SAM@x.com>" on one half and "sam jones
+ *  <sam@x.com>" on the other is one choice, not two. */
+export function mergeContactKey(contact: { name: string | null; address: string | null }): string {
+  const tidy = (value: string | null) => (value ?? '').trim().toLowerCase()
+  return `${tidy(contact.name)}\u0000${tidy(contact.address)}`
+}
+
+/**
+ * Every different person the conversations being merged are with, in the order
+ * given - the winner first, so the one it would have shown anyway leads.
+ *
+ * Read off the same two fields the list prints for each row, so the choice on
+ * offer is exactly the names somebody was looking at when they picked the rows.
+ * A half with neither a name nor an address has nobody to offer and is skipped.
+ * The route works the same list out again on the server and refuses anything
+ * not on it, so a merge cannot be used to label a conversation with a name that
+ * appears nowhere in it.
+ */
+export function mergeContacts(rows: Array<{
+  participantName: string | null
+  participantAddress: string | null
+  personId: string | null
+}>): MergeContact[] {
+  const seen = new Set<string>()
+  const found: MergeContact[] = []
+  for (const row of rows) {
+    const contact = {
+      name: row.participantName?.trim() || null,
+      address: row.participantAddress?.trim() || null,
+      personId: row.personId,
+    }
+    if (!contact.name && !contact.address) continue
+    const key = mergeContactKey(contact)
+    if (seen.has(key)) continue
+    seen.add(key)
+    found.push(contact)
+  }
+  return found
+}

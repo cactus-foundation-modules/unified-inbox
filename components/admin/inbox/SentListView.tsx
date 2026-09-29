@@ -4,11 +4,10 @@ import {
   formatFull,
   formatWhen,
   inboxHref,
-  initialsFor,
   pageCount,
   PER_PAGE,
 } from '@/modules/unified-inbox/lib/list'
-import { OutboundIcon, PaperclipIcon, TickIcon } from './icons'
+import { PaperclipIcon, TickIcon } from './icons'
 
 // What has been sent, newest first.
 //
@@ -98,11 +97,6 @@ export function SentListView({
                 href={inboxHref(base, params, { id: row.threadId })}
                 aria-current={row.threadId === openThreadId ? 'true' : undefined}
               >
-                <span className="uin-avatar-wrap">
-                  <span className="uin-avatar" aria-hidden="true">
-                    {who ? initialsFor(who) : OutboundIcon}
-                  </span>
-                </span>
                 <span className="uin-row-main">
                   <span className="uin-row-who">
                     <span className="uin-row-name">

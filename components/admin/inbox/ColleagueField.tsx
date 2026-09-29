@@ -1,7 +1,6 @@
 'use client'
 
 import { useCallback, useId, useMemo, useRef, useState } from 'react'
-import { initialsFor } from '@/modules/unified-inbox/lib/list'
 
 // The To line on a discussion: the colleagues it is being put to.
 //
@@ -157,9 +156,6 @@ export function ColleagueField({ id, colleagues, chosen, onChange, placeholder }
               onMouseEnter={() => setActive(index)}
               onMouseDown={(e) => { e.preventDefault(); add(person) }}
             >
-              <span className="uin-suggestion-avatar" aria-hidden="true">
-                {initialsFor(person.name)}
-              </span>
               <span className="uin-suggestion-text">
                 <span className="uin-suggestion-name">{person.name}</span>
               </span>

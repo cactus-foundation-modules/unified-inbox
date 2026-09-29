@@ -103,6 +103,7 @@ describe.runIf(shouldRun)('merging conversations, against a real database', () =
     status?: 'open' | 'done'
     sentAt?: Date
     internalKey?: string | null
+    from?: { name: string | null; address: string }
   }): Promise<string> {
     const subject = over.subject ?? 'Artisan Furniture'
     const threadId = await lib.createThread({
@@ -121,8 +122,8 @@ describe.runIf(shouldRun)('merging conversations, against a real database', () =
       messageIdHeader: over.messageId ?? `${threadId}@deskwell.co.uk`,
       inReplyTo: null,
       references: [],
-      fromName: 'A Customer',
-      fromAddress: 'customer@example.com',
+      fromName: over.from ? over.from.name : 'A Customer',
+      fromAddress: over.from?.address ?? 'customer@example.com',
       replyTo: null,
       toAddresses: ['chris@deskwell.co.uk'],
       ccAddresses: [],
@@ -612,6 +613,56 @@ describe.runIf(shouldRun)('merging conversations, against a real database', () =
     // conversation nothing shows, and it would simply never appear.
     const state = await lib.providerThreadState('live-chat', 'conv-4471')
     expect(state?.id).toBe(winner)
+  })
+
+  it('shows the contact picked at merge, refuses one not in it, and undoing puts it back', async () => {
+    const email = await conversation({
+      inboxId: chrisInbox, subject: 'Order 203', from: { name: 'Sam Jones', address: 'sam@example.com' },
+    })
+    // Rang in afterwards, so on its own the merged row would say the number.
+    const call = await conversation({
+      inboxId: chrisInbox, subject: 'Order 203', sentAt: LATER,
+      from: { name: null, address: '+447700900123' },
+    })
+
+    expect(await lib.mergeThreads(email, [call], null, undefined, { name: 'Somebody Else', address: 'x@example.com' }))
+      .toEqual({ error: 'That contact is not one of the conversations being merged.' })
+
+    const result = await lib.mergeThreads(email, [call], null, undefined, { name: 'sam jones ', address: 'SAM@example.com' })
+    if ('error' in result) throw new Error(result.error)
+    const row = (await lib.listThreads(filters())).find((r) => r.id === email)
+    expect(row?.participantName).toBe('Sam Jones')
+    expect(row?.participantAddress).toBe('sam@example.com')
+    expect((await lib.getThreadDetail(email))?.contactName).toBe('Sam Jones')
+
+    expect(await lib.undoThreadMerge(result.mergeIds[0]!, null)).not.toHaveProperty('error')
+    const after = await lib.getThreadDetail(email)
+    expect(after?.contactName).toBeNull()
+    expect(after?.contactAddress).toBeNull()
+  })
+
+  it('keeps the picked contact on the merge that brought it in', async () => {
+    const email = await conversation({
+      inboxId: chrisInbox, subject: 'Order 204', from: { name: 'Sam Jones', address: 'sam@example.com' },
+    })
+    const callA = await conversation({
+      inboxId: chrisInbox, subject: 'Order 204', sentAt: LATER, from: { name: null, address: '+447700900001' },
+    })
+    const textB = await conversation({
+      inboxId: chrisInbox, subject: 'Order 204', sentAt: LATER, from: { name: null, address: '+447700900002' },
+    })
+
+    const result = await lib.mergeThreads(email, [callA, textB], null, undefined, { name: null, address: '+447700900002' })
+    if ('error' in result) throw new Error(result.error)
+    expect((await lib.getThreadDetail(email))?.contactAddress).toBe('+447700900002')
+
+    // Undoing the call's merge is not undoing the text's: the text's number stays.
+    expect(await lib.undoThreadMerge(result.mergeIds[0]!, null)).not.toHaveProperty('error')
+    expect((await lib.getThreadDetail(email))?.contactAddress).toBe('+447700900002')
+
+    // Undoing the text's merge takes its number back off.
+    expect(await lib.undoThreadMerge(result.mergeIds[1]!, null)).not.toHaveProperty('error')
+    expect((await lib.getThreadDetail(email))?.contactAddress).toBeNull()
   })
 
   it('takes the hidden side with it when the conversation is deleted', async () => {

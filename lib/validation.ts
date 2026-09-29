@@ -541,6 +541,12 @@ export const ThreadMergeBody = z.object({
   /** Which of the conversations' subjects the merged one keeps. Checked against
    *  them on the server, so the cap is only a sanity bound. */
   subject: z.string().max(2000).optional(),
+  /** Who the merged conversation is with, picked from the people the halves
+   *  are with. Checked against them on the server, like the subject. */
+  contact: z.object({
+    name: z.string().max(500).nullable(),
+    address: z.string().max(500).nullable(),
+  }).optional(),
 })
 
 /** A base64url value that decodes to exactly `bytes` bytes. The keys a browser

@@ -44,7 +44,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (!await canOpenThread(user, loser)) return errorResponse('Forbidden', 403)
   }
 
-  const result = await mergeThreads(id, parsed.data.loserIds, user.id, parsed.data.subject)
+  const result = await mergeThreads(id, parsed.data.loserIds, user.id, parsed.data.subject, parsed.data.contact)
   if ('error' in result) return errorResponse(result.error)
 
   // Said out loud, because it changes which address the next reply leaves from.

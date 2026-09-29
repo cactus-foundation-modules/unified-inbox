@@ -374,6 +374,9 @@ export async function UnifiedInboxPanel({
     // The search dialog's narrower cuts, so a search survives opening one of
     // the conversations it found and coming back to the list.
     'from', 'to', 'subject', 'att', 'after', 'before',
+    // And "everything with this person", from pressing an outsider's address,
+    // which has to survive opening one of the conversations it found.
+    'with',
     // And whether those cuts are a search's own screen or a list somebody
     // narrowed where it stood, so opening one of the results and coming back
     // lands on the search rather than on a list with no head to it.
@@ -719,6 +722,7 @@ export async function UnifiedInboxPanel({
     search: params.search,
     fromText: params.fromText,
     toText: params.toText,
+    withText: params.withText,
     subjectText: params.subjectText,
     withAttachment: params.withAttachment,
     // The two ends of the range become instants HERE, because that takes the
@@ -1112,6 +1116,32 @@ export async function UnifiedInboxPanel({
           settings.personalDomains,
         ),
       }
+      // Every outsider named on these messages - who wrote in, and who anything
+      // went or was copied to - and where pressing their address goes: All
+      // mail, every status, narrowed to conversations they are anywhere on.
+      // Ours never: the same gate as above says what is ours, so a colleague's
+      // or one of our own addresses stays plain text rather than opening half
+      // the inbox.
+      const outsiderLinks: Record<string, string> = {}
+      for (const m of messages) {
+        if (m.direction === 'note') continue
+        const named = [
+          ...(m.direction === 'in' && m.fromAddress ? [m.fromAddress] : []),
+          ...m.toAddresses,
+          ...m.ccAddresses,
+        ]
+        for (const raw of named) {
+          const address = raw.trim().toLowerCase()
+          if (!address.includes('@') || outsiderLinks[address]) continue
+          if (isOwnSender({ direction: 'in', fromAddress: address }, ownSenderGate)) continue
+          outsiderLinks[address] = inboxHref(base, carried, {
+            inbox: 'all', status: 'all', with: address,
+            id: null, person: null, page: null, find: null, q: null, from: null, to: null,
+            subject: null, att: null, after: null, before: null, unread: null, assignee: null,
+            org: null, view: null, edit: null, import: null, cat: null, compose: null, draft: null,
+          })
+        }
+      }
       const view: ThreadMessageView[] = messages.map((m) => ({
         ...m,
         attachments: byMessage.get(m.id) ?? [],
@@ -1245,6 +1275,34 @@ export async function UnifiedInboxPanel({
       // and no address, and would leave nobody to refuse.
       const lastInbound = [...messages].reverse()
         .find((m) => m.direction === 'in' && !isSideText(m, thread.channel)) ?? null
+      // Who it is with, for the line under the subject - where the name of the
+      // channel used to be. A conversation merged out of an email, a text and a
+      // call is not a "Phone" conversation, and how somebody got in touch was
+      // never the question anyway: who they are is. The contact a merge was
+      // told to show where there is one, otherwise the newest message's other
+      // end, read the way the list reads its row so the two never disagree. A
+      // discussion is between colleagues and keeps its own word.
+      // The same message the list's row is read off: the newest one that came
+      // IN, and only where nothing has come in, the newest one we sent (see
+      // threadListQuery's ORDER BY (direction = 'in') DESC). Otherwise a
+      // conversation we had answered said the customer's address up here and
+      // their name in the row beside it.
+      const reversed = [...messages].reverse()
+      const lastExchanged = reversed.find((m) => m.direction === 'in')
+        ?? reversed.find((m) => m.direction === 'out')
+        ?? null
+      const contactLabel = isDiscussion ? null
+        : thread.contactName?.trim() || thread.contactAddress?.trim()
+          || (lastExchanged
+            ? (lastExchanged.direction === 'in'
+              ? lastExchanged.fromName?.trim() || lastExchanged.fromAddress || lastExchanged.fromPhone
+              : lastExchanged.toAddresses[0] ?? lastExchanged.fromPhone)
+            : null)
+          || null
+      const contactAddress = (thread.contactAddress
+        ?? (lastExchanged
+          ? (lastExchanged.direction === 'in' ? lastExchanged.fromAddress : lastExchanged.toAddresses[0] ?? null)
+          : null))?.trim().toLowerCase() ?? null
       const spamSender = lastInbound
         ? normaliseAddress(lastInbound.replyTo || lastInbound.fromAddress || '')
         : ''
@@ -1415,6 +1473,11 @@ export async function UnifiedInboxPanel({
           params={carried}
           thread={thread}
           inboxName={threadInbox?.name ?? null}
+          contactLabel={contactLabel}
+          outsiderLinks={outsiderLinks}
+          /* The same press on the name under the subject, where it is an
+             outsider with an address to look for. */
+          contactHref={contactAddress ? outsiderLinks[contactAddress] ?? null : null}
           otherInboxNames={otherInboxNames}
           /* Only the id and what it was called: who did it and when are the
              merge's own line in the conversation, and the way out of a merge
@@ -1443,7 +1506,6 @@ export async function UnifiedInboxPanel({
           canSuggestReplies={canSuggest}
           newestFirst={settings.newestFirst}
           scrollToMessageId={openOnMessage?.id ?? null}
-          showAvatars={settings.showAvatars}
           canDeleteMessages={canDeleteMessages}
           /* Throwing one message away, or moving one out to a conversation of
              its own. The same grant merging takes, for the same reason: both
@@ -1842,7 +1904,6 @@ export async function UnifiedInboxPanel({
       allCount={allOpen}
       current={currentTab}
       me={{ id: user.id, name: staffById[user.id] ?? 'You' }}
-      showAvatars={settings.showAvatars}
       askedCount={askedCount}
       railOrder={railOrder}
       showUnrouted={canManage}
@@ -1957,7 +2018,6 @@ export async function UnifiedInboxPanel({
         base={base}
         params={carried}
         rows={contacts}
-        showAvatars={settings.showAvatars}
         categories={contactCategories}
         total={contactsTotal}
         page={params.page}
@@ -2031,7 +2091,6 @@ export async function UnifiedInboxPanel({
       staffById={staffById}
       meId={user.id}
       inboxNames={Object.fromEntries(allInboxes.map((i) => [i.id, i.name]))}
-      showAvatars={settings.showAvatars}
       neverSynced={neverSynced}
       spam={params.spamOnly}
       spamOwnerName={params.spamOnly ? folderOwnerName : null}
@@ -2204,6 +2263,7 @@ export async function UnifiedInboxPanel({
                     narrowed={{
                       from: params.fromText,
                       to: params.toText,
+                      with: params.withText,
                       subject: params.subjectText,
                       withAttachment: params.withAttachment,
                       after: params.after,
@@ -2237,6 +2297,7 @@ export async function UnifiedInboxPanel({
                           closeHref: inboxHref(base, carried, { id: null }),
                         }
                       : null}
+                    compose={composeHref ? { href: composeHref, entries: composeEntries } : null}
                   />
                 </div>
                 {showStatusTabs && (

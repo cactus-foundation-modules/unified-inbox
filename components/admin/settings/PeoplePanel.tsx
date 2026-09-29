@@ -35,7 +35,6 @@ export function PeoplePanel({ settings, inboxes, counts, categories, shopInstall
   const [order, setOrder] = useState(settings.orderNumberPattern ?? '')
   const [po, setPo] = useState(settings.poNumberPattern ?? '')
   const [quote, setQuote] = useState(settings.quoteNumberPattern ?? '')
-  const [avatars, setAvatars] = useState(settings.showAvatars)
   const [shopContacts, setShopContacts] = useState(settings.shopCustomerContacts)
   // A pattern that cannot be searched for used to be accepted here and only fall
   // over later, out of sight.
@@ -49,7 +48,6 @@ export function PeoplePanel({ settings, inboxes, counts, categories, shopInstall
     setOrder(settings.orderNumberPattern ?? '')
     setPo(settings.poNumberPattern ?? '')
     setQuote(settings.quoteNumberPattern ?? '')
-    setAvatars(settings.showAvatars)
     setShopContacts(settings.shopCustomerContacts)
   }
 
@@ -86,7 +84,6 @@ export function PeoplePanel({ settings, inboxes, counts, categories, shopInstall
         orderNumberPattern: order.trim() === '' ? null : order,
         poNumberPattern: po.trim() === '' ? null : po,
         quoteNumberPattern: quote.trim() === '' ? null : quote,
-        showAvatars: avatars,
         // Sent as it stands whether or not the shop is here: unchanged is
         // unchanged, and a shop installed later finds the answer already given.
         shopCustomerContacts: shopContacts,
@@ -143,30 +140,6 @@ export function PeoplePanel({ settings, inboxes, counts, categories, shopInstall
             provider does not get mistaken for the company they work for.
           </span>
         </div>
-      </FieldGroup>
-
-      <FieldGroup
-        title="Their own picture instead of their initials"
-        hint="Off unless you turn it on, and worth reading before you do."
-      >
-        <CheckField
-          label="Show people’s own pictures beside their messages"
-          checked={avatars}
-          onChange={setAvatars}
-          hint={<>
-            Plenty of people have published a picture of themselves against their email address at
-            Gravatar or Libravatar, and this puts it beside their messages in place of their
-            initials. Nobody is asked to sign up for anything and nothing changes for anyone who
-            has not.
-            {' '}
-            <strong>The trade is this:</strong> to find out whether somebody has a picture, this
-            site has to ask those two services about their address - so those services learn that
-            you hold it. The address itself is never sent, only a one-way scramble of it, the
-            asking is done by the site rather than by your browser, and the picture is served from
-            your own site afterwards. Even so, it is somebody else being told something about your
-            customer, which is why it is your decision rather than ours.
-          </>}
-        />
       </FieldGroup>
 
       {shopInstalled && (

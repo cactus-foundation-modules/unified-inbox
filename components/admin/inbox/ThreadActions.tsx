@@ -11,7 +11,7 @@ import {
 import { SnoozePanel } from './SnoozePanel'
 import { SpamButton } from './SpamButton'
 import { useOfferUndo } from './UndoProvider'
-import { AlarmIcon, ChevronDownIcon } from './icons'
+import { AlarmIcon, AssignedIcon, ChevronDownIcon, SquareIcon, SquareTickIcon } from './icons'
 
 // What is done TO a conversation: whose desk it is on, where it stands, and
 // when it comes back. Everything here is one small request and a refresh - the
@@ -21,9 +21,9 @@ import { AlarmIcon, ChevronDownIcon } from './icons'
 // It was four buttons in a row that spelled out what pressing them would do -
 // "Mark as done", "Remind me later". Which is a row of instructions rather than
 // a row of controls, and it never said where the conversation actually stood
-// without reading the tag on the line above. So the middle of it is now a
-// button that SAYS where it stands and opens the other answers, the reminder is
-// the clock beside it, and marking something read again went where it belongs:
+// without reading the tag on the line above. So where it stands is now a box
+// that is ticked or it is not, and pressing it flips it; the reminder is the
+// clock beside it, and marking something read again went where it belongs:
 // on a message, behind its own dots.
 //
 // Everything in this row that ENDS a conversation - the bin, the junk sign, the
@@ -82,15 +82,6 @@ type Props = {
    *  something goes there, since the conversation has just left every list this
    *  reader could have been standing in. */
   closeHref: string
-}
-
-/** What to call where it stands, on the button that says so. Not a sentence:
- *  this is the state of the thing, and it is read at a glance beside the
- *  arrow that changes it. */
-const STATUS_WORDS: Record<string, string> = {
-  open: 'Open',
-  done: 'Done',
-  snoozed: 'Snoozed',
 }
 
 export function ThreadActions({
@@ -214,6 +205,18 @@ export function ThreadActions({
     many ? `${targets.length} ${them(targets.length)} ${verb}.` : one
   ), [many, targets.length])
 
+  /** Opening it again, with the same offer to take the press back that marking
+   *  it done makes. It stays on the screen - an opened conversation is one
+   *  somebody is about to deal with - so this one redraws rather than leaves. */
+  const reopen = useCallback(async () => {
+    const back = whereTheyStood()
+    if (!(await patch({ status: 'open' }))) return
+    dropSelection()
+    offerUndo({ message: said('Opened again.', 'opened again'), undo: () => restore(back) })
+  }, [dropSelection, offerUndo, patch, restore, said, whereTheyStood])
+
+  const done = status === 'done'
+
   return (
     <>
       <div className="uin-thread-actions">
@@ -231,6 +234,10 @@ export function ThreadActions({
             point of having both - people were reaching for the junk button to
             mean "delete", which slowly filled the spam folder with post that
             was not spam and made it useless for the one job it does have. */}
+        {/* The three wordless ones share one capsule of glass, hairlines between
+            them - the shape Mail on a phone gives its own row of the same sort
+            of buttons. */}
+        <div className="uin-action-group" role="group" aria-label="Bin, junk and snooze">
         <BinButton
           threadId={threadId}
           binned={binned}
@@ -277,13 +284,22 @@ export function ThreadActions({
             />
           </Dropdown>
         </AdminTooltip>
+        </div>
 
-        {/* Whose it is. It said "With nobody yet", which describes the state
-            rather than offering the thing you press it to do - and the state is
-            already written on the row in the list. */}
+        {/* Whose it is, as a capsule of two halves: a person on the left -
+            or, once somebody has it, their name in its place - and the arrow
+            that opens the list on the right. */}
         <Dropdown
-          label={<>{assignedTo ? `With ${assignedTo}` : 'Assign'}{ChevronDownIcon}</>}
-          className="btn btn-secondary btn-sm uin-status-btn"
+          label={<>
+            <span className="uin-capsule-main">
+              {assignedTo ?? <span className="uin-capsule-icon" aria-hidden="true">{AssignedIcon}</span>}
+            </span>
+            <span className="uin-capsule-sep" aria-hidden="true" />
+            <span className="uin-capsule-arrow" aria-hidden="true">{ChevronDownIcon}</span>
+          </>}
+          ariaLabel={assignedTo ? `With ${assignedTo}. Hand it to somebody else` : 'Assign - hand it to somebody'}
+          title={assignedTo ? `With ${assignedTo}` : 'Assign'}
+          className="uin-capsule"
           disabled={busy}
           align="end"
           width={220}
@@ -308,34 +324,35 @@ export function ThreadActions({
           ))}
         </Dropdown>
 
-        {/* No width on this one: two one-word answers do not want two hundred
-            pixels of panel, and the panel now takes only what is in it. */}
-        <Dropdown
-          label={<>{STATUS_WORDS[status] ?? 'Open'}{ChevronDownIcon}</>}
-          className="btn btn-secondary btn-sm uin-status-btn"
-          title="Where this conversation stands"
-          align="end"
-          disabled={busy}
-        >
-          {status !== 'open' && (
-            <MenuItem disabled={busy} onClick={() => void patch({ status: 'open' })}>
-              {many ? `Open - all ${targets.length}` : 'Open'}
-            </MenuItem>
-          )}
-          {status !== 'done' && (
-            <MenuItem
-              disabled={busy}
-              onClick={() => void closeWith(
+        {/* Where it stands, as a box to tick. Empty while it is open (or
+            asleep), ticked once it is done; pressing it flips it, and either
+            way the offer to take the press back goes up. Snoozing and waking
+            are the clock's business, next door. */}
+        <AdminTooltip body={done
+          ? (many ? `Open all ${targets.length} again` : 'Done. Press to open it again.')
+          : (many ? `Mark all ${targets.length} as done` : doneForMeOnly ? 'Mark as done for you' : 'Mark as done')}>
+          <button
+            type="button"
+            className="uin-icon-btn uin-icon-btn-framed uin-done-toggle"
+            aria-pressed={done}
+            aria-label="Done"
+            disabled={busy}
+            onClick={() => {
+              if (done) {
+                void reopen()
+                return
+              }
+              void closeWith(
                 { status: 'done' },
                 doneForMeOnly
                   ? said('Done for you. Still open for everybody else in it.', 'marked as done')
                   : said('Marked as done.', 'marked as done'),
-              )}
-            >
-              {many ? `Done - all ${targets.length}` : doneForMeOnly ? 'Done for me' : 'Done'}
-            </MenuItem>
-          )}
-        </Dropdown>
+              )
+            }}
+          >
+            {done ? SquareTickIcon : SquareIcon}
+          </button>
+        </AdminTooltip>
       </div>
 
       {/* Its own line under the subject rather than squeezed onto the end of

@@ -135,6 +135,10 @@ export type InboxParams = {
    *  them read off the address like everything else on this screen. */
   fromText: string | null
   toText: string | null
+  /** Somebody who is anywhere on the conversation - who a message came from,
+   *  or who one went or was copied to. What pressing an outsider's address on
+   *  a message asks for: everything they are in. */
+  withText: string | null
   subjectText: string | null
   withAttachment: boolean
   /** Calendar dates, "YYYY-MM-DD", meant in the site's own timezone. Kept as
@@ -295,6 +299,7 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
     searchPage: sp.find === '1',
     fromText: text(sp.from),
     toText: text(sp.to),
+    withText: text(sp.with),
     subjectText: text(sp.subject),
     withAttachment: sp.att === '1',
     after: calendarDate(sp.after),
@@ -411,6 +416,9 @@ export function buildSearchHref(
     q: value(request.q),
     from: value(request.from),
     to: value(request.to),
+    // The "everything they are in" cut is a press on a message rather than a
+    // box in the search, so a search made after it starts clean of it.
+    with: null,
     subject: value(request.subject),
     att: request.withAttachment ? '1' : null,
     unread: request.unreadOnly ? '1' : null,
@@ -436,7 +444,7 @@ export function buildSearchHref(
  */
 export function leaveSearchHref(base: string, current: Record<string, string>): string {
   return inboxHref(base, current, {
-    find: null, q: null, from: null, to: null, subject: null, att: null,
+    find: null, q: null, from: null, to: null, with: null, subject: null, att: null,
     after: null, before: null, unread: null, status: null, page: null,
   })
 }
@@ -518,6 +526,7 @@ export function isSearching(params: InboxParams): boolean {
   return !!params.search
     || !!params.fromText
     || !!params.toText
+    || !!params.withText
     || !!params.subjectText
     || params.withAttachment
     || !!params.after

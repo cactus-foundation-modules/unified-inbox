@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { AdminTooltip } from '@/components/admin/Tooltip'
 
 // The address in a message header, cut short when there is no room for it.
@@ -21,7 +22,16 @@ import { AdminTooltip } from '@/components/admin/Tooltip'
 // it - taken again whenever the box changes size, because the column is
 // draggable and the window is resizable.
 
-export function AddressLine({ text }: { text: string }) {
+/** One address in the line, and where pressing it goes when it goes anywhere:
+ *  an outsider's address opens everything they are in. */
+export type AddressPart = { text: string; href?: string | null }
+
+export function AddressLine({ text, parts }: {
+  text: string
+  /** The same line in pieces, for a line where some of the addresses can be
+   *  pressed. Joined with commas; `text` is still what the tooltip says. */
+  parts?: AddressPart[]
+}) {
   const ref = useRef<HTMLSpanElement | null>(null)
   const [clipped, setClipped] = useState(false)
 
@@ -39,7 +49,26 @@ export function AddressLine({ text }: { text: string }) {
 
   return (
     <AdminTooltip body={text} disabled={!clipped} className="uin-msg-address">
-      <span ref={ref} className="uin-msg-address-text">{text}</span>
+      <span ref={ref} className="uin-msg-address-text">
+        {parts
+          ? parts.map((part, index) => (
+              <Fragment key={`${index}:${part.text}`}>
+                {index > 0 && ', '}
+                {part.href
+                  ? (
+                      <Link
+                        className="uin-msg-with"
+                        href={part.href}
+                        title={`Every conversation with ${part.text.replace(/^<|>$/g, '')}`}
+                      >
+                        {part.text}
+                      </Link>
+                    )
+                  : part.text}
+              </Fragment>
+            ))
+          : text}
+      </span>
     </AdminTooltip>
   )
 }

@@ -4,6 +4,7 @@ import {
   createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState,
   type ReactNode,
 } from 'react'
+import { createPortal } from 'react-dom'
 
 // One button that opens one panel, and everything that has to be true about a
 // panel opened from a button: it goes away when you press elsewhere, it goes
@@ -185,7 +186,17 @@ export function Dropdown({
         {label}
       </button>
 
-      {open && at && (
+      {/* Into the page itself, like ComposeMenu and every dialog in here. The
+          panel is position: fixed and placed in window coordinates, and a fixed
+          box is only fixed to the window while no ancestor has a transform, a
+          filter or a backdrop-filter - any of which makes that ancestor its
+          containing block instead. The glass header of a conversation, the bar
+          over a pick and the composer's card all have a backdrop-filter, so a
+          panel drawn inside them opened offset by wherever they sat and was cut
+          off by the pane. React still treats it as a child, so the close
+          context and the events bubble exactly as before. Never open on a first
+          render, so the server and the browser agree about the markup. */}
+      {open && at && typeof document !== 'undefined' && createPortal(
         <div
           className={panelClassName ? `uin-menu ${panelClassName}` : 'uin-menu'}
           ref={panel}
@@ -196,7 +207,8 @@ export function Dropdown({
           <DropdownCloseContext.Provider value={closeAndFocus}>
             {children}
           </DropdownCloseContext.Provider>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

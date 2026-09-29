@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { inboxHref, initialsFor, pageCount, PER_PAGE } from '@/modules/unified-inbox/lib/list'
+import { inboxHref, pageCount, PER_PAGE } from '@/modules/unified-inbox/lib/list'
 import type { OrganisationListRow } from '@/modules/unified-inbox/lib/db'
 
 // The companies half of the address book.
@@ -50,9 +50,6 @@ export function OrganisationsListView({
                 aria-current={open ? 'true' : undefined}
                 href={inboxHref(base, params, { org: row.id, person: null, edit: null, import: null })}
               >
-                <span className="uin-avatar-wrap">
-                  <span className="uin-avatar" aria-hidden="true">{initialsFor(row.name)}</span>
-                </span>
                 <span className="uin-row-main">
                   <span className="uin-row-who">
                     <span className="uin-row-name">{row.name}</span>

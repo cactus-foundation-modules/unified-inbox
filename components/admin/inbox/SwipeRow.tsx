@@ -32,6 +32,10 @@ type Props = {
   start: React.ReactNode[]
   /** The buttons swiping LEFT uncovers, on the right-hand side. */
   end: React.ReactNode[]
+  /** A finger held still on the row for LONG_PRESS_MS - how a phone starts
+   *  picking several at once, since it has no cmd key. The tap that follows
+   *  the hold is swallowed, so the row picked is not also opened. */
+  onLongPress?: () => void
   children: React.ReactNode
 }
 
@@ -39,7 +43,11 @@ type Props = {
  *  width too (--uin-swipe-btn), so the row stops exactly where they end. */
 const BUTTON_PX = 76
 
-export function SwipeRow({ className, selected, open, onOpen, start, end, children }: Props) {
+/** How long a finger has to stay put before a touch is a hold. What iOS itself
+ *  waits before a hold turns into a menu, near enough, so it feels the same. */
+const LONG_PRESS_MS = 450
+
+export function SwipeRow({ className, selected, open, onOpen, start, end, onLongPress, children }: Props) {
   const item = useRef<HTMLLIElement>(null)
   // Whether the last touch was a swipe, so the click the browser may send after
   // it is not also taken as a tap on the row.
@@ -49,10 +57,10 @@ export function SwipeRow({ className, selected, open, onOpen, start, end, childr
 
   // Kept in a ref so the native listeners below, attached once, read the
   // current values rather than the ones from the render that attached them.
-  const live = useRef({ open, onOpen, startWidth, endWidth })
+  const live = useRef({ open, onOpen, startWidth, endWidth, onLongPress })
   useEffect(() => {
-    live.current = { open, onOpen, startWidth, endWidth }
-  }, [open, onOpen, startWidth, endWidth])
+    live.current = { open, onOpen, startWidth, endWidth, onLongPress }
+  }, [open, onOpen, startWidth, endWidth, onLongPress])
 
   // Native listeners rather than React's: a sideways swipe has to be able to
   // stop the page scrolling, and React attaches touchmove as passive, which
@@ -65,10 +73,23 @@ export function SwipeRow({ className, selected, open, onOpen, start, end, childr
     let from = 0
     let at = 0
     let mode: 'idle' | 'deciding' | 'sliding' = 'idle'
+    // The hold, if one is being timed. Any movement worth deciding on, a lift
+    // or a second finger stops it: a hold is a finger that stays put.
+    let hold: number | null = null
+    // Whether the hold fired during this touch, so the click the lift sends is
+    // swallowed - measured from the LIFT rather than from when the hold fired,
+    // or a finger held for a second and a half let its click through and
+    // un-picked the row it had just picked.
+    let held = false
+    const stopHold = () => {
+      if (hold !== null) window.clearTimeout(hold)
+      hold = null
+    }
     const face = () => li.querySelector<HTMLElement>(':scope > .uin-row')
 
     const onStart = (event: TouchEvent) => {
       mode = 'idle'
+      stopHold()
       if (!isPhone() || event.touches.length !== 1) return
       const touch = event.touches[0]!
       // From the very edge belongs to the list of mailboxes, not to the row.
@@ -79,6 +100,22 @@ export function SwipeRow({ className, selected, open, onOpen, start, end, childr
       from = side === 'start' ? s : side === 'end' ? -e : 0
       at = from
       mode = 'deciding'
+      stopHold()
+      held = false
+      // Only on a shut row: holding one whose buttons are showing is a finger
+      // resting on the way to one of them.
+      if (live.current.onLongPress && !side) {
+        hold = window.setTimeout(() => {
+          hold = null
+          mode = 'idle'
+          held = true
+          // The click the lift is about to fire is the end of the hold, not a
+          // tap - see onClickCapture, and onEnd for when this is let go of.
+          swiped.current = true
+          navigator.vibrate?.(10)
+          live.current.onLongPress?.()
+        }, LONG_PRESS_MS)
+      }
     }
 
     const onMove = (event: TouchEvent) => {
@@ -89,6 +126,7 @@ export function SwipeRow({ className, selected, open, onOpen, start, end, childr
       const dy = touch.clientY - y0
       if (mode === 'deciding') {
         if (Math.abs(dx) < DECIDE_PX && Math.abs(dy) < DECIDE_PX) return
+        stopHold()
         // Mostly up or down is a scroll, and the row leaves it alone.
         if (Math.abs(dy) >= Math.abs(dx)) { mode = 'idle'; return }
         mode = 'sliding'
@@ -104,6 +142,12 @@ export function SwipeRow({ className, selected, open, onOpen, start, end, childr
     }
 
     const onEnd = () => {
+      stopHold()
+      if (held) {
+        held = false
+        window.setTimeout(() => { swiped.current = false }, 400)
+        return
+      }
       if (mode !== 'sliding') { mode = 'idle'; return }
       mode = 'idle'
       swiped.current = true
@@ -132,6 +176,7 @@ export function SwipeRow({ className, selected, open, onOpen, start, end, childr
       li.removeEventListener('touchmove', onMove)
       li.removeEventListener('touchend', onEnd)
       li.removeEventListener('touchcancel', onEnd)
+      stopHold()
     }
   }, [])
 
@@ -139,7 +184,10 @@ export function SwipeRow({ className, selected, open, onOpen, start, end, childr
   // conversation, which is what a thumb landing back on it means. Taps on the
   // buttons in the trays go through untouched.
   const onClickCapture = useCallback((event: React.MouseEvent) => {
-    if ((event.target as HTMLElement).closest('.uin-swipe-tray')) return
+    // A menu opened from a tray button is drawn into the page body (see
+    // Dropdown), so it is not inside the tray in the DOM - but its clicks still
+    // bubble up here through React, and swallowing them broke the snooze panel.
+    if ((event.target as HTMLElement).closest('.uin-swipe-tray, .uin-menu')) return
     if (swiped.current || live.current.open) {
       event.preventDefault()
       event.stopPropagation()
@@ -161,6 +209,10 @@ export function SwipeRow({ className, selected, open, onOpen, start, end, childr
         '--uin-swipe-end': `${endWidth}px`,
       } as React.CSSProperties}
       onClickCapture={onClickCapture}
+      // Android answers a held link with its own menu of Open in new tab and
+      // Copy link, over the top of the pick the hold has just started. On a
+      // phone, where the hold means something here, it is not asked for.
+      onContextMenu={(event) => { if (onLongPress && isPhone()) event.preventDefault() }}
     >
       {start.length > 0 && (
         <div className="uin-swipe-tray" data-side="start" inert={open !== 'start'}>

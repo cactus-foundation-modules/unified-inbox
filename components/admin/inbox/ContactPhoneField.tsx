@@ -1,7 +1,6 @@
 'use client'
 
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { initialsFor } from '@/modules/unified-inbox/lib/list'
 
 // The box you say who to ring in, with the address book underneath it.
 //
@@ -208,9 +207,6 @@ export function ContactPhoneField({ id, value, onChange, onPick, placeholder }: 
               onMouseEnter={() => setActive(index)}
               onMouseDown={(e) => { e.preventDefault(); choose(suggestion) }}
             >
-              <span className="uin-suggestion-avatar" aria-hidden="true">
-                {initialsFor(suggestion.name)}
-              </span>
               <span className="uin-suggestion-text">
                 <span className="uin-suggestion-name">{suggestion.name}</span>
                 <span className="uin-suggestion-meta">

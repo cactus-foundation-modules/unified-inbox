@@ -6,29 +6,28 @@ import { useRouter } from 'next/navigation'
 import type { ThreadListRow } from '@/modules/unified-inbox/lib/db'
 import { normaliseAddress } from '@/modules/unified-inbox/lib/addresses'
 import {
-  avatarHref,
-  channelLabel,
   discussionFrom,
   discussionTo,
   formatFull,
   formatWhen,
   inboxHref,
-  initialsFor,
   MAX_SHOWN,
   participantLabel,
   PER_PAGE,
 } from '@/modules/unified-inbox/lib/list'
-import { pickWinner, widenedAccessWarning } from '@/modules/unified-inbox/lib/thread-merge'
 import {
-  AlarmIcon, BinIcon, ChatIcon, ChevronDownIcon, FormIcon, InboundIcon, MailOpenIcon,
-  MailSealedIcon, MergeIcon, NoteIcon, PaperclipIcon, PhoneIcon, ReplyIcon, RestoreIcon,
+  mergeContactKey, mergeContacts, pickWinner, widenedAccessWarning,
+} from '@/modules/unified-inbox/lib/thread-merge'
+import {
+  AlarmIcon, BinIcon, ChevronDownIcon, MailOpenIcon,
+  MailSealedIcon, MergeIcon, PaperclipIcon, ReplyIcon, RestoreIcon,
   SpamIcon, TickIcon,
 } from './icons'
 import { AdminTooltip } from '@/components/admin/Tooltip'
-import { Avatar } from './Avatar'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Dropdown } from './Dropdown'
 import { useRegisterRows, useSelection, type PickedRow } from './Selection'
+import { isPhone } from './swipe'
 import { beginThreadDrag, draggedIds, endThreadDrag } from './thread-drag'
 import { SnoozePanel } from './SnoozePanel'
 import { SwipeRow, type SwipeSide } from './SwipeRow'
@@ -84,9 +83,6 @@ type Props = {
   /** What each inbox is called, so a row can say which of your addresses it
    *  came in on when nobody has been handed it yet. */
   inboxNames: Record<string, string>
-  /** Whether to ask for people's own pictures at all. Off unless the site has
-   *  switched it on - see Settings, People. */
-  showAvatars: boolean
   /** True when nothing has ever been collected AND this list is one that mail
    *  collection would fill, which is a different problem from a filter that
    *  matches nothing. */
@@ -125,27 +121,6 @@ type Props = {
   timezone: string
 }
 
-const CHANNEL_ICONS: Record<string, React.ReactNode> = {
-  chat: ChatIcon,
-  form: FormIcon,
-  phone: PhoneIcon,
-  sms: PhoneIcon,
-  discussion: NoteIcon,
-}
-
-/** How a conversation arrived, on the corner of the circle. Email is the ordinary
- *  case and wears no badge - a mark against every row marks nothing. */
-function ChannelBadge({ channel }: { channel: string }) {
-  const icon = CHANNEL_ICONS[channel]
-  if (!icon) return null
-  return (
-    <span className="uin-avatar-badge">
-      {icon}
-      <span className="sr-only">{channelLabel(channel)}</span>
-    </span>
-  )
-}
-
 /** Everybody a set of rows could be blocked on - see `blockable` in the list,
  *  which says why discussions and anything without an `@` are left out. */
 function blockableOf(rows: ThreadListRow[]): string[] {
@@ -159,7 +134,7 @@ function blockableOf(rows: ThreadListRow[]): string[] {
 }
 
 export function ThreadListView({
-  base, params, rows, total, page, openThreadId, staffById, meId, inboxNames, showAvatars,
+  base, params, rows, total, page, openThreadId, staffById, meId, inboxNames,
   neverSynced, spam, spamOwnerName, bin, binOwnerName, canManage, canBlock, searching, now, timezone,
 }: Props) {
   const router = useRouter()
@@ -176,6 +151,10 @@ export function ThreadListView({
   /** The subject picked in the merge dialog, where the conversations disagree.
    *  Null until somebody picks one, which means the winner's own. */
   const [mergeSubject, setMergeSubject] = useState<string | null>(null)
+  /** Who the merged conversation is with, as picked in the same dialog - by
+   *  key, see mergeContactKey. Null until somebody picks, which means the
+   *  first on offer: the one the winner already shows. */
+  const [mergeContact, setMergeContact] = useState<string | null>(null)
   // Which conversation has been CLICKED but whose pane has not arrived yet, and
   // what the address said at the moment of the press. Both halves, because the
   // second is how this knows when it has stopped being true: once the address
@@ -231,6 +210,11 @@ export function ThreadListView({
   const picked = useMemo(() => selected.filter((id) => onScreen.has(id)), [selected, onScreen])
   const pickedSet = useMemo(() => new Set(picked), [picked])
   const pickedRows = useMemo(() => rows.filter((row) => pickedSet.has(row.id)), [rows, pickedSet])
+  /** Whether the list is in picking mode: every row wears its circle, and on a
+   *  phone a tap picks rather than opens. Nothing more to it than something
+   *  being picked, so the bar's Cancel - which empties the pick - is also the
+   *  way out of the mode. */
+  const selecting = picked.length > 0
 
   /** Which of the bar's buttons are worth offering.
    *
@@ -345,6 +329,15 @@ export function ThreadListView({
       toggle(id, index)
       return
     }
+    // Picking on a phone, where there is no cmd key to hold: once a press and
+    // hold has started a pick (see onLongPress below), every tap adds or takes
+    // off one more, exactly as Mail on a phone does, until the bar's Cancel
+    // or the last one taken off ends it.
+    if (selecting && isPhone()) {
+      e.preventDefault()
+      toggle(id, index)
+      return
+    }
     // An ordinary press on an ordinary link: let it open the conversation, and
     // remember the row it opened, because that is where the next shift-click
     // measures its run from.
@@ -360,7 +353,16 @@ export function ThreadListView({
     // server confirms it a moment later, by which time the highlight is already
     // where the confirmation would have put it.
     setOpening({ id, from: openThreadId })
-  }, [extendTo, openThreadId, setSelected, toggle])
+  }, [extendTo, openThreadId, selecting, setSelected, toggle])
+
+  /** Press and hold on a phone: into picking mode, with the row held as the
+   *  first one picked. Ignored once already picking - a second hold is just a
+   *  slow tap, and the tap already does the right thing. */
+  const onLongPress = useCallback((id: string, index: number) => {
+    if (!isPhone() || selecting) return
+    setSwiped(null)
+    toggle(id, index)
+  }, [selecting, toggle])
 
   const onRowKeyDown = useCallback((e: React.KeyboardEvent, id: string, index: number) => {
     // Space on a link does nothing at all by default, so it is free to mean
@@ -685,6 +687,10 @@ export function ThreadListView({
       winner,
       losers,
       subjects,
+      // Everybody the halves are with. A conversation put together out of an
+      // email, a text and two calls shows whichever of those came in last,
+      // which is a phone number as often as a name - so the merge asks.
+      contacts: mergeContacts([winner, ...losers]),
       warning: widenedAccessWarning({ winner, losers, inboxNames: names }),
     }
   }, [picked, rows, inboxNames])
@@ -694,13 +700,23 @@ export function ThreadListView({
   const merge = useCallback(async () => {
     if (!mergePlan) return
     const keep = mergeSubject && mergeSubject !== mergePlan.winner.subject?.trim() ? mergeSubject : undefined
+    // Only asked where there was a choice, and then always sent - even when the
+    // answer is the one it shows already - because the point of asking is that
+    // the next call from a withheld number does not change it back.
+    const chosen = mergePlan.contacts.length > 1
+      ? mergePlan.contacts.find((c) => mergeContactKey(c) === mergeContact) ?? mergePlan.contacts[0]
+      : undefined
     setBusy(true)
     setError('')
     try {
       const response = await fetch(`/api/m/unified-inbox/threads/${mergePlan.winner.id}/merge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ loserIds: mergePlan.losers.map((row) => row.id), subject: keep }),
+        body: JSON.stringify({
+          loserIds: mergePlan.losers.map((row) => row.id),
+          subject: keep,
+          contact: chosen ? { name: chosen.name, address: chosen.address } : undefined,
+        }),
       })
       if (!response.ok) {
         setError((await response.json().catch(() => null))?.error ?? 'They could not be merged.')
@@ -713,7 +729,7 @@ export function ThreadListView({
     } finally {
       setBusy(false)
     }
-  }, [mergePlan, mergeSubject, router, setSelected])
+  }, [mergePlan, mergeSubject, mergeContact, router, setSelected])
 
   if (rows.length === 0) {
     return (
@@ -931,7 +947,7 @@ export function ThreadListView({
           {canManage && picked.length > 1 && (
             <AdminTooltip body="Merge them into one conversation">
               <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
-                      onClick={() => { setMergeSubject(null); setMerging(true) }}>
+                      onClick={() => { setMergeSubject(null); setMergeContact(null); setMerging(true) }}>
                 {MergeIcon}
                 <span className="sr-only">Fold the {picked.length} picked conversations into one</span>
               </button>
@@ -960,14 +976,6 @@ export function ThreadListView({
           const startedBy = discussionFrom(row, endNames)
           const putTo = discussionTo(row, endNames)
           const who = startedBy ?? participantLabel(row)
-          // Whether there is a human here to take initials off, asked separately
-          // from what the row says. "Unknown sender" is a sentence standing in
-          // for a name nobody recorded, and initials taken off it put US in a
-          // circle as though somebody of that name had written in. Off the real
-          // names, not the printed ones: a row that says "Me" still wants the
-          // reader's own initials in the circle rather than an M.
-          const named = discussionFrom(row, staffById)
-            ?? ((row.participantName ?? row.participantAddress ?? '').trim() || null)
           const open = row.id === shownOpenId
           const assignee = row.assigneeUserId ? endNames[row.assigneeUserId] : null
           // Whose desk it is on. A name once somebody has taken it, and the
@@ -994,6 +1002,9 @@ export function ThreadListView({
               selected={ticked}
               open={swiped?.id === row.id ? swiped.side : null}
               onOpen={(side) => setSwiped(side ? { id: row.id, side } : null)}
+              /* Not while already picking: a hold then is just a slow tap, and
+                 the tap already picks or un-picks. */
+              onLongPress={selecting ? undefined : () => onLongPress(row.id, index)}
               /* Swiping left: what is done WITH it. The same two words and
                  the same clock the bar above uses, so a phone and a desk say
                  one thing one way. Done turns into Reopen on something already
@@ -1078,23 +1089,15 @@ export function ThreadListView({
                 }}
                 onDragEnd={endThreadDrag}
               >
-                {/* A picked row wears a tick where its face was. The circle is
-                    already there on every row and already the right size, so
-                    saying it this way costs the list no width at all. */}
-                {ticked ? (
-                  <span className="uin-avatar-wrap">
-                    <span className="uin-avatar uin-avatar-ticked" aria-hidden="true">{TickIcon}</span>
+                {/* The circle every row grows while picking, the way Mail on
+                    a phone does it: empty on the ones not picked, filled with a
+                    tick on the ones that are. Not drawn at all otherwise - the
+                    faces that used to sit here are gone, since nobody had a
+                    picture to put in one. See .uin-row-check. */}
+                {selecting && (
+                  <span className={ticked ? 'uin-row-check is-on' : 'uin-row-check'} aria-hidden="true">
+                    {ticked && TickIcon}
                   </span>
-                ) : (
-                  <Avatar
-                    src={showAvatars
-                      ? avatarHref(startedBy ? 'user' : 'person', startedBy ? row.startedByUserId : row.personId)
-                      : null}
-                    badge={<ChannelBadge channel={row.channel} />}
-                    title={named ?? undefined}
-                  >
-                    {named ? initialsFor(named) : InboundIcon}
-                  </Avatar>
                 )}
                 <span className="uin-row-main">
                   <span className="uin-row-who">
@@ -1237,6 +1240,36 @@ export function ThreadListView({
                       <span>
                         {subject}
                         {index === 0 && <span className="uin-merge-subject-note"> - the one it started with</span>}
+                      </span>
+                    </label>
+                  )
+                })}
+              </fieldset>
+            )}
+            {/* Who it is with, where the halves disagree - which is every
+                merge of a phone call into an email. The winner's first, and
+                chosen unless somebody says otherwise. */}
+            {mergePlan.contacts.length > 1 && (
+              <fieldset className="uin-merge-subjects">
+                <legend>Who is this conversation with?</legend>
+                {mergePlan.contacts.map((contact, index) => {
+                  const key = mergeContactKey(contact)
+                  const chosen = (mergeContact ?? mergeContactKey(mergePlan.contacts[0]!)) === key
+                  return (
+                    <label key={key} className={chosen ? 'uin-merge-subject is-chosen' : 'uin-merge-subject'}>
+                      <input
+                        type="radio"
+                        name="uin-merge-contact"
+                        value={key}
+                        checked={chosen}
+                        onChange={() => setMergeContact(key)}
+                      />
+                      <span>
+                        {contact.name ?? contact.address}
+                        {contact.name && contact.address && (
+                          <span className="uin-merge-subject-note"> {contact.address}</span>
+                        )}
+                        {index === 0 && <span className="uin-merge-subject-note"> - shown now</span>}
                       </span>
                     </label>
                   )

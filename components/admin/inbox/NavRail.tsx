@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { LinkBusy } from './NavProgress'
 import { useRouter } from 'next/navigation'
 import {
-  avatarHref, channelGlyph, inboxHref, initialsFor, moveInOrder, sortByStoredOrder, splitInboxes,
+  channelGlyph, inboxHref, moveInOrder, sortByStoredOrder, splitInboxes,
   type ChannelGlyph,
 } from '@/modules/unified-inbox/lib/list'
 import {
@@ -13,7 +13,6 @@ import {
   FileIcon, FolderIcon, FormIcon, InboxIcon, MailIcon, MegaphoneIcon, MenuIcon, PeopleIcon,
   PhoneIcon, SendIcon, SmartphoneIcon, SmsIcon, SpamIcon,
 } from './icons'
-import { Avatar } from './Avatar'
 import { useSelection } from './Selection'
 import { currentThreadDrag, endThreadDrag, isThreadDrag, movedMessage, wouldMove } from './thread-drag'
 import { useOfferUndo } from './UndoProvider'
@@ -138,12 +137,8 @@ type Props = {
    *  `drafts:<inbox id>` / `scheduled:<inbox id>` / `mentions:<inbox id>` for a
    *  folder under a colleague's name, or null for All. */
   current: string | null
-  /** Who is reading, for the picture and initials at the head of the rail, and
-   *  for telling their own address apart from the ones merely pinned to it. */
+  /** Who is reading, for their name at the head of the rail, and for telling their own address apart from the ones merely pinned to it. */
   me: { id: string; name: string }
-  /** Whether to ask for their own picture at all. Off unless the site has
-   *  switched it on - see Settings, People. */
-  showAvatars: boolean
   /** Things colleagues have tagged this person in and that they have not dealt
    *  with yet. Open only: something set aside until Thursday is not waiting, and
    *  a number that counts it makes the place look busier than it is. */
@@ -387,12 +382,11 @@ function Entry({ item }: { item: RailItem }) {
 /**
  * One address that opens out into folders of its own.
  *
- * The colour IS the control. It used to be a chevron sitting in front of the
- * row, which cost every one of those names an indent the other groups did not
- * have, for an arrow most people never press - so the dot that was inside the
- * link comes out of it and becomes the button, in exactly the place the dot
- * stood. It reads as a coloured dot until the pointer is on the row, and turns
- * into the arrow then.
+ * The arrow is the control, in front of the name, pointing right while the
+ * folders are shut and down once they are open. It spent a while as a coloured
+ * dot that only turned into the arrow under the pointer; the dot is still in the
+ * markup, but the stylesheet no longer shows it - an arrow says "there is more
+ * under this" and a dot says nothing at all.
  *
  * Outside the link rather than inside it, because a control inside a link is one
  * you cannot press without going where the link goes.
@@ -575,7 +569,7 @@ function useRailDrag(enabled: boolean, move: (fromId: string, toId: string) => v
 
 
 export function NavRail({
-  base, params, inboxes, channels, allCount, current, me, showAvatars, askedCount, railOrder,
+  base, params, inboxes, channels, allCount, current, me, askedCount, railOrder,
   showUnrouted, unroutedCount, showDrafts, draftCount, draftCounts, showScheduled, scheduledCount,
   scheduledCounts,
   spamCount, binCount, contactCount, showCampaigns, composeHref,
@@ -1469,9 +1463,6 @@ export function NavRail({
           <span className="uin-rail-places-chevron" aria-hidden="true">{ChevronDownIcon}</span>
           <span className="sr-only">. Choose an inbox or a view</span>
         </button>
-        <Avatar src={showAvatars ? avatarHref('user', me.id) : null} title={me.name}>
-          {initialsFor(me.name)}
-        </Avatar>
         <span className="uin-rail-me-name">{me.name}</span>
         <InboxSearch
           base={base}
@@ -1510,9 +1501,6 @@ export function NavRail({
         {/* The drawer's own head. Who is reading, which the bar outside has no
             room to say, and the way out. Not drawn as anything above 1200px. */}
         <div className="uin-rail-drawer-head">
-          <Avatar src={showAvatars ? avatarHref('user', me.id) : null} title={me.name}>
-            {initialsFor(me.name)}
-          </Avatar>
           <span className="uin-rail-me-name">{me.name}</span>
           <button
             type="button"

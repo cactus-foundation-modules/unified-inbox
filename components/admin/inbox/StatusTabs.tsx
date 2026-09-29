@@ -1,16 +1,17 @@
 import Link from 'next/link'
 import { LinkBusy } from './NavProgress'
 import { inboxHref, type StatusFilter } from '@/modules/unified-inbox/lib/list'
+import { AlarmIcon, AssignedIcon, InboxIcon, MailIcon, TickIcon } from './icons'
 
 // Where a conversation stands, at the head of the list it narrows: waiting, set
 // aside, dealt with, or the lot - and, on a shared address, the queue in front
 // of all four: the open ones nobody has picked up.
 //
-// Plain words with a line under the one that is on, rather than a pill or a
-// segmented control. Four segments in a column this narrow is four boxes with
-// two letters showing in each; words with the chosen one underlined take the
-// width they need and no more, and it is the shape every mail program uses for
-// the same four choices.
+// A row of pills, and only the one that is on says its name: the rest are an
+// icon each - a clock for snoozed, a tick for done, the tray for all of it. Four
+// words in a column this narrow was four boxes with two letters showing in
+// each; four icons and one word fit, and it is the shape Mail on a phone draws
+// its own row of mailboxes in.
 //
 // The numbers are what is behind each one given everything else already chosen,
 // so "Snoozed 3" beside a search for "invoice" means three snoozed conversations
@@ -41,7 +42,7 @@ type Props = {
   showUnassigned?: boolean
 }
 
-type Tab = { value: StatusFilter; label: string; countKey: string }
+type Tab = { value: StatusFilter; label: string; countKey: string; icon: React.ReactNode }
 
 /** The queue, and first: on a shared address the morning starts with what
  *  nobody has taken, and the tab that answers that has no business being read
@@ -51,17 +52,17 @@ type Tab = { value: StatusFilter; label: string; countKey: string }
  *  are. Left carried, a name chosen in the filter menu would sit underneath it
  *  asking for the opposite thing and the list would simply be empty, with two
  *  controls each insisting they were right. */
-const QUEUE_TAB: Tab = { value: 'unassigned', label: 'Unassigned', countKey: 'unassigned' }
+const QUEUE_TAB: Tab = { value: 'unassigned', label: 'Unassigned', countKey: 'unassigned', icon: AssignedIcon }
 
 const STATUS_TABS: Tab[] = [
-  { value: 'open', label: 'Open', countKey: 'open' },
-  { value: 'snoozed', label: 'Snoozed', countKey: 'snoozed' },
-  { value: 'done', label: 'Done', countKey: 'done' },
+  { value: 'open', label: 'Open', countKey: 'open', icon: MailIcon },
+  { value: 'snoozed', label: 'Snoozed', countKey: 'snoozed', icon: AlarmIcon },
+  { value: 'done', label: 'Done', countKey: 'done', icon: TickIcon },
   // "Everything" is the better word and does not fit: four segments share the
   // width of one column - five on a shared address - and the count has to fit
   // beside each of them. The row scrolls sideways rather than squashing when it
   // has to (see .uin-tabs), which is what makes room for the fifth.
-  { value: 'all', label: 'All', countKey: 'all' },
+  { value: 'all', label: 'All', countKey: 'all', icon: InboxIcon },
 ]
 
 export function StatusTabs({
@@ -79,20 +80,27 @@ export function StatusTabs({
     <div className="uin-tabs" role="group" aria-label={ariaLabel}>
       {(showUnassigned ? [QUEUE_TAB, ...STATUS_TABS] : STATUS_TABS).map((tab) => {
         const count = counts[tab.countKey] ?? 0
+        const on = status === tab.value
+        // Only the one that is on says its name out loud; the rest are an icon
+        // in a pill of their own, the way Mail on a phone draws its row of
+        // mailboxes. The name is still there for a screen reader and in the
+        // little yellow box, with the count beside it.
         return (
           <Link
             key={tab.value}
             className="uin-tab"
+            title={on ? undefined : (count > 0 ? `${tab.label} (${count > 999 ? '999+' : count})` : tab.label)}
             href={inboxHref(base, params, {
               status: tab.value,
               ...(tab.value === 'unassigned' ? { assignee: null } : {}),
               ...reset,
             })}
-            aria-current={status === tab.value ? 'true' : undefined}
+            aria-current={on ? 'true' : undefined}
           >
-            {tab.label}
+            <span className="uin-tab-icon" aria-hidden="true">{tab.icon}</span>
+            <span className={on ? 'uin-tab-label' : 'sr-only'}>{tab.label}</span>
             {count > 0 && (
-              <span className="uin-tab-count">
+              <span className={on ? 'uin-tab-count' : 'sr-only'}>
                 {/* Same ceiling as the counts on the rail. Two thresholds on one
                     visual chip is one too many. */}
                 {count > 999 ? '999+' : count}

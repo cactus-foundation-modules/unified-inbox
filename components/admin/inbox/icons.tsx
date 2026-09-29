@@ -23,6 +23,10 @@ export const PaperclipIcon = <svg {...ICON}><path d="M17 7.5 9.5 15a2.5 2.5 0 0 
 export const TagIcon = <svg {...ICON}><path d="M11 3H4v7l10 10 7-7L11 3Z" /><circle cx="7.5" cy="7.5" r="1.2" /></svg>
 export const ClockIcon = <svg {...ICON}><circle cx="12" cy="12" r="8" /><path d="M12 7.5V12l3 2" /></svg>
 export const TickIcon = <svg {...ICON}><path d="m5 12.5 4.5 4.5L19 7" /></svg>
+// Where a conversation stands, as a box to tick: empty while it is open, ticked
+// once it is done - the shape Reminders gives the same question.
+export const SquareIcon = <svg {...ICON}><rect x="4.5" y="4.5" width="15" height="15" rx="4" /></svg>
+export const SquareTickIcon = <svg {...ICON}><rect x="4.5" y="4.5" width="15" height="15" rx="4" /><path d="m8.5 12.2 2.4 2.4 4.6-5" /></svg>
 export const SearchIcon = <svg {...ICON}><circle cx="11" cy="11" r="6" /><path d="m20 20-4.5-4.5" /></svg>
 // Three lines: the places to go, folded away behind one button on a phone.
 export const MenuIcon = <svg {...ICON}><path d="M4 7h16" /><path d="M4 12h16" /><path d="M4 17h16" /></svg>
@@ -44,6 +48,7 @@ export const ReplyIcon = <svg {...ICON}><path d="M9 7 4 12l5 5" /><path d="M4 12
 export const FilterIcon = <svg {...ICON}><path d="M4 7h13" /><path d="M4 12h9" /><path d="M4 17h5" /></svg>
 export const SortIcon = <svg {...ICON}><path d="M7 20V4" /><path d="m3.5 7.5 3.5-3.5 3.5 3.5" /><path d="M17 4v16" /><path d="m13.5 16.5 3.5 3.5 3.5-3.5" /></svg>
 export const ChevronDownIcon = <svg {...ICON}><path d="m6 9.5 6 6 6-6" /></svg>
+export const ChevronUpIcon = <svg {...ICON}><path d="m6 14.5 6-6 6 6" /></svg>
 export const SmsIcon = <svg {...ICON}><path d="M4 5h16v10H9l-5 3z" /><path d="M8.5 10h.01" /><path d="M12 10h.01" /><path d="M15.5 10h.01" /></svg>
 export const AssignedIcon = <svg {...ICON}><circle cx="12" cy="8" r="3.2" /><path d="M5.5 19a6.5 6.5 0 0 1 13 0" /></svg>
 export const MoreIcon = <svg {...ICON}><circle cx="12" cy="5.5" r="1.4" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" /><circle cx="12" cy="18.5" r="1.4" fill="currentColor" stroke="none" /></svg>
