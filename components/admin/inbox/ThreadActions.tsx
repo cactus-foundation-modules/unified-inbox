@@ -23,11 +23,11 @@ import { AlarmIcon, AssignedIcon, ChevronDownIcon, SquareIcon, SquareTickIcon } 
 // a row of controls, and it never said where the conversation actually stood
 // without reading the tag on the line above. So where it stands is now a box
 // that is ticked or it is not, and pressing it flips it; the reminder is the
-// clock beside it, and marking something read again went where it belongs:
+// clock on the end of that box, and marking something read again went where it belongs:
 // on a message, behind its own dots.
 //
 // Everything in this row that ENDS a conversation - the bin, the junk sign, the
-// clock, and Done - acts on whatever is ticked in the list beside it as well as
+// snooze clock, and Done - acts on whatever is ticked in the list beside it as well as
 // on the conversation being read. Picking six, opening one of them to check it
 // is the right pile and pressing Done used to file exactly one, with the other
 // five still ticked behind and nothing on the screen admitting it. See
@@ -220,8 +220,8 @@ export function ThreadActions({
   return (
     <>
       <div className="uin-thread-actions">
-        {/* The bin, the junk sign, the clock, then whose it is, then where it
-            stands. All five sit on the subject line now, hard against the way
+        {/* The bin, the junk sign, then whose it is, then where it stands -
+            with the snooze clock on its end. All of them sit on the subject line now, hard against the way
             out of the conversation: they are what you press on the way OUT of
             one, and a row of them on a line of their own was a band of chrome
             between the subject and the message.
@@ -234,10 +234,10 @@ export function ThreadActions({
             point of having both - people were reaching for the junk button to
             mean "delete", which slowly filled the spam folder with post that
             was not spam and made it useless for the one job it does have. */}
-        {/* The three wordless ones share one capsule of glass, hairlines between
+        {/* The two wordless ones share one capsule of glass, hairlines between
             them - the shape Mail on a phone gives its own row of the same sort
             of buttons. */}
-        <div className="uin-action-group" role="group" aria-label="Bin, junk and snooze">
+        <div className="uin-action-group" role="group" aria-label="Bin and junk">
         <BinButton
           threadId={threadId}
           binned={binned}
@@ -256,34 +256,6 @@ export function ThreadActions({
           closeHref={closeHref}
           disabled={busy}
         />
-        {/* The other wordless one, and given the same tooltip as the junk sign
-            for the same reason: a clock on its own is a guess until something
-            says which of the four things a clock could mean this one is. */}
-        <AdminTooltip body={many
-          ? `Snooze - set when all ${targets.length} come back`
-          : 'Snooze - set when this comes back'}>
-          <Dropdown
-            className="uin-icon-btn uin-icon-btn-framed"
-            label={AlarmIcon}
-            ariaLabel="Set when this comes back"
-            align="end"
-            width={280}
-            disabled={busy}
-            panelClassName="uin-menu-snooze"
-          >
-            <SnoozePanel
-              status={status}
-              timezone={timezone}
-              busy={busy}
-              title={many ? `Snooze these ${targets.length}` : undefined}
-              onSnooze={(until) => void closeWith(
-                { status: 'snoozed', snoozeUntil: until.toISOString() },
-                said('Snoozed.', 'snoozed'),
-              )}
-              onWake={() => void patch({ status: 'open' })}
-            />
-          </Dropdown>
-        </AdminTooltip>
         </div>
 
         {/* Whose it is, as a capsule of two halves: a person on the left -
@@ -326,14 +298,16 @@ export function ThreadActions({
 
         {/* Where it stands, as a box to tick. Empty while it is open (or
             asleep), ticked once it is done; pressing it flips it, and either
-            way the offer to take the press back goes up. Snoozing and waking
-            are the clock's business, next door. */}
+            way the offer to take the press back goes up. The clock beside it
+            is the other way of putting it away - until later - so snoozing
+            and waking live there, in one capsule with Done. */}
+        <div className="uin-capsule uin-done-split">
         <AdminTooltip body={done
           ? (many ? `Open all ${targets.length} again` : 'Done. Press to open it again.')
           : (many ? `Mark all ${targets.length} as done` : doneForMeOnly ? 'Mark as done for you' : 'Mark as done')}>
           <button
             type="button"
-            className="uin-icon-btn uin-icon-btn-framed uin-done-toggle"
+            className="uin-done-toggle"
             aria-pressed={done}
             aria-label="Done"
             disabled={busy}
@@ -353,6 +327,33 @@ export function ThreadActions({
             {done ? SquareTickIcon : SquareIcon}
           </button>
         </AdminTooltip>
+          <span className="uin-capsule-sep" aria-hidden="true" />
+          <AdminTooltip body={many
+            ? `Snooze - set when all ${targets.length} come back`
+            : 'Snooze - set when this comes back'}>
+            <Dropdown
+              className="uin-done-more"
+              label={<span className="uin-done-more-icon" aria-hidden="true">{AlarmIcon}</span>}
+              ariaLabel="Snooze - set when this comes back"
+              align="end"
+              width={280}
+              disabled={busy}
+              panelClassName="uin-menu-snooze"
+            >
+              <SnoozePanel
+                status={status}
+                timezone={timezone}
+                busy={busy}
+                title={many ? `Snooze these ${targets.length}` : undefined}
+                onSnooze={(until) => void closeWith(
+                  { status: 'snoozed', snoozeUntil: until.toISOString() },
+                  said('Snoozed.', 'snoozed'),
+                )}
+                onWake={() => void patch({ status: 'open' })}
+              />
+            </Dropdown>
+          </AdminTooltip>
+        </div>
       </div>
 
       {/* Its own line under the subject rather than squeezed onto the end of

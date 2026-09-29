@@ -827,6 +827,7 @@ export function formatWhen(value: Date | string | null, now: Date, timezone: str
   if (dayOfDate === dayOfNow) {
     return formatInSiteTimezone(date, timezone, { hour: '2-digit', minute: '2-digit' })
   }
+  if (dayOfDate === dayBefore(dayOfNow)) return 'Yesterday'
   if (diff < 7 * 86_400_000 && diff >= 0) {
     return formatInSiteTimezone(date, timezone, { weekday: 'short' })
   }
@@ -834,6 +835,30 @@ export function formatWhen(value: Date | string | null, now: Date, timezone: str
     return formatInSiteTimezone(date, timezone, { day: 'numeric', month: 'short' })
   }
   return formatInSiteTimezone(date, timezone, { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+/** The calendar day before a YYYY-MM-DD one. Done on the date itself rather
+ *  than by taking 24 hours off the clock, which lands on the wrong day either
+ *  side of a clock change. */
+function dayBefore(day: string): string {
+  const at = new Date(`${day}T12:00:00Z`)
+  at.setUTCDate(at.getUTCDate() - 1)
+  return at.toISOString().slice(0, 10)
+}
+
+/** When one message happened, for its own header: "Today, 14:20" and
+ *  "Yesterday, 09:05" rather than a bare time or a weekday - "Mon" on a
+ *  Tuesday made people count - and otherwise what the list says. */
+export function formatStamp(value: Date | string | null, now: Date, timezone: string): string {
+  if (!value) return ''
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const day = calendarDateIn(date, timezone)
+  const today = calendarDateIn(now, timezone)
+  const time = () => formatInSiteTimezone(date, timezone, { hour: '2-digit', minute: '2-digit' })
+  if (day === today) return `Today, ${time()}`
+  if (day === dayBefore(today)) return `Yesterday, ${time()}`
+  return formatWhen(date, now, timezone)
 }
 
 /** The long form, for the header of one message where there is room to be

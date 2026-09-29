@@ -3,6 +3,7 @@ import type { ContextAdapter, LinkSuggestion, LinkTarget } from './types'
 import { SUGGEST_LIMIT } from './types'
 import { detailLine, humanStatus, inList, likeTerm, money, shortDate } from './format'
 import { getSiteTimezone } from '@/lib/config/timezone.server'
+import { existingTables, installedModuleNames } from '../installed'
 
 // Purchasing's side of a conversation: which purchase order it is about.
 //
@@ -40,6 +41,53 @@ export const purchaseOrdersAdapter: ContextAdapter = {
       label: `Purchase order ${row.number}`,
       href: `m/purchase-orders/orders/${row.id}`,
     }
+  },
+
+  /**
+   * A purchase order raised from a shop order, and that shop order, belong on
+   * a conversation together: a supplier writing about the PO is writing about
+   * somebody's order, and a customer chasing an order is waiting on the PO. So
+   * attaching either one brings the other along. The tie is the one purchasing
+   * writes when it raises a PO from an order (`source_ref.orderId`).
+   *
+   * The shop's table is checked for rather than assumed - purchasing is often
+   * installed on a site with no shop at all.
+   */
+  async related(record): Promise<LinkTarget[]> {
+    const toOrder = record.moduleName === 'purchase-orders' && record.recordType === 'purchase-order'
+    const toPos = record.moduleName === 'shop' && record.recordType === 'order'
+    if (!toOrder && !toPos) return []
+    const [installed, tables] = await Promise.all([installedModuleNames(), existingTables(['shp_orders'])])
+    if (!installed.has('shop') || !tables.has('shp_orders')) return []
+
+    if (toOrder) {
+      const rows = await prisma.$queryRaw<{ id: string; order_number: string }[]>`
+        SELECT so."id", so."order_number"
+          FROM "po_orders" o
+          JOIN "shp_orders" so ON so."id" = o."source_ref"->>'orderId'
+         WHERE o."id" = ${record.recordId}
+      `
+      return rows.map((row) => ({
+        moduleName: 'shop',
+        recordType: 'order',
+        recordId: row.id,
+        label: `Order ${row.order_number}`,
+        href: `m/shop/orders/${row.id}`,
+      }))
+    }
+
+    const rows = await prisma.$queryRaw<{ id: string; number: string }[]>`
+      SELECT "id", "number" FROM "po_orders"
+       WHERE "source_ref"->>'orderId' = ${record.recordId}
+       ORDER BY "created_at" ASC
+    `
+    return rows.map((row) => ({
+      moduleName: 'purchase-orders',
+      recordType: 'purchase-order',
+      recordId: row.id,
+      label: `Purchase order ${row.number}`,
+      href: `m/purchase-orders/orders/${row.id}`,
+    }))
   },
 
   /**

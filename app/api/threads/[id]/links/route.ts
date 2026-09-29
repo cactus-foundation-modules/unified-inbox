@@ -5,7 +5,7 @@ import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { canOpenThread } from '@/modules/unified-inbox/lib/access'
 import { getThreadDetail, recordEvent, recordLink, threadHasLink } from '@/modules/unified-inbox/lib/db'
-import { confirmReference, suggestRecords } from '@/modules/unified-inbox/lib/adapters'
+import { confirmReference, linkRelatedRecords, suggestRecords } from '@/modules/unified-inbox/lib/adapters'
 import { buildThreadContextQuery } from '@/modules/unified-inbox/lib/identity'
 import type { LinkKind } from '@/modules/unified-inbox/lib/linking'
 
@@ -55,6 +55,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     linkedBy: 'user',
   })
   await recordEvent(id, user.id, 'linked', { label: target.label, moduleName: target.moduleName })
+  // The order behind a purchase order, or the purchase orders behind an order,
+  // come with it - see linkRelatedRecords.
+  await linkRelatedRecords(id, target)
 
   return NextResponse.json({ ok: true, label: target.label })
 }

@@ -2,6 +2,7 @@
 
 import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { AdminTooltip } from '@/components/admin/Tooltip'
 
 // The name at the head of a conversation, which is also where it is renamed.
 //
@@ -102,12 +103,14 @@ export function ThreadSubject({ threadId, subject }: Props) {
 
   return (
     <h2 className="uin-thread-subject uin-subject-editable">
-      {/* Two lines, then an ellipsis - so the whole of it goes in the title,
+      {/* Two lines, then an ellipsis - so the whole of it goes in the tooltip,
           where a subject cut short can still be read. */}
-      <button type="button" className="uin-subject-button" title={shown} onClick={start}>
-        {shown}
-        <span className="sr-only"> - press to rename</span>
-      </button>
+      <AdminTooltip title={shown} body="Press to rename" style={{ display: 'block' }}>
+        <button type="button" className="uin-subject-button" onClick={start}>
+          {shown}
+          <span className="sr-only"> - press to rename</span>
+        </button>
+      </AdminTooltip>
     </h2>
   )
 }

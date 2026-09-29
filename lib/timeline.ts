@@ -280,6 +280,11 @@ function lineFor(
       return to ? `${who} renamed it to “${to}”` : `${who} renamed it`
     }
 
+    case 'contact_set': {
+      const to = str(d.to)
+      return to ? `${who} said it is with ${to}` : `${who} let it go back to showing whoever wrote last`
+    }
+
     case 'merged': {
       const to = str(d.subjectTo)
       return to ? `${who} merged it with another and kept the subject “${to}”` : `${who} merged it with another`

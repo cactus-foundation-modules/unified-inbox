@@ -1,6 +1,7 @@
 'use client'
 
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import type { ContextHint } from '@/modules/unified-inbox/lib/adapters/types'
 import type { LinkKind } from '@/modules/unified-inbox/lib/linking'
@@ -240,7 +241,12 @@ export function ContextRecords({
         {ChevronDownIcon}
       </button>
 
-      {open && at && (
+      {/* Into the page body, the way Dropdown draws its panels. The menu is
+          position: fixed, and fixed only means "to the window" while no
+          ancestor has a backdrop-filter - the glass header this arrow sits in
+          has one, so the menu opened against the header instead, clipped out
+          of sight, and the arrow looked as if it did nothing at all. */}
+      {open && at && typeof document !== 'undefined' && createPortal(
         <div
           className="uin-ctxbar-menu"
           ref={menu}
@@ -304,7 +310,8 @@ export function ContextRecords({
             <p className="uin-ctx-sub">No context on this yet.</p>
           )}
           {canAdd && <AddLink threadId={threadId} kinds={kinds} defaultKind={defaultKind} />}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

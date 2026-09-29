@@ -232,7 +232,7 @@ the same human collapse into one story.
   behind.
 - **Send it later, and chase it up.** A message written at half past eleven at
   night can be set to go out at nine in the morning - off the alarm clock under
-  the box, which offers the same times, in the same words, as the clock that
+  the box, which offers the same times, in the same words, as the clock beside Done that
   puts a conversation to sleep. It can carry a follow-up with it: once it has
   gone, the conversation goes quiet until whenever you said and comes back if
   nobody has answered. A reply cancels the chase on its own, so you only see it

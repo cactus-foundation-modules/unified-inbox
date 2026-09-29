@@ -12,6 +12,7 @@ import {
   mergeOrder,
   searchRequestFrom,
   sortByChannelOrder,
+  formatStamp,
   formatWhen,
   inboxHref,
   initialsFor,
@@ -370,6 +371,15 @@ describe('discussionFrom and discussionTo', () => {
   })
 })
 
+describe('formatStamp', () => {
+  const now = new Date('2026-09-29T10:00:00Z')
+  it('says today and yesterday in words, with the time', () => {
+    expect(formatStamp(new Date('2026-09-29T08:30:00Z'), now, 'Europe/London')).toBe('Today, 09:30')
+    expect(formatStamp(new Date('2026-09-28T17:48:00Z'), now, 'Europe/London')).toBe('Yesterday, 18:48')
+    expect(formatStamp(new Date('2026-09-25T17:48:00Z'), now, 'Europe/London')).toBe('Fri')
+  })
+})
+
 describe('formatWhen', () => {
   const now = new Date('2026-08-28T15:00:00Z')
 
@@ -395,7 +405,7 @@ describe('formatWhen', () => {
     const londonNow = new Date('2026-08-29T08:00:00Z')
     expect(formatWhen(justAfterMidnight, londonNow, 'Europe/London')).toBe('00:30')
     // In UTC the same instant belongs to the previous day, so it reads as a weekday.
-    expect(formatWhen(justAfterMidnight, londonNow, 'UTC')).toBe('Fri')
+    expect(formatWhen(justAfterMidnight, londonNow, 'UTC')).toBe('Yesterday')
   })
 })
 

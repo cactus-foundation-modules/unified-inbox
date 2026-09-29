@@ -1,6 +1,7 @@
 import { hasPermissions } from '@/lib/permissions/check'
 import type { SessionUser } from '@/lib/auth/session'
 import { existingTables, installedModuleNames } from '../installed'
+import { recordLink, threadHasLink } from '../db'
 import type { LinkKind } from '../linking'
 import type { LinkKindOption } from '../link-kinds'
 import type {
@@ -145,6 +146,57 @@ export async function confirmReference(kind: LinkKind, reference: string): Promi
     }
   }
   return null
+}
+
+/**
+ * Attach whatever belongs alongside a record just attached to a conversation -
+ * the shop order behind a purchase order, the purchase orders raised for a shop
+ * order (see each adapter's `related`).
+ *
+ * Marked as found automatically rather than as the person's own choice, so it
+ * carries the tag that says it can be taken off if it is wrong. Only one step
+ * out: a PO brings its order, and that order does NOT then go on to bring every
+ * other PO raised for it - which on a big order would be a header full of
+ * suppliers who have nothing to do with this one.
+ *
+ * Like confirmReference, gated on what is installed rather than on who is
+ * looking: this decides what a conversation is about. A failure costs the
+ * extra links, never the one somebody asked for.
+ */
+export async function linkRelatedRecords(
+  threadId: string,
+  record: { moduleName: string; recordType: string; recordId: string },
+): Promise<LinkTarget[]> {
+  const wantedTables = [...new Set(ADAPTERS.flatMap((a) => a.tables))]
+  const [installed, tables] = await Promise.all([
+    installedModuleNames(),
+    wantedTables.length > 0 ? existingTables(wantedTables) : Promise.resolve(new Set<string>()),
+  ])
+  const added: LinkTarget[] = []
+  for (const adapter of ADAPTERS) {
+    if (!adapter.related) continue
+    if (adapter.moduleName !== 'core' && !installed.has(adapter.moduleName)) continue
+    if (!adapter.tables.every((t) => tables.has(t))) continue
+    try {
+      for (const target of await adapter.related(record)) {
+        if (await threadHasLink(threadId, target.moduleName, target.recordType, target.recordId)) continue
+        await recordLink({
+          threadId,
+          personId: null,
+          moduleName: target.moduleName,
+          recordType: target.recordType,
+          recordId: target.recordId,
+          label: target.label,
+          confidence: 90,
+          linkedBy: 'auto',
+        })
+        added.push(target)
+      }
+    } catch (err) {
+      console.error(`[unified-inbox] could not attach what goes with ${record.recordType} ${record.recordId}:`, err)
+    }
+  }
+  return added
 }
 
 /**

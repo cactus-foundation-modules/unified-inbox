@@ -7,7 +7,9 @@ import {
   assignThread,
   closeDiscussionFor,
   getThreadDetail,
+  listThreadMessages,
   renameThread,
+  setThreadContact,
   reopenDiscussionFor,
   settleOwnMentionOn,
   recordEvent,
@@ -17,6 +19,7 @@ import {
 } from '@/modules/unified-inbox/lib/db'
 import { queueAssignmentWebhooks } from '@/modules/unified-inbox/lib/colleague-webhooks'
 import { pushProviderRead } from '@/modules/unified-inbox/lib/provider-read'
+import { threadContactKey, threadContacts } from '@/modules/unified-inbox/lib/thread-contact'
 import { ThreadPatchBody } from '@/modules/unified-inbox/lib/validation'
 
 // Working through a conversation: read it, rename it, hand it to somebody, put
@@ -59,6 +62,21 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   if (body.subject !== undefined && body.subject !== (thread.subject ?? '').trim()) {
     await renameThread(id, body.subject)
     await recordEvent(id, user.id, 'renamed', { from: thread.subject, to: body.subject })
+  }
+
+  // Who it is with. Only somebody who actually appears in it - the list is
+  // worked out again here off the messages, the same way the browser offered it.
+  if (body.contactAddress !== undefined) {
+    let picked: { name: string | null; address: string } | null = null
+    if (body.contactAddress !== null) {
+      const key = threadContactKey(body.contactAddress)
+      picked = threadContacts(await listThreadMessages(id)).find((c) => threadContactKey(c.address) === key) ?? null
+      if (!picked) return errorResponse('That person is not in this conversation.', 400)
+    }
+    if ((picked?.address ?? null) !== thread.contactAddress || (picked?.name ?? null) !== thread.contactName) {
+      await setThreadContact(id, picked)
+      await recordEvent(id, user.id, 'contact_set', { to: picked ? picked.name ?? picked.address : null })
+    }
   }
 
   if (body.assigneeUserId !== undefined && body.assigneeUserId !== thread.assigneeUserId) {

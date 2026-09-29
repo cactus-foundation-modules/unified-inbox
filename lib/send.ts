@@ -50,6 +50,7 @@ import { getSiteTimezone } from '@/lib/config/timezone.server'
 import { normaliseSubject, buildSnippet, cleanMessageId } from './threading'
 import { htmlToText } from './html'
 import { buildRawMessage } from './mime'
+import { linkRelatedRecords } from './adapters'
 import { appendToSent } from './append'
 import { ownPostOwnerOf } from './own-post'
 import { standDownScheduled } from './stand-down'
@@ -407,6 +408,7 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
       confidence: 100,
       linkedBy: 'user',
     })
+    await linkRelatedRecords(threadId, request.link)
   }
 
   // Everything that was printed on it, now attached to the conversation - the

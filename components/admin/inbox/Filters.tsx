@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { AdminTooltip } from '@/components/admin/Tooltip'
 import { formatCalendarDate, inboxHref } from '@/modules/unified-inbox/lib/list'
 import { BlockedAddresses } from './BlockedAddresses'
 import { ComposeMenu, type ComposeMenuEntry } from './ComposeMenu'
@@ -179,18 +180,20 @@ export function Filters({
               a channel - the full menu stands, because there the assignee
               question is the useful one. */}
           {ownInbox ? (
+            <AdminTooltip body={unreadOnly ? 'Showing only what you have not read. Press to show everything.' : 'Show only what you have not read'}>
             <Link
               className={unreadOnly ? 'uin-icon-btn uin-icon-btn-on' : 'uin-icon-btn'}
               href={inboxHref(base, params, { unread: unreadOnly ? null : '1', ...reset })}
               aria-pressed={unreadOnly}
-              title={unreadOnly ? 'Showing only what you have not read. Press to show everything.' : 'Show only what you have not read'}
             >
               {FilterIcon}
               <span className="sr-only">
                 {unreadOnly ? 'Showing only what you have not read. Show everything.' : 'Show only what you have not read.'}
               </span>
             </Link>
+            </AdminTooltip>
           ) : (
+            <AdminTooltip body={unreadOnly || assignee !== null ? 'Filter - some filters are on' : 'Filter the list'}>
             <FilterMenu
               base={base}
               params={params}
@@ -198,20 +201,22 @@ export function Filters({
               assignee={assignee}
               staff={staff}
             />
+            </AdminTooltip>
           )}
           {/* Order, not contents. A link rather than a button because it is one
               more thing in the address, like every other choice on this screen. */}
+          <AdminTooltip body={oldestFirst ? 'Oldest first. Press for newest first.' : 'Newest first. Press for oldest first.'}>
           <Link
             className="uin-icon-btn"
             href={inboxHref(base, params, { sort: oldestFirst ? null : 'oldest', ...reset })}
             aria-pressed={oldestFirst}
-            title={oldestFirst ? 'Oldest first. Press for newest first.' : 'Newest first. Press for oldest first.'}
           >
             {SortIcon}
             <span className="sr-only">
               {oldestFirst ? 'Showing oldest first. Show newest first.' : 'Showing newest first. Show oldest first.'}
             </span>
           </Link>
+          </AdminTooltip>
         </div>
         {compose && (
           <ComposeMenu

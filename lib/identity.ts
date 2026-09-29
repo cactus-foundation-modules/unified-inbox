@@ -33,7 +33,7 @@ import {
   type PersonGate,
 } from './people'
 import { compilePatterns, extractReferences } from './linking'
-import { confirmReference } from './adapters'
+import { confirmReference, linkRelatedRecords } from './adapters'
 import type { ContextQuery } from './adapters'
 import type { UnifiedInboxSettings } from './types'
 
@@ -389,6 +389,7 @@ export async function autoLinkThread(
       linkedBy: 'auto',
     })
     linked += 1
+    linked += (await linkRelatedRecords(threadId, target)).length
   }
   return linked
 }

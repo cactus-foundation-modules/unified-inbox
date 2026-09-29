@@ -53,7 +53,6 @@ export function FilterMenu(props: Props) {
       className={anyOn ? 'uin-icon-btn uin-icon-btn-on' : 'uin-icon-btn'}
       label={FilterIcon}
       ariaLabel={anyOn ? 'Filter the list. Some filters are on.' : 'Filter the list'}
-      title="Filter"
       align="end"
       width={250}
     >

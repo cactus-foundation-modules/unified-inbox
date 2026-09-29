@@ -19,9 +19,9 @@ import {
   mergeContactKey, mergeContacts, pickWinner, widenedAccessWarning,
 } from '@/modules/unified-inbox/lib/thread-merge'
 import {
-  AlarmIcon, BinIcon, ChevronDownIcon, MailOpenIcon,
+  AlarmIcon, BinIcon, ChevronDownIcon, CloseIcon, MailOpenIcon,
   MailSealedIcon, MergeIcon, PaperclipIcon, ReplyIcon, RestoreIcon,
-  SpamIcon, TickIcon,
+  SpamIcon, SquareIcon, SquareTickIcon, TickIcon,
 } from './icons'
 import { AdminTooltip } from '@/components/admin/Tooltip'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -809,157 +809,152 @@ export function ThreadListView({
           <span className="uin-bulk-count">
             {picked.length} selected
           </span>
-          {/* Nearly all of this bar is drawings now. It used to be eight
-              buttons with whole instructions written on them - "Mark as read",
-              "Mark as unread", "Mark as spam" - which at eleven characters a
-              word wrapped onto three lines inside a list column and pushed the
-              rows down the screen every time anybody picked one. The same eight
-              acts are the same eight icons the conversation beside the list
-              already uses for them, so there is one drawing per act on the
-              whole screen rather than a picture in one place and a sentence in
-              the other. Each one carries the admin's own tooltip and a line for
-              a screen reader - see BinButton, which draws its bin exactly this
-              way and for exactly these reasons.
+          {/* The same three capsules the head of one open conversation draws,
+              in the same order, so a pick of six and a single conversation are
+              one set of controls rather than two to learn: the two that get rid
+              of something, then where they stand, then whether they have been
+              read. Each capsule only holds the presses that would change
+              something about THIS pile - see `offer` - which is why the middle
+              one grows a second square when the pile is part done and part
+              not, and the last one a second envelope when it is part read. */}
+          <div className="uin-action-group" role="group" aria-label="Bin and junk">
+            {/* The bin, offered everywhere except the Bin folder itself - where
+                the same button turns round and puts the pile back. Neither press
+                destroys anything: that is "Empty bin", and it asks. */}
+            {bin ? (
+              <AdminTooltip body="Put them back">
+                <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
+                        onClick={() => void restorePicked()}>
+                  {RestoreIcon}
+                  <span className="sr-only">Take the {picked.length} picked {them(picked.length)} out of the bin</span>
+                </button>
+              </AdminTooltip>
+            ) : (
+              <AdminTooltip body="Delete - moves them to the bin">
+                <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
+                        onClick={() => void deletePicked()}>
+                  {BinIcon}
+                  <span className="sr-only">
+                    Move the {picked.length} picked {them(picked.length)} to the bin. Nothing is
+                    destroyed until the bin is emptied.
+                  </span>
+                </button>
+              </AdminTooltip>
+            )}
+            {/* Not in the Spam folder, where everything is already marked, and
+                not in the Bin, where junk would move them between two folders
+                they stay hidden in either way. */}
+            {!spam && !bin && (
+              <AdminTooltip body="Junk - moves them to the spam folder">
+                <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
+                        onClick={markPickedSpam}>
+                  {SpamIcon}
+                  <span className="sr-only">Move the {picked.length} picked {them(picked.length)} to the spam folder</span>
+                </button>
+              </AdminTooltip>
+            )}
+          </div>
 
-              The two that are still words are the two that say where a
-              conversation STANDS rather than what is about to happen to it.
-              "Done" and "Reopen" have no drawing anybody would recognise
-              without being taught it, and a tick in a bar that also holds a bin
-              and a no-entry sign reads as "confirm" rather than as "filed".
-
-              Each of them only where it would actually do something - see
-              `offer` above for why a button that changes nothing is worse than
-              no button at all. */}
-          {offer.done && (
-            <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                    onClick={() => void closePicked(
-                      { status: 'done' },
-                      `${picked.length} ${them(picked.length)} marked as done.`,
-                    )}>
-              Done
-            </button>
-          )}
-          {offer.open && (
-            <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
-                    onClick={() => void closePicked(
-                      { status: 'open' },
-                      `${picked.length} ${them(picked.length)} opened again.`,
-                    )}>
-              Reopen
-            </button>
-          )}
-          {offer.read && (
-            <AdminTooltip body="Mark as read">
-              <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
-                      onClick={() => void applyToPicked({ unread: false })}>
-                {MailOpenIcon}
-                <span className="sr-only">Mark the {picked.length} picked {them(picked.length)} as read</span>
-              </button>
+          {/* Where they stand. All still open: the empty square, which files
+              them, as it does on one conversation. All done: the ticked one,
+              which opens them again. A mixture: both, so either answer is one
+              press away - the empty square opens every one of them, the ticked
+              one files every one of them. The clock beside them either way:
+              choosing a new time for something already asleep is a real change. */}
+          <div className="uin-action-group" role="group" aria-label="Done, open and snooze">
+            {offer.open && (
+              <AdminTooltip body={`Open all ${picked.length} again`}>
+                <button type="button" className="uin-icon-btn uin-icon-btn-framed uin-bulk-status"
+                        aria-pressed={!offer.done ? true : undefined} disabled={busy}
+                        onClick={() => void closePicked(
+                          { status: 'open' },
+                          `${picked.length} ${them(picked.length)} opened again.`,
+                        )}>
+                  {offer.done ? SquareIcon : SquareTickIcon}
+                  <span className="sr-only">Open the {picked.length} picked {them(picked.length)} again</span>
+                </button>
+              </AdminTooltip>
+            )}
+            {offer.done && (
+              <AdminTooltip body={`Mark all ${picked.length} as done`}>
+                <button type="button" className="uin-icon-btn uin-icon-btn-framed uin-bulk-status"
+                        disabled={busy}
+                        onClick={() => void closePicked(
+                          { status: 'done' },
+                          `${picked.length} ${them(picked.length)} marked as done.`,
+                        )}>
+                  {offer.open ? SquareTickIcon : SquareIcon}
+                  <span className="sr-only">Mark the {picked.length} picked {them(picked.length)} as done</span>
+                </button>
+              </AdminTooltip>
+            )}
+            {/* The same panel the clock on a single conversation opens - one
+                vocabulary for one idea. */}
+            <AdminTooltip body="Snooze - set when these come back">
+              <Dropdown
+                className="uin-icon-btn uin-icon-btn-framed"
+                label={AlarmIcon}
+                ariaLabel="Set when these come back"
+                align="start"
+                width={280}
+                disabled={busy}
+                panelClassName="uin-menu-snooze"
+              >
+                <SnoozePanel
+                  timezone={timezone}
+                  busy={busy}
+                  title={picked.length === 1 ? 'Snooze this one' : `Snooze these ${picked.length}`}
+                  onSnooze={(until) => void closePicked(
+                    { status: 'snoozed', snoozeUntil: until.toISOString() },
+                    `${picked.length} ${them(picked.length)} snoozed.`,
+                  )}
+                />
+              </Dropdown>
             </AdminTooltip>
-          )}
-          {offer.unread && (
-            <AdminTooltip body="Mark as unread">
-              <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
-                      onClick={() => void applyToPicked({ unread: true })}>
-                {MailSealedIcon}
-                <span className="sr-only">Mark the {picked.length} picked {them(picked.length)} as unread</span>
-              </button>
-            </AdminTooltip>
-          )}
-          {/* The one button in this bar that asks a question rather than doing a
-              thing, so it is a menu rather than a press: "when" has no sensible
-              default and a bar button that put six conversations to sleep until
-              some hour nobody chose would be worse than no button.
+          </div>
 
-              The same panel the clock on a single conversation opens, which is
-              deliberate - one vocabulary for one idea, and the times underneath
-              each answer are the SITE's, worked out once when the menu opens.
-              The same clock face too, now that this bar is drawings: a control
-              that opens the identical menu ought to look identical.
+          <div className="uin-action-group" role="group" aria-label="Read, unread and merge">
+            {offer.read && (
+              <AdminTooltip body="Mark as read">
+                <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
+                        onClick={() => void applyToPicked({ unread: false })}>
+                  {MailOpenIcon}
+                  <span className="sr-only">Mark the {picked.length} picked {them(picked.length)} as read</span>
+                </button>
+              </AdminTooltip>
+            )}
+            {offer.unread && (
+              <AdminTooltip body="Mark as unread">
+                <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
+                        onClick={() => void applyToPicked({ unread: true })}>
+                  {MailSealedIcon}
+                  <span className="sr-only">Mark the {picked.length} picked {them(picked.length)} as unread</span>
+                </button>
+              </AdminTooltip>
+            )}
+            {/* Two or more, because merging one conversation into itself is not
+                a thing - and only for whoever set the addresses up, since a
+                merge across two of them changes who can read what. */}
+            {canManage && picked.length > 1 && (
+              <AdminTooltip body="Merge them into one conversation">
+                <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
+                        onClick={() => { setMergeSubject(null); setMergeContact(null); setMerging(true) }}>
+                  {MergeIcon}
+                  <span className="sr-only">Fold the {picked.length} picked conversations into one</span>
+                </button>
+              </AdminTooltip>
+            )}
+          </div>
 
-              Offered whatever is picked, including a pile that is already
-              asleep: unlike Mark as read, choosing a new time for something that
-              already has one is a real change rather than writing down what was
-              already written. Bringing them back is not in here - "Reopen"
-              beside it already does that for the whole pile. */}
-          <AdminTooltip body="Snooze - set when these come back">
-            <Dropdown
-              className="uin-icon-btn uin-icon-btn-framed"
-              label={AlarmIcon}
-              ariaLabel="Set when these come back"
-              align="start"
-              width={280}
-              disabled={busy}
-              panelClassName="uin-menu-snooze"
-            >
-              <SnoozePanel
-                timezone={timezone}
-                busy={busy}
-                title={picked.length === 1 ? 'Snooze this one' : `Snooze these ${picked.length}`}
-                onSnooze={(until) => void closePicked(
-                  { status: 'snoozed', snoozeUntil: until.toISOString() },
-                  `${picked.length} ${them(picked.length)} snoozed.`,
-                )}
-              />
-            </Dropdown>
+          {/* Letting go of the pick, at the far end: the one control here that
+              acts on the pick rather than on the post. A cross, the way the head
+              of a conversation closes it. */}
+          <AdminTooltip body="Clear the selection" className="uin-bulk-clear">
+            <button type="button" className="uin-icon-btn" disabled={busy} onClick={clearPicked}>
+              {CloseIcon}
+              <span className="sr-only">Clear the selection</span>
+            </button>
           </AdminTooltip>
-          {/* Not in the Spam folder, where everything on the screen is already
-              marked and the button would be an offer to do it again - and not
-              in the Bin, where marking something as junk would move it between
-              two folders it stays hidden in either way. */}
-          {!spam && !bin && (
-            <AdminTooltip body="Junk - moves them to the spam folder">
-              <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
-                      onClick={markPickedSpam}>
-                {SpamIcon}
-                <span className="sr-only">Move the {picked.length} picked {them(picked.length)} to the spam folder</span>
-              </button>
-            </AdminTooltip>
-          )}
-          {/* The bin, offered everywhere except the Bin folder itself - where
-              the same button turns round and puts the pile back, because a bin
-              you can fill fifty at a time and empty one at a time is a bin
-              people stop using. Neither press destroys anything: that is the
-              "Empty bin" button in the head of the folder, and it asks. */}
-          {bin ? (
-            <AdminTooltip body="Put them back">
-              <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
-                      onClick={() => void restorePicked()}>
-                {RestoreIcon}
-                <span className="sr-only">Take the {picked.length} picked {them(picked.length)} out of the bin</span>
-              </button>
-            </AdminTooltip>
-          ) : (
-            <AdminTooltip body="Delete - moves them to the bin">
-              <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
-                      onClick={() => void deletePicked()}>
-                {BinIcon}
-                <span className="sr-only">
-                  Move the {picked.length} picked {them(picked.length)} to the bin. Nothing is
-                  destroyed until the bin is emptied.
-                </span>
-              </button>
-            </AdminTooltip>
-          )}
-          {/* Two or more, because merging one conversation into itself is not a
-              thing - and only for whoever set the addresses up, since a merge
-              across two of them changes who can read what. */}
-          {canManage && picked.length > 1 && (
-            <AdminTooltip body="Merge them into one conversation">
-              <button type="button" className="uin-icon-btn uin-icon-btn-framed" disabled={busy}
-                      onClick={() => { setMergeSubject(null); setMergeContact(null); setMerging(true) }}>
-                {MergeIcon}
-                <span className="sr-only">Fold the {picked.length} picked conversations into one</span>
-              </button>
-            </AdminTooltip>
-          )}
-          {/* Still a word, and pushed to the far end of the bar. It is the one
-              control here that acts on the PICK rather than on the post, and a
-              ninth drawing in the row would be a ninth thing to work out before
-              pressing anything. */}
-          <button type="button" className="uin-chip uin-bulk-clear" disabled={busy} onClick={clearPicked}>
-            Clear
-          </button>
         </div>
       )}
 

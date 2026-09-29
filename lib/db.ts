@@ -3401,7 +3401,8 @@ function threadListQuery(
   const order = oldestFirst ? THREAD_LIST_ORDER_OLDEST : THREAD_LIST_ORDER
   return Prisma.sql`
     SELECT t."id", t."inbox_id", t."person_id", t."channel", t."provider_module", t."subject",
-           t."preview", ${statusFor(viewerUserId)} AS "status", t."snooze_until", t."assignee_user_id",
+           COALESCE(pv."preview", t."preview") AS "preview",
+           ${statusFor(viewerUserId)} AS "status", t."snooze_until", t."assignee_user_id",
            t."last_message_at", t."last_direction", t."unread", t."message_count",
            t."created_at", t."started_by_user_id", t."to_user_ids",
            t."contact_name", t."contact_address",
@@ -3429,6 +3430,18 @@ function threadListQuery(
          ORDER BY (m."direction" = 'in') DESC, m."sent_at" DESC
          LIMIT 1
       ) lm ON true
+      -- The line under the subject: the opening of whatever was said LAST,
+      -- either way - the same snippet the stored column was always made from. The stored column is only kept up by some of the ways a
+      -- message arrives - a reply sent from here left it saying "Incoming
+      -- call" underneath a conversation whose newest word was ours - so it is
+      -- read off the newest message itself and the column is only the fallback.
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(NULLIF(btrim(m."snippet"), ''), LEFT(btrim(m."body_text"), 200)) AS "preview"
+          FROM "uin_messages" m
+         WHERE m."thread_id" = t."id" AND m."direction" <> 'note'
+         ORDER BY m."sent_at" DESC, m."created_at" DESC
+         LIMIT 1
+      ) pv ON true
      ORDER BY ${order}`
 }
 
@@ -3942,6 +3955,9 @@ export type ThreadEventKind =
   /** Somebody gave it a different name. `detail` carries what it was called
    *  before and after, as typed. */
   | 'renamed'
+  /** Somebody picked who the conversation is with. `detail.to` is the name or
+   *  address picked, or null where it was handed back to the newest message. */
+  | 'contact_set'
   | 'snoozed'
   | 'woken'
   | 'status'
@@ -4057,6 +4073,20 @@ export async function renameThread(threadId: string, subject: string): Promise<v
   await prisma.$executeRaw`
     UPDATE "uin_threads"
        SET "subject" = ${subject}, "subject_edited_at" = now(), "updated_at" = now()
+     WHERE "id" = ${threadId}
+  `
+}
+
+/** Who the line under the subject says it is with, as somebody here picked it
+ *  (see lib/thread-contact.ts). Both null hands it back to the newest message. */
+export async function setThreadContact(
+  threadId: string,
+  contact: { name: string | null; address: string } | null,
+): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "uin_threads"
+       SET "contact_name" = ${contact?.name ?? null}, "contact_address" = ${contact?.address ?? null},
+           "updated_at" = now()
      WHERE "id" = ${threadId}
   `
 }

@@ -4994,6 +4994,23 @@
 /* Who the conversation is with leads the line under the subject, in the
    weight of a name rather than the grey of a label. */
 .uin-thread-with { font-weight: 600; color: var(--color-text); }
+/* The same name, pressable (ThreadContactPicker): it looks exactly like the
+   plain one, and only its hover and focus say it opens something - the way the
+   subject above it renames itself. */
+.uin-contact-button {
+  margin: 0 0 0 -0.25rem;
+  padding: 0.05rem 0.25rem;
+  border: 0;
+  border-radius: 0.3rem;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.uin-contact-button:hover,
+.uin-contact-button[aria-expanded="true"] { background: var(--color-bg-subtle); }
+.uin-contact-button:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+.uin-contact-error { font-size: 0.75rem; color: var(--color-danger); }
 
 /* ---- the head of an open conversation ----------------------------------- */
 /* Whose it is, as a capsule of two halves: a person, or their name once
@@ -5092,8 +5109,38 @@
 /* Where it stands, as a box to tick. The tick is the whole of the state, so
    the pressed button keeps the ordinary glass rather than filling in as well. */
 .uin-done-toggle svg { width: 19px; height: 19px; }
-.uin-thread-actions .uin-done-toggle[aria-pressed="true"] { background: var(--uin-fill); color: var(--color-text); }
-.uin-thread-actions .uin-done-toggle[aria-pressed="true"]:hover { background: var(--uin-fill-hover); }
+/* Done, with the snooze clock on its end: one capsule, two presses. The
+   capsule itself is not a button here, so it keeps still under the pointer and
+   each half lights up on its own. */
+.uin-done-split { cursor: default; gap: 0; }
+.uin-done-split:hover { background: var(--uin-fill); }
+.uin-done-split > *:not(.uin-capsule-sep),
+.uin-done-split > * > * { display: inline-flex; align-self: stretch; height: 100%; }
+.uin-done-toggle,
+.uin-done-more {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  padding: 0 0.45rem 0 0.6rem;
+  border: 0;
+  border-radius: var(--radius-full, 9999px) 0 0 var(--radius-full, 9999px);
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+.uin-done-more { padding: 0 0.6rem 0 0.45rem; border-radius: 0 var(--radius-full, 9999px) var(--radius-full, 9999px) 0; }
+.uin-done-more-icon { display: grid; place-items: center; color: var(--color-text-secondary); }
+.uin-done-more-icon svg { display: block; width: 18px; height: 18px; }
+.uin-done-more:hover .uin-done-more-icon,
+.uin-done-more[aria-expanded="true"] .uin-done-more-icon { color: var(--color-text); }
+.uin-done-toggle:hover,
+.uin-done-more:hover,
+.uin-done-more[aria-expanded="true"] { background: var(--uin-fill-hover); }
+.uin-done-toggle:disabled,
+.uin-done-more:disabled { opacity: 0.6; cursor: default; }
+.uin-done-toggle:focus-visible,
+.uin-done-more:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
 
 /* An outsider's name or address on a message, which opens every conversation
    they are in. Their own colour, not the link colour - a header full of blue
@@ -5206,6 +5253,7 @@
    (see the portals), so they carry their own copy of the glass. */
 .uin-menu,
 .uin-compose-menu,
+.uin-ctxbar-menu,
 .uin-modal-card {
   --uin-fill: color-mix(in srgb, var(--color-text) 7%, transparent);
   --uin-fill-hover: color-mix(in srgb, var(--color-text) 12%, transparent);
@@ -5344,3 +5392,72 @@
 @media (prefers-reduced-motion: reduce) {
   .uin-search, .uin-icon-btn, .uin-rail-search, .uin-tab, .uin-capsule { transition: none; }
 }
+
+/* ---- the rest of the head of a conversation, and each message's tools --- */
+/* The close cross, the arrow that opens the context, and the dots and reply
+   arrow on every message: round glass, the same as the buttons beside them.
+   They were the last little squares with a border that only appeared under
+   the pointer, which next to a row of glass read as something left over. */
+.uin-thread-close,
+.uin-ctxbar-more,
+.uin-msg-tools .uin-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--uin-fill);
+  box-shadow: var(--uin-shine);
+  color: var(--color-text-secondary);
+  transition: background 0.15s ease-out, color 0.15s ease-out;
+}
+.uin-thread-close:hover,
+.uin-ctxbar-more:hover,
+.uin-ctxbar-more[aria-expanded="true"],
+.uin-msg-tools .uin-icon-btn:hover:not(:disabled),
+.uin-msg-tools .uin-icon-btn[aria-expanded="true"] {
+  border-color: transparent;
+  background: var(--uin-fill-hover);
+  color: var(--color-text);
+}
+@media (min-width: 900px) {
+  .uin-thread-close { width: var(--uin-pill-h); height: var(--uin-pill-h); min-height: 0; padding: 0; }
+}
+.uin-ctxbar-more { width: 1.75rem; height: 1.75rem; }
+.uin-msg-tools { gap: 0.3rem; }
+.uin-msg-tools .uin-icon-btn { width: 1.875rem; height: 1.875rem; }
+/* A finger wants the bigger target the touch block above gives these, which
+   the sizes just above would otherwise overrule by coming later. */
+@media (pointer: coarse) {
+  .uin-ctxbar-more,
+  .uin-msg-tools .uin-icon-btn { width: 2.25rem; height: 2.25rem; }
+  .uin-thread-close { min-height: 2.5rem; }
+}
+.uin-ctxbar-menu { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, var(--font-sans, sans-serif); }
+
+/* The arrows to the message above and below, between the date and the dots -
+   the same round glass as the dots and the reply arrow beside them. */
+.uin-msg-steps { display: inline-flex; align-items: center; gap: 0.3rem; margin-left: 0.3rem; flex: 0 0 auto; }
+.uin-msg-steps .uin-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.875rem;
+  height: 1.875rem;
+  border: 0;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--uin-fill);
+  box-shadow: var(--uin-shine);
+  color: var(--color-text-secondary);
+  transition: background 0.15s ease-out, color 0.15s ease-out;
+}
+.uin-msg-steps .uin-icon-btn:hover { border-color: transparent; background: var(--uin-fill-hover); color: var(--color-text); }
+@media (pointer: coarse) {
+  .uin-msg-steps .uin-icon-btn { width: 2.25rem; height: 2.25rem; }
+}
+
+/* The squares in the bar over a pick, drawn at the size the same squares are
+   on one conversation. Pressed keeps the ordinary glass: the tick is the state. */
+.uin-bulk .uin-bulk-status svg { width: 19px; height: 19px; }
+.uin-bulk .uin-action-group .uin-bulk-status[aria-pressed="true"] { background: transparent; }
+.uin-bulk .uin-action-group .uin-bulk-status[aria-pressed="true"]:hover { background: var(--uin-fill); }

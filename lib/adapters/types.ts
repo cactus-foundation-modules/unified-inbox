@@ -160,6 +160,16 @@ export type ContextAdapter = {
    * somebody else's the tenth.
    */
   suggest?(kind: LinkKind, term: string, query: ContextQuery | null): Promise<LinkSuggestion[]>
+  /**
+   * Records that belong on a conversation alongside one just attached to it -
+   * ANY module's record, not only this adapter's own. Purchasing answers for
+   * both ends of "this purchase order was raised for that shop order", so
+   * attaching either brings the other with it. Empty for nothing related.
+   *
+   * Only the tables in `tables` are guaranteed to exist; anything else it
+   * reads it must check for itself, since the other module may not be here.
+   */
+  related?(record: { moduleName: string; recordType: string; recordId: string }): Promise<LinkTarget[]>
 }
 
 /** One record offered for attaching: a link target with enough beside it to

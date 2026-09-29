@@ -4,13 +4,14 @@ import type { AttachmentRow, ThreadDetail, ThreadEventRow, ThreadMessageRow } fr
 import type { DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
 import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 import type { ReplyStyle } from '@/modules/unified-inbox/lib/channel-reply'
-import { channelLabel, formatFull, formatWhen, inboxHref, splitQuotedText } from '@/modules/unified-inbox/lib/list'
+import { channelLabel, formatFull, formatStamp, formatWhen, inboxHref, splitQuotedText } from '@/modules/unified-inbox/lib/list'
 import { draftHref } from '@/modules/unified-inbox/lib/drafts'
 import {
   attributionLine, forwardHeaderRows, forwardSubject as forwardSubjectOf, replySubject as replySubjectOf,
 } from '@/modules/unified-inbox/lib/compose'
 import { normaliseSubject } from '@/modules/unified-inbox/lib/threading'
 import { isSideText } from '@/modules/unified-inbox/lib/text-rules'
+import { threadContacts } from '@/modules/unified-inbox/lib/thread-contact'
 import type { QuotedPreview } from '@/modules/unified-inbox/lib/quoted-preview'
 import { describeSendAt } from '@/modules/unified-inbox/lib/scheduled'
 import { describeEvents, weaveTimeline, type TimelineEvent, type TimelineLine } from '@/modules/unified-inbox/lib/timeline'
@@ -20,11 +21,13 @@ import { MessageText } from './MessageText'
 import { RetryButton } from './RetryButton'
 import { ThreadActions } from './ThreadActions'
 import { ThreadSubject } from './ThreadSubject'
+import { ThreadContactPicker } from './ThreadContactPicker'
 import { DeleteMessageButton } from './MessageActions'
 import { ProviderAudio, type ProviderAudioFile } from './ProviderAudio'
 import { BlockParticipant } from './BlockParticipant'
 import { ComposerOpenProvider, ComposerSlot } from './ComposerOpen'
 import { MessageMenu } from './MessageMenu'
+import { MessageSteps } from './MessageSteps'
 import { NoteBar } from './NoteBar'
 import { ThreadContext, hasThreadContext, type ThreadContextView } from './ThreadContext'
 import { UnmergeButton, type ThreadMergeView } from './Unmerge'
@@ -265,12 +268,11 @@ const AUTO_LABELS: Record<string, string> = {
   bulk: 'Sent to a list rather than written to you',
 }
 
-/** When a message happened, written the way the list beside it writes the same
- *  thing - a time today, a weekday this week, a date after that - with the full
- *  date in the tooltip for anybody working out exactly when. The two used to
- *  disagree: the list said "Fri" and the conversation said the whole date. */
+/** When a message happened: "Today, 14:20", "Yesterday, 09:05", then a weekday
+ *  this week and a date after that, the way the list writes it - with the full
+ *  date in the tooltip for anybody working out exactly when. */
 function MessageWhen({ at, now, timezone }: { at: Date | string | null; now: Date; timezone: string }) {
-  return <span className="uin-msg-when" title={formatFull(at, timezone)}>{formatWhen(at, now, timezone)}</span>
+  return <span className="uin-msg-when" title={formatFull(at, timezone)}>{formatStamp(at, now, timezone)}</span>
 }
 
 /**
@@ -279,7 +281,7 @@ function MessageWhen({ at, now, timezone }: { at: Date | string | null; now: Dat
  * customers has a picture to put in one and a column of initials was a column
  * of decoration taking the width a narrow pane needs.
  */
-function MessageHeader({ message, sideText, staffById, outsiderLinks, now, timezone, tools }: {
+function MessageHeader({ message, sideText, staffById, outsiderLinks, now, timezone, steps, tools }: {
   message: ThreadMessageView
   /** A text carried on an email conversation, which says so: without it a
    *  customer's text reads as an email with no address on it. */
@@ -292,6 +294,9 @@ function MessageHeader({ message, sideText, staffById, outsiderLinks, now, timez
    *  already built, because ThreadPane is a server component and those two are
    *  the only part of a message that has to be interactive. */
   tools: ReactNode
+  /** The arrows to the message above and below, between the date and the
+   *  dots - see MessageSteps. */
+  steps: ReactNode
 }) {
   if (message.direction === 'note') {
     const author = message.authorUserId ? staffById[message.authorUserId] : null
@@ -304,6 +309,7 @@ function MessageHeader({ message, sideText, staffById, outsiderLinks, now, timez
           </div>
         </div>
         <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
+        {steps}
         {tools}
       </div>
     )
@@ -333,6 +339,7 @@ function MessageHeader({ message, sideText, staffById, outsiderLinks, now, timez
           />
         </div>
         <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
+        {steps}
         {tools}
       </div>
     )
@@ -373,6 +380,7 @@ function MessageHeader({ message, sideText, staffById, outsiderLinks, now, timez
         <ToLine addresses={message.toAddresses} links={outsiderLinks} />
       </div>
       <MessageWhen at={message.sentAt} now={now} timezone={timezone} />
+      {steps}
       {tools}
     </div>
   )
@@ -409,7 +417,7 @@ function isRecording(file: { externalUrl: string | null; contentType: string | n
     && (!!file.contentType?.startsWith('audio/') || /\.(mp3|wav|ogg|m4a)$/i.test(file.filename))
 }
 
-function Message({ message, sideText, threadSubject, staffById, outsiderLinks, now, timezone, canDelete, tools }: {
+function Message({ message, sideText, threadSubject, staffById, outsiderLinks, now, timezone, canDelete, steps, tools }: {
   message: ThreadMessageView
   /** A text carried on an email conversation - see MessageHeader. */
   sideText: boolean
@@ -425,6 +433,8 @@ function Message({ message, sideText, threadSubject, staffById, outsiderLinks, n
   canDelete: boolean
   /** Answering this message, and the rarer things beside it. */
   tools: ReactNode
+  /** The arrows to the neighbouring messages. */
+  steps: ReactNode
 }) {
   const kind = message.direction === 'note' ? 'note' : message.direction === 'out' ? 'out' : 'in'
 
@@ -448,6 +458,7 @@ function Message({ message, sideText, threadSubject, staffById, outsiderLinks, n
         outsiderLinks={outsiderLinks}
         now={now}
         timezone={timezone}
+        steps={steps}
         tools={tools}
       />
       {/* Its own subject, wherever that is not the conversation's. A conversation
@@ -665,6 +676,8 @@ export function ThreadPane({
   canDeleteMessages, canManage, blockState, spamState, binState, now, timezone, heldDrafts, viewerUserId, othersDrafts, focusDraft = null,
   context, asked, merges, otherInboxNames, scrollToMessageId, textTo,
 }: Props) {
+  // Everybody the name under the subject could be changed to.
+  const contacts = threadContacts(messages)
   // The list arrives oldest first. Reversing a copy rather than sorting again:
   // the query already decided the order, and this only says which end to read
   // it from.
@@ -681,6 +694,9 @@ export function ThreadPane({
   const lines = describeEvents(events, { staffById, timezone, viewerUserId })
   const woven = weaveTimeline(messages, lines)
   const ordered = newestFirst ? [...woven].reverse() : woven
+  // The messages in the order they are on the screen, timeline lines left out,
+  // so each one's arrows know which message is above it and which below.
+  const shownIds = ordered.flatMap((entry) => (entry.type === 'line' ? [] : [entry.message.id]))
 
   /** Colleagues' unsent replies, placed where a reply sits - beside the newest
    *  message - so they read as part of the conversation rather than a note
@@ -836,7 +852,19 @@ export function ThreadPane({
           {/* Who it is with rather than how they got in touch - see the note
               where InboxPanel works it out. The channel stays for a discussion,
               which has nobody outside to name. */}
-          {contactHref && contactLabel
+          {/* Pressing the name changes who it is with - see ThreadContactPicker.
+              Only where there is somebody outside to choose between. */}
+          {contactLabel && contacts.length > 0
+            ? (
+                <ThreadContactPicker
+                  threadId={thread.id}
+                  label={contactLabel}
+                  href={contactHref}
+                  contacts={contacts}
+                  chosenAddress={thread.contactAddress}
+                />
+              )
+            : contactHref && contactLabel
             ? (
                 <Link className="uin-thread-with uin-msg-with" href={contactHref} title="Every conversation with them">
                   {contactLabel}
@@ -1007,9 +1035,16 @@ export function ThreadPane({
               }
               const message = entry.message
               const sideText = isSideText(message, thread.channel)
+              const at = shownIds.indexOf(message.id)
               return (
               <Message
                 key={message.id}
+                steps={(
+                  <MessageSteps
+                    previousId={at > 0 ? messageDomId(shownIds[at - 1]!) : null}
+                    nextId={at >= 0 && at < shownIds.length - 1 ? messageDomId(shownIds[at + 1]!) : null}
+                  />
+                )}
                 message={message}
                 sideText={sideText}
                 threadSubject={thread.subject}

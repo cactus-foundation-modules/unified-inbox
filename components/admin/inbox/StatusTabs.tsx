@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { AdminTooltip } from '@/components/admin/Tooltip'
 import { LinkBusy } from './NavProgress'
 import { inboxHref, type StatusFilter } from '@/modules/unified-inbox/lib/list'
 import { AlarmIcon, AssignedIcon, InboxIcon, MailIcon, TickIcon } from './icons'
@@ -86,10 +87,16 @@ export function StatusTabs({
         // mailboxes. The name is still there for a screen reader and in the
         // little yellow box, with the count beside it.
         return (
-          <Link
+          // The site's own tooltip rather than the browser's little yellow box,
+          // the same as every other icon on this screen - and on the one that
+          // is on as well, since its count means nothing without the word.
+          <AdminTooltip
             key={tab.value}
+            body={count > 0 ? `${tab.label} - ${count > 999 ? '999+' : count} ${unit}` : `${tab.label} - none`}
+            style={{ flex: 'none' }}
+          >
+          <Link
             className="uin-tab"
-            title={on ? undefined : (count > 0 ? `${tab.label} (${count > 999 ? '999+' : count})` : tab.label)}
             href={inboxHref(base, params, {
               status: tab.value,
               ...(tab.value === 'unassigned' ? { assignee: null } : {}),
@@ -109,6 +116,7 @@ export function StatusTabs({
             )}
             <LinkBusy />
           </Link>
+          </AdminTooltip>
         )
       })}
     </div>

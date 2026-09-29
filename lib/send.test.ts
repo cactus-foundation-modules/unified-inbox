@@ -73,6 +73,10 @@ vi.mock('./transport', async () => {
 })
 vi.mock('./own-post', () => ownPost)
 vi.mock('./append', () => append)
+// What goes on a conversation alongside a record is the adapters' business and
+// is tested there; here it only has to be asked.
+const adapters = vi.hoisted(() => ({ linkRelatedRecords: vi.fn(async () => []) }))
+vi.mock('./adapters', () => adapters)
 vi.mock('./mime', () => mime)
 vi.mock('./stand-down', () => standDown)
 vi.mock('./attachments', () => ({ loadAttachmentBytes: vi.fn(), cacheAttachment: vi.fn() }))

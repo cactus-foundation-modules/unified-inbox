@@ -247,8 +247,8 @@ export function NoteBar({ threadId, staff }: Props) {
         value={text}
         disabled={busy}
         placeholder={staff.length > 0
-          ? 'Leave an internal note - nobody outside sees this. Type @ to ask somebody'
-          : 'Leave an internal note - nobody outside sees this'}
+          ? 'Leave an internal note. Type @ to ask someone'
+          : 'Leave an internal note'}
         aria-label="Leave an internal note. Nobody outside sees this. Type @ to ask a colleague to look."
         autoComplete="off"
         role="combobox"

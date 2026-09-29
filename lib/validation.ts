@@ -209,6 +209,10 @@ export const ThreadPatchBody = z.object({
   /** A new name for the conversation. Blank is refused rather than read as
    *  "no subject": clearing the box is far more likely a slip than a wish. */
   subject: z.string().trim().min(1).max(300).optional(),
+  /** Who it is with: an address somebody in the conversation used, or null to
+   *  go back to reading it off the newest message. The name is not sent - the
+   *  route looks it up off the messages, so it cannot be made up. */
+  contactAddress: z.string().trim().min(1).max(320).nullable().optional(),
 })
 
 /** Junk, as one person sees it. One boolean, because there are exactly two
