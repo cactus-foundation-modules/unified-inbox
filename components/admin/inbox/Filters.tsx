@@ -4,7 +4,6 @@ import { formatCalendarDate, inboxHref } from '@/modules/unified-inbox/lib/list'
 import { BlockedAddresses } from './BlockedAddresses'
 import { ComposeMenu, type ComposeMenuEntry } from './ComposeMenu'
 import { EmptyBinButton } from './EmptyBinButton'
-import { FilterMenu } from './FilterMenu'
 import { QueryForm } from './QueryForm'
 import { FilterIcon, SearchIcon, SortIcon } from './icons'
 
@@ -16,7 +15,7 @@ import { FilterIcon, SearchIcon, SortIcon } from './icons'
 // Search sits FIRST, above the tabs, which is where a mail program keeps it and
 // where somebody arriving to find one thing looks before they look anywhere
 // else. Beside it, the controls that are about the list rather than in it: the
-// filters, behind one button (see FilterMenu), and the one that changes the
+// unread switch, and the one that changes the
 // order rather than the contents - newest first, or oldest first for working a
 // backlog off the bottom without the top moving under you.
 //
@@ -36,15 +35,16 @@ import { FilterIcon, SearchIcon, SortIcon } from './icons'
 // The filters used to be laid out flat here: a chip, a menu of names, and a
 // Filter button to make the menu mean anything. That is a permanent row of
 // controls across the top of the column for two questions asked once a week,
-// so they went behind the button and the row underneath now holds only what is
-// actually switched on.
+// so they went behind a button, and then the names went altogether: whose desk
+// something is on is the Unassigned tab's question and the pinned header's, and
+// a filter for it was a menu nobody opened. What is left is one switch - unread
+// or everything - and the row underneath holds only what is actually on.
 //
 // "Mine" used to be a chip here, and then briefly a place in the rail. It is
 // neither now: what has been handed to somebody shows in the address they open
 // on, beside the post that arrived there, because "what is on my desk" is the
 // screen they are already looking at rather than a filter they remember to
-// press or a second list they remember to check. What is left here is the
-// genuinely occasional question - what is on somebody ELSE's desk.
+// press or a second list they remember to check.
 //
 // All of it lives in the head of the list column, so it stays put while forty
 // conversations go past underneath. It used to sit above the whole workspace,
@@ -54,7 +54,7 @@ import { FilterIcon, SearchIcon, SortIcon } from './icons'
 // Links and a form rather than client state: this panel is drawn on the server
 // from the query string, so a filter held in the browser would describe a list
 // the server had not drawn. The address stays the state; only the way it is
-// changed is the router's job (see QueryForm and FilterMenu), so narrowing a
+// changed is the router's job (see QueryForm), so narrowing a
 // list no longer fetches the whole admin again.
 
 type Props = {
@@ -80,9 +80,6 @@ type Props = {
   /** Which end of the list is being read from, so the button can say what
    *  pressing it would do rather than what is already true. */
   oldestFirst: boolean
-  /** Whether this is the reader's OWN address, where the menu collapses into a
-   *  single unread toggle. See the note above the button below. */
-  ownInbox: boolean
   /** The Spam folder, which is the one list that gets a fourth control - the
    *  addresses the site turns away. Null everywhere else, and that is the whole
    *  of the condition: see the note beside the button. */
@@ -103,7 +100,7 @@ type Props = {
 }
 
 export function Filters({
-  base, params, unreadOnly, assignee, search, narrowed, staff, oldestFirst, ownInbox,
+  base, params, unreadOnly, assignee, search, narrowed, staff, oldestFirst,
   blockedAddresses, emptyBin, compose,
 }: Props) {
   // Any filter change starts again at page one and closes whatever was open,
@@ -170,39 +167,21 @@ export function Filters({
             shows rather than what is in it. On a phone the stylesheet moves it
             to the near side of the search. */}
         <div className="uin-list-tools" role="group" aria-label="Filter and order">
-          {/* On the reader's OWN address the menu is a menu of one, so it is not
-              a menu. Everything in that list is either post that came to them or
-              work handed to them; "whose desk is this on" has the same answer all
-              the way down, and a panel that has to be opened to find one tick is
-              two presses for a question with one answer. So the same button in
-              the same place becomes a plain switch: press it for the unread,
-              press it again for the lot. Everywhere else - a shared address, All,
-              a channel - the full menu stands, because there the assignee
-              question is the useful one. */}
-          {ownInbox ? (
-            <AdminTooltip body={unreadOnly ? 'Showing only what you have not read. Press to show everything.' : 'Show only what you have not read'}>
-            <Link
-              className={unreadOnly ? 'uin-icon-btn uin-icon-btn-on' : 'uin-icon-btn'}
-              href={inboxHref(base, params, { unread: unreadOnly ? null : '1', ...reset })}
-              aria-pressed={unreadOnly}
-            >
-              {FilterIcon}
-              <span className="sr-only">
-                {unreadOnly ? 'Showing only what you have not read. Show everything.' : 'Show only what you have not read.'}
-              </span>
-            </Link>
-            </AdminTooltip>
-          ) : (
-            <AdminTooltip body={unreadOnly || assignee !== null ? 'Filter - some filters are on' : 'Filter the list'}>
-            <FilterMenu
-              base={base}
-              params={params}
-              unreadOnly={unreadOnly}
-              assignee={assignee}
-              staff={staff}
-            />
-            </AdminTooltip>
-          )}
+          {/* The one filter: unread, or everything. A plain switch rather than
+              a menu of one, because a panel that has to be opened to find one
+              tick is two presses for a question with one answer. */}
+          <AdminTooltip body={unreadOnly ? 'Showing only what you have not read. Press to show everything.' : 'Show only what you have not read'}>
+          <Link
+            className={unreadOnly ? 'uin-icon-btn uin-icon-btn-on' : 'uin-icon-btn'}
+            href={inboxHref(base, params, { unread: unreadOnly ? null : '1', ...reset })}
+            aria-pressed={unreadOnly}
+          >
+            {FilterIcon}
+            <span className="sr-only">
+              {unreadOnly ? 'Showing only what you have not read. Show everything.' : 'Show only what you have not read.'}
+            </span>
+          </Link>
+          </AdminTooltip>
           {/* Order, not contents. A link rather than a button because it is one
               more thing in the address, like every other choice on this screen. */}
           <AdminTooltip body={oldestFirst ? 'Oldest first. Press for newest first.' : 'Newest first. Press for oldest first.'}>

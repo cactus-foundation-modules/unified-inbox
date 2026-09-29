@@ -419,7 +419,7 @@ export function ThreadListView({
       // A pile that has just been filed, put to sleep or binned has left the
       // list, and the conversation open beside it may have been in the pile - in
       // which case the pane is showing something the list no longer holds. It
-      // goes back to "Nothing open", exactly as it does when the same thing is
+      // closes and the list takes the width again, exactly as when the same thing is
       // done to that one conversation from its own header.
       if (openWasPicked) closePane()
       else if (refresh) router.refresh()

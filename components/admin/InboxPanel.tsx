@@ -97,7 +97,6 @@ import { replyDestination, replyStyleFor } from '@/modules/unified-inbox/lib/cha
 import { pushProviderRead } from '@/modules/unified-inbox/lib/provider-read'
 import { providerForKey, visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
 import { InboxStyles } from './inbox/styles'
-import { InboxIcon } from './inbox/icons'
 import { NavRail } from './inbox/NavRail'
 import { CampaignsPanel } from './inbox/campaigns/CampaignsPanel'
 import { StatusTabs } from './inbox/StatusTabs'
@@ -2161,6 +2160,7 @@ export async function UnifiedInboxPanel({
       <div
         className="uin-app"
         data-open={opened ? '1' : '0'}
+        data-list={opened ? 'split' : 'full'}
         data-context="off"
         data-find={params.searchPage ? '1' : '0'}
       >
@@ -2271,9 +2271,6 @@ export async function UnifiedInboxPanel({
                     }}
                     staff={staff}
                     oldestFirst={params.oldestFirst}
-                    /* Their own address, where "who is this on" has one answer
-                       all the way down and the menu is a switch instead. */
-                    ownInbox={!!pinnedInboxId && params.inboxId === pinnedInboxId}
                     /* The Spam folder, and only for somebody who may read the
                        site's settings - which is the grant the list itself takes,
                        because who is blocked is a fact about how the site is set
@@ -2316,21 +2313,10 @@ export async function UnifiedInboxPanel({
           <div className="uin-col-scroll">{listView}</div>
         </div>
 
-        {/* Always drawn, even with nothing in it. A right-hand half that appears
-            and disappears is a screen that jumps every time somebody opens a
-            row, and a mail program that shows a reading pane only once you have
-            picked something is not one anybody recognises. */}
-        <div className="uin-read">
-          {otherPane ?? threadPane ?? (
-            <div className="uin-nothing">
-              {InboxIcon}
-              <strong>Nothing open</strong>
-              {params.contactsOnly
-                ? 'Pick somebody from the list to see their card, everything they have written and everything the rest of the site knows about them.'
-                : 'Pick something from the list to read it. Everything you can then do with it - answering it, setting it aside, handing it on - is at the top of it.'}
-            </div>
-          )}
-        </div>
+        {/* Only drawn when something is open. With nothing picked the list
+            takes the whole width (data-list="full" above) rather than sharing
+            it with half a screen that says there is nothing in it. */}
+        {opened && <div className="uin-read">{otherPane ?? threadPane}</div>}
 
         {/* The two hairlines between the rail, the list and the conversation,
             made draggable. Last inside the frame so it is over the panes rather

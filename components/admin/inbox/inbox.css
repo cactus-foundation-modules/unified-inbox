@@ -196,6 +196,27 @@
   }
 }
 
+/* NOTHING OPEN, THE LIST TAKES THE WIDTH. The inbox draws no reading pane
+   until something is picked (InboxPanel sets data-list="full"), so from 900px
+   up the list stretches across where the pane would be rather than sitting
+   beside half a screen of nothing. Scoped to the attribute, not to
+   data-open="0", because the campaigns screen shares this frame and keeps its
+   own empty pane. After the rules above so it wins at equal specificity. */
+@media (min-width: 900px) {
+  .uin-app[data-list="full"] {
+    grid-template-areas: "rail" "find" "list";
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+}
+@media (min-width: 1200px) {
+  .uin-app[data-list="full"] {
+    grid-template-areas: "rail find" "rail list";
+    grid-template-columns: var(--uin-rail) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+}
+
 /* ---- the handles between the columns ------------------------------------ */
 /* How wide the list wants to be is a question about the person reading it, not
    about the screen, so the two hairlines between the three columns can be
@@ -230,6 +251,8 @@
   }
   .uin-resize[data-edge="rail"] { left: calc(var(--uin-rail) - 4px); }
   .uin-resize[data-edge="list"] { left: calc(var(--uin-rail) + var(--uin-list) - 4px); }
+  /* No edge to drag when the list is the whole width. */
+  .uin-app[data-list="full"] .uin-resize[data-edge="list"] { display: none; }
 
   /* The line itself, inside the target rather than being it: the thing somebody
      can hit is nine pixels wide and the thing they can see is two. */
@@ -3704,45 +3727,6 @@
 }
 .uin-menu-item-after { flex: none; display: inline-flex; color: var(--color-text-secondary); }
 .uin-menu-sep { height: 1px; margin: 0.2rem 0.25rem; background: var(--color-border); }
-/* A panel with two halves to it - the filters, and the names behind them. The
-   way back sits hard left so the title stays put when the panel swaps what is
-   in it, rather than sliding across as the words change. */
-.uin-menu-back { justify-content: center; position: relative; }
-.uin-menu-back .uin-icon-btn { position: absolute; left: 0.15rem; }
-/* Finding one colleague among thirty. Same box as the search over the list, at
-   the width of the panel it is in. */
-.uin-menu-search {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  margin: 0.1rem 0.25rem 0.25rem;
-  padding: 0 0.5rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius, 0.375rem);
-  background: var(--color-bg);
-  color: var(--color-text-muted);
-}
-.uin-menu-search:focus-within {
-  border-color: var(--color-border-focus);
-  box-shadow: 0 0 0 3px var(--color-primary-glow);
-}
-.uin-menu-search svg { display: block; width: 14px; height: 14px; }
-.uin-menu-search input {
-  flex: 1 1 auto;
-  min-width: 0;
-  border: 0;
-  background: none;
-  padding: 0.35rem 0;
-  font-size: 0.8125rem;
-  color: var(--color-text);
-}
-.uin-menu-search input:focus { outline: none; box-shadow: none; }
-.uin-menu-empty {
-  margin: 0;
-  padding: 0.45rem 0.5rem;
-  font-size: 0.75rem;
-  color: var(--color-text-secondary);
-}
 
 /* ---- a button that is only an icon -------------------------------------- */
 /* No border until it is wanted, so a run of them beside a name reads as marks

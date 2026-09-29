@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { AdminTooltip } from '@/components/admin/Tooltip'
 import { LinkBusy } from './NavProgress'
 import { inboxHref, type StatusFilter } from '@/modules/unified-inbox/lib/list'
-import { AlarmIcon, AssignedIcon, InboxIcon, MailIcon, TickIcon } from './icons'
+import { AlarmIcon, AssignedIcon, InboxIcon, SquareIcon, TickIcon } from './icons'
 
 // Where a conversation stands, at the head of the list it narrows: waiting, set
 // aside, dealt with, or the lot - and, on a shared address, the queue in front
@@ -50,13 +50,13 @@ type Tab = { value: StatusFilter; label: string; countKey: string; icon: React.R
  *  after the three that answer what has already been dealt with.
  *
  *  It sets `status` and clears `assignee`, because it already says whose these
- *  are. Left carried, a name chosen in the filter menu would sit underneath it
+ *  are. Left carried, an assignee still in the address would sit underneath it
  *  asking for the opposite thing and the list would simply be empty, with two
  *  controls each insisting they were right. */
 const QUEUE_TAB: Tab = { value: 'unassigned', label: 'Unassigned', countKey: 'unassigned', icon: AssignedIcon }
 
 const STATUS_TABS: Tab[] = [
-  { value: 'open', label: 'Open', countKey: 'open', icon: MailIcon },
+  { value: 'open', label: 'Open', countKey: 'open', icon: SquareIcon },
   { value: 'snoozed', label: 'Snoozed', countKey: 'snoozed', icon: AlarmIcon },
   { value: 'done', label: 'Done', countKey: 'done', icon: TickIcon },
   // "Everything" is the better word and does not fit: four segments share the

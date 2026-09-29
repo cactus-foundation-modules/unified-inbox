@@ -181,7 +181,7 @@ export function ThreadActions({
   /** Marking it done, and putting it to sleep, both take the conversation off
    *  the list it was found on - so both do the same two things afterwards.
    *
-   *  The pane goes back to "Nothing open". Somebody who has just filed a
+   *  The pane closes and the list takes the width. Somebody who has just filed a
    *  conversation is done with it, and leaving it sitting there under their eyes
    *  while the list beside it has dropped the row is a screen that disagrees
    *  with itself - which is exactly what junking one has always done (see
