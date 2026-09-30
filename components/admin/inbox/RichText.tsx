@@ -5,6 +5,9 @@ import {
   type ReactNode,
 } from 'react'
 import { BLOCK_CLASS, BLOCK_OFF_CLASS, openUpAround } from '@/modules/unified-inbox/lib/richtext-blocks'
+import {
+  linkAtCaret, linkifyEditable, openableHref, type LinkifyMode,
+} from '@/modules/unified-inbox/lib/richtext-links'
 import { LinkIcon, ListIcon, NumberedListIcon, PaletteIcon } from './icons'
 
 // The writing box, with enough formatting to write an email in and no more.
@@ -106,6 +109,9 @@ type RichTextValue = {
   restoreSelection: () => boolean
   /** Drop a block of markup in where the caret was. */
   insertHtml: (html: string) => void
+  /** Turn the bare web addresses in the box into links - see
+   *  lib/richtext-links.ts for which ones, and when. */
+  linkify: (mode: LinkifyMode) => void
   placeholder: string
   label: string
 }
@@ -244,6 +250,11 @@ export function RichText({ id, value, onChange, placeholder, label, handleRef, c
     emit()
   }, [emit, rememberSelection])
 
+  const linkify = useCallback((mode: LinkifyMode) => {
+    const el = box.current
+    if (el) linkifyEditable(el, mode)
+  }, [])
+
   // Handed out while the box is on the screen and taken back when it goes, so
   // nothing can write into a box that has been unmounted.
   useEffect(() => {
@@ -263,6 +274,11 @@ export function RichText({ id, value, onChange, placeholder, label, handleRef, c
     if (el.innerHTML === value) return
     // An empty box is genuinely empty, so the placeholder underneath shows.
     el.innerHTML = value
+    // A draft saved before the box linked addresses as they were typed opens
+    // with them linked, so what is on the screen is what will be sent. Not
+    // emitted, for the same reason as the line breaks below: nobody wrote it,
+    // and the send path links the saved copy on its way out regardless.
+    linkifyEditable(el, 'all')
     // A draft written elsewhere - or migrated, with its products run onto the
     // end - arrives with its blocks shoulder to shoulder. Nothing is emitted
     // for this: the line breaks are somewhere to put a caret, not something
@@ -272,10 +288,12 @@ export function RichText({ id, value, onChange, placeholder, label, handleRef, c
 
   const api = useMemo<RichTextValue>(
     () => ({
-      id, attach, emit, exec, rememberSelection, restoreSelection, insertHtml, placeholder, label,
+      id, attach, emit, exec, rememberSelection, restoreSelection, insertHtml, linkify, placeholder,
+      label,
     }),
     [
-      attach, emit, exec, id, insertHtml, label, placeholder, rememberSelection, restoreSelection,
+      attach, emit, exec, id, insertHtml, label, linkify, placeholder, rememberSelection,
+      restoreSelection,
     ],
   )
 
@@ -284,14 +302,32 @@ export function RichText({ id, value, onChange, placeholder, label, handleRef, c
 
 /** The words themselves. */
 export function RichTextBox() {
-  const { id, attach, emit, exec, rememberSelection, placeholder, label } = useRichText()
+  const { id, attach, emit, exec, rememberSelection, linkify, placeholder, label } = useRichText()
+  /** Where the link the caret is in goes, when it is in one. A link in an
+   *  editable box cannot be followed by pressing it - the press puts the caret
+   *  there, which is what a writing box is for - so the line under the box
+   *  says where it goes and is the way to go there. */
+  const [here, setHere] = useState<string | null>(null)
+  const notice = useCallback((el: HTMLElement) => setHere(openableHref(linkAtCaret(el))), [])
 
   /** The little cross on a block - a product, today - takes the whole block
    *  out. The box has no idea what it removed, which is the point: a block is
    *  whatever wears the class, and the thing that put it there decides what
    *  goes in it. */
   const onClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    const off = (event.target as Element | null)?.closest?.(`.${BLOCK_OFF_CLASS}`)
+    const target = event.target as Element | null
+    // Cmd- or ctrl-click follows a link, the way it does in every other
+    // editor: the fingers that know it expect it, and the plain click is the
+    // caret's.
+    const anchor = target?.closest?.('a')
+    if (anchor && (event.metaKey || event.ctrlKey) && event.currentTarget.contains(anchor)) {
+      event.preventDefault()
+      const href = openableHref(anchor.getAttribute('href'))
+      if (href) window.open(href, '_blank', 'noopener,noreferrer')
+      return
+    }
+    notice(event.currentTarget)
+    const off = target?.closest?.(`.${BLOCK_OFF_CLASS}`)
     if (!off) return
     event.preventDefault()
     off.closest(`.${BLOCK_CLASS}`)?.remove()
@@ -299,7 +335,19 @@ export function RichTextBox() {
     // need a line between them as much as they ever did.
     openUpAround(event.currentTarget)
     emit()
-  }, [emit])
+  }, [emit, notice])
+
+  /** An address is finished when something goes in behind it that cannot be
+   *  part of it - a space, a new line - and that is the moment it is linked. */
+  const onInput = useCallback((event: React.FormEvent<HTMLDivElement>) => {
+    const input = event.nativeEvent instanceof InputEvent ? event.nativeEvent : null
+    const kind = input?.inputType ?? ''
+    const ended = (kind === 'insertText' && !!input?.data && /\s/.test(input.data))
+      || kind === 'insertParagraph' || kind === 'insertLineBreak'
+    if (ended) linkify('typing')
+    emit()
+    notice(event.currentTarget)
+  }, [emit, linkify, notice])
 
   /** The two shortcuts fingers already know. Everything else is a button: a
    *  keystroke nobody was told about is not a feature. */
@@ -322,12 +370,18 @@ export function RichTextBox() {
         aria-multiline="true"
         aria-label={label}
         data-placeholder={placeholder}
-        onInput={emit}
+        onInput={onInput}
         // Where the caret was, kept on the way out: anything that opens over the
         // box to ask a question - the link box, the catalogue - takes the focus
         // with it, and what it puts back has to land where somebody was writing.
-        onBlur={() => { rememberSelection(); emit() }}
+        //
+        // Leaving the box is also when the last address gets linked: the one
+        // somebody pasted or typed at the very end and never put a space after.
+        // Linked BEFORE the caret is remembered, so the remembered caret points
+        // into the new markup rather than at words that have just been replaced.
+        onBlur={() => { linkify('all'); rememberSelection(); emit(); setHere(null) }}
         onKeyDown={onKeyDown}
+        onKeyUp={(event) => notice(event.currentTarget)}
         onClick={onClick}
         // Arbitrary markup off a clipboard brings a web page's layout, its
         // fonts and its tracking pixels with it. The words are what somebody
@@ -335,9 +389,28 @@ export function RichTextBox() {
         onPaste={(event) => {
           event.preventDefault()
           const text = event.clipboardData.getData('text/plain')
-          if (text) exec('insertText', text)
+          if (!text) return
+          exec('insertText', text)
+          linkify('typing')
+          emit()
         }}
       />
+      {here && (
+        <p className="uin-rt-linkhint">
+          Goes to{' '}
+          {/* Refusing the mouse-down keeps the focus in the box: the line is
+              taken away when the box loses the focus, and a link taken away
+              between the press and the release is a click that goes nowhere. */}
+          <a
+            href={here}
+            target="_blank"
+            rel="noopener noreferrer"
+            onMouseDown={(event) => event.preventDefault()}
+          >
+            {here}
+          </a>
+        </p>
+      )}
     </div>
   )
 }

@@ -2097,6 +2097,10 @@
    rule, because it is a warning about what follows rather than a footnote on
    what came before. */
 .uin-msg-flag { border-bottom: 1px solid var(--color-border); padding-top: 0.5rem; }
+/* A line another module left on a message ("Filed on PO-01234 as the
+   proforma"). Muted, because it is a remark about the message and not part of
+   it; wraps rather than pushing the card sideways on a phone. */
+.uin-msg-handler-note { color: var(--color-text-muted); overflow-wrap: anywhere; }
 /* Anything that acts on the message rather than describing it, pushed to the
    trailing end of the foot. margin-left:auto rather than a float: the foot is
    already a flex row, so this stays inside it and out of the message body. */
@@ -4209,6 +4213,18 @@
 /* What the six buttons produce, drawn as the recipient will see it rather than
    as the admin's own body text. */
 .uin-richtext-box a { color: var(--color-link, var(--color-primary)); }
+/* Where the link the caret is in goes. A link in a writing box cannot be
+   followed by pressing it - that press is the caret's - so this line is the way
+   to it. Small and quiet: it is a note about the words, not part of them. */
+.uin-rt-linkhint {
+  margin: 0;
+  padding: 0 0.75rem 0.4rem;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.uin-modal .uin-rt-linkhint { padding-inline: 0; }
+.uin-rt-linkhint a { color: var(--color-link, var(--color-primary)); }
 .uin-richtext-box ul, .uin-richtext-box ol { margin: 0.4rem 0; padding-left: 1.5rem; }
 .uin-richtext-box li { margin: 0.15rem 0; }
 

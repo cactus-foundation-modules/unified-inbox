@@ -4,6 +4,7 @@ import { formatInSiteTimezone } from '@/lib/config/timezone'
 import { normaliseAddress, addressDomain, isValidAddress } from './addresses'
 import { CUSTOM_TAG_HEADER, READ_RECEIPT_HEADER, customTagFor } from './receipts'
 import { htmlToText } from './html'
+import { linkifyHtml } from './linkify'
 import { flattenWithProducts, refKey, replaceSlots } from './products/slots'
 
 // ---------------------------------------------------------------------------
@@ -304,7 +305,12 @@ export function assembleBody(parts: {
   // the table that leaves is the one lib/products/render.ts wrote rather than
   // the one DOMPurify made of it.
   const placed = parts.products?.placed ?? new Map<string, { html: string; text: string }>()
-  const typed = replaceSlots(clean, (ref) => placed.get(refKey(ref))?.html ?? '')
+  // Every address in the writing leaves as a link, whether or not the box got
+  // round to linking it - a draft saved before it did, or one scheduled and
+  // never opened again, would otherwise go out with an address nobody can press.
+  // After the sanitiser, which is what makes the markup safe to split on its
+  // tags; the text half below is flattened from `clean`, where it reads the same.
+  const typed = replaceSlots(linkifyHtml(clean), (ref) => placed.get(refKey(ref))?.html ?? '')
 
   // The same markup flattened for the text half, with each slot standing in as
   // a token until the flattening is done - see flattenWithProducts.

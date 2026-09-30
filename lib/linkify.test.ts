@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hrefFor, splitLinks, trimTrailing } from './linkify'
+import { hrefFor, linkifyHtml, splitLinks, trimTrailing } from './linkify'
 
 // Every case here is a sentence somebody has actually written in an email, and
 // each one is a way of getting this subtly wrong in front of a reader: an
@@ -64,5 +64,46 @@ describe('the two pure helpers', () => {
     expect(hrefFor('www.a.example')).toBe('https://www.a.example')
     expect(hrefFor('WWW.A.example')).toBe('https://WWW.A.example')
     expect(hrefFor('http://a.example')).toBe('http://a.example')
+  })
+})
+
+// The writing box's markup, on its way out. Every case is a way a typed address
+// could have left as words, or a way linking it could have broken the markup.
+describe('linking addresses in markup', () => {
+  it('links a bare address in the writing', () => {
+    expect(linkifyHtml('<div>See https://deskwell.co.uk/chairs.</div>'))
+      .toBe('<div>See <a href="https://deskwell.co.uk/chairs">https://deskwell.co.uk/chairs</a>.</div>')
+  })
+
+  it('keeps an escaped ampersand in both the address and the words', () => {
+    const url = 'https://deskwell.co.uk/hq/inbox?tab=unified-inbox&amp;inbox=all&amp;id=a456'
+    expect(linkifyHtml(`Here: ${url}<br>`)).toBe(`Here: <a href="${url}">${url}</a><br>`)
+  })
+
+  it('leaves an address somebody already linked alone', () => {
+    const html = '<a href="https://deskwell.co.uk">https://deskwell.co.uk</a> and <a href="https://x.example">our site</a>'
+    expect(linkifyHtml(html)).toBe(html)
+  })
+
+  it('never touches an attribute', () => {
+    const html = '<img src="https://cdn.example/a.png" alt="https://cdn.example/a.png">'
+    expect(linkifyHtml(html)).toBe(html)
+  })
+
+  it('stops at an escaped bracket or a non-breaking space', () => {
+    expect(linkifyHtml('&lt;https://a.example&gt;'))
+      .toBe('&lt;<a href="https://a.example">https://a.example</a>&gt;')
+    expect(linkifyHtml('https://a.example&nbsp;then'))
+      .toBe('<a href="https://a.example">https://a.example</a>&nbsp;then')
+  })
+
+  it('carries on linking after a link closes', () => {
+    expect(linkifyHtml('<a href="https://a.example">a</a> then www.b.example'))
+      .toBe('<a href="https://a.example">a</a> then <a href="https://www.b.example">www.b.example</a>')
+  })
+
+  it('leaves a style block as it is', () => {
+    const html = '<style>a{background:url(https://a.example/x.png)}</style>'
+    expect(linkifyHtml(html)).toBe(html)
   })
 })

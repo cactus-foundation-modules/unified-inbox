@@ -83,3 +83,61 @@ function count(value: string, character: string): number {
   for (const c of value) if (c === character) found += 1
   return found
 }
+
+// ---------------------------------------------------------------------------
+// The same, for writing that is already markup.
+//
+// The writing box holds HTML, and an address somebody typed or pasted into it
+// was words in that HTML and nothing more - so a draft, a scheduled message and
+// the copy that finally went out all carried an address nobody could press.
+// This is the last word on that, run over the typed half of every message on the
+// way out: whatever the box did or did not manage to link, the message leaves
+// with its addresses linked.
+// ---------------------------------------------------------------------------
+
+/** An escaped character ends an address the way a space or a quote does in
+ *  plain text: "&lt;https://example.com&gt;" is an address in angle brackets,
+ *  and "&nbsp;" is a space. Split on, so the regex never sees them. */
+const ENTITY_BREAK = /(&(?:nbsp|lt|gt|quot|apos|#160|#34|#39|#60|#62);)/i
+
+/**
+ * Every bare address in a block of markup made a link.
+ *
+ * Tag-aware rather than clever: the markup is split into its tags and the text
+ * between them, and only text is touched - never an attribute, never anything
+ * already inside an <a>, never the inside of a <style> or <script>. The text is
+ * still escaped HTML, which is why the href can be written straight from it: an
+ * "&amp;" in the address is exactly what the attribute needs.
+ *
+ * Expects markup that has been through the sanitiser, which is what guarantees
+ * every "<" in the text is escaped and so every "<" that is left starts a tag.
+ */
+export function linkifyHtml(html: string): string {
+  let anchors = 0
+  let raw: string | null = null
+  return html.split(/(<[^>]*>)/).map((token) => {
+    if (token.startsWith('<')) {
+      const tag = /^<\s*(\/?)\s*([a-z][a-z0-9]*)/i.exec(token)
+      if (tag) {
+        const closing = tag[1] === '/'
+        const name = tag[2]!.toLowerCase()
+        if (name === 'a' && !/\/\s*>$/.test(token)) anchors = Math.max(0, anchors + (closing ? -1 : 1))
+        if (name === 'style' || name === 'script') raw = closing ? null : name
+      }
+      return token
+    }
+    if (!token || anchors > 0 || raw) return token
+    return token
+      .split(ENTITY_BREAK)
+      .map((part, index) => (index % 2 === 1 ? part : linkEscapedText(part)))
+      .join('')
+  }).join('')
+}
+
+function linkEscapedText(text: string): string {
+  const pieces = splitLinks(text)
+  if (pieces.length === 1 && pieces[0]!.kind === 'text') return text
+  return pieces
+    .map((piece) => (piece.kind === 'text' ? piece.value : `<a href="${piece.href}">${piece.value}</a>`))
+    .join('')
+}
