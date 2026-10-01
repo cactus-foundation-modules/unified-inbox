@@ -56,6 +56,12 @@ vi.mock('./provider-registry', () => ({ allConversationProviders }))
 vi.mock('./blocked-senders', () => ({ blockedSenderSet }))
 vi.mock('./bin', () => ({ unbinOnReply }))
 vi.mock('./stand-down', () => ({ standDownScheduled }))
+// Nothing listens for post here. Mocked rather than left real: the real
+// gatherer imports the whole generated extension registry, which is a
+// multi-second load under a full test run and nothing this file is about.
+const gatherMessageHandlers = vi.hoisted(() => vi.fn(async (): Promise<unknown[]> => []))
+const offerMessage = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => 'offered'))
+vi.mock('./message-handlers', () => ({ gatherMessageHandlers, offerMessage }))
 
 const { syncProvider, syncAllProviders } = await import('./provider-sync')
 
@@ -122,6 +128,8 @@ beforeEach(() => {
   heldChannelMessages.mockReset().mockResolvedValue(new Map())
   claimSentText.mockReset().mockResolvedValue(false)
   markTextLinkRead.mockReset().mockResolvedValue(undefined)
+  gatherMessageHandlers.mockReset().mockResolvedValue([])
+  offerMessage.mockReset().mockResolvedValue('offered')
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
@@ -714,5 +722,61 @@ describe('syncProvider, texts filed on an email conversation', () => {
     await syncProvider(telephony({ list: vi.fn().mockResolvedValue({ items: [phoneSummary(at)] }), thread }))
 
     expect(thread).not.toHaveBeenCalled()
+  })
+})
+
+describe('telling the modules listening for post', () => {
+  const now = () => new Date(Date.now() - 60_000)
+  const HANDLER = { moduleName: 'm', id: 'h', source: 'm:h', handle: async () => {}, attachmentTypes: [] }
+
+  it('offers what the party wrote, not what we wrote, and gathers the listeners once a pass', async () => {
+    gatherMessageHandlers.mockResolvedValue([HANDLER])
+    insertProviderMessage.mockResolvedValueOnce('in-1').mockResolvedValueOnce('out-1').mockResolvedValueOnce('in-2')
+    const messages = [
+      message({ id: 'a', sentAt: now() }),
+      message({ id: 'b', direction: 'out', sentAt: now() }),
+      message({ id: 'c', sentAt: now() }),
+    ]
+    const thread = vi.fn().mockResolvedValue({ summary: summary(), messages })
+    await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }))
+
+    expect(offerMessage.mock.calls.map((c) => c[0])).toEqual(['in-1', 'in-2'])
+    expect(offerMessage).toHaveBeenCalledWith('in-1', expect.objectContaining({ handlers: [HANDLER] }))
+    expect(gatherMessageHandlers).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not read the listeners at all for a pass with nothing new from the party', async () => {
+    const thread = vi.fn().mockResolvedValue({ summary: summary(), messages: [message({ direction: 'out', sentAt: now() })] })
+    await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }))
+    expect(gatherMessageHandlers).not.toHaveBeenCalled()
+  })
+
+  it('carries on filing when the listeners cannot be read, and asks only once', async () => {
+    gatherMessageHandlers.mockRejectedValue(new Error('the registry would not load'))
+    insertProviderMessage.mockResolvedValueOnce('in-1').mockResolvedValueOnce('in-2')
+    const messages = [message({ id: 'a', sentAt: now() }), message({ id: 'c', sentAt: now() })]
+    const thread = vi.fn().mockResolvedValue({ summary: summary(), messages })
+
+    const outcome = await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }))
+
+    // Both filed, and everything after the filing still done.
+    expect(outcome.ok).toBe(true)
+    expect(outcome.messages).toBe(2)
+    expect(recountProviderThread).toHaveBeenCalledWith('t1')
+    expect(markProviderContentRead).toHaveBeenCalled()
+    // The failure is taken as nobody listening for the rest of the pass.
+    expect(gatherMessageHandlers).toHaveBeenCalledTimes(1)
+    expect(offerMessage).not.toHaveBeenCalled()
+  })
+
+  it('carries on filing when an offer itself throws', async () => {
+    gatherMessageHandlers.mockResolvedValue([HANDLER])
+    offerMessage.mockRejectedValue(new Error('should never happen, and yet'))
+    const thread = vi.fn().mockResolvedValue({ summary: summary(), messages: [message({ sentAt: now() })] })
+
+    const outcome = await syncProvider(resolved({ list: vi.fn().mockResolvedValue({ items: [summary()] }), thread }))
+
+    expect(outcome.ok).toBe(true)
+    expect(recountProviderThread).toHaveBeenCalledWith('t1')
   })
 })

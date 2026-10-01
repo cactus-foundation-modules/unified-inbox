@@ -109,6 +109,9 @@ export type AttachmentFetchSuccess = { ok: true } & FetchedAttachment
  */
 export async function loadAttachmentBytes(
   attachmentId: string,
+  /** False to hand the bytes back without storing them - for a caller that
+   *  decides for itself what may be stored (lib/message-handlers.ts). */
+  opts: { cache?: boolean } = {},
 ): Promise<AttachmentFetchSuccess | AttachmentFetchFailure> {
   const attachment = await getAttachment(attachmentId)
   if (!attachment) return { ok: false, reason: 'That attachment no longer exists.', status: 404 }
@@ -132,11 +135,12 @@ export async function loadAttachmentBytes(
     }
   }
 
-  return fetchFromMailbox(attachment)
+  return fetchFromMailbox(attachment, opts.cache ?? true)
 }
 
 async function fetchFromMailbox(
   attachment: AttachmentRow,
+  cache: boolean,
 ): Promise<AttachmentFetchSuccess | AttachmentFetchFailure> {
   if (!attachment.connectionId || !attachment.imapFolder || attachment.imapUid === null) {
     return {
@@ -175,7 +179,7 @@ async function fetchFromMailbox(
     }
 
     const contentType = found.contentType || attachment.contentType || 'application/octet-stream'
-    await cacheAttachment(attachment, buffer, contentType)
+    if (cache) await cacheAttachment(attachment, buffer, contentType)
     return { ok: true, buffer, contentType, filename: attachment.filename }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -197,13 +201,17 @@ async function fetchFromMailbox(
  * A storage failure is not fatal: the reader already has their file, and the
  * only cost is fetching it again next time. Returns where the bytes ended up,
  * or null when nothing was stored - which is how the backfill knows whether
- * there is an old copy left to tidy away, and what to point a forward at.
+ * there is an old copy left to tidy away, and what to point a forward at -
+ * and the library row it was filed as, null when it went on the private
+ * prefix instead (an inline part, no correspondent, or a folder that would
+ * not resolve). Stored and in the library are not the same thing, and a
+ * caller that needs the second must read mediaId.
  */
 export async function cacheAttachment(
   attachment: { id: string; messageId: string; filename: string },
   buffer: Buffer,
   contentType: string,
-): Promise<{ key: string; url: string } | null> {
+): Promise<{ key: string; url: string; mediaId: string | null } | null> {
   try {
     const provider = await getActiveMediaProvider()
     if (!provider || !isMediaProviderConfigured(provider)) return null
@@ -247,7 +255,7 @@ export async function cacheAttachment(
       sizeBytes: result.sizeBytes,
       mediaId: media?.id ?? null,
     })
-    return { key: result.key, url: result.url }
+    return { key: result.key, url: result.url, mediaId: media?.id ?? null }
   } catch {
     // Storage is a cache in this direction, not the record. Carry on.
     return null

@@ -480,6 +480,21 @@ function Message({ message, sideText, threadSubject, staffById, outsiderLinks, n
           <span className="uin-tag uin-tag-snoozed">{AUTO_LABELS[message.autoKind] ?? 'Sent automatically'}</span>
         </div>
       )}
+      {/* What the modules listening for post made of it, one line each -
+          "Filed on PO-01234 as the proforma". Said here, on the message it is
+          about, rather than in the conversation's timeline, because a
+          conversation can carry a dozen emails and only one of them was the
+          proforma. Where it came from is on the title, for anybody wondering
+          which part of the site did it. */}
+      {message.handlerNotes.map((entry) => (
+        <div
+          key={entry.source}
+          className="uin-msg-foot uin-msg-flag uin-msg-handler-note"
+          title={`Noted automatically by ${entry.moduleName.replace(/[-_]+/g, ' ')}`}
+        >
+          {entry.note}
+        </div>
+      ))}
       <div className="uin-msg-body">
         {/* A NOTE IS NEVER PUT IN THE FRAME. The frame exists to hold a
             stranger's markup at arm's length (E16): it is a document of its own,

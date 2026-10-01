@@ -254,6 +254,12 @@ CREATE TABLE IF NOT EXISTS "uin_messages" (
     "delivery_status"     TEXT,
     "delivery_error"      TEXT,
     "author_user_id"      TEXT,
+    -- When every module listening on unified-inbox.message-received had its
+    -- turn, and the line each asked to show on it (migration 070).
+    "handled_at"          TIMESTAMPTZ,
+    "handler_notes"       JSONB,
+    "offering_at"         TIMESTAMPTZ,
+    "offer_attempts"      INTEGER      NOT NULL DEFAULT 0,
     "created_at"          TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "uin_messages_pkey" PRIMARY KEY ("id"),
@@ -268,6 +274,8 @@ CREATE TABLE IF NOT EXISTS "uin_messages" (
 CREATE INDEX IF NOT EXISTS "uin_messages_thread_sent_idx" ON "uin_messages" ("thread_id", "sent_at");
 CREATE INDEX IF NOT EXISTS "uin_messages_message_id_idx" ON "uin_messages" ("message_id_header");
 CREATE INDEX IF NOT EXISTS "uin_messages_from_address_idx" ON "uin_messages" ("from_address");
+-- uin_messages_unhandled_idx is made by 070 alone, fresh installs included:
+-- its predicate reads auto_kind, which 002 adds after this file has run.
 
 -- Attachment metadata only. The bytes are fetched lazily on open and stored
 -- under this module's own key prefix - never as a Media row, or a customer's
@@ -324,6 +332,24 @@ CREATE INDEX IF NOT EXISTS "uin_record_links_person_idx" ON "uin_record_links" (
 CREATE INDEX IF NOT EXISTS "uin_record_links_thread_idx" ON "uin_record_links" ("thread_id");
 CREATE INDEX IF NOT EXISTS "uin_record_links_record_idx"
     ON "uin_record_links" ("module_name", "record_type", "record_id");
+
+-- Automatic links somebody took off, so a listener offered the message again
+-- does not put them back (migration 070).
+CREATE TABLE IF NOT EXISTS "uin_record_link_removals" (
+    "thread_id"   TEXT         NOT NULL,
+    "module_name" TEXT         NOT NULL,
+    "record_type" TEXT         NOT NULL,
+    "record_id"   TEXT         NOT NULL,
+    "removed_by"  TEXT,
+    "removed_at"  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "uin_record_link_removals_pkey"
+        PRIMARY KEY ("thread_id", "module_name", "record_type", "record_id"),
+    CONSTRAINT "uin_record_link_removals_thread_fk"
+        FOREIGN KEY ("thread_id") REFERENCES "uin_threads" ("id") ON DELETE CASCADE,
+    CONSTRAINT "uin_record_link_removals_user_fk"
+        FOREIGN KEY ("removed_by") REFERENCES "User" ("id") ON DELETE SET NULL
+);
 
 -- ---------------------------------------------------------------------------
 -- Sync bookkeeping. One row per folder we read, holding the cursors that make

@@ -242,6 +242,29 @@ export const CRON_TICK_DEADLINE_MS = 24_000
  *  sitting there watching for it. */
 export const MANUAL_TICK_DEADLINE_MS = 52_000
 
+/**
+ * The latest the hourly tick's catch-up for the modules listening for post
+ * (lib/message-handlers.ts) may run to, measured from the start of the run.
+ *
+ * The catch-up goes last, after the webhooks, and every pass before it holds
+ * its budget from whenever it began, so a relative slice on top of them can
+ * overrun. The worst case of those passes, as they stand: collection and the
+ * channels to 24 seconds (CRON_TICK_DEADLINE_MS), nudges to about 30 (a 5
+ * second slice plus the push in flight when it ends), and the webhooks to about
+ * 48 (an 8 second slice, plus one delivery already under way that may take its
+ * full 10 second timeout). The core dispatcher calls a job with at most 54
+ * seconds - 60 less its 6 second reserve - so 48 is the last moment worth
+ * starting anything from. A catch-up squeezed to nothing is skipped and runs
+ * next hour; every offer commits as it goes, so being cut off costs a message
+ * an hour, never an offer made twice.
+ */
+export const CRON_CATCH_UP_CEILING_MS = 48_000
+
+/** The catch-up's deadline: its own slice, never past the ceiling above. */
+export function catchUpDeadline(started: number, sliceMs: number, now: number = Date.now()): number {
+  return Math.min(now + sliceMs, started + CRON_CATCH_UP_CEILING_MS)
+}
+
 export function makeDeadline(budgetMs: number, now: number = Date.now()): number {
   return now + budgetMs
 }

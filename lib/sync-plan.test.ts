@@ -11,6 +11,8 @@ import {
   makeDeadline,
   CRON_BUDGET_MS,
   CRON_TICK_DEADLINE_MS,
+  CRON_CATCH_UP_CEILING_MS,
+  catchUpDeadline,
 } from './sync-plan'
 import { PROVIDER_BUDGET_MS } from './provider-sync'
 import type { MailFolder } from './imap'
@@ -241,5 +243,27 @@ describe('folderOwnersFor', () => {
 
   it('ignores a folder name that is nothing but spaces', () => {
     expect(folderOwnersFor([owning('blank', '   ')])).toEqual(new Map())
+  })
+})
+
+describe('the catch-up\u2019s deadline in the hourly tick', () => {
+  const SLICE = 16_000
+
+  it('gets its whole slice on a quiet hour', () => {
+    // Everything before it done in 25 seconds.
+    expect(catchUpDeadline(0, SLICE, 25_000)).toBe(41_000)
+  })
+
+  it('is squeezed on a bad hour, and never runs past the ceiling', () => {
+    // The webhooks ran to 40 seconds: 8 left, not 16.
+    expect(catchUpDeadline(0, SLICE, 40_000)).toBe(CRON_CATCH_UP_CEILING_MS)
+    // They ran to 46: 2 seconds, which is less than one handler's turn, so the
+    // catch-up does nothing this tick.
+    expect(catchUpDeadline(0, SLICE, 46_000) - 46_000).toBe(2_000)
+  })
+
+  it('leaves the ceiling inside the core dispatcher\u2019s 54 second call', () => {
+    // 60 second maxDuration less the dispatcher's 6 second reserve.
+    expect(CRON_CATCH_UP_CEILING_MS).toBeLessThanOrEqual(54_000 - 6_000)
   })
 })

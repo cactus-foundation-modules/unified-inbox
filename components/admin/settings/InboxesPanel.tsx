@@ -3,7 +3,7 @@
 import { useId, useMemo, useState } from 'react'
 import { FolderPicker } from '../FolderPicker'
 import { ConfirmDialog } from '../inbox/ConfirmDialog'
-import { fetchFolders } from './api'
+import { fetchFolders, offerInboxAgain } from './api'
 import { SignatureEditor } from './SignatureEditor'
 import { blankInbox, type InboxDraft } from './inbox-draft'
 import type {
@@ -39,12 +39,28 @@ const KINDS: ReadonlyArray<{ value: InboxKind; label: string; hint: string }> = 
   },
 ]
 
-export function InboxesPanel({ inboxes, connections, access, defaults, users, busy, call, setMessage, reload }: {
+/** A module's name as somebody who does not build websites would say it:
+ *  "purchase-orders" is "purchase orders". */
+function listenerName(moduleName: string): string {
+  return moduleName.replace(/[-_]+/g, ' ')
+}
+
+/** "purchase orders", "purchase orders and bookkeeping", "a, b and c". */
+function listenerList(names: string[]): string {
+  const spoken = names.map(listenerName)
+  if (spoken.length <= 1) return spoken[0] ?? ''
+  return `${spoken.slice(0, -1).join(', ')} and ${spoken[spoken.length - 1]}`
+}
+
+export function InboxesPanel({ inboxes, connections, access, defaults, users, messageListeners, busy, call, setMessage, reload }: {
   inboxes: Inbox[]
   connections: Connection[]
   access: AccessRow[]
   defaults: DefaultInboxRow[]
   users: StaffMember[]
+  /** The modules listening for post. The "offer again" button only exists
+   *  where there is somebody to offer it to. */
+  messageListeners: string[]
   busy: boolean
   call: Caller
   setMessage: (n: Note | null) => void
@@ -62,6 +78,10 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
   // Which inbox the Remove question is about. Null when nothing is asked.
   const [removing, setRemoving] = useState<Inbox | null>(null)
   const [refreshingFolders, setRefreshingFolders] = useState(false)
+  // Which inbox the "offer the last 14 days again" question is about, and
+  // whether that walk is under way - it can take several requests.
+  const [offering, setOffering] = useState<Inbox | null>(null)
+  const [offerRunning, setOfferRunning] = useState(false)
   const fid = useId()
 
   const accessByInbox = useMemo(() => {
@@ -208,6 +228,26 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
       })
     }
     setEditing(null)
+  }
+
+  /** Walk an inbox's last fortnight, a slice per request, until the site says
+   *  there is nothing left. Reports once, at the end. */
+  async function offerAgain(inbox: Inbox) {
+    setOfferRunning(true)
+    setMessage(null)
+    const result = await offerInboxAgain(inbox.id)
+    setOfferRunning(false)
+    setOffering(null)
+    if (!result.ok) {
+      setMessage({ tone: 'bad', text: result.error })
+      return
+    }
+    setMessage({
+      tone: 'ok',
+      text: result.offered === 0
+        ? `Nothing in the last 14 days on ${inbox.address} for ${listenerList(messageListeners)} to look at.`
+        : `${result.offered === 1 ? '1 message' : `${result.offered} messages`} from the last 14 days on ${inbox.address} offered to ${listenerList(messageListeners)} again.`,
+    })
   }
 
   async function remove(id: string) {
@@ -742,6 +782,19 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
               </>}
               actions={<>
                 <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => startEdit(inbox)}>Edit</button>
+                {/* Only where something listens, and only on an address post
+                    actually arrives at: a send-only inbox has nothing to offer. */}
+                {messageListeners.length > 0 && inbox.connectionId && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    disabled={busy || offerRunning}
+                    title={`Hand the last 14 days of post on this address to ${listenerList(messageListeners)} again.`}
+                    onClick={() => setOffering(inbox)}
+                  >
+                    Offer the last 14 days again
+                  </button>
+                )}
                 <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => setRemoving(inbox)}>Remove</button>
               </>}
             />
@@ -756,6 +809,21 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, bu
       )}
 
       {editing === 'new' && inboxForm('A new inbox')}
+
+      <ConfirmDialog
+        open={offering !== null}
+        title="Offer the last 14 days again?"
+        body={offering
+          ? `Every message that arrived on ${offering.address} in the last 14 days is handed to ${listenerList(messageListeners)} again, as though it had just come in. Anything already dealt with is recognised and left alone, so nothing is done twice. A busy fortnight can take a minute or two.`
+          : ''}
+        confirmLabel={offerRunning ? 'Offering\u2026' : 'Offer them again'}
+        busy={offerRunning}
+        onCancel={() => { if (!offerRunning) setOffering(null) }}
+        onConfirm={() => {
+          const inbox = offering
+          if (inbox) void offerAgain(inbox)
+        }}
+      />
 
       <ConfirmDialog
         open={removing !== null}

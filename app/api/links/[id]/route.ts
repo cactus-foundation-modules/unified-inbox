@@ -4,6 +4,7 @@ import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { canOpenThread } from '@/modules/unified-inbox/lib/access'
 import { deleteLink, getLink, getThreadDetail, recordEvent } from '@/modules/unified-inbox/lib/db'
+import { rememberRemovedAutoLink } from '@/modules/unified-inbox/lib/message-handlers-db'
 
 // Removing a link, which is the half of automatic linking that makes the other
 // half acceptable. Every automatic link says it was automatic and comes off in
@@ -31,6 +32,17 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
       recordType: link.recordType,
       label: link.label,
     })
+    // An automatic link taken off stays off: noted, so offering the message to
+    // the listening modules again does not put it back.
+    if (link.linkedBy === 'auto') {
+      await rememberRemovedAutoLink({
+        threadId: link.threadId,
+        moduleName: link.moduleName,
+        recordType: link.recordType,
+        recordId: link.recordId,
+        removedBy: user.id,
+      })
+    }
   }
 
   await deleteLink(id)

@@ -489,3 +489,114 @@ export type RecordLink = {
   linkedBy: 'auto' | 'user'
   createdAt: Date
 }
+
+// ---------------------------------------------------------------------------
+// `unified-inbox.message-received` - telling other modules that mail arrived.
+//
+// Restated, not imported, by every listener: nothing outside this module may
+// import it, so a handler copies these two shapes into its own file and stays
+// structurally compatible. Primitives only for exactly that reason. See
+// lib/message-handlers.ts for when a message is offered and what happens to
+// what a handler says back, and wiki/Unified-Inbox.md for module authors.
+// ---------------------------------------------------------------------------
+
+/**
+ * One inbound message, offered to every handler once it is filed and its files
+ * are in the media library.
+ *
+ * HANDLERS MUST BE IDEMPOTENT ON `messageId`. The same message is offered again
+ * by the hourly catch-up when a run never finished, and on purpose by the
+ * "offer the last 14 days again" button, which ignores what was offered before.
+ * A second offer that does something twice is the handler's bug. The inbox
+ * claims a message before offering it, so two offers of one message do not
+ * normally overlap - but a claim can expire under a run that died slowly, so
+ * make the guarantee with a unique constraint and ON CONFLICT, never with
+ * "look, then insert".
+ *
+ * Colleague-to-colleague email between two of the site's own addresses is
+ * offered too, on the side that received it.
+ */
+export type InboundMessageEvent = {
+  /** uin_messages.id - the idempotency key for every listener. */
+  messageId: string
+  threadId: string
+  /** Lower case. Empty when the channel had no address to give - a text or a
+   *  call, which carries a phone number instead. */
+  fromAddress: string
+  toAddresses: string[]
+  /** Who was copied in, exactly as toAddresses is given. Empty when nobody
+   *  was, and always empty from a channel with no Cc of its own (a form, a
+   *  chat, a text). A supplier often copies the order desk in rather than
+   *  writing to it. */
+  ccAddresses: string[]
+  /** Empty when the message had none. */
+  subject: string
+  /** Capped as lib/linking.ts caps what it scans: the reference, when there is
+   *  one, is near the top, and a thirty-page quoted chain is not. */
+  bodyText: string
+  /** ISO 8601. The date written on the message, not when it was collected. */
+  sentAt: string
+  attachments: Array<{
+    attachmentId: string
+    filename: string
+    mimeType: string
+    sizeBytes: number
+    /** The core Media row holding the bytes, read back with core's
+     *  downloadMedia. Only set for files of a kind some handler asked for
+     *  (InboundMessageRegistration.attachmentTypes) whose bytes proved them to
+     *  be that kind, or that somebody already opened. Null for everything else:
+     *  inline parts (a signature logo, which listeners ignore), kinds nobody
+     *  asked for, a file too big or too slow to fetch, and a file a channel
+     *  only holds a link to. */
+    mediaId: string | null
+  }>
+}
+
+/**
+ * What a handler may hand back. Everything optional: returning nothing is the
+ * ordinary answer for mail that is none of its business.
+ */
+export type InboundMessageOutcome = {
+  /** Records this message is about. Stored as automatic links on the
+   *  conversation, exactly like the ones the reference patterns find: shown,
+   *  marked automatic, and removable with one click. */
+  links?: Array<{ moduleName: string; recordType: string; recordId: string; label: string }>
+  /** One line shown on the message: "Filed on PO-01234 as the proforma". A
+   *  second offer replaces the handler's earlier line rather than adding one. */
+  note?: string
+}
+
+/** A handler for `unified-inbox.message-received`. Given five seconds; the
+ *  signal is aborted when they run out, and anything longer belongs on the
+ *  handler's own cron. */
+export type InboundMessageHandler = (
+  event: InboundMessageEvent,
+  context: { signal: AbortSignal },
+) => Promise<InboundMessageOutcome | void> | InboundMessageOutcome | void
+
+/**
+ * What the manifest entry's `component` names: the handler on its own, or this
+ * object when the handler needs files in hand.
+ *
+ * `attachmentTypes` asks the inbox to put files of those kinds in the media
+ * library as mail arrives, so `mediaId` is set. Only 'application/pdf',
+ * 'image/png', 'image/jpeg', 'image/gif' and 'image/webp' are honoured, each
+ * judged by the file's own bytes rather than the sender's label; anything else
+ * named is ignored. See lib/inbound-file-policy.ts. On the export rather than
+ * the manifest entry because core keeps a parsed manifest and drops fields its
+ * schema does not know.
+ */
+export type InboundMessageRegistration = {
+  handle: InboundMessageHandler
+  attachmentTypes?: string[]
+}
+
+/** A handler's line on a message, as stored in uin_messages.handler_notes. */
+export type HandlerNote = {
+  /** `<module>:<extension point id>` - what a second offer replaces by. */
+  source: string
+  moduleName: string
+  note: string
+  /** ISO 8601. */
+  at: string
+}

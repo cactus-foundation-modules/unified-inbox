@@ -87,6 +87,9 @@ import {
 } from './threading'
 import type { Inbox } from './types'
 import { isAccountSecurityMail, queueMessageWebhooks } from './webhooks'
+import { cacheAttachment, MAX_ATTACHMENT_BYTES } from './attachments'
+import { gatherMessageHandlers, offerMessage, storableTypesFor, type MessageHandlerEntry } from './message-handlers'
+import { MAX_EAGER_BYTES_PER_MESSAGE, storableAs } from './inbound-file-policy'
 
 // ---------------------------------------------------------------------------
 // The engine. Reads mail, files it, and stops when the clock says so.
@@ -275,6 +278,10 @@ export async function syncConnection(
     const ownPost = settings.autoAssignOwnPost
       ? await ownPostOwners(allInboxes)
       : new Map<string, string>()
+    // Other modules listening for post, read once per account. On a site with
+    // no listeners this is a memoised manifest read and an empty list.
+    const messageHandlers = await gatherMessageHandlers()
+    const storeInboundTypes = storableTypesFor(messageHandlers, settings.attachmentFetch)
 
     // An account its provider rings for (lib/push-checks.ts). The newest ring
     // is noted BEFORE the folders are read, so any mail it announced is already
@@ -302,6 +309,8 @@ export async function syncConnection(
           siteSendingAddress,
           blockedSenders,
           ownPostOwners: ownPost,
+          messageHandlers,
+          storeInboundTypes,
         })
         // A second round reports into the first round's line for the folder,
         // so the outcome still has one entry per folder.
@@ -420,6 +429,15 @@ type FolderContext = {
    *  individual inboxes, and empty when the setting is switched off, so the
    *  rule costs nothing at all where it does not apply. See lib/own-post.ts. */
   ownPostOwners: ReadonlyMap<string, string>
+  /** Whoever listens on `unified-inbox.message-received`, gathered once per
+   *  account. Empty on nearly every site, and then nothing below does any of
+   *  the extra work - see lib/message-handlers.ts. */
+  messageHandlers: MessageHandlerEntry[]
+  /** The kinds of file a listener asked to have in hand, which go into the
+   *  media library as an inbound message is filed - judged by their bytes, see
+   *  lib/inbound-file-policy.ts. Empty unless a listener asked, and always
+   *  empty when the site has said attachments are never to be fetched. */
+  storeInboundTypes: ReadonlySet<string>
 }
 
 async function syncFolder(ctx: FolderContext): Promise<FolderOutcome> {
@@ -945,6 +963,16 @@ async function fileMessage(
   // else, never passed on to a webhook.
   const securityMail = isAccountSecurityMail(headerValue(parsed, 'x-cactus-template'))
 
+  // Whether a side facing this way is offered to the modules listening for
+  // post (lib/message-handlers.ts), there and then. Post arriving now only:
+  // the backfill reads history, and a proforma from last March is not news to
+  // anybody. Never post the site refused, never the mail system talking, never
+  // the site's own login codes. The offer itself checks the rest.
+  const offerOnArrival = (side: 'in' | 'out') => side === 'in'
+    && ctx.messageHandlers.length > 0
+    && pass === 'forward'
+    && !junk && !automated && !securityMail
+
   // A bounce is filed against the message it is about as well as on the
   // conversation - the "Sent" under our reply becomes "It did not arrive".
   if (automated === 'bounce' && direction === 'in' && !junk) await fileBounce(parsed, subject, sentAt)
@@ -1068,8 +1096,9 @@ async function fileMessage(
     // Metadata only. The bytes stay on the mail server until somebody opens one -
     // pulling every attachment on the account through a 25 second cron slice is
     // not a plan, and D17 wants them fetched lazily anyway.
+    const stored: Array<{ id: string; index: number }> = []
     for (const [index, attachment] of parsed.attachments.entries()) {
-      await insertAttachment({
+      const attachmentId = await insertAttachment({
         messageId: written,
         filename: attachment.filename || `attachment-${index + 1}`,
         contentType: attachment.contentType || null,
@@ -1081,6 +1110,37 @@ async function fileMessage(
         // way out, so take the tidier one.
         contentId: attachment.cid || attachment.contentId || null,
       })
+      stored.push({ id: attachmentId, index })
+    }
+
+    // The exception to the paragraph above: when another module is about to be
+    // told this message has arrived AND asked for files of a kind this one
+    // carries, those go into the media library now, from the bytes already in
+    // hand, so the listener is given a file it can read. Only the kinds asked
+    // for, judged by the bytes rather than by the sender's label, never an
+    // inline part, and no more than the per-message allowance - see
+    // lib/inbound-file-policy.ts for why each of those matters. Everything else
+    // stays on the mail server as before and is offered as metadata alone.
+    //
+    // And only for a message with a sender to file the files under: without
+    // one there is no library folder, the file would be stored with no library
+    // row, and the listener would be handed mediaId null regardless.
+    if (offerOnArrival(input.direction) && ctx.storeInboundTypes.size > 0 && fromAddress) {
+      let budgetLeft = MAX_EAGER_BYTES_PER_MESSAGE
+      for (const { id, index } of stored) {
+        const part = parsed.attachments[index]!
+        if (part.cid || part.contentId) continue
+        if (part.content.length > MAX_ATTACHMENT_BYTES) continue
+        if (outOfTime(ctx.deadline)) break
+        const type = storableAs(part.content, ctx.storeInboundTypes, budgetLeft)
+        if (!type) continue
+        const kept = await cacheAttachment(
+          { id, messageId: written, filename: part.filename || `attachment-${index + 1}` },
+          Buffer.from(part.content),
+          type,
+        )
+        if (kept?.mediaId) budgetLeft -= part.content.length
+      }
     }
 
     await touchThread(thread, {
@@ -1213,6 +1273,7 @@ async function fileMessage(
   // outbound row - is stepped over rather than written twice.
   if (internal) {
     const written: string[] = []
+    const arrived: string[] = []
     let primaryThread: string | null = null
     for (const side of sides) {
       const sideMatch = chooseFor(side.inboxId, true)
@@ -1228,6 +1289,7 @@ async function fileMessage(
       })
       primaryThread ??= side_.threadId
       if (side_.messageId) written.push(side_.messageId)
+      if (side_.messageId && offerOnArrival(side.direction)) arrived.push(side_.messageId)
     }
 
     await markLocationProcessed({
@@ -1242,6 +1304,9 @@ async function fileMessage(
     // "something has arrived that you may want to act on", and the site has
     // just decided the opposite about this one.
     if (!junk && !securityMail) for (const messageId of written) await queueMessageWebhooks(messageId)
+    for (const messageId of arrived) {
+      await offerMessage(messageId, { handlers: ctx.messageHandlers, deadline: ctx.deadline })
+    }
     return { stored: written.length > 0, sentAt }
   }
 
@@ -1281,6 +1346,14 @@ async function fileMessage(
   // Nor about the site's own login codes and recovery links: see
   // isAccountSecurityMail for the loop that would otherwise start.
   if (!junk && !securityMail) await queueMessageWebhooks(messageId)
+
+  // And then the modules listening for post, now that the message, its files
+  // and its location are all safely recorded. Inside each handler's allowance
+  // and never past this pass's deadline: a message the clock leaves unoffered
+  // is picked up by the hourly catch-up. Never throws.
+  if (offerOnArrival(direction)) {
+    await offerMessage(messageId, { handlers: ctx.messageHandlers, deadline: ctx.deadline })
+  }
 
   return { stored: true, sentAt }
 }

@@ -160,6 +160,7 @@ export function UnifiedInboxSettingsTab() {
             access={data.access}
             defaults={data.defaults}
             users={data.users}
+            messageListeners={data.messageListeners ?? []}
             busy={busy}
             call={call}
             setMessage={setMessage}

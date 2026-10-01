@@ -41,7 +41,7 @@ export const DEFAULT_PATTERNS: Record<LinkKind, string> = {
  *  else's regular expression running over somebody else's email, and the two
  *  together are a fine way to spend a cron slice. The reference, when there is
  *  one, is in the subject or near the top of the message. */
-const MAX_SCAN_CHARS = 20_000
+export const MAX_SCAN_CHARS = 20_000
 
 /** Beyond this many hits the pattern is matching something structural rather
  *  than a reference, and running a lookup for each one helps nobody. */

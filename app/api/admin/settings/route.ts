@@ -25,6 +25,7 @@ import { retentionPreview } from '@/modules/unified-inbox/lib/retention'
 import { pushUrl } from '@/modules/unified-inbox/lib/push-checks'
 import { getSiteUrlOrNull } from '@/lib/config/env'
 import { existingTables, installedModuleNames } from '@/modules/unified-inbox/lib/installed'
+import { gatherMessageHandlers } from '@/modules/unified-inbox/lib/message-handlers'
 
 // Everything the settings screen draws, in one request: the mail accounts, the
 // inboxes hanging off them, who may read which, the module's own settings, and
@@ -36,7 +37,7 @@ export async function GET(request: NextRequest) {
   if (!user) return errorResponse('Not authenticated', 401)
   if (!await hasPermission(user, 'unifiedinbox.manage')) return errorResponse('Forbidden', 403)
 
-  const [connections, inboxes, access, defaults, settings, collection, unrouted, people, categories, clashes, retention, users, channels, blockedSenders, installed, shopTables] = await Promise.all([
+  const [connections, inboxes, access, defaults, settings, collection, unrouted, people, categories, clashes, retention, users, channels, blockedSenders, installed, shopTables, messageHandlers] = await Promise.all([
     listConnections(),
     listInboxes(),
     listAllInboxAccess(),
@@ -57,6 +58,7 @@ export async function GET(request: NextRequest) {
     listBlockedSenders(),
     installedModuleNames(),
     existingTables(['shp_orders']),
+    gatherMessageHandlers(),
   ])
 
   // The address a provider rings to say mail has arrived, for the accounts
@@ -124,6 +126,11 @@ export async function GET(request: NextRequest) {
     // Without one the switch for it would be a question about nothing, so the
     // screen leaves it out.
     shopInstalled: installed.has('shop') && shopTables.has('shp_orders'),
+    // The modules listening for post (unified-inbox.message-received), by
+    // name. Empty on nearly every site, and then the button that offers an
+    // inbox's recent post to them again is not shown: it would offer it to
+    // nobody.
+    messageListeners: [...new Set(messageHandlers.map((h) => h.moduleName))],
     // Without a site encryption key there is nowhere safe to put a mailbox
     // password, so the screen says so rather than saving one in the clear.
     encryptionReady: isEncryptionKeyUsable(),

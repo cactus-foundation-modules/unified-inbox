@@ -14,6 +14,7 @@ import type { OutboundCandidate } from './relay-copy'
 import { hasInlineImages, readableHtml, rewriteInlineImages } from './html'
 import { inlineImageHref, matchInlinePart, type InlineImagePart } from './inline-images'
 import { showableRemoteImageUrls } from './remote-images'
+import { readNotes } from './message-handlers-db'
 import { DRAFT_MODES, DRAFT_SEND_STATES, isInboxKind, isSignatureKind } from './types'
 import type {
   AttachmentFetchMode,
@@ -27,6 +28,7 @@ import type {
   DraftMode,
   DraftProduct,
   DraftSendState,
+  HandlerNote,
   IdentityKind,
   Inbox,
   InboxAccess,
@@ -2443,6 +2445,15 @@ export async function recordLink(data: {
             ${data.recordId}, ${data.label}, ${data.confidence}, ${data.linkedBy})
     ON CONFLICT DO NOTHING
   `
+  // Somebody putting a record back by hand overrides their own earlier "not
+  // that one" - see uin_record_link_removals, migration 070.
+  if (data.linkedBy === 'user' && data.threadId) {
+    await prisma.$executeRaw`
+      DELETE FROM "uin_record_link_removals"
+       WHERE "thread_id" = ${data.threadId} AND "module_name" = ${data.moduleName}
+         AND "record_type" = ${data.recordType} AND "record_id" = ${data.recordId}
+    `
+  }
 }
 
 /**
@@ -3793,6 +3804,9 @@ export type ThreadMessageRow = {
   /** The owning channel's id for this message, when source is provider - e.g.
    *  `voicemail:RE…` for a voicemail the phone module still holds. */
   providerMessageId: string | null
+  /** What the modules listening for post said about it, one line each -
+   *  "Filed on PO-01234 as the proforma". Empty on nearly every message. */
+  handlerNotes: HandlerNote[]
 }
 
 function mapThreadMessage(r: Record<string, unknown>): ThreadMessageRow {
@@ -3835,6 +3849,7 @@ function mapThreadMessage(r: Record<string, unknown>): ThreadMessageRow {
     authorUserId: (r.author_user_id as string | null) ?? null,
     source: r.source as string,
     providerMessageId: (r.provider_message_id as string | null) ?? null,
+    handlerNotes: readNotes(r.handler_notes),
   }
 }
 

@@ -168,6 +168,8 @@ export type Payload = {
   blockedSenders: BlockedSenderRow[]
   /** Whether the shop is here, so the switch for its customers is worth showing. */
   shopInstalled: boolean
+  /** The modules listening for post, by name. Empty on nearly every site. */
+  messageListeners: string[]
   encryptionReady: boolean
 }
 

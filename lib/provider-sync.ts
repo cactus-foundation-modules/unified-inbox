@@ -4,6 +4,8 @@ import type {
   ResolvedConversationProvider,
 } from '@/lib/conversations/types'
 import { queueMessageWebhooks } from './webhooks'
+import { gatherMessageHandlers, offerMessage, type MessageHandlerEntry } from './message-handlers'
+import { CATCH_UP_DAYS } from './message-handlers-db'
 import {
   assignThreadIfUnassigned,
   claimLocalOutbound,
@@ -230,6 +232,21 @@ export async function syncProvider(
   // once per account: it is a handful of strings, and this is the hot loop.
   const blocked = await blockedSenderSet()
 
+  // The modules listening for post, read once for the whole pass rather than
+  // per message - and only when a message actually arrives, so a quiet channel
+  // does not pay for it. Empty on nearly every site, and then offerArrival
+  // does nothing.
+  //
+  // A gather that fails is logged once and taken as "nobody listening" for the
+  // rest of the pass. It must never reach the caller: offerArrival runs between
+  // filing a message and recounting its conversation, and a throw there would
+  // leave the conversation half-updated and fail the whole tick.
+  let gathered: Promise<MessageHandlerEntry[]> | null = null
+  const messageHandlers = () => (gathered ??= gatherMessageHandlers().catch((err) => {
+    console.error('[unified-inbox] could not read the modules listening for post; none are told this pass', err)
+    return []
+  }))
+
   // What this site has already thrown away on this channel.
   //
   // The owning module is the source of truth and never hears about a deletion
@@ -310,7 +327,7 @@ export async function syncProvider(
       if (linkSettled(link, lastMessageAt, contentAt)) continue
       const linked = await collectLinkedConversation({
         provider, channelKey, summary, link, channel, subject, party, floor,
-        lastMessageAt, contentAt, inboxId,
+        lastMessageAt, contentAt, inboxId, deadline: opts.deadline, messageHandlers,
       })
       if (linked === null) continue
       opened += 1
@@ -436,6 +453,7 @@ export async function syncProvider(
       if (id) {
         stored += 1
         await queueMessageWebhooks(id)
+        await offerArrival(id, direction, sentAt, messageHandlers, opts.deadline)
         firstAny ??= id
         if (direction === 'in') firstIn ??= id
         if (direction === 'out') firstOut ??= id
@@ -566,6 +584,11 @@ async function collectLinkedConversation(input: {
   lastMessageAt: Date
   contentAt: Date
   inboxId: string | null
+  /** The pass's deadline, which a listener's turn may not run past. */
+  deadline?: number
+  /** The modules listening for post, gathered at most once per pass by
+   *  syncProvider. */
+  messageHandlers: () => Promise<MessageHandlerEntry[]>
 }): Promise<{ stored: number } | null> {
   const { provider, channelKey, summary, link, channel, party, floor } = input
 
@@ -648,6 +671,7 @@ async function collectLinkedConversation(input: {
       if (!id) continue
       here += 1
       await queueMessageWebhooks(id)
+      await offerArrival(id, direction, sentAt, input.messageHandlers, input.deadline)
       firsts.firstAny ??= id
       if (direction === 'in') firsts.firstIn ??= id
       if (direction === 'out') firsts.firstOut ??= id
@@ -701,6 +725,7 @@ async function collectLinkedConversation(input: {
     if (!id) continue
     there += 1
     await queueMessageWebhooks(id)
+    await offerArrival(id, direction, sentAt, input.messageHandlers, input.deadline)
     // Landing as an email does: to the top of the list, and unread when it
     // was them.
     await touchThread(link.threadId, {
@@ -740,6 +765,36 @@ function attachmentsOf(message: ConversationMessage): ProviderMessageAttachments
     url: att.url,
     contentType: att.contentType ?? null,
   }))
+}
+
+/**
+ * A message that has just arrived on a channel, offered to the modules
+ * listening for post (lib/message-handlers.ts) the way an email is.
+ *
+ * Inbound only, and only when it is news: the first pass over a channel copies
+ * a month of history, and a call from three weeks ago is not something to tell
+ * anybody about. The window is the catch-up's, so what is not offered here is
+ * not offered there either. Nothing at all on a site where nothing listens,
+ * and never throws.
+ */
+async function offerArrival(
+  messageId: string,
+  direction: string,
+  sentAt: Date,
+  gather: () => Promise<MessageHandlerEntry[]>,
+  deadline: number | undefined,
+): Promise<void> {
+  if (direction !== 'in') return
+  if (Date.now() - sentAt.getTime() > CATCH_UP_DAYS * 86_400_000) return
+  // Belt and braces over the gatherer's own catch: whatever is handed in here,
+  // nothing it does may escape into the collecting pass.
+  try {
+    const handlers = await gather()
+    if (handlers.length === 0) return
+    await offerMessage(messageId, { handlers, deadline })
+  } catch (err) {
+    console.error(`[unified-inbox] could not offer message ${messageId} to the modules listening for post`, err)
+  }
 }
 
 type ProviderMessageAttachments = Array<{ filename: string; url: string; contentType: string | null }> | undefined
