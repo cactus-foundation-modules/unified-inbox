@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
-import { canOpenThread, canReplyToInbox } from '@/modules/unified-inbox/lib/access'
+import { canOpenThread, canReplyToInbox, threadAccessKind } from '@/modules/unified-inbox/lib/access'
 import {
   deleteDraft,
   getDraftInInbox,
@@ -88,7 +88,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (!await canOpenThread(user, thread)) {
       return errorResponse('You do not have permission to answer that conversation.', 403)
     }
-    if (thread.providerModule) {
+    if (thread.providerModule && threadAccessKind(thread) === 'channel') {
       const allowed = await visibleChannelKeys(user)
       if (!allowed.includes(thread.providerModule)) {
         return errorResponse('You do not have permission to answer that conversation.', 403)

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
-import { canReplyToInbox } from '@/modules/unified-inbox/lib/access'
+import { canReplyToInbox, threadAccessKind } from '@/modules/unified-inbox/lib/access'
 import { defaultInboxIdFor, discardDraftAfterSend, getThread, standDownScheduledDraft } from '@/modules/unified-inbox/lib/db'
 import { applyFollowUpAfterSend } from '@/modules/unified-inbox/lib/follow-up'
 import { sendMessage } from '@/modules/unified-inbox/lib/send'
@@ -86,9 +86,13 @@ export async function POST(request: Request) {
     && (await providerForKey(thread.providerModule))?.provider.capabilities?.email === true
 
   if (thread?.providerModule && !forwardsByEmail) {
-    const allowed = await visibleChannelKeys(user)
-    if (!allowed.includes(thread.providerModule)) {
-      return errorResponse('You do not have permission to answer this conversation.', 403)
+    // A channel filed in an address answers to that address's guest list, which
+    // canOpenThread and canReplyToInbox have already checked.
+    if (threadAccessKind(thread) === 'channel') {
+      const allowed = await visibleChannelKeys(user)
+      if (!allowed.includes(thread.providerModule)) {
+        return errorResponse('You do not have permission to answer this conversation.', 403)
+      }
     }
     if (body.mode === 'forward' || body.mode === 'new') {
       return errorResponse(
@@ -121,7 +125,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ messageId: result.messageId, threadId: thread.id, alreadySent: false })
   }
 
-  if (forwardsByEmail && thread?.providerModule) {
+  if (forwardsByEmail && thread?.providerModule && threadAccessKind(thread) === 'channel') {
     // The channel's own permission still governs who may read the enquiry, and
     // so who may pass it on.
     const allowed = await visibleChannelKeys(user)

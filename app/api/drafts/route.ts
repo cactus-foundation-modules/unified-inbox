@@ -4,7 +4,7 @@ import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { sanitizeEmailHtml } from '@/lib/sanitize'
 import { getSiteTimezone } from '@/lib/config/timezone.server'
-import { canOpenThread, canReplyToInbox } from '@/modules/unified-inbox/lib/access'
+import { canOpenThread, canReplyToInbox, threadAccessKind } from '@/modules/unified-inbox/lib/access'
 import { getThreadDetail, saveDraft } from '@/modules/unified-inbox/lib/db'
 import { htmlHasWriting, isWorthSaving } from '@/modules/unified-inbox/lib/drafts'
 import { decideFollowUp, decideSendAt } from '@/modules/unified-inbox/lib/scheduled'
@@ -66,7 +66,9 @@ export async function POST(request: Request) {
   if (thread && !await canOpenThread(user, thread)) {
     return errorResponse('You do not have permission to write on that conversation.', 403)
   }
-  if (thread?.providerModule) {
+  // Only a channel nobody has filed in an address answers to its own permission;
+  // a filed one answers to the guest list on that address (see threadAccessKind).
+  if (thread?.providerModule && threadAccessKind(thread) === 'channel') {
     const allowed = await visibleChannelKeys(user)
     if (!allowed.includes(thread.providerModule)) {
       return errorResponse('You do not have permission to write on that conversation.', 403)
