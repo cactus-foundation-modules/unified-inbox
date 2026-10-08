@@ -1,5 +1,6 @@
 import {
   claimDueScheduledDrafts,
+  defaultInboxIdFor,
   deleteDraft,
   failScheduledDraft,
   getThread,
@@ -163,6 +164,17 @@ async function sendOneScheduled(
     // channel's own permission, and the right to answer anything at all.
     if (!await canUserOpenThread(draft.authorUserId, thread) || !await userCanReply(draft.authorUserId)) {
       return { ok: false, reason: 'Whoever wrote it can no longer answer this conversation.' }
+    }
+    // A forward of an enquiry leaves from an address of ours, not through the
+    // channel, so the address has to still be one they may send from.
+    if (draft.mode === 'forward') {
+      const inboxId = draftSendingInboxId(draft, thread) ?? await defaultInboxIdFor(draft.authorUserId)
+      if (!inboxId || !await canUserReplyToInbox(draft.authorUserId, inboxId)) {
+        return {
+          ok: false,
+          reason: 'Whoever wrote it can no longer send from that address, so it stayed here.',
+        }
+      }
     }
   } else {
     const inboxId = draftSendingInboxId(draft, thread)

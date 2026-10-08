@@ -3,11 +3,11 @@ import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { canReplyToInbox } from '@/modules/unified-inbox/lib/access'
-import { discardDraftAfterSend, getThread, standDownScheduledDraft } from '@/modules/unified-inbox/lib/db'
+import { defaultInboxIdFor, discardDraftAfterSend, getThread, standDownScheduledDraft } from '@/modules/unified-inbox/lib/db'
 import { applyFollowUpAfterSend } from '@/modules/unified-inbox/lib/follow-up'
 import { sendMessage } from '@/modules/unified-inbox/lib/send'
 import { sendProviderReply } from '@/modules/unified-inbox/lib/provider-send'
-import { visibleChannelKeys } from '@/modules/unified-inbox/lib/provider-registry'
+import { providerForKey, visibleChannelKeys } from '@/modules/unified-inbox/lib/provider-registry'
 import { SendBody } from '@/modules/unified-inbox/lib/validation'
 
 // Sending a message: a reply, a reply to everybody, a forward, or a new
@@ -75,7 +75,17 @@ export async function POST(request: Request) {
   const thread = body.threadId ? await getThread(body.threadId) : null
 
   // ---- a channel somebody else owns --------------------------------------
-  if (thread?.providerModule) {
+  //
+  // One answered by email (an enquiry off a form) can also be FORWARDED, and a
+  // forward is not the channel's business: it is a new email to somebody the
+  // channel has never heard of, so it leaves by this module's own mail road
+  // like any other forward, from an address of ours. It falls through to the
+  // email path below rather than being sent from here.
+  const forwardsByEmail = !!thread?.providerModule
+    && body.mode === 'forward'
+    && (await providerForKey(thread.providerModule))?.provider.capabilities?.email === true
+
+  if (thread?.providerModule && !forwardsByEmail) {
     const allowed = await visibleChannelKeys(user)
     if (!allowed.includes(thread.providerModule)) {
       return errorResponse('You do not have permission to answer this conversation.', 403)
@@ -99,6 +109,8 @@ export async function POST(request: Request) {
       authorUserId: user.id,
       authorName: user.displayName ?? null,
       products: body.products ?? [],
+      subject: body.subject,
+      attachments: body.attachments,
     })
     if (!result.ok) return errorResponse(result.reason, 400)
     const discarded = await discardDraftAfterSend(body.draftId, user.id)
@@ -109,8 +121,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ messageId: result.messageId, threadId: thread.id, alreadySent: false })
   }
 
+  if (forwardsByEmail && thread?.providerModule) {
+    // The channel's own permission still governs who may read the enquiry, and
+    // so who may pass it on.
+    const allowed = await visibleChannelKeys(user)
+    if (!allowed.includes(thread.providerModule)) {
+      return errorResponse('You do not have permission to answer this conversation.', 403)
+    }
+  }
+
   // ---- email -------------------------------------------------------------
-  const inboxId = body.inboxId ?? thread?.inboxId ?? null
+  // An enquiry is often not filed in any address, so a forward of one goes from
+  // the sender's own default when nothing else says.
+  const inboxId = body.inboxId ?? thread?.inboxId
+    ?? (forwardsByEmail ? await defaultInboxIdFor(user.id) : null)
   if (!inboxId) {
     return errorResponse(
       'This conversation is not filed in an inbox yet, so there is nothing to send it from.',
@@ -124,7 +148,7 @@ export async function POST(request: Request) {
   const standDown = await timerIsOff(body.draftId, user.id)
   if (!standDown.ok) return standDown.response
 
-  const result = await sendMessage({ ...body, authorUserId: user.id })
+  const result = await sendMessage({ ...body, inboxId, authorUserId: user.id })
 
   // A refusal is a 400 with a sentence, never a 500 with a stack trace. The
   // person reading it is deciding what to do next.

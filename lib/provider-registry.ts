@@ -177,6 +177,9 @@ export type ProviderChannel = {
    *  wrapped in on the way out - and they must be the same list, or a button
    *  is offered whose work is thrown away. */
   textStyles: ConversationTextStyles | null
+  /** Whether its conversations are answered by email, so a reply has a subject
+   *  and a message can be forwarded - see `capabilities.email` in core. */
+  email: boolean
 }
 
 /**
@@ -219,6 +222,7 @@ export const visibleProviderChannels = cache(async (user: SessionUser): Promise<
       canDelete: provider.capabilities?.delete === true && typeof provider.deleteMessage === 'function',
       canBlock: provider.capabilities?.block === true && typeof provider.blockParticipant === 'function',
       textStyles: provider.capabilities?.textStyles ?? null,
+      email: provider.capabilities?.email === true,
     })
   }
   return channels

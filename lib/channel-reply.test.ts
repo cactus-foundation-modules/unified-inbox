@@ -30,6 +30,23 @@ describe('replyStyleFor', () => {
     expect(style.forward).toBe(false)
   })
 
+  // An enquiry off a form is answered by email, so it has a subject to change
+  // and can be passed on - but still nobody types who the reply goes to.
+  it('gives a channel answered by email the whole email box, bar the address', () => {
+    const style = replyStyleFor({ providerModule: 'contact-form' }, null, true)
+    expect(style.subject).toBe(true)
+    expect(style.forward).toBe(true)
+    expect(style.richText).toBe(true)
+    expect(style.attachments).toBe(true)
+    expect(style.addressed).toBe(false)
+  })
+
+  it('keeps a chat without a subject or a forward', () => {
+    const style = replyStyleFor({ providerModule: 'live-chat' }, null, false)
+    expect(style.subject).toBe(false)
+    expect(style.forward).toBe(false)
+  })
+
   it('offers no emphasis at all on a channel that declared none', () => {
     expect(replyStyleFor({ providerModule: 'twilio' }).styles).toEqual([])
     expect(replyStyleFor({ providerModule: 'twilio' }, null).styles).toEqual([])

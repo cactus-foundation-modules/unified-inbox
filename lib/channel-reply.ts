@@ -41,6 +41,10 @@ export type ReplyStyle = {
   attachments: boolean
   /** Whether it can be forwarded to somebody else from here. */
   forward: boolean
+  /** Whether the subject of the reply can be changed, on a channel where
+   *  nobody types an address. True on email, and on a channel answered by
+   *  email (an enquiry off a form), which has a subject to change. */
+  subject: boolean
 }
 
 /** One inline style, named the way core's ConversationTextStyles names it. */
@@ -53,6 +57,7 @@ export const EMAIL_REPLY_STYLE: ReplyStyle = {
   styles: [],
   attachments: true,
   forward: true,
+  subject: true,
 }
 
 /**
@@ -69,6 +74,7 @@ export const CHANNEL_REPLY_STYLE: ReplyStyle = {
   styles: [],
   attachments: false,
   forward: false,
+  subject: false,
 }
 
 /**
@@ -90,10 +96,18 @@ export function replyStyleFor(
   thread: { providerModule: string | null },
   /** The channel's own declaration, straight off the resolved provider. */
   channelStyles?: Partial<Record<TextStyleName, string>> | null,
+  /** The channel's `capabilities.email`: it is answered by email, so the reply
+   *  is a full email in every respect but the address - formatting, files, a
+   *  subject, and a message can be forwarded. The reply itself still goes back
+   *  through the owning module, which is why nothing is addressed here. */
+  answeredByEmail = false,
 ): ReplyStyle {
   if (!thread.providerModule) return EMAIL_REPLY_STYLE
   const styles = STYLE_NAMES.filter((name) => !!channelStyles?.[name])
-  return styles.length === 0 ? CHANNEL_REPLY_STYLE : { ...CHANNEL_REPLY_STYLE, styles }
+  const base = answeredByEmail
+    ? { ...CHANNEL_REPLY_STYLE, richText: true, attachments: true, forward: true, subject: true }
+    : CHANNEL_REPLY_STYLE
+  return styles.length === 0 ? base : { ...base, styles }
 }
 
 /** In the order the buttons are drawn in, so two channels declaring the same

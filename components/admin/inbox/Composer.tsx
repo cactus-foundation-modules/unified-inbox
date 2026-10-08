@@ -29,7 +29,7 @@ import { AlarmIcon, CloseIcon, CollapseIcon, ExpandIcon, PaperclipIcon, TagIcon 
 import { useComposerOpen } from './composer-open'
 import { ReplySuggestions } from '@/components/admin/ReplySuggestions'
 import type { DraftSendState } from '@/modules/unified-inbox/lib/types'
-import type { ReplyStyle } from '@/modules/unified-inbox/lib/channel-reply'
+import { EMAIL_REPLY_STYLE, type ReplyStyle } from '@/modules/unified-inbox/lib/channel-reply'
 import { appendSlots, refKey, slotHtml, slotRefs } from '@/modules/unified-inbox/lib/products/slots'
 import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 import { pickQuotedPreview, type QuotedPreview } from '@/modules/unified-inbox/lib/quoted-preview'
@@ -130,7 +130,7 @@ type Props = {
 }
 
 export function Composer({
-  threadId, inboxId, replyTo, replyAllTo, canReply, canForward, style, destinationLine, staff,
+  threadId, inboxId, replyTo, replyAllTo, canReply, canForward, style: replyStyle, destinationLine, staff,
   cannotReplyReason, replySubject, forwardSubject, draft, canAddProducts, draftProducts,
   requestedMode, requestedAt, requestedReplyToId, quotedPreviews, canSuggestReplies, timezone,
 }: Props) {
@@ -307,6 +307,10 @@ export function Composer({
 
   const forwarding = mode === 'forward'
   const noting = mode === 'note'
+  // A forward is a new email to somebody the conversation has never met, so it
+  // is drawn as one - To, Cc, Bcc, Subject, the formatting strip and the
+  // paperclip - even on a conversation whose replies go back down a channel.
+  const style = forwarding ? EMAIL_REPLY_STYLE : replyStyle
   /** The message that will be quoted under this one, or null on a conversation
    *  with nothing quotable on it. The same rule the send route follows - what
    *  was pressed, else the newest - so the panel below is not describing a
@@ -977,6 +981,48 @@ export function Composer({
     </>
   )
 
+  const subjectButton = (
+    <button
+      type="button"
+      className="uin-field-add"
+      onClick={() => {
+        setShowSubject(true)
+        // Opened to be changed, so it opens on what it would have said - an
+        // empty subject box on a reply is a trap.
+        setSubject((was) => was || defaultSubject)
+      }}
+    >
+      Subject
+    </button>
+  )
+
+  const subjectRow = (
+    <div className="uin-field-row">
+      <label htmlFor="uin-reply-subject">Subject</label>
+      <div className="uin-field-control">
+        <input
+          id="uin-reply-subject"
+          type="text"
+          value={subject}
+          onChange={(e) => { setSubject(e.target.value); setDirty(true) }}
+          onKeyDown={onLineEnter('uin-composer-text')}
+          placeholder={defaultSubject}
+          autoComplete="off"
+        />
+        {!subject.trim() && (
+          <button
+            type="button"
+            className="uin-field-add"
+            onClick={() => setShowSubject(false)}
+            aria-label="Take the Subject line off"
+          >
+            Remove
+          </button>
+        )}
+      </div>
+    </div>
+  )
+
   const body = (
     // The provider rather than a box: the words are drawn in the middle of this
     // and the buttons that format them are drawn on the strip along the bottom,
@@ -1017,13 +1063,22 @@ export function Composer({
            back where it came from, and the four lines an email opens with - To,
            Cc, Bcc and Subject - are four boxes nothing on the server reads. In
            their place, one line saying who is about to receive it, which is the
-           part of the To line that was ever worth having here. */
-        <div className="uin-composer-aside-row">
-          <p className="uin-recipients uin-composer-aside">
-            {destinationLine ?? 'This goes back the way it came.'}
-          </p>
-          {headTools && <span className="uin-field-links">{headTools}</span>}
-        </div>
+           part of the To line that was ever worth having here. One that is
+           answered by email keeps the Subject, which the channel does read. */
+        <>
+          <div className="uin-composer-aside-row">
+            <p className="uin-recipients uin-composer-aside">
+              {destinationLine ?? 'This goes back the way it came.'}
+            </p>
+            {(headTools || (style.subject && !showSubject)) && (
+              <span className="uin-field-links">
+                {style.subject && !showSubject && subjectButton}
+                {headTools}
+              </span>
+            )}
+          </div>
+          {style.subject && showSubject && <div className="uin-fields">{subjectRow}</div>}
+        </>
       ) : (
         <div className="uin-fields">
           <div className="uin-field-row">
@@ -1049,20 +1104,7 @@ export function Composer({
                 {!showBcc && (
                   <button type="button" className="uin-field-add" onClick={() => setShowBcc(true)}>Bcc</button>
                 )}
-                {!showSubject && (
-                  <button
-                    type="button"
-                    className="uin-field-add"
-                    onClick={() => {
-                      setShowSubject(true)
-                      // Opened to be changed, so it opens on what it would have
-                      // said - an empty subject box on a reply is a trap.
-                      setSubject((was) => was || defaultSubject)
-                    }}
-                  >
-                    Subject
-                  </button>
-                )}
+                {!showSubject && subjectButton}
                 {headTools}
               </div>
             </div>
@@ -1126,32 +1168,7 @@ export function Composer({
             </div>
           )}
 
-          {showSubject && (
-            <div className="uin-field-row">
-              <label htmlFor="uin-reply-subject">Subject</label>
-              <div className="uin-field-control">
-                <input
-                  id="uin-reply-subject"
-                  type="text"
-                  value={subject}
-                  onChange={(e) => { setSubject(e.target.value); setDirty(true) }}
-                  onKeyDown={onLineEnter('uin-composer-text')}
-                  placeholder={defaultSubject}
-                  autoComplete="off"
-                />
-                {!subject.trim() && (
-                  <button
-                    type="button"
-                    className="uin-field-add"
-                    onClick={() => setShowSubject(false)}
-                    aria-label="Take the Subject line off"
-                  >
-                    Remove
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
+          {showSubject && subjectRow}
         </div>
       )}
 

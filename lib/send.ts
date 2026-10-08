@@ -628,8 +628,8 @@ type GatheredAttachment = {
 }
 
 /** The bytes for everything travelling with this message. */
-async function gatherAttachments(
-  request: SendRequest,
+export async function gatherAttachments(
+  request: Pick<SendRequest, 'attachments' | 'includeOriginalAttachments'>,
   parentMessageId: string | null,
 ): Promise<{ ok: true; items: GatheredAttachment[] } | { ok: false; reason: string }> {
   const items: GatheredAttachment[] = []

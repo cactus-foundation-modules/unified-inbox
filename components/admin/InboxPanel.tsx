@@ -1387,7 +1387,7 @@ export async function UnifiedInboxPanel({
       // is what stopped every WhatsApp message being answered at all: the To
       // line came back empty, because a WhatsApp conversation has a number on
       // it and no address anywhere, and an empty To line disables Send.
-      const style = replyStyleFor(thread, channel?.textStyles)
+      const style = replyStyleFor(thread, channel?.textStyles, channel?.email === true)
       const destinationLine = style.addressed
         ? null
         : replyDestination({

@@ -1,5 +1,6 @@
 import {
   getThreadDetail,
+  insertOutboundAttachment,
   insertProviderMessage,
   recordEvent,
   recordLink,
@@ -8,11 +9,14 @@ import {
   setThreadRead,
   threadHasLink,
 } from './db'
+import { cacheAttachment } from './attachments'
+import { assembleBody, checkAttachmentBudget, type OutgoingAttachment } from './compose'
 import { htmlHasWriting } from './drafts'
+import { gatherAttachments, type SendRequest } from './send'
 import { htmlToText } from './html'
 import { applyTextStyles } from './text-styles'
 import { resolveProducts } from './products'
-import { renderProductText } from './products/render'
+import { renderProductTable, renderProductText } from './products/render'
 import { flattenWithProducts, refKey, slotRefs } from './products/slots'
 import type { ProductRef } from './products/types'
 import type { ConversationTextStyles } from '@/lib/conversations/types'
@@ -97,6 +101,45 @@ export async function replyWords(
   return [words, renderProductText(trailing)].filter(Boolean).join('\n\n')
 }
 
+/**
+ * A reply on a channel that is answered by email, built the way an email is:
+ * the writing cleaned and linked, and the catalogue as the same table an email
+ * from this module carries rather than as lines of text.
+ *
+ * What comes back is the markup and its plain words. The channel wraps the
+ * markup in its own design and signature; this is only the middle of it.
+ */
+async function emailReplyBody(
+  bodyHtml: string,
+  refs: readonly ProductRef[],
+): Promise<{ html: string; text: string }> {
+  const products = await resolveProducts(refs)
+  const slotted = new Set(slotRefs(bodyHtml).map(refKey))
+  const placed = new Map<string, { html: string; text: string }>()
+  const trailing: typeof products[number]['choice'][] = []
+  for (const { choice } of products) {
+    if (slotted.has(refKey(choice))) {
+      placed.set(refKey(choice), {
+        html: renderProductTable([choice]),
+        text: renderProductText([choice]),
+      })
+    } else {
+      trailing.push(choice)
+    }
+  }
+  return assembleBody({
+    bodyHtml,
+    products: {
+      placed,
+      trailing: trailing.length > 0
+        ? { html: renderProductTable(trailing), text: renderProductText(trailing) }
+        : null,
+    },
+    signature: null,
+    quoted: null,
+  })
+}
+
 export async function sendProviderReply(input: {
   threadId: string
   /** What to send, either as it was typed or as it already stood.
@@ -116,6 +159,11 @@ export async function sendProviderReply(input: {
    *  purchase order or an order sits on. Already in the words; this is only
    *  about what the thread is ABOUT. */
   products?: readonly ProductRef[]
+  /** A subject typed over the usual one. Only handed on to a channel that is
+   *  answered by email; anywhere else there is no subject to change. */
+  subject?: string | null
+  /** Files to go with it. Only carried by a channel answered by email. */
+  attachments?: SendRequest['attachments']
 }): Promise<ProviderSendResult> {
   // Nothing written, refused before anything is looked up. Checked twice over:
   // here on what was typed, so an empty box costs no queries, and again on the
@@ -146,20 +194,58 @@ export async function sendProviderReply(input: {
   // Emphasis written the way this channel writes it, and the catalogue put
   // where it was put. Both need the channel, which is why the words are made
   // here and not at the two call sites.
-  const body = ('html' in input.body
-    ? await replyWords(
-      input.body.html,
-      input.products ?? [],
-      resolved.provider.capabilities?.textStyles ?? null,
-    )
-    : input.body.text
+  //
+  // A channel answered by email takes the whole reply: formatted, with files.
+  // Anything else is words.
+  const byEmail = resolved.provider.capabilities?.email === true
+  const email = byEmail && 'html' in input.body
+    ? await emailReplyBody(input.body.html, input.products ?? [])
+    : null
+  const body = (email
+    ? email.text
+    : 'html' in input.body
+      ? await replyWords(
+        input.body.html,
+        input.products ?? [],
+        resolved.provider.capabilities?.textStyles ?? null,
+      )
+      : input.body.text
   ).trim()
   if (!body) return { ok: false, reason: 'There is nothing to send.' }
+
+  // Bytes come from storage rather than from the browser, and the lot is
+  // checked against the size limit before anything leaves.
+  const files = byEmail && (input.attachments ?? []).length > 0
+    ? await gatherAttachments({ attachments: input.attachments }, null)
+    : { ok: true as const, items: [] }
+  if (!files.ok) return { ok: false, reason: files.reason }
+  const budget = checkAttachmentBudget(
+    files.items.map((f): OutgoingAttachment => ({
+      filename: f.filename,
+      contentType: f.contentType,
+      sizeBytes: f.content.byteLength,
+    })),
+    Buffer.byteLength(email?.html ?? '') + Buffer.byteLength(body),
+  )
+  if (!budget.ok) return { ok: false, reason: budget.reason }
 
   try {
     await resolved.provider.send(thread.externalId, {
       text: body,
+      ...(email ? { html: email.html } : {}),
+      ...(files.items.length > 0
+        ? {
+            attachments: files.items.map((f) => ({
+              filename: f.filename,
+              contentType: f.contentType,
+              content: f.content,
+            })),
+          }
+        : {}),
       authorUserId: input.authorUserId,
+      ...(resolved.provider.capabilities?.email === true && input.subject?.trim()
+        ? { subject: input.subject.trim() }
+        : {}),
     })
   } catch (err) {
     // The owning module knows why its own send failed and says so in English -
@@ -191,10 +277,32 @@ export async function sendProviderReply(input: {
     fromPhone: null,
     subject: thread.subject,
     bodyText: body,
-    bodyHtml: null,
+    bodyHtml: email?.html ?? null,
     snippet: buildSnippet(body),
     sentAt,
   })
+  // The files, kept against the copy on the conversation so they are there to
+  // open and to forward, exactly as they are on an email we sent.
+  if (messageId) {
+    for (const file of files.items) {
+      const attachmentId = await insertOutboundAttachment({
+        messageId,
+        filename: file.filename,
+        contentType: file.contentType,
+        sizeBytes: file.content.byteLength,
+        mediaKey: file.key,
+        mediaProvider: file.provider,
+        mediaUrl: file.url,
+      })
+      if (file.staged) {
+        await cacheAttachment(
+          { id: attachmentId, messageId, filename: file.filename },
+          file.content,
+          file.contentType ?? 'application/octet-stream',
+        )
+      }
+    }
+  }
   await recountProviderThread(thread.id)
 
   // Everything that was quoted, now attached to the conversation - exactly as it

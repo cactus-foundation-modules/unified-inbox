@@ -2,7 +2,8 @@ import { plainTextToHtml } from './scheduled'
 import { draftBodyText } from './drafts'
 import { sendMessage } from './send'
 import { sendProviderReply } from './provider-send'
-import type { ThreadRow } from './db'
+import { providerForKey } from './provider-registry'
+import { defaultInboxIdFor, type ThreadRow } from './db'
 import type { Draft } from './types'
 
 // ---------------------------------------------------------------------------
@@ -57,7 +58,13 @@ export async function postDraft(
 ): Promise<DraftPostResult> {
   // A conversation another module owns - a chat, an enquiry, a text. It goes
   // back out the way it came in.
-  if (thread?.providerModule) {
+  //
+  // Except a forward of one answered by email, which is not the channel's to
+  // send - it goes by the road below, from an address of ours.
+  const forwardsByEmail = !!thread?.providerModule
+    && draft.mode === 'forward'
+    && (await providerForKey(thread.providerModule))?.provider.capabilities?.email === true
+  if (thread?.providerModule && !forwardsByEmail) {
     if (draft.mode === 'forward' || draft.mode === 'new') {
       return { ok: false, reason: 'This kind of conversation can be replied to, but not forwarded.' }
     }
@@ -73,11 +80,19 @@ export async function postDraft(
       authorUserId: options.sentByUserId,
       authorName: null,
       products: draft.products,
+      subject: draft.subject,
+      attachments: draft.attachments.map((file) => ({
+        key: file.key,
+        url: file.url,
+        filename: file.filename,
+        contentType: file.contentType,
+      })),
     })
     return result.ok ? { ok: true, threadId: thread.id } : { ok: false, reason: result.reason }
   }
 
   const inboxId = draftSendingInboxId(draft, thread)
+    ?? (forwardsByEmail ? await defaultInboxIdFor(options.sentByUserId) : null)
   if (!inboxId) {
     return { ok: false, reason: 'There is no address left to send it from, so it stayed here.' }
   }
