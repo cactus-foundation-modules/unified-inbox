@@ -7,6 +7,7 @@ import { defaultInboxIdFor, discardDraftAfterSend, getThread, standDownScheduled
 import { applyFollowUpAfterSend } from '@/modules/unified-inbox/lib/follow-up'
 import { sendMessage } from '@/modules/unified-inbox/lib/send'
 import { sendProviderReply } from '@/modules/unified-inbox/lib/provider-send'
+import { leavesByEmailRoad } from '@/modules/unified-inbox/lib/email-road'
 import { providerForKey, visibleChannelKeys } from '@/modules/unified-inbox/lib/provider-registry'
 import { SendBody } from '@/modules/unified-inbox/lib/validation'
 
@@ -85,7 +86,11 @@ export async function POST(request: Request) {
     && body.mode === 'forward'
     && (await providerForKey(thread.providerModule))?.provider.capabilities?.email === true
 
-  if (thread?.providerModule && !forwardsByEmail) {
+  // A reply to an enquiry filed in an address leaves from that address as plain
+  // email, not as the channel's own designed message (see leavesByEmailRoad).
+  const byEmailRoad = await leavesByEmailRoad(thread, body.mode)
+
+  if (thread?.providerModule && !byEmailRoad) {
     // A channel filed in an address answers to that address's guest list, which
     // canOpenThread and canReplyToInbox have already checked.
     if (threadAccessKind(thread) === 'channel') {

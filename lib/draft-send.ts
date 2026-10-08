@@ -1,3 +1,4 @@
+import { leavesByEmailRoad } from './email-road'
 import { plainTextToHtml } from './scheduled'
 import { draftBodyText } from './drafts'
 import { sendMessage } from './send'
@@ -64,7 +65,8 @@ export async function postDraft(
   const forwardsByEmail = !!thread?.providerModule
     && draft.mode === 'forward'
     && (await providerForKey(thread.providerModule))?.provider.capabilities?.email === true
-  if (thread?.providerModule && !forwardsByEmail) {
+  const byEmailRoad = await leavesByEmailRoad(thread, draft.mode)
+  if (thread?.providerModule && !byEmailRoad) {
     if (draft.mode === 'forward' || draft.mode === 'new') {
       return { ok: false, reason: 'This kind of conversation can be replied to, but not forwarded.' }
     }
