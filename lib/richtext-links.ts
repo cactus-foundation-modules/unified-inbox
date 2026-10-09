@@ -114,16 +114,20 @@ export function linkifyEditable(root: HTMLElement, mode: LinkifyMode): boolean {
   return changed
 }
 
-/** The link the caret is in, when it is in one inside this box - for the line
- *  under the box that says where it goes and lets somebody go there. */
-export function linkAtCaret(root: HTMLElement): string | null {
+/** The link the caret is in, when it is in one inside this box - for the
+ *  bubble that says where it goes and lets somebody go there. */
+export function anchorAtCaret(root: HTMLElement): HTMLAnchorElement | null {
   const selection = root.ownerDocument.getSelection()
   const node = selection && selection.rangeCount > 0 ? selection.anchorNode : null
   if (!node || !root.contains(node)) return null
   const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement
   const anchor = element?.closest('a')
-  if (!anchor || !root.contains(anchor)) return null
-  return anchor.getAttribute('href')
+  return anchor && root.contains(anchor) ? anchor : null
+}
+
+/** Where that link goes. */
+export function linkAtCaret(root: HTMLElement): string | null {
+  return anchorAtCaret(root)?.getAttribute('href') ?? null
 }
 
 /** An address it is safe to send somebody to from the admin: the web, an

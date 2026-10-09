@@ -4213,18 +4213,38 @@
 /* What the six buttons produce, drawn as the recipient will see it rather than
    as the admin's own body text. */
 .uin-richtext-box a { color: var(--color-link, var(--color-primary)); }
-/* Where the link the caret is in goes. A link in a writing box cannot be
-   followed by pressing it - that press is the caret's - so this line is the way
-   to it. Small and quiet: it is a note about the words, not part of them. */
-.uin-rt-linkhint {
-  margin: 0;
-  padding: 0 0.75rem 0.4rem;
-  font-size: 0.75rem;
+/* Underlined as well as coloured: in a box full of somebody's own words, a
+   colour alone is too easy to read as a colour somebody chose. */
+.uin-richtext-box a { text-decoration: underline; text-underline-offset: 2px; }
+/* The bubble under a link somebody has pressed in the box. A link in a writing
+   box cannot be followed by pressing it - that press is the caret's - so this
+   is the way to it. The wrapper is its positioning frame. */
+.uin-richtext { position: relative; }
+.uin-rt-linkbubble {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8125rem;
   color: var(--color-text-secondary);
-  overflow-wrap: anywhere;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  box-shadow: var(--shadow-xl);
 }
-.uin-modal .uin-rt-linkhint { padding-inline: 0; }
-.uin-rt-linkhint a { color: var(--color-link, var(--color-primary)); }
+.uin-rt-linkbubble a {
+  flex: none;
+  font-weight: 600;
+  color: var(--color-link, var(--color-primary));
+}
+.uin-rt-linkbubble-url {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .uin-richtext-box ul, .uin-richtext-box ol { margin: 0.4rem 0; padding-left: 1.5rem; }
 .uin-richtext-box li { margin: 0.15rem 0; }
 

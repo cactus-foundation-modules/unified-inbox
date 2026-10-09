@@ -6,7 +6,7 @@ import {
 } from 'react'
 import { BLOCK_CLASS, BLOCK_OFF_CLASS, openUpAround } from '@/modules/unified-inbox/lib/richtext-blocks'
 import {
-  linkAtCaret, linkifyEditable, openableHref, type LinkifyMode,
+  anchorAtCaret, linkifyEditable, openableHref, type LinkifyMode,
 } from '@/modules/unified-inbox/lib/richtext-links'
 import { LinkIcon, ListIcon, NumberedListIcon, PaletteIcon } from './icons'
 
@@ -300,15 +300,45 @@ export function RichText({ id, value, onChange, placeholder, label, handleRef, c
   return <RichTextContext.Provider value={api}>{children}</RichTextContext.Provider>
 }
 
+/** The link bubble's widest, and the least room it is given before it is
+ *  pulled back from the right-hand edge - enough for "Open link" and the start
+ *  of an address. Pixels, because they are compared with measured ones. */
+const BUBBLE_WIDEST = 416
+const BUBBLE_ROOM = 280
+
 /** The words themselves. */
 export function RichTextBox() {
   const { id, attach, emit, exec, rememberSelection, linkify, placeholder, label } = useRichText()
-  /** Where the link the caret is in goes, when it is in one. A link in an
-   *  editable box cannot be followed by pressing it - the press puts the caret
-   *  there, which is what a writing box is for - so the line under the box
-   *  says where it goes and is the way to go there. */
-  const [here, setHere] = useState<string | null>(null)
-  const notice = useCallback((el: HTMLElement) => setHere(openableHref(linkAtCaret(el))), [])
+  /** The link the caret is in, when it is in one, and where to draw the
+   *  bubble for it. A link in an editable box cannot be followed by pressing
+   *  it - the press puts the caret there, which is what a writing box is for -
+   *  so pressing one opens a bubble just under it that says where it goes and
+   *  is the way to go there. The same bubble every mail program's composer
+   *  draws. It used to be a line under the whole box, which is somewhere
+   *  nobody looks while they are looking at the link they have just pressed. */
+  const [here, setHere] = useState<
+    { href: string; top: number; left: number; maxWidth: number } | null
+  >(null)
+  const notice = useCallback((el: HTMLElement) => {
+    const anchor = anchorAtCaret(el)
+    const href = openableHref(anchor?.getAttribute('href') ?? null)
+    const frame = el.parentElement
+    if (!anchor || !href || !frame) { setHere(null); return }
+    // Measured against the wrapper the bubble is positioned in. The link's
+    // first line rather than its whole box, so a long address that wraps gets
+    // its bubble under where it starts rather than under its far end.
+    const at = anchor.getClientRects()[0] ?? anchor.getBoundingClientRect()
+    const home = frame.getBoundingClientRect()
+    // Kept inside the box: a link near the right-hand edge gets its bubble
+    // pulled back left rather than hanging off the side of the composer.
+    const left = Math.max(0, Math.min(at.left - home.left, home.width - BUBBLE_ROOM))
+    setHere({
+      href,
+      top: at.bottom - home.top + 4,
+      left,
+      maxWidth: Math.min(BUBBLE_WIDEST, home.width - left),
+    })
+  }, [])
 
   /** The little cross on a block - a product, today - takes the whole block
    *  out. The box has no idea what it removed, which is the point: a block is
@@ -381,7 +411,13 @@ export function RichTextBox() {
         // into the new markup rather than at words that have just been replaced.
         onBlur={() => { linkify('all'); rememberSelection(); emit(); setHere(null) }}
         onKeyDown={onKeyDown}
-        onKeyUp={(event) => notice(event.currentTarget)}
+        onKeyUp={(event) => {
+          if (event.key === 'Escape') setHere(null)
+          else notice(event.currentTarget)
+        }}
+        // A bubble measured before the words moved is pointing at the wrong
+        // line, so it goes; pressing the link again brings it back.
+        onScroll={() => setHere(null)}
         onClick={onClick}
         // Arbitrary markup off a clipboard brings a web page's layout, its
         // fonts and its tracking pixels with it. The words are what somebody
@@ -396,20 +432,19 @@ export function RichTextBox() {
         }}
       />
       {here && (
-        <p className="uin-rt-linkhint">
-          Goes to{' '}
-          {/* Refusing the mouse-down keeps the focus in the box: the line is
-              taken away when the box loses the focus, and a link taken away
-              between the press and the release is a click that goes nowhere. */}
-          <a
-            href={here}
-            target="_blank"
-            rel="noopener noreferrer"
-            onMouseDown={(event) => event.preventDefault()}
-          >
-            {here}
+        <div
+          className="uin-rt-linkbubble"
+          style={{ top: here.top, left: here.left, maxWidth: here.maxWidth }}
+          // Refusing the mouse-down keeps the focus in the box: the bubble is
+          // taken away when the box loses the focus, and a link taken away
+          // between the press and the release is a click that goes nowhere.
+          onMouseDown={(event) => event.preventDefault()}
+        >
+          <a href={here.href} target="_blank" rel="noopener noreferrer">
+            Open link
           </a>
-        </p>
+          <span className="uin-rt-linkbubble-url" title={here.href}>{here.href}</span>
+        </div>
       )}
     </div>
   )
