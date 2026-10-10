@@ -5829,6 +5829,9 @@ function mapPerson(r: Record<string, unknown>): Person {
     addressPostcode: (r.address_postcode as string | null) ?? null,
     addressCountry: (r.address_country as string | null) ?? null,
     mergedIntoId: (r.merged_into_id as string | null) ?? null,
+    marketingConsent: typeof r.marketing_consent === 'boolean' ? r.marketing_consent : null,
+    marketingConsentAt: (r.marketing_consent_at as Date | null) ?? null,
+    marketingConsentSource: (r.marketing_consent_source as string | null) ?? null,
     createdAt: r.created_at as Date,
     updatedAt: r.updated_at as Date,
   }
@@ -5839,6 +5842,7 @@ const PERSON_SELECT = Prisma.sql`
   p."primary_email", p."organisation_id", p."notes", p."origin",
   p."address_line1", p."address_line2", p."address_city", p."address_county",
   p."address_postcode", p."address_country", p."address_label",
+  p."marketing_consent", p."marketing_consent_at", p."marketing_consent_source",
   p."merged_into_id", p."created_at", p."updated_at", o."name" AS organisation_name`
 
 /** One person, following a merge to whoever they were merged into. Somebody
@@ -6036,6 +6040,42 @@ export async function createPerson(data: {
     RETURNING "id"
   `
   return rows[0]!.id
+}
+
+/** One answer about marketing email, with when and where it was given. */
+export type MarketingConsentRecord = {
+  consent: boolean
+  at: Date
+  /** "Order DW000218", "Changed by hand". */
+  source: string
+}
+
+/**
+ * Put somebody's answer about marketing email on their card - if it is the
+ * newest answer the card has heard.
+ *
+ * Newest by when it was GIVEN, not when it arrived here: an order synced late,
+ * or the same order announced twice (placed, then paid), must never overwrite
+ * a later answer with an earlier one. Returns whether anything changed.
+ */
+export async function recordMarketingConsent(personId: string, record: MarketingConsentRecord): Promise<boolean> {
+  const source = record.source.trim().slice(0, 200) || 'Unknown'
+  const changed = await prisma.$executeRaw`
+    UPDATE "uin_people"
+       SET "marketing_consent" = ${record.consent},
+           "marketing_consent_at" = ${record.at},
+           "marketing_consent_source" = ${source},
+           "updated_at" = now()
+     WHERE "id" = ${personId}
+       AND (
+         "marketing_consent_at" IS NULL
+         OR "marketing_consent_at" < ${record.at}
+         OR ("marketing_consent_at" = ${record.at}
+             AND ("marketing_consent" IS DISTINCT FROM ${record.consent}
+                  OR "marketing_consent_source" IS DISTINCT FROM ${source}))
+       )
+  `
+  return changed > 0
 }
 
 export async function updatePerson(id: string, data: PersonDetails & {
@@ -6647,11 +6687,16 @@ export async function setThreadPerson(
  *
  *  Newest first on purpose: mail that arrived while the module had no people
  *  layer is what somebody is looking at today, and the archive can catch up
- *  over the following ticks. */
+ *  over the following ticks.
+ *
+ *  Never one stamped as post from a blocked sender: a blocked sender is never
+ *  made a contact (see blocked-senders.ts), so it would be asked about again on
+ *  every tick for ever, and a busy spammer would crowd the batch. */
 export async function unresolvedThreads(limit: number): Promise<Array<{ id: string }>> {
   return prisma.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "uin_threads"
      WHERE "person_id" IS NULL AND "provider_module" IS NULL AND "merged_into_id" IS NULL
+       AND "blocked_at" IS NULL
      ORDER BY "last_message_at" DESC NULLS LAST
      LIMIT ${limit}
   `
@@ -7035,6 +7080,12 @@ export async function mergePeople(
       SELECT "id" FROM "uin_record_links" WHERE "person_id" = ${loserId}
     `
 
+    // Their answer about marketing goes with whichever of the two gave it
+    // last. The winner's own answer is kept in the snapshot so an undo can put
+    // it back.
+    const takeLoserConsent = loser.marketingConsent !== null && loser.marketingConsentAt !== null
+      && (winner.marketingConsentAt === null || loser.marketingConsentAt > winner.marketingConsentAt)
+
     const snapshot = {
       loser: {
         displayName: loser.displayName,
@@ -7042,6 +7093,14 @@ export async function mergePeople(
         organisationId: loser.organisationId,
         notes: loser.notes,
       },
+      ...(takeLoserConsent ? {
+        winnerConsentBefore: {
+          consent: winner.marketingConsent,
+          at: winner.marketingConsentAt?.toISOString() ?? null,
+          source: winner.marketingConsentSource,
+        },
+        consentTakenAt: loser.marketingConsentAt?.toISOString() ?? null,
+      } : {}),
       identityIds: identities.map((r) => r.id),
       addressIds: addressRows.map((r) => r.id),
       threadIds: threads.map((r) => r.id),
@@ -7086,6 +7145,15 @@ export async function mergePeople(
              "updated_at" = now()
        WHERE "id" = ${winnerId}
     `
+    if (takeLoserConsent) {
+      await tx.$executeRaw`
+        UPDATE "uin_people"
+           SET "marketing_consent" = ${loser.marketingConsent},
+               "marketing_consent_at" = ${loser.marketingConsentAt},
+               "marketing_consent_source" = ${loser.marketingConsentSource}
+         WHERE "id" = ${winnerId}
+      `
+    }
 
     const merge = await tx.$queryRaw<{ id: string }[]>`
       INSERT INTO "uin_person_merges" ("winner_id", "loser_id", "user_id", "snapshot")
@@ -7127,6 +7195,8 @@ export async function undoMerge(mergeId: string, userId: string | null): Promise
     addressIds?: string[]
     threadIds?: string[]
     linkIds?: string[]
+    winnerConsentBefore?: { consent: boolean | null; at: string | null; source: string | null }
+    consentTakenAt?: string | null
   }
   const identityIds = snapshot.identityIds ?? []
   const addressIds = snapshot.addressIds ?? []
@@ -7161,6 +7231,19 @@ export async function undoMerge(mergeId: string, userId: string | null): Promise
     await tx.$executeRaw`
       UPDATE "uin_people" SET "merged_into_id" = NULL, "updated_at" = now() WHERE "id" = ${loserId}
     `
+    // The winner's own marketing answer back, if the merge replaced it and
+    // nothing has given a newer one since.
+    const before = snapshot.winnerConsentBefore
+    if (before && snapshot.consentTakenAt) {
+      await tx.$executeRaw`
+        UPDATE "uin_people"
+           SET "marketing_consent" = ${before.consent},
+               "marketing_consent_at" = ${before.at ? new Date(before.at) : null},
+               "marketing_consent_source" = ${before.source}
+         WHERE "id" = ${winnerId}
+           AND "marketing_consent_at" = ${new Date(snapshot.consentTakenAt)}
+      `
+    }
     await tx.$executeRaw`
       UPDATE "uin_person_merges" SET "undone_at" = now(), "undone_by" = ${userId} WHERE "id" = ${mergeId}
     `

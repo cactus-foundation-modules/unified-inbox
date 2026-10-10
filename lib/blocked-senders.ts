@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db/prisma'
 import { normaliseAddress } from './addresses'
 
@@ -33,6 +34,14 @@ import { normaliseAddress } from './addresses'
 // conversations they have already had with this site: often the whole reason
 // somebody wants a caller stopped is the history they need to keep. Marking
 // those as junk is the other button, and it is a separate press for a reason.
+//
+// THE ONE EXCEPTION IS THE ADDRESS BOOK. Every address that writes in becomes
+// a contact, so a spammer turned away still sat in the contacts list, in the
+// campaign audiences and in the people search, looking exactly like a
+// customer. Blocking them takes the contact out (forgetBlockedContact below),
+// and the people pass will not make a new one while they stay blocked (the
+// `blockedAddresses` half of PersonGate). Their conversations stay, as above -
+// they simply stop belonging to a contact.
 // ---------------------------------------------------------------------------
 
 export type BlockedSender = {
@@ -126,6 +135,98 @@ export async function blockSender(address: string, userId: string | null): Promi
     VALUES (${key}, ${userId})
     ON CONFLICT ("address") DO NOTHING
   `
+  await forgetBlockedContact(key)
+}
+
+/**
+ * Take a blocked address out of the address book.
+ *
+ * Who goes depends on what else the contact holds, because one contact can
+ * carry several ways of reaching somebody:
+ *
+ *   Every identity they have is blocked (the ordinary spammer, one address and
+ *   nothing else): the whole contact goes, along with anybody merged into them
+ *   - a merged-away contact left behind would lose its pointer and reappear in
+ *   the list as a stranger. Labels, postal addresses, campaign rows and record
+ *   links go with them by foreign key; their conversations stay and simply stop
+ *   belonging to anybody.
+ *
+ *   They can still be reached some other way - a phone number, a second address
+ *   nobody has blocked: only the blocked address comes off. Deleting a customer
+ *   whose old work address has started sending junk would be throwing away the
+ *   customer to get rid of the junk.
+ *
+ * Matched on the address exactly as it was blocked, not on the person key that
+ * drops a `+tag`: blocking `ada+offers@example.com` refuses that address and no
+ * other, so it must not cost `ada@example.com` their contact either, nor the
+ * other way round.
+ */
+export async function forgetBlockedContact(address: string): Promise<{ deleted: number; trimmed: number }> {
+  const key = normaliseAddress(address)
+  if (!key) return { deleted: 0, trimmed: 0 }
+  return prisma.$transaction(async (tx) => {
+    // Contacts that are nothing but blocked addresses, plus whatever was merged
+    // into them. Merged-away rows are not targets in their own right: their
+    // identities moved to the winner, who decides.
+    const doomed = await tx.$queryRaw<{ id: string }[]>`
+      WITH RECURSIVE "doomed" AS (
+        SELECT p."id" FROM "uin_people" p
+         WHERE p."merged_into_id" IS NULL
+           AND (
+             EXISTS (
+               SELECT 1 FROM "uin_person_identities" i
+                WHERE i."person_id" = p."id" AND i."kind" = 'email'
+                  AND lower(btrim(i."value")) = ${key}
+             )
+             OR lower(btrim(p."primary_email")) = ${key}
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM "uin_person_identities" i
+              WHERE i."person_id" = p."id"
+                AND NOT (
+                  i."kind" = 'email'
+                  AND EXISTS (
+                    SELECT 1 FROM "uin_blocked_senders" b
+                     WHERE b."address" = lower(btrim(i."value"))
+                  )
+                )
+           )
+        UNION
+        SELECT l."id" FROM "uin_people" l JOIN "doomed" d ON l."merged_into_id" = d."id"
+      )
+      SELECT "id" FROM "doomed"
+    `
+    const ids = doomed.map((r) => r.id)
+    if (ids.length > 0) {
+      // The merge ledger holds no foreign key on purpose (see deletePersonRow),
+      // so it is cleared by hand.
+      await tx.$executeRaw`
+        DELETE FROM "uin_person_merges"
+         WHERE "winner_id" IN (${Prisma.join(ids)}) OR "loser_id" IN (${Prisma.join(ids)})
+      `
+      await tx.$executeRaw`DELETE FROM "uin_people" WHERE "id" IN (${Prisma.join(ids)})`
+    }
+
+    // Whoever is left holding the address can still be reached another way:
+    // take the address off them, and give them a primary address they can
+    // actually be written to at.
+    const trimmed = await tx.$executeRaw`
+      DELETE FROM "uin_person_identities"
+       WHERE "kind" = 'email' AND lower(btrim("value")) = ${key}
+    `
+    await tx.$executeRaw`
+      UPDATE "uin_people" p
+         SET "primary_email" = (
+               SELECT i."value" FROM "uin_person_identities" i
+                WHERE i."person_id" = p."id" AND i."kind" = 'email'
+                ORDER BY i."created_at" ASC
+                LIMIT 1
+             ),
+             "updated_at" = CURRENT_TIMESTAMP
+       WHERE lower(btrim(p."primary_email")) = ${key}
+    `
+    return { deleted: ids.length, trimmed }
+  })
 }
 
 /** Open it again. Nothing is fetched retrospectively - see the note at the top

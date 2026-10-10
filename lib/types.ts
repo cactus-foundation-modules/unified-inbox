@@ -434,6 +434,12 @@ export type Person = PostalAddress & {
   /** Set when this person lost a merge. Everything that lists people hides
    *  these, and opening one sends you to whoever they were merged into. */
   mergedIntoId: string | null
+  /** Their answer about marketing email: true happy to receive it, false asked
+   *  not to, null never asked. With when they said it and where - see
+   *  migrations/074_marketing_consent.sql. */
+  marketingConsent: boolean | null
+  marketingConsentAt: Date | null
+  marketingConsentSource: string | null
   createdAt: Date
   updatedAt: Date
 }

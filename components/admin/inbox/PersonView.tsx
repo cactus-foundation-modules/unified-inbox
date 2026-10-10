@@ -14,6 +14,7 @@ import {
 import { BackIcon, CloseIcon, InboundIcon, OutboundIcon } from './icons'
 import { PersonActionsBar, PersonActionsPanels, PersonActionsProvider } from './PersonActions'
 import { ContactIdentities } from './ContactIdentities'
+import { MarketingConsentField } from './MarketingConsentField'
 import { ContextRail } from './ContextRail'
 
 // One person, and everything about them the hub can honestly show.
@@ -221,6 +222,29 @@ export function PersonView({
                   ))}
                 </section>
               )}
+
+              <section className="uin-ctx-block">
+                <h3 className="uin-ctx-heading">Marketing emails</h3>
+                <p className="uin-ctx-sub">
+                  {person.marketingConsent === true
+                    ? 'Happy to receive them'
+                    : person.marketingConsent === false
+                      ? 'Asked not to receive them'
+                      : 'Not asked'}
+                </p>
+                {/* Where the answer came from and when - consent nobody can
+                    trace back is consent nobody can show. */}
+                {person.marketingConsent !== null && person.marketingConsentAt && (
+                  <p className="uin-ctx-sub">
+                    {person.marketingConsentSource ?? 'Recorded'}
+                    {' · '}
+                    {formatInSiteTimezone(person.marketingConsentAt, timezone, {
+                      day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
+                    })}
+                  </p>
+                )}
+                {canEdit && <MarketingConsentField personId={person.id} consent={person.marketingConsent} />}
+              </section>
 
               {person.notes && (
                 <section className="uin-ctx-block">

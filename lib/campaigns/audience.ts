@@ -17,6 +17,10 @@ import type { RecipientNames } from './types'
 
 export type AudienceCandidate = RecipientNames & {
   personId: string
+  /** What they said about marketing email, from their card: false means they
+   *  asked not to be sent it. Optional so a candidate built without it (a
+   *  test, a seed) reads as never asked. */
+  marketingConsent?: boolean | null
 }
 
 export type AudienceGate = {
@@ -58,6 +62,9 @@ export function decideAudience(
   }
   if (gate.suppressed.has(address)) {
     return { include: false, reason: 'They have unsubscribed, or their address has bounced.' }
+  }
+  if (candidate.marketingConsent === false) {
+    return { include: false, reason: 'They asked not to be sent marketing email.' }
   }
   if (gate.excludeColleagues) {
     const domain = domainOf(address)

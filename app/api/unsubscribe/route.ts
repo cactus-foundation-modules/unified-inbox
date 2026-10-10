@@ -7,6 +7,8 @@ import {
   isSuppressed,
   unsubscribeEverywhere,
 } from '@/modules/unified-inbox/lib/campaigns/store'
+import { findPersonByIdentity, recordMarketingConsent } from '@/modules/unified-inbox/lib/db'
+import { identityKey } from '@/modules/unified-inbox/lib/people'
 
 // Making it stop, from the link at the bottom of the message.
 //
@@ -66,6 +68,17 @@ export async function POST(request: NextRequest) {
   // Everywhere, not only the campaign whose link they pressed: an opt-out is
   // from this business rather than from one mailshot.
   await unsubscribeEverywhere(parsed.address, new Date())
+  // And on their contact card, so the record of what they said about marketing
+  // says this too. Never at the cost of the unsubscribe itself, which is done.
+  try {
+    const key = identityKey(parsed.address)
+    const personId = key ? await findPersonByIdentity([key]) : null
+    if (personId) {
+      await recordMarketingConsent(personId, { consent: false, at: new Date(), source: 'Unsubscribed by email link' })
+    }
+  } catch (err) {
+    console.error('[unified-inbox] could not record the unsubscribe on the contact', err)
+  }
 
   return page(
     'Done',

@@ -54,9 +54,12 @@ type Props = {
    *  asks first. Passed rather than exported, because the question it raises is
    *  the shell's own state. */
   children: (api: { askToLeave: () => void }) => ReactNode
+  /** Buttons for the head, drawn to the left of the cross - the contact card's
+   *  save, which lives up there rather than at the foot of a long form. */
+  headActions?: ReactNode
 }
 
-export function ComposeModal({ title, closeHref, guard, noun, focusId, children }: Props) {
+export function ComposeModal({ title, closeHref, guard, noun, focusId, children, headActions }: Props) {
   const router = useRouter()
   const card = useRef<HTMLDivElement>(null)
   const [asking, setAsking] = useState(false)
@@ -140,6 +143,7 @@ export function ComposeModal({ title, closeHref, guard, noun, focusId, children 
       >
         <div className="uin-modal-head">
           <h2 className="uin-modal-title" id={titleId}>{title}</h2>
+          {headActions}
           <Link
             className="uin-modal-close"
             href={closeHref}

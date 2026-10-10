@@ -8,6 +8,7 @@ import {
   isPersonalDomain,
   organisationNameFromDomain,
   phoneKey,
+  tidyPhone,
   resolveOwnDomains,
   shouldBecomePerson,
 } from './people'
@@ -42,18 +43,30 @@ describe('identityKey', () => {
   })
 })
 
-describe('phoneKey', () => {
+describe('tidyPhone and phoneKey', () => {
   it('reduces a number written several ways to one identity', () => {
-    expect(phoneKey('01234 567 890')).toBe('01234567890')
-    expect(phoneKey('(01234) 567890')).toBe('01234567890')
+    expect(phoneKey('01234 567 890', '+44')).toBe('01234567890')
+    expect(phoneKey('(01234) 567890', '+44')).toBe('01234567890')
   })
 
-  it('keeps a leading plus, which is the country code', () => {
-    expect(phoneKey('+44 1234 567890')).toBe('+441234567890')
+  it('writes the site\'s own country nationally, without spaces', () => {
+    for (const typed of ['+447311351565', '+44 7311 351565', '0044 7311 351565', '+44 (0)7311 351565', '07311 351565']) {
+      expect(tidyPhone(typed, '+44')).toBe('07311351565')
+    }
+  })
+
+  it('keeps the country code on a number from somewhere else', () => {
+    expect(tidyPhone('+33 1 23 45 67 89', '+44')).toBe('+33123456789')
+    expect(tidyPhone('+44 7311 351565', '+33')).toBe('+447311351565')
+  })
+
+  it('has no trunk zero for a North American site', () => {
+    expect(tidyPhone('+1 212 555 0123', '+1')).toBe('2125550123')
   })
 
   it('refuses something too short to be a number', () => {
-    expect(phoneKey('123')).toBeNull()
+    expect(phoneKey('123', '+44')).toBeNull()
+    expect(tidyPhone('', '+44')).toBeNull()
   })
 })
 
@@ -99,6 +112,19 @@ describe('isOwnSender', () => {
 describe('shouldBecomePerson', () => {
   it('accepts an ordinary customer', () => {
     expect(shouldBecomePerson('jane@customer.com', gate())).toBe(true)
+  })
+
+  it('refuses a blocked sender, however it is capitalised', () => {
+    // Blocking takes them out of the address book; without this the next pass
+    // would put them straight back.
+    const g = gate({ blockedAddresses: new Set(['spam@example.com']) })
+    expect(shouldBecomePerson('  Spam@Example.COM ', g)).toBe(false)
+  })
+
+  it('blocks only the address that was blocked, not its plus-tagged cousins', () => {
+    const g = gate({ blockedAddresses: new Set(['ada+offers@example.com']) })
+    expect(shouldBecomePerson('ada+offers@example.com', g)).toBe(false)
+    expect(shouldBecomePerson('ada@example.com', g)).toBe(true)
   })
 
   it('refuses one of our own inboxes', () => {

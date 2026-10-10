@@ -22,9 +22,12 @@
 // So it takes `manage` - which is also why the button in the Spam folder that
 // opens the same list is only drawn for somebody who has it.
 //
-// NOTHING IS DELETED BY EITHER VERB. Blocking somebody does not touch the
-// conversations they have already had here - often that history is the whole
-// reason somebody wants them stopped. What they send while the door is shut is
+// NO CONVERSATION IS DELETED BY EITHER VERB. Blocking somebody does not touch
+// the conversations they have already had here - often that history is the
+// whole reason somebody wants them stopped. It does take them out of the address
+// book (forgetBlockedContact), which is the one thing a block removes: a spammer
+// sitting in the contacts list and the campaign audiences is not history, it is
+// clutter with somebody's marketing consent question attached. What they send while the door is shut is
 // collected and dropped straight into the Spam folder, marked done and left
 // unread (see migration 044), so unblocking them has nothing to go back for -
 // it is all still there, in the bin, one press from being taken out again.

@@ -3,6 +3,7 @@ import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { addIdentity, findPersonByIdentity, getPerson } from '@/modules/unified-inbox/lib/db'
+import { siteDiallingCode } from '@/lib/phone.server'
 import { identityKey, phoneKey } from '@/modules/unified-inbox/lib/people'
 import { IdentityBody } from '@/modules/unified-inbox/lib/validation'
 
@@ -26,13 +27,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const parsed = IdentityBody.safeParse(await request.json().catch(() => null))
   if (!parsed.success) return errorResponse('That does not look right.')
 
-  const { kind, value, label } = parsed.data
-  const matchValue = kind === 'email' ? identityKey(value) : phoneKey(value)
+  const { kind, label } = parsed.data
+  const matchValue = kind === 'email' ? identityKey(parsed.data.value) : phoneKey(parsed.data.value, await siteDiallingCode())
   if (!matchValue) {
     return errorResponse(kind === 'email'
       ? 'That does not look like an email address.'
       : 'That does not look like a phone number.')
   }
+
+  // A number is written down tidied (see tidyPhone), which is its match key.
+  const value = kind === 'email' ? parsed.data.value : matchValue
 
   const owner = await findPersonByIdentity([matchValue])
   if (owner && owner !== person.id) {

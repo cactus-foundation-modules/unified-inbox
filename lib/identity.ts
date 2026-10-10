@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/db/prisma'
+import { siteDiallingCode } from '@/lib/phone.server'
 import {
   addIdentity,
   addressesOnThread,
@@ -32,6 +33,7 @@ import {
   shouldBecomePerson,
   type PersonGate,
 } from './people'
+import { blockedSenderSet } from './blocked-senders'
 import { compilePatterns, extractReferences } from './linking'
 import { confirmReference, linkRelatedRecords } from './adapters'
 import type { ContextQuery } from './adapters'
@@ -54,6 +56,11 @@ import type { UnifiedInboxSettings } from './types'
 //   Nothing here creates a person for one of us (E18). Our inboxes, our staff
 //   and anybody at our own domains are colleagues, and a customer record for
 //   the person at the next desk is how this layer stops being trusted.
+//
+//   Nothing here creates a person for a blocked sender. Blocking somebody takes
+//   them out of the address book (see blocked-senders.ts), and their junk keeps
+//   arriving - so without the gate saying no, the next pass would put them
+//   straight back.
 
 /** How many unresolved conversations one catch-up pass takes on. Small on
  *  purpose: it rides along on the sync tick, which already has a budget and
@@ -77,10 +84,11 @@ export type ResolutionContext = {
  * and running them for every email in a mailbox is how a 25 second budget goes.
  */
 export async function buildResolutionContext(): Promise<ResolutionContext> {
-  const [inboxes, staff, settings] = await Promise.all([
+  const [inboxes, staff, settings, blockedAddresses] = await Promise.all([
     listInboxes(),
     prisma.user.findMany({ select: { email: true } }),
     getSettings(),
+    blockedSenderSet(),
   ])
 
   const ownAddresses = new Set(
@@ -95,7 +103,7 @@ export async function buildResolutionContext(): Promise<ResolutionContext> {
     settings.personalDomains,
   )
 
-  return { gate: { ownAddresses, staffAddresses, ownDomains }, settings }
+  return { gate: { ownAddresses, staffAddresses, ownDomains, blockedAddresses }, settings }
 }
 
 /**
@@ -180,7 +188,8 @@ export async function resolveProviderThreadPerson(
   if (!party) return null
 
   const emailKey = shouldBecomePerson(party.address, context.gate) ? identityKey(party.address) : null
-  const numberKey = phoneKey(party.phone)
+  const diallingCode = await siteDiallingCode()
+  const numberKey = phoneKey(party.phone, diallingCode)
   if (!emailKey && !numberKey) return null
 
   const existing = await findPersonByIdentity([emailKey, numberKey].filter((k): k is string => !!k))
@@ -202,7 +211,7 @@ export async function resolveProviderThreadPerson(
     : null
 
   const personId = await createPerson({
-    displayName: displayNameFor(party.name, party.address) ?? party.phone ?? null,
+    displayName: displayNameFor(party.name, party.address) ?? numberKey ?? party.phone ?? null,
     primaryEmail: emailKey && party.address ? party.address.toLowerCase() : null,
     organisationId,
   })
@@ -230,7 +239,8 @@ async function attachIdentities(
     await addIdentity({
       personId,
       kind: 'phone',
-      value: party.phone,
+      // The key is the tidied number, so it is also what the card shows.
+      value: numberKey,
       matchValue: numberKey,
       source: 'provider',
     })

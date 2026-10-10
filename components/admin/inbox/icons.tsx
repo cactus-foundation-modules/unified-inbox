@@ -132,6 +132,9 @@ export const RestoreIcon = <svg {...ICON}><path d="M4.5 7h15" /><path d="M6.6 7l
  *  world draws for it. */
 export const SplitIcon = <svg {...ICON}><path d="M4 12h4.5c2 0 3.5-3.5 6-3.5H19" /><path d="M8.5 12c2 0 3.5 3.5 6 3.5H19" /><path d="m16.5 6 2.5 2.5-2.5 2.5" /><path d="m16.5 13 2.5 2.5-2.5 2.5" /></svg>
 export const ImportIcon = <svg {...ICON}><path d="M12 15V4" /><path d="m7 8.5 5-5 5 5" /><path d="M5 20h14" /></svg>
+/** A floppy disk: still the one mark everybody reads as "save", long after
+ *  anybody last held one. */
+export const SaveIcon = <svg {...ICON}><path d="M5 4h11l3 3v13H5z" /><path d="M8 4v5h7V4" /><path d="M8 20v-6h8v6" /></svg>
 export const DownloadIcon = <svg {...ICON}><path d="M12 4v11" /><path d="m7 11 5 5 5-5" /><path d="M5 20h14" /></svg>
 export const MergeIcon = <svg {...ICON}><path d="M6 4v4.5c0 2 1.6 3.5 3.5 3.5H18" /><path d="M6 20v-4.5c0-2 1.6-3.5 3.5-3.5" /><path d="m14.5 8.5 3.5 3.5-3.5 3.5" /></svg>
 /** A handset with a screen, for the channels that live on somebody's phone

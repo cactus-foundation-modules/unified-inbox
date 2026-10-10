@@ -1322,9 +1322,10 @@ export function ThreadListView({
               Would you also like to turn {askedAbout.length > 1 ? 'these senders' : <strong>{askedAbout[0]}</strong>} away
               in future? Nothing further from them would reach an inbox on this site - shared or
               personal. It would be dropped straight in here instead, marked as dealt with and left
-              unread, so you can still see what they sent. Nothing already here would be touched,
-              anybody already turned away simply stays that way, and you can let them back in from
-              the Spam folder or from the inbox settings.
+              unread, so you can still see what they sent. They would come out of your contacts,
+              but their conversations already here would not be touched, anybody already turned
+              away simply stays that way, and you can let them back in from the Spam folder or
+              from the inbox settings.
             </p>
           ) : (
             /* Nobody in this pile to turn away: internal discussions, senders

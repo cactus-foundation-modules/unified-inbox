@@ -3,13 +3,13 @@ import {
   addressKey, addressLines, contactDisplayName, splitName,
   type ContactDraft, type LabelledAddress, type LabelledPhone,
 } from './contacts'
-import type { PersonDetails } from './db'
+import type { MarketingConsentRecord, PersonDetails } from './db'
 import type { Person } from './types'
 
 // ---------------------------------------------------------------------------
 // A shop order, read as a contact card: the pure half.
 //
-// Somebody who pays for an order has told the site their name, their email
+// Somebody who places an order has told the site their name, their email
 // address, usually a phone number, sometimes the company they are buying for,
 // and where the invoice goes. That is an address book entry in all but name,
 // and lib/shop-customer-sync.ts is what writes it down. This file only answers
@@ -31,6 +31,12 @@ export type ShopOrderCustomer = {
   customerPhone: string | null
   billingAddress: unknown
   shippingAddress: unknown
+  /** The shopper's answer about marketing email at the checkout: true happy,
+   *  false asked not to be, null never asked. Optional, with the two below, so
+   *  an order read without them (a test, an older shop) simply says nothing. */
+  marketingConsent?: boolean | null
+  orderNumber?: string | null
+  createdAt?: Date | null
 }
 
 /** The shop's address, as much of it as a contact card holds. Every part
@@ -185,6 +191,30 @@ export const BILLING_LABEL = 'Billing'
 export const DELIVERY_LABEL = 'Delivery'
 
 /** Whether the order has a billing address of its own that can be read. */
+/**
+ * Whether two numbers as typed are the same line.
+ *
+ * The checkout keeps the contact number as the shopper typed it and the
+ * delivery one in international form, so `07311 351565` and `+447311351565`
+ * arrive on one order meaning one phone. Digits alone call those different and
+ * put the number on the card twice. A national number's leading 0 stands in for
+ * a one-to-three digit country code, so that is the only gap allowed: the
+ * international digits must end with the national ones after their 0.
+ */
+export function samePhoneNumber(a: string | null | undefined, b: string | null | undefined): boolean {
+  const da = (a ?? '').replace(/\D/g, '')
+  const db = (b ?? '').replace(/\D/g, '')
+  if (!da || !db) return false
+  if (da === db) return true
+  const [national, international] = da.startsWith('0') && !db.startsWith('0') ? [da, db]
+    : db.startsWith('0') && !da.startsWith('0') ? [db, da]
+    : [null, null]
+  if (!national || !international) return false
+  const rest = national.replace(/^0+/, '')
+  const codeLength = international.length - rest.length
+  return rest.length >= 6 && codeLength >= 1 && codeLength <= 3 && international.endsWith(rest)
+}
+
 function hasOwnBilling(order: Pick<ShopOrderCustomer, 'billingAddress'>): boolean {
   return order.billingAddress !== null && order.billingAddress !== undefined
     && readAddress(order.billingAddress) !== null
@@ -203,7 +233,7 @@ export function shopCustomerExtras(order: ShopOrderCustomer): ShopCustomerExtras
 
   const orderPhone = field(order.customerPhone) ?? field(billingAddressOf(order)?.phone)
   const deliveryPhone = field(shipping.phone)
-  if (deliveryPhone && deliveryPhone.replace(/\D/g, '') !== (orderPhone ?? '').replace(/\D/g, '')) {
+  if (deliveryPhone && !samePhoneNumber(deliveryPhone, orderPhone)) {
     extras.phones.push({ label: DELIVERY_PHONE_LABEL, value: deliveryPhone })
   }
 
@@ -288,4 +318,22 @@ export function isEmptyFillIn(fill: ContactFillIn): boolean {
     && fill.displayName === undefined
     && fill.primaryEmail === undefined
     && fill.organisationName === undefined
+}
+
+/**
+ * The order's answer about marketing email, as a record for the card - or null
+ * when the checkout never asked, which tells the card nothing and so changes
+ * nothing on it.
+ *
+ * Dated by when the order was placed, which is when they answered.
+ */
+export function shopOrderConsent(order: ShopOrderCustomer): MarketingConsentRecord | null {
+  if (typeof order.marketingConsent !== 'boolean') return null
+  if (!order.createdAt || !Number.isFinite(order.createdAt.getTime())) return null
+  const number = tidy(order.orderNumber)
+  return {
+    consent: order.marketingConsent,
+    at: order.createdAt,
+    source: number ? `Order ${number}` : 'An order',
+  }
 }

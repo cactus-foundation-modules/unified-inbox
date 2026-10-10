@@ -1,29 +1,32 @@
 import { prisma } from '@/lib/db/prisma'
 import {
   addPersonAddressIfMissing, addPersonCategories, findOrCreateCategory, findPersonByIdentity, getPerson,
-  getSettings, updatePerson,
+  getSettings, recordMarketingConsent, updatePerson,
 } from './db'
 import { attachContactIdentities, resolveOrganisation, saveContact } from './contact-store'
 import { buildResolutionContext } from './identity'
 import { identityKey, shouldBecomePerson } from './people'
 import {
-  BILLING_LABEL, fillInBlanks, isEmptyFillIn, shopCustomerDraft, shopCustomerExtras,
+  BILLING_LABEL, fillInBlanks, isEmptyFillIn, shopCustomerDraft, shopCustomerExtras, shopOrderConsent,
   type ShopOrderCustomer,
 } from './shop-customers'
 import { addressLines } from './contacts'
 
 // ---------------------------------------------------------------------------
-// Somebody paid for an order: put them in the address book.
+// Somebody ordered: put them in the address book.
 //
-// Runs off the shop's own `shop.order-paid` announcement (see
-// lib/order-paid-observer.ts), which the shop makes exactly once per order
-// however the money arrived. Nothing in the shop knows this file exists, and a
-// site running the shop without this module never loads it.
+// Runs off two of the shop's own announcements (see lib/order-paid-observer.ts):
+// `shop.order-paid`, made exactly once per order however the money arrived, and
+// `shop.order-placed-unpaid`, made once when a shopper finishes checking out on
+// bank transfer or another manual method. Nothing in the shop knows this file
+// exists, and a site running the shop without this module never loads it.
 //
-// Paid rather than placed, on purpose and because it is the announcement the
-// shop makes. An order sitting on a bank transfer nobody has sent is not yet a
-// customer, and the day the payment is marked as received is the day they
-// become one - that is when this runs for them.
+// Placed as well as paid, learned the hard way: somebody emailed in, ordered on
+// bank transfer, and their card sat there without the number, the address or
+// the Customers label for as long as the transfer took. A bank-transfer order is
+// a real customer from the moment it is placed. Card orders announce paid
+// seconds after placing, so they come through the paid one. A bank-transfer
+// order announces both, and the second run changes nothing - see below.
 //
 // Three rules, each of which is the difference between an address book that
 // helps and one somebody has to tidy up after:
@@ -39,13 +42,13 @@ import { addressLines } from './contacts'
 //   contacts claiming one phone number is a merge for a person to decide on.
 //
 // Every one of them is filed under Customers, new or already known: somebody
-// who emailed in March and paid in April is as much a customer as somebody who
+// who emailed in March and ordered in April is as much a customer as somebody who
 // arrived through the checkout, and a Customers category missing everybody who
 // wrote in first would be a list nobody could trust for a campaign. Only ever
 // added - a label somebody else put on them stays on.
 // ---------------------------------------------------------------------------
 
-/** The category every paying customer is filed under. Found by name, however
+/** The category every ordering customer is filed under. Found by name, however
  *  it was typed, and made the first time it is needed. Renamed, it stops being
  *  found and the next paid order makes a fresh one - the name is the handle. */
 export const SHOP_CUSTOMER_CATEGORY = 'Customers'
@@ -60,12 +63,16 @@ export type ShopCustomerOutcome =
   | 'no-order'
   | 'no-address'
 
-async function readOrderCustomer(orderId: string): Promise<ShopOrderCustomer | null> {
+export async function readOrderCustomer(orderId: string): Promise<ShopOrderCustomer | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT "customer_name", "customer_email", "customer_organisation", "customer_phone",
-           "billing_address", "shipping_address"
-      FROM "shp_orders"
-     WHERE "id" = ${orderId}
+    SELECT o."customer_name", o."customer_email", o."customer_organisation", o."customer_phone",
+           o."billing_address", o."shipping_address", o."order_number", o."created_at",
+           -- Through the row's JSON rather than by name: a shop older than its
+           -- marketing question has no such column, and naming one that is not
+           -- there would fail the whole read instead of leaving the answer out.
+           to_jsonb(o) -> 'marketing_consent' AS marketing_consent
+      FROM "shp_orders" o
+     WHERE o."id" = ${orderId}
      LIMIT 1
   `
   const r = rows[0]
@@ -77,12 +84,16 @@ async function readOrderCustomer(orderId: string): Promise<ShopOrderCustomer | n
     customerPhone: (r.customer_phone as string | null) ?? null,
     billingAddress: r.billing_address ?? null,
     shippingAddress: r.shipping_address ?? null,
+    marketingConsent: typeof r.marketing_consent === 'boolean' ? r.marketing_consent : null,
+    orderNumber: (r.order_number as string | null) ?? null,
+    createdAt: r.created_at instanceof Date ? r.created_at : null,
   }
 }
 
 /**
- * The customer on one paid order, created as a contact or filled in on the one
- * they already have.
+ * The customer on one order, created as a contact or filled in on the one
+ * they already have. Safe to run more than once on the same order: it only
+ * fills blanks and adds what the card does not already hold.
  *
  * Throws on a database failure; the observer that calls it is what makes sure
  * that can never reach a payment webhook.
@@ -124,6 +135,8 @@ export async function addShopCustomerToContacts(orderId: string): Promise<ShopCu
         addressCountry: address.addressCountry ?? null,
       })
     }
+    const consent = shopOrderConsent(order)
+    if (consent) await recordMarketingConsent(personId, consent)
     return 'created'
   }
 
@@ -180,5 +193,9 @@ export async function addShopCustomerToContacts(orderId: string): Promise<ShopCu
   ]
   for (const address of orderAddresses) await addPersonAddressIfMissing(person.id, address)
   await addPersonCategories(person.id, [categoryId])
+  // Their answer about marketing, if this order asked - and only if it is newer
+  // than whatever the card already holds.
+  const consent = shopOrderConsent(order)
+  if (consent) await recordMarketingConsent(person.id, consent)
   return 'existing'
 }

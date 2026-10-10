@@ -8,8 +8,9 @@ import { joinCategories, splitCategories, type ContactDraft } from '@/modules/un
 import { CardField, CardNotes, CardSection } from './ContactFieldRows'
 import { AddressBlocks, LabelSuggestions, PhoneRows } from './ContactMultiFields'
 import { CategoryPicker } from './CategoryPicker'
-import { BackIcon, CloseIcon } from './icons'
-import { ComposeCancel, ComposeModal } from './ComposeModal'
+import { BackIcon, CloseIcon, SaveIcon } from './icons'
+import { ComposeModal } from './ComposeModal'
+import { AdminTooltip } from '@/components/admin/Tooltip'
 
 // One contact, written down.
 //
@@ -138,14 +139,14 @@ export function ContactCard({ base, params, personId, initial, onSaved, modal = 
     }
   }
 
-  // Where the cross and Cancel go in the dialog: back to the list, with nothing
+  // Where the cross goes in the dialog: back to the list, with nothing
   // started. Anything typed is worth a question first.
   const closeHref = inboxHref(base, params, {})
   const guard = Object.values(draft).some((value) => typeof value === 'string' && value.trim() !== '')
     || (draft.phones ?? []).some((p) => p.value.trim() !== '')
     || (draft.addresses ?? []).length > 0
 
-  const form = (askToLeave: () => void) => (
+  const form = () => (
     <div className="uin-card">
       {error && <div className="alert alert-danger" role="alert">{error}</div>}
       {refused.length > 0 && (
@@ -220,18 +221,21 @@ export function ContactCard({ base, params, personId, initial, onSaved, modal = 
       <LabelSuggestions id={labelListId} />
 
       <CardNotes value={draft.notes ?? ''} onChange={set('notes')} disabled={busy} />
+    </div>
+  )
 
-      <div className="uin-actions">
-        <button type="button" className="btn btn-primary btn-sm" onClick={save} disabled={busy}>
-          {busy ? 'Saving...' : personId ? 'Save changes' : 'Add this contact'}
+  // Up in the head, left of the cross, in the same round frame as the icons
+  // on a contact's own page - rather than a Save and a Cancel at the foot of a
+  // form long enough that nobody scrolls to them. The cross is the way out.
+  const saveLabel = busy ? 'Saving...' : personId ? 'Save changes' : 'Add this contact'
+  const saveButton = (
+    <div className="uin-thread-actions uin-person-actions">
+      <AdminTooltip body={saveLabel}>
+        <button type="button" className="uin-icon-btn uin-icon-btn-framed" onClick={save} disabled={busy}>
+          {SaveIcon}
+          <span className="sr-only">{saveLabel}</span>
         </button>
-        <Link
-          className="btn btn-secondary btn-sm"
-          href={inboxHref(base, params, personId ? { person: personId } : { person: null, import: null })}
-        >
-          Cancel
-        </Link>
-      </div>
+      </AdminTooltip>
     </div>
   )
 
@@ -243,8 +247,9 @@ export function ContactCard({ base, params, personId, initial, onSaved, modal = 
         guard={guard}
         noun="contact"
         focusId="uin-contact-first-name"
+        headActions={saveButton}
       >
-        {({ askToLeave }) => form(askToLeave)}
+        {() => form()}
       </ComposeModal>
     )
   }
@@ -254,6 +259,7 @@ export function ContactCard({ base, params, personId, initial, onSaved, modal = 
       <div className="uin-thread-head">
         <div className="uin-thread-top">
           <h2 className="uin-thread-subject">{personId ? 'Edit this contact' : 'New contact'}</h2>
+          {saveButton}
           <Link className="uin-thread-close" href={inboxHref(base, params, { person: null, import: null })}>
             <span className="uin-back-phone" aria-hidden="true">{BackIcon}<span className="uin-back-words">Back</span></span>
             <span className="uin-back-wide" aria-hidden="true">{CloseIcon}</span>
@@ -263,7 +269,7 @@ export function ContactCard({ base, params, personId, initial, onSaved, modal = 
       </div>
 
       <div className="uin-thread-body">
-        {form(() => {})}
+        {form()}
       </div>
     </div>
   )

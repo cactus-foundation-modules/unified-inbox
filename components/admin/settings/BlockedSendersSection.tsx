@@ -54,8 +54,9 @@ export function BlockedSendersSection({ blocked, users, busy, call }: {
         collected and dropped straight into the Spam folder instead, marked as dealt with and
         left unread, so you can see what they sent without any of it landing in front of
         anybody. You block somebody from a conversation, using the junk button at the top of it;
-        this is where you let them back in, and so is the Spam folder itself. Blocking never
-        deleted anything: their old conversations are still exactly where they were.
+        this is where you let them back in, and so is the Spam folder itself. Blocking takes
+        them out of your contacts, but their old conversations are still exactly where they
+        were.
       </>}
     >
       {blocked.length === 0 ? (

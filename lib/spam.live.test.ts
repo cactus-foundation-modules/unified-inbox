@@ -56,6 +56,11 @@ import {
 //      list, in every real bin, done, unread - and pressing "Not junk" takes
 //      the stamp off again, which is the only way out of the folder and
 //      therefore the one that must not be broken.
+//   8. BLOCKING TAKES THEM OUT OF THE ADDRESS BOOK. A contact that is nothing
+//      but the blocked address goes, with whoever was merged into it; one who
+//      can still be reached another way keeps the record and loses the
+//      address; a plus-tagged cousin is left alone; the conversation stays and
+//      stops belonging to anybody.
 //
 // A real throwaway database on the Postgres VPS, built from the core schema and
 // this module's own migrations. Named `cactus_rt_*` and dropped afterwards; the
@@ -502,5 +507,77 @@ describe.runIf(shouldRun)('junk and blocked senders, against a real database', (
     expect(await spam.threadIsSpamFor(id, 'user-leaver')).toBe(false)
     // And the conversation itself is untouched - nothing here deletes post.
     expect(await listFor(emma)).toContain(id)
+  })
+
+  /** A contact with the given email (and phone) identities, as the people
+   *  pass would have made them. */
+  const contact = async (name: string, emails: string[], phones: string[] = []): Promise<string> => {
+    const personId = await lib.createPerson({ displayName: name, primaryEmail: emails[0] ?? null, organisationId: null })
+    for (const value of emails) {
+      await lib.addIdentity({ personId, kind: 'email', value, matchValue: value.toLowerCase().replace(/\+[^@]*@/, '@'), source: 'imap' })
+    }
+    for (const value of phones) {
+      await lib.addIdentity({ personId, kind: 'phone', value, matchValue: value, source: 'provider' })
+    }
+    return personId
+  }
+  const exists = async (personId: string): Promise<boolean> =>
+    (await db.$queryRawUnsafe<unknown[]>(`SELECT 1 FROM "uin_people" WHERE "id" = $1`, personId)).length > 0
+  const identitiesOf = async (personId: string): Promise<string[]> =>
+    (await db.$queryRawUnsafe<{ value: string }[]>(
+      `SELECT "value" FROM "uin_person_identities" WHERE "person_id" = $1 ORDER BY "value"`, personId,
+    )).map((r) => r.value)
+
+  it('takes a blocked sender out of the address book, and only them', async () => {
+    const spammer = await contact('Cheap Desks Ltd', ['Offers@Cheap-Desks.example'])
+    // Merged into the spammer earlier: identities moved to the winner, the
+    // shell kept for undo. Left behind it would lose its pointer and come back.
+    const shell = await lib.createPerson({ displayName: 'Cheap Desks', primaryEmail: null, organisationId: null })
+    await db.$executeRawUnsafe(`UPDATE "uin_people" SET "merged_into_id" = $1 WHERE "id" = $2`, spammer, shell)
+    await db.$executeRawUnsafe(
+      `INSERT INTO "uin_person_merges" ("winner_id", "loser_id") VALUES ($1, $2)`, spammer, shell,
+    )
+    // A real customer whose old work address has started sending junk.
+    const customer = await contact('Ada Lovelace', ['ada@old-job.example', 'ada@new-job.example'], ['07700900123'])
+    const phoneOnly = await contact('Bob', ['bob@junk.example'], ['07700900456'])
+    // Somebody whose address merely shares a stem with a blocked one.
+    const cousin = await contact('Ada Offers', ['ada+offers@old-job.example'])
+    const thread = await threadIn(team, 'Cheap desks 20')
+    await lib.setThreadPerson(thread, spammer, null)
+
+    await blocked.blockSender('offers@cheap-desks.example', emma)
+    await blocked.blockSender('ADA@old-job.example', emma)
+    await blocked.blockSender('bob@junk.example', emma)
+
+    expect(await exists(spammer)).toBe(false)
+    expect(await exists(shell)).toBe(false)
+    expect(await db.$queryRawUnsafe<unknown[]>(
+      `SELECT 1 FROM "uin_person_merges" WHERE "winner_id" = $1 OR "loser_id" = $1`, spammer,
+    )).toEqual([])
+    // The conversation stays, belonging to nobody.
+    expect(await listFor(emma)).toContain(thread)
+    expect((await db.$queryRawUnsafe<{ person_id: string | null }[]>(
+      `SELECT "person_id" FROM "uin_threads" WHERE "id" = $1`, thread,
+    ))[0]!.person_id).toBeNull()
+
+    expect(await exists(customer)).toBe(true)
+    expect(await identitiesOf(customer)).toEqual(['07700900123', 'ada@new-job.example'])
+    expect((await lib.getPerson(customer))?.primaryEmail).toBe('ada@new-job.example')
+
+    expect(await exists(phoneOnly)).toBe(true)
+    expect(await identitiesOf(phoneOnly)).toEqual(['07700900456'])
+    expect((await lib.getPerson(phoneOnly))?.primaryEmail).toBeNull()
+
+    expect(await exists(cousin)).toBe(true)
+    expect(await identitiesOf(cousin)).toEqual(['ada+offers@old-job.example'])
+  })
+
+  it('will not make a contact for a blocked sender on the next pass', async () => {
+    await blocked.blockSender('persistent@spam.example', emma)
+    const { buildResolutionContext } = await import('./identity')
+    const { shouldBecomePerson } = await import('./people')
+    const { gate } = await buildResolutionContext()
+    expect(shouldBecomePerson('Persistent@Spam.example', gate)).toBe(false)
+    expect(shouldBecomePerson('welcome@customer.example', gate)).toBe(true)
   })
 })

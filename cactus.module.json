@@ -1,6 +1,6 @@
 {
   "name": "unified-inbox",
-  "version": "0.1.115",
+  "version": "0.1.116",
   "tablePrefix": "uin_",
   "description": "Every conversation with every customer and supplier in one place - email, live chat, contact form, calls, texts and WhatsApp - with your own records beside them.",
   "requiresCoreVersion": "0.5.1750",
@@ -108,6 +108,12 @@
       "id": "unified-inbox-shop-customers",
       "import": "./lib/order-paid-observer",
       "component": "unifiedInboxOrderPaidObserver"
+    },
+    {
+      "point": "shop.order-placed-unpaid",
+      "id": "unified-inbox-shop-customers-unpaid",
+      "import": "./lib/order-paid-observer",
+      "component": "unifiedInboxOrderPlacedUnpaidObserver"
     }
   ],
   "consumesConversationProviders": true,

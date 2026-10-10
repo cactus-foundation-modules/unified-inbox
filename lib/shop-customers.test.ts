@@ -4,8 +4,10 @@ import {
   countryName,
   fillInBlanks,
   isEmptyFillIn,
+  samePhoneNumber,
   shopCustomerDraft,
   shopCustomerExtras,
+  shopOrderConsent,
   type ShopOrderCustomer,
 } from './shop-customers'
 import type { Person } from './types'
@@ -52,6 +54,9 @@ function person(overrides: Partial<Person> = {}): Person {
     notes: null,
     origin: 'mail',
     mergedIntoId: null,
+    marketingConsent: null,
+    marketingConsentAt: null,
+    marketingConsentSource: null,
     addressLabel: null,
     addressLine1: null,
     addressLine2: null,
@@ -210,6 +215,21 @@ describe('filling in somebody already here', () => {
   })
 })
 
+describe('samePhoneNumber', () => {
+  it('matches the same digits however they are spaced', () => {
+    expect(samePhoneNumber('0113 000 0000', '01130000000')).toBe(true)
+  })
+  it('matches a national number to its international form', () => {
+    expect(samePhoneNumber('07311 351565', '+44 7311 351565')).toBe(true)
+    expect(samePhoneNumber('+447311351565', '07311351565')).toBe(true)
+  })
+  it('keeps genuinely different numbers apart', () => {
+    expect(samePhoneNumber('07311 351565', '+447311351566')).toBe(false)
+    expect(samePhoneNumber('0113 000 0000', '07311 351565')).toBe(false)
+    expect(samePhoneNumber('07311 351565', null)).toBe(false)
+  })
+})
+
 describe('what an order says beyond the card\'s own boxes', () => {
   it('keeps the delivery number and the delivery address, labelled', () => {
     expect(shopCustomerExtras(order())).toEqual({
@@ -231,8 +251,32 @@ describe('what an order says beyond the card\'s own boxes', () => {
     expect(shopCustomerExtras(same)).toEqual({ phones: [], addresses: [] })
   })
 
+  it('knows a number typed nationally and the same one in international form are one phone', () => {
+    const same = order({
+      shippingAddress: { ...ADDRESS, phone: '+447311351565' }, customerPhone: '07311 351565',
+    })
+    expect(shopCustomerExtras(same).phones).toEqual([])
+  })
+
   it('calls the address on the card delivery when there is no billing one', () => {
     expect(shopCustomerDraft(order({ billingAddress: null }))?.addressLabel).toBe('Delivery')
     expect(shopCustomerExtras(order({ billingAddress: null })).addresses).toEqual([])
+  })
+})
+
+describe('the marketing answer an order carries', () => {
+  const placed = new Date('2026-10-05T18:25:21Z')
+
+  it('is a dated record naming the order', () => {
+    expect(shopOrderConsent(order({ marketingConsent: true, orderNumber: 'DW000218', createdAt: placed })))
+      .toEqual({ consent: true, at: placed, source: 'Order DW000218' })
+    expect(shopOrderConsent(order({ marketingConsent: false, orderNumber: 'DW000201', createdAt: placed }))?.consent)
+      .toBe(false)
+  })
+
+  it('says nothing when the checkout never asked, or the order has no date', () => {
+    expect(shopOrderConsent(order({ marketingConsent: null, createdAt: placed }))).toBeNull()
+    expect(shopOrderConsent(order())).toBeNull()
+    expect(shopOrderConsent(order({ marketingConsent: true, createdAt: null }))).toBeNull()
   })
 })

@@ -321,17 +321,18 @@ the same human collapse into one story.
   label anything puts on for you is **Customers**, and only where the shop is
   installed - see below.
 - **Shop customers, filed for you.** Where the shop is installed too, somebody
-  who pays for an order becomes a contact: their name, email address, phone
+  who places an order becomes a contact: their name, email address, phone
   number, company and billing address as they gave them at the checkout, filed
   under a **Customers** category that is made the first time it is needed.
   Somebody already here - because they emailed first, or bought before - is
   filled in rather than copied: a blank box gets the order's answer, anything
   already written stays exactly as it is, and they gain the Customers label
   without losing any other. An order waiting on a bank transfer adds its
-  customer when the payment is marked as received, and a colleague testing the
-  checkout from a work address is never added. On unless you switch it off, under
+  customer the moment it is placed rather than whenever the money lands, and a
+  colleague testing the checkout from a work address is never added. On unless you switch it off, under
   **Settings -> Unified Inbox -> People**. Nothing about the shop changes; this
-  module listens for the shop's own "order paid" news and does the rest.
+  module listens for the shop's own "order paid" and "order placed, awaiting
+  payment" news and does the rest.
 - **Bringing an address book in.** Point it at a CSV out of Outlook, Google
   Contacts, a spreadsheet or whatever the contacts are in now, and it shows you
   each column with its best guess at what it is - change any of them, leave out

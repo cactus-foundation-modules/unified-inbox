@@ -391,6 +391,7 @@ export async function listAudienceCandidates(categoryIds: string[]): Promise<Aud
            p."last_name",
            p."display_name",
            p."primary_email" AS address,
+           p."marketing_consent",
            o."name"      AS organisation_name
       FROM "uin_people" p
       LEFT JOIN "uin_organisations" o ON o."id" = p."organisation_id"
@@ -407,6 +408,7 @@ export async function listAudienceCandidates(categoryIds: string[]): Promise<Aud
     lastName: (r.last_name as string | null) ?? null,
     displayName: (r.display_name as string | null) ?? null,
     organisationName: (r.organisation_name as string | null) ?? null,
+    marketingConsent: typeof r.marketing_consent === 'boolean' ? r.marketing_consent : null,
   }))
 }
 

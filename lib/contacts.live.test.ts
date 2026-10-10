@@ -521,7 +521,7 @@ describe.runIf(shouldRun)('the address book, against a real database', () => {
 
     const numbers = (await lib.listIdentities(personId)).filter((i) => i.kind === 'phone')
     expect(numbers.map((n) => [n.label, n.value]).sort())
-      .toEqual([['Delivery', '07700 900222'], ['Order', '07700 900111']])
+      .toEqual([['Delivery', '07700900222'], ['Order', '07700900111']])
     expect((await lib.getPerson(personId))?.addressLabel).toBe('Billing')
     const further = await lib.listPersonAddresses(personId)
     expect(further.map((a) => [a.label, a.addressLine1])).toEqual([['Delivery', '2 Goods In']])
@@ -539,7 +539,7 @@ describe.runIf(shouldRun)('the address book, against a real database', () => {
     }, { origin: 'hand' })
 
     const numbers = (await lib.listIdentities(una.id)).filter((i) => i.kind === 'phone')
-    expect(numbers.map((n) => [n.label, n.value])).toEqual([['Mobile', '07700 900111']])
+    expect(numbers.map((n) => [n.label, n.value])).toEqual([['Mobile', '07700900111']])
     expect(await lib.listPersonAddresses(una.id)).toEqual([])
     // The email address is not a number and was never on the list.
     expect((await lib.listIdentities(una.id)).some((i) => i.kind === 'email')).toBe(true)
@@ -549,7 +549,7 @@ describe.runIf(shouldRun)('the address book, against a real database', () => {
     const una = (await lib.listPeople({ search: 'una@labels.test', page: 1, perPage: 5 })).rows[0]!
     await store.saveContact(una.id, { phone: '07700 900333', phoneLabel: 'Work' }, { origin: 'import' })
     const numbers = (await lib.listIdentities(una.id)).filter((i) => i.kind === 'phone')
-    expect(numbers.map((n) => n.value).sort()).toEqual(['07700 900111', '07700 900333'])
+    expect(numbers.map((n) => n.value).sort()).toEqual(['07700900111', '07700900333'])
   })
 
   it('adds an address a paid order brings only if they do not hold it already', async () => {
@@ -603,5 +603,61 @@ describe.runIf(shouldRun)('the address book, against a real database', () => {
       `SELECT COUNT(*)::bigint AS n FROM "uin_person_addresses" WHERE "person_id" = $1`, una.id,
     )
     expect(Number(left[0]!.n)).toBe(0)
+  })
+  it('keeps the newest marketing answer, whichever order it arrives in', async () => {
+    const { personId } = await store.saveContact(null, { firstName: 'Mae', lastName: 'Consent', email: 'mae@consent.test' }, { origin: 'hand' })
+    const monday = new Date('2026-10-05T10:00:00Z')
+    const friday = new Date('2026-10-09T10:00:00Z')
+
+    expect(await lib.recordMarketingConsent(personId, { consent: false, at: friday, source: 'Order DW2' })).toBe(true)
+    // An older order synced late changes nothing.
+    expect(await lib.recordMarketingConsent(personId, { consent: true, at: monday, source: 'Order DW1' })).toBe(false)
+    // The same order announced twice changes nothing either.
+    expect(await lib.recordMarketingConsent(personId, { consent: false, at: friday, source: 'Order DW2' })).toBe(false)
+
+    const mae = await lib.getPerson(personId)
+    expect(mae?.marketingConsent).toBe(false)
+    expect(mae?.marketingConsentSource).toBe('Order DW2')
+    expect(mae?.marketingConsentAt?.toISOString()).toBe(friday.toISOString())
+  })
+
+  it('carries the newer marketing answer across a merge, and puts it back on undo', async () => {
+    const a = await store.saveContact(null, { firstName: 'Ada', lastName: 'Old', email: 'ada-old@consent.test' }, { origin: 'hand' })
+    const b = await store.saveContact(null, { firstName: 'Ada', lastName: 'New', email: 'ada-new@consent.test' }, { origin: 'hand' })
+    await lib.recordMarketingConsent(a.personId, { consent: true, at: new Date('2026-10-01T09:00:00Z'), source: 'Order DW10' })
+    await lib.recordMarketingConsent(b.personId, { consent: false, at: new Date('2026-10-08T09:00:00Z'), source: 'Order DW11' })
+
+    const merged = await lib.mergePeople(a.personId, b.personId, null)
+    if (!('mergeId' in merged)) throw new Error(merged.error)
+    expect((await lib.getPerson(a.personId))?.marketingConsentSource).toBe('Order DW11')
+
+    await lib.undoMerge(merged.mergeId, null)
+    const back = await lib.getPerson(a.personId)
+    expect(back?.marketingConsent).toBe(true)
+    expect(back?.marketingConsentSource).toBe('Order DW10')
+  })
+
+  it('reads an order\'s marketing answer, and a shop without the column as no answer', async () => {
+    const { readOrderCustomer } = await import('./shop-customer-sync')
+    await db.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS "shp_orders" (
+      "id" TEXT PRIMARY KEY, "order_number" TEXT, "created_at" TIMESTAMP(3), "customer_name" TEXT,
+      "customer_email" TEXT, "customer_organisation" TEXT, "customer_phone" TEXT,
+      "billing_address" JSONB, "shipping_address" JSONB)`)
+    await db.$executeRawUnsafe(`INSERT INTO "shp_orders" ("id", "order_number", "created_at", "customer_email")
+      VALUES ('o1', 'DW9', '2026-10-05 18:25:21', 'mae@consent.test')`)
+    expect((await readOrderCustomer('o1'))?.marketingConsent).toBeNull()
+
+    await db.$executeRawUnsafe(`ALTER TABLE "shp_orders" ADD COLUMN "marketing_consent" BOOLEAN`)
+    await db.$executeRawUnsafe(`UPDATE "shp_orders" SET "marketing_consent" = true WHERE "id" = 'o1'`)
+    const order = await readOrderCustomer('o1')
+    expect(order?.marketingConsent).toBe(true)
+    expect(order?.orderNumber).toBe('DW9')
+    expect(order?.createdAt).toBeInstanceOf(Date)
+  })
+
+  it('leaves somebody who said no off a campaign list', async () => {
+    const { listAudienceCandidates } = await import('./campaigns/store')
+    const mae = (await listAudienceCandidates([])).find((c) => c.address === 'mae@consent.test')
+    expect(mae?.marketingConsent).toBe(false)
   })
 })

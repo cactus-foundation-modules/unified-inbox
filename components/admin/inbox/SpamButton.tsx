@@ -367,8 +367,9 @@ export function SpamButton({
               {targets.length - 1} still move, and their senders are left alone.</> : null} Nothing
             further from them would reach an inbox on this site - shared or personal. It would be
             dropped straight in here instead, marked as dealt with and left unread, so you can
-            still see what they sent. Nothing already here would be touched, and you can let them
-            back in from the Spam folder or from the inbox settings.
+            still see what they sent. They would come out of your contacts, but their
+            conversations already here would not be touched, and you can let them back in from
+            the Spam folder or from the inbox settings.
           </> : <>
             {/* No door to offer: nobody to block, already blocked, or a reader
                 who may not shut it. The question is worth asking anyway - it is

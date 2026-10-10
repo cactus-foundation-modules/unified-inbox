@@ -28,6 +28,8 @@ import { standDownScheduled } from './stand-down'
 import { ownPostOwners } from './own-post'
 import { allConversationProviders } from './provider-registry'
 import { normaliseSubject } from './threading'
+import { tidyPhone } from './people'
+import { siteDiallingCode } from '@/lib/phone.server'
 import { claimSentText, heldChannelMessages, markTextLinkRead, textLinksFor } from './text-links'
 import { isTextChannel, linkSettled, redirectsTo, type TextLink } from './text-rules'
 
@@ -130,13 +132,44 @@ function whenOf(value: Date | string): Date {
 /** Whether a conversation's own party is reachable by address or by number.
  *  Both are stored; which one is filled decides how the people layer will
  *  recognise them later. */
-function partyOf(summary: ConversationSummary): { name: string | null; email: string | null; phone: string | null } {
+function partyOf(summary: ConversationSummary, diallingCode: string | null): {
+  name: string | null
+  email: string | null
+  phone: string | null
+  shownName: string | null
+  shownPhone: string | null
+} {
   const p = summary.participant ?? { name: null, email: null, phone: null }
+  const name = typeof p.name === 'string' && p.name.trim() ? p.name.trim() : null
+  const phone = typeof p.phone === 'string' && p.phone.trim() ? p.phone.trim() : null
+  // `phone` stays exactly as the channel gave it: it is what text links and
+  // the channel's own conversation are keyed on. What gets written on the
+  // messages people read is the address book's shape, so a call from
+  // +441217329511 says 01217329511 like the card it belongs to. A channel that
+  // names the party by their number gets the same treatment on the name.
+  const shownPhone = phone && diallingCode ? (tidyPhone(phone, diallingCode) ?? phone) : phone
+  const shownName = name && phone && name === phone ? shownPhone : name
   return {
-    name: typeof p.name === 'string' && p.name.trim() ? p.name.trim() : null,
+    name,
     email: typeof p.email === 'string' && p.email.trim() ? p.email.trim().toLowerCase() : null,
-    phone: typeof p.phone === 'string' && p.phone.trim() ? p.phone.trim() : null,
+    phone,
+    shownName,
+    shownPhone,
   }
+}
+
+/** Who a message says it is from. A channel that signs a message with the
+ *  party's bare number gets the number written the inbox's way. */
+function shownAuthor(author: string | null | undefined, party: { phone: string | null; shownPhone: string | null }): string | null {
+  if (!author) return null
+  return party.phone && author.trim() === party.phone ? party.shownPhone : author
+}
+
+/** A channel's subject with the party's raw number in it ("Phone: +441217329511")
+ *  written the way the rest of the inbox writes it. */
+function withShownNumber(subject: string | null, party: { phone: string | null; shownPhone: string | null }): string | null {
+  if (!subject || !party.phone || !party.shownPhone || party.phone === party.shownPhone) return subject
+  return subject.split(party.phone).join(party.shownPhone)
 }
 
 function messageDirection(message: ConversationMessage): 'in' | 'out' | 'note' {
@@ -277,10 +310,11 @@ export async function syncProvider(
   // filed there rather than on the phone conversation - see lib/text-links.ts.
   // One read for the whole pass, and only for the numbers on offer; a channel
   // that carries no texts asks nothing at all.
+  const diallingCode = await siteDiallingCode()
   const textLinks = await textLinksFor(
     summaries
       .filter((summary) => isTextChannel(channelOf(summary.channel, provider.channel)))
-      .map((summary) => partyOf(summary).phone ?? ''),
+      .map((summary) => partyOf(summary, null).phone ?? ''),
   )
 
   for (const summary of summaries) {
@@ -293,12 +327,13 @@ export async function syncProvider(
     // we are caught up on something we are not.
     const contentAt = contentAtOf(summary, lastMessageAt)
     const channel = channelOf(summary.channel, provider.channel)
-    const subject = typeof summary.subject === 'string' && summary.subject.trim() ? summary.subject.trim() : null
+    const channelSubject = typeof summary.subject === 'string' && summary.subject.trim() ? summary.subject.trim() : null
 
     // partyOf lower-cases and trims, which is the same normalisation the block
     // list is stored under - so this is a straight comparison rather than a
     // guess.
-    const party = partyOf(summary)
+    const party = partyOf(summary, diallingCode)
+    const subject = withShownNumber(channelSubject, party)
     if (party.email && blocked.has(party.email)) continue
 
     // Thrown away here, and nothing has happened on it since. Not opened, not
@@ -436,9 +471,9 @@ export async function syncProvider(
         // The party's own details go on their messages, not on ours: the list
         // and the people layer both read the newest INBOUND message to find out
         // who a conversation is with.
-        fromName: direction === 'in' ? (message.authorName ?? party.name) : (message.authorName ?? null),
+        fromName: direction === 'in' ? (shownAuthor(message.authorName, party) ?? party.shownName) : (message.authorName ?? null),
         fromAddress: direction === 'in' ? party.email : null,
-        fromPhone: direction === 'in' ? party.phone : null,
+        fromPhone: direction === 'in' ? party.shownPhone : null,
         subject,
         bodyText: text,
         bodyHtml: typeof message.html === 'string' && message.html.trim() ? message.html : null,
@@ -658,9 +693,9 @@ async function collectLinkedConversation(input: {
         providerMessageId: message.id,
         direction,
         channel,
-        fromName: direction === 'in' ? (message.authorName ?? party.name) : (message.authorName ?? null),
+        fromName: direction === 'in' ? (shownAuthor(message.authorName, party) ?? party.shownName) : (message.authorName ?? null),
         fromAddress: direction === 'in' ? party.email : null,
-        fromPhone: direction === 'in' ? party.phone : null,
+        fromPhone: direction === 'in' ? party.shownPhone : null,
         subject: input.subject,
         bodyText: text,
         bodyHtml: typeof message.html === 'string' && message.html.trim() ? message.html : null,
@@ -710,11 +745,11 @@ async function collectLinkedConversation(input: {
       providerMessageId: message.id,
       direction,
       channel: 'sms',
-      fromName: message.authorName ?? null,
+      fromName: shownAuthor(message.authorName, party),
       fromAddress: null,
       // The other party's number in both directions: on an email conversation
       // it is the only thing that says who a text was with.
-      fromPhone: party.phone,
+      fromPhone: party.shownPhone,
       subject: null,
       bodyText: text,
       bodyHtml: null,

@@ -145,10 +145,10 @@ export function PeoplePanel({ settings, inboxes, counts, categories, shopInstall
       {shopInstalled && (
         <FieldGroup
           title="Customers from the shop"
-          hint="Somebody who pays for an order has already told you who they are. This saves typing it in again."
+          hint="Somebody who places an order has already told you who they are. This saves typing it in again."
         >
           <CheckField
-            label="Add everybody who pays for an order to your contacts"
+            label="Add everybody who places an order to your contacts"
             checked={shopContacts}
             onChange={setShopContacts}
             hint={<>
@@ -157,7 +157,7 @@ export function PeoplePanel({ settings, inboxes, counts, categories, shopInstall
               first time it is needed). Somebody already in your contacts is filled in rather than
               copied: an empty box gets the answer from the order, and anything already written on
               their card is left exactly as it is. An order waiting on a bank transfer adds its
-              customer once the payment is marked as received. Colleagues testing the checkout
+              customer as soon as it is placed, not when the money lands. Colleagues testing the checkout
               from a work address are never added.
             </>}
           />

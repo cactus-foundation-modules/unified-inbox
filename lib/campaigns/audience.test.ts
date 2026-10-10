@@ -37,6 +37,13 @@ describe('one contact at a time', () => {
     expect(decision).toEqual({ include: true, address: 'jane@acme.co.uk' })
   })
 
+  it('leaves out somebody who asked not to be sent marketing, and keeps the rest', () => {
+    expect(decideAudience(candidate({ marketingConsent: false }), gate()))
+      .toEqual({ include: false, reason: 'They asked not to be sent marketing email.' })
+    expect(decideAudience(candidate({ marketingConsent: true }), gate()).include).toBe(true)
+    expect(decideAudience(candidate({ marketingConsent: null }), gate()).include).toBe(true)
+  })
+
   it('leaves out somebody with no address', () => {
     const decision = decideAudience(candidate({ address: '' }), gate())
     expect(decision).toEqual({ include: false, reason: 'No email address on their record.' })

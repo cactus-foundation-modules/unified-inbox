@@ -226,8 +226,9 @@ function BlockedAddressesDialog({ staff, canUnblock, onClose }: {
             <>
               <p className="uin-recipients">
                 Post from these addresses is collected and dropped straight in here, marked as
-                dealt with and left unread. It never reaches an inbox, shared or personal. Nothing
-                of theirs was deleted - their old conversations are exactly where they were.
+                dealt with and left unread. It never reaches an inbox, shared or personal. They
+                were taken out of your contacts, but their old conversations are exactly where
+                they were.
               </p>
               <ul className="uin-blocked-list">
                 {rows.map((row) => {

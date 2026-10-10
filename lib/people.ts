@@ -6,6 +6,8 @@
 // in here - the moment this file grows a stage, a score or a pipeline it has
 // stopped being the thing the plan asked for and started being a CRM.
 
+import { toE164 } from '@/lib/phone'
+
 /**
  * Free mail providers. An address at one of these tells you about the person's
  * mailbox and nothing whatever about who they work for, so a domain on this
@@ -73,15 +75,42 @@ export function identityKey(address: string | null | undefined): string | null {
   return `${bare}@${domain}`
 }
 
-/** Digits only, so a number written six ways is one identity. A leading + is
- *  kept because it is the difference between a country code and an area code. */
-export function phoneKey(value: string | null | undefined): string | null {
+/**
+ * A phone number the way the address book writes it down: one shape, so a
+ * number typed six ways is one number on the card and one identity.
+ *
+ * A number in the site's own country (Settings > General, dialling code) is
+ * written nationally, trunk zero and digits, no spaces - `+44 7311 351565`,
+ * `0044 7311 351565`, `+44 (0)7311 351565` and `07311 351565` all become
+ * `07311351565`. A number from anywhere else keeps its country code, again
+ * with no spaces: `+33 1 23 45 67 89` becomes `+33123456789`. North America has
+ * no trunk zero, so a +1 site's own numbers are the ten digits.
+ *
+ * Something that cannot be read as a number at all keeps its digits (and a
+ * leading +); fewer than six of them is not a phone number and comes back null.
+ */
+export function tidyPhone(value: string | null | undefined, diallingCode: string): string | null {
   if (!value) return null
   const trimmed = value.trim()
-  const plus = trimmed.startsWith('+')
+  const e164 = toE164(trimmed, diallingCode)
+  if (e164) {
+    const code = diallingCode.replace(/\D/g, '').replace(/^00/, '')
+    if (code && e164.startsWith(`+${code}`)) {
+      // `.replace(/^0+/, '')` because `+44 (0)7311...` arrives as +4407311...
+      const national = e164.slice(code.length + 1).replace(/^0+/, '')
+      return code === '1' ? national : `0${national}`
+    }
+    return e164
+  }
   const digits = trimmed.replace(/\D+/g, '')
   if (digits.length < 6) return null
-  return plus ? `+${digits}` : digits
+  return trimmed.startsWith('+') ? `+${digits}` : digits
+}
+
+/** What a number is matched on. The tidied number itself, so the matching key
+ *  and what the card shows can never disagree about who holds a number. */
+export function phoneKey(value: string | null | undefined, diallingCode: string): string | null {
+  return tidyPhone(value, diallingCode)
 }
 
 export function isPersonalDomain(domain: string | null, extra: readonly string[] = []): boolean {
@@ -124,6 +153,12 @@ export type PersonGate = {
   staffAddresses: ReadonlySet<string>
   /** Domains that mean "one of us", from resolveOwnDomains. */
   ownDomains: readonly string[]
+  /** Addresses the site has blocked, exactly as blocked (lower case, trimmed,
+   *  any `+tag` kept). Blocking somebody takes them out of the address book,
+   *  and this is what stops the next pass putting them straight back. Optional
+   *  because only the gates that MINT people need it - the one deciding whether
+   *  a message is our own has no use for it. */
+  blockedAddresses?: ReadonlySet<string>
 }
 
 /**
@@ -137,6 +172,7 @@ export type PersonGate = {
 export function shouldBecomePerson(address: string | null, gate: PersonGate): boolean {
   const key = identityKey(address)
   if (!key) return false
+  if (address && gate.blockedAddresses?.has(address.trim().toLowerCase())) return false
   if (gate.ownAddresses.has(key)) return false
   if (gate.staffAddresses.has(key)) return false
   const domain = domainOf(key)

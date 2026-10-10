@@ -300,9 +300,30 @@ describe('syncProvider', () => {
         thread: vi.fn().mockResolvedValue({ summary: party, messages: [message()] }),
       }),
     )
+    // Written the address book's way: a number in the site's own country is
+    // national, no spaces. The default dialling code is +44.
     expect(insertProviderMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ fromAddress: null, fromPhone: '+441234567890' }),
+      expect.objectContaining({ fromAddress: null, fromPhone: '01234567890' }),
     )
+  })
+
+  it('writes a number in the subject and the sender name the same way, and keeps the raw one for routing', async () => {
+    const party = summary({
+      channel: 'phone',
+      subject: 'Phone: +441217329511',
+      participant: { name: '+441217329511', email: null, phone: '+441217329511' },
+    })
+    await syncProvider(
+      resolved({
+        channel: 'phone',
+        list: vi.fn().mockResolvedValue({ items: [party] }),
+        thread: vi.fn().mockResolvedValue({ summary: party, messages: [message({ authorName: '+441217329511' })] }),
+      }),
+    )
+    expect(insertProviderMessage).toHaveBeenCalledWith(expect.objectContaining({
+      fromName: '01217329511', fromPhone: '01217329511', subject: 'Phone: 01217329511',
+    }))
+    expect(upsertProviderThread).toHaveBeenCalledWith(expect.objectContaining({ subject: 'Phone: 01217329511' }))
   })
 
   it('does not open a conversation that has not moved since we last read it', async () => {
@@ -637,7 +658,7 @@ describe('syncProvider, texts filed on an email conversation', () => {
     // Not a phone conversation at all: nothing was left for one.
     expect(upsertProviderThread).not.toHaveBeenCalled()
     expect(insertProviderMessage).toHaveBeenCalledWith(expect.objectContaining({
-      threadId: 'email-thread', channel: 'sms', direction: 'in', fromPhone: PHONE, fromAddress: null,
+      threadId: 'email-thread', channel: 'sms', direction: 'in', fromPhone: '07700900123', fromName: '07700900123', fromAddress: null,
     }))
     expect(touchThread).toHaveBeenCalledWith('email-thread', expect.objectContaining({ markUnread: true }))
     expect(reopenOnReply).toHaveBeenCalledWith('email-thread')

@@ -15,7 +15,8 @@ import {
   updatePerson,
   type PersonDetails,
 } from './db'
-import { identityKey, phoneKey } from './people'
+import { siteDiallingCode } from '@/lib/phone.server'
+import { identityKey, phoneKey, tidyPhone } from './people'
 import {
   contactDisplayName,
   isWorthImporting,
@@ -120,9 +121,11 @@ export async function attachContactIdentities(
     ? (draft.phones ?? []).map((p) => ({ value: p.value, label: clean(p.label) }))
     : [{ value: draft.phone ?? '', label: clean(draft.phoneLabel) }]
   const kept: string[] = []
+  const diallingCode = numbers.length > 0 ? await siteDiallingCode() : ''
   for (const entry of numbers) {
-    const phone = clean(entry.value)
-    const numberKey = phoneKey(phone)
+    // Written down tidied, whatever shape it was typed or ordered in. See tidyPhone.
+    const phone = tidyPhone(clean(entry.value), diallingCode)
+    const numberKey = phoneKey(phone, diallingCode)
     if (!phone || !numberKey) continue
     const written = await addIdentity({
       personId, kind: 'phone', value: phone, matchValue: numberKey, source, label: entry.label,
@@ -290,7 +293,7 @@ async function applyCategories(
  * their details rather than build a second copy of each of them.
  */
 async function existingContactFor(draft: ContactDraft): Promise<string | null> {
-  const keys = [identityKey(clean(draft.email)), phoneKey(clean(draft.phone))]
+  const keys = [identityKey(clean(draft.email)), phoneKey(clean(draft.phone), await siteDiallingCode())]
     .filter((k): k is string => !!k)
   if (keys.length === 0) return null
   return findPersonByIdentity(keys)

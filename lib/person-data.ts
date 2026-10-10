@@ -52,6 +52,8 @@ export type PersonExport = {
     organisation: string | null
     notes: string | null
     knownSince: string
+    /** Their answer about marketing email, and when and where they gave it. */
+    marketingConsent: { consent: boolean | null; givenAt: string | null; source: string | null }
   }
   identities: Array<{ kind: string; value: string; label: string | null; firstSeen: string }>
   /** Where they are: the address on the card and every further one, each with
@@ -128,6 +130,11 @@ export async function exportPerson(personId: string): Promise<PersonExport | nul
       organisation: organisation?.name ?? person.organisationName,
       notes: person.notes,
       knownSince: person.createdAt.toISOString(),
+      marketingConsent: {
+        consent: person.marketingConsent,
+        givenAt: person.marketingConsentAt ? person.marketingConsentAt.toISOString() : null,
+        source: person.marketingConsentSource,
+      },
     },
     identities: identities.map((i) => ({
       kind: i.kind,

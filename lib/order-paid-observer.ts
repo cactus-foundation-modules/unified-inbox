@@ -42,3 +42,32 @@ export async function unifiedInboxOrderPaidObserver(event: OrderPaidEvent): Prom
     console.error(`[unified-inbox] could not add the customer on paid order ${event.orderNumber} to contacts`, err)
   }
 }
+
+/** The shop's `shop.order-placed-unpaid` payload, restated locally for the
+ *  same reason as OrderPaidEvent. */
+export type OrderPlacedUnpaidEvent = {
+  orderId: string
+  orderNumber: string
+  paymentMethod: string
+}
+
+/**
+ * The same, for an order placed on bank transfer or another manual method and
+ * not paid for yet.
+ *
+ * Somebody who emailed in, then ordered on bank transfer, used to stay a
+ * stranger on their card - no number, no address, no Customers label - until
+ * the money was marked as received, which can be a week. The order is real the
+ * moment it is placed. The same order announces order-paid later and runs the
+ * sync again; it only ever fills blanks and adds, so the second run is a no-op.
+ *
+ * Never throws, for the same reason as the paid observer.
+ */
+export async function unifiedInboxOrderPlacedUnpaidObserver(event: OrderPlacedUnpaidEvent): Promise<void> {
+  try {
+    const { addShopCustomerToContacts } = await import('./shop-customer-sync')
+    await addShopCustomerToContacts(event.orderId)
+  } catch (err) {
+    console.error(`[unified-inbox] could not add the customer on order ${event.orderNumber} to contacts`, err)
+  }
+}
