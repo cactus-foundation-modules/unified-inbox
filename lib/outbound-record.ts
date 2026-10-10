@@ -3,13 +3,17 @@ import { getActiveMediaProvider, isMediaProviderConfigured } from '@/lib/config/
 import type { OutboundEmailRecorder, RecordedOutboundEmail } from '@/lib/email/record'
 import {
   createOutboundThread,
+  findThreadByKey,
   getInbox,
   insertOutboundAttachment,
   insertOutboundMessage,
+  listInboxes,
   settleDelivery,
+  touchThread,
 } from './db'
 import { getModuleCopyInboxId } from './module-senders'
 import { generateMessageId } from './compose'
+import { normaliseAddress } from './addresses'
 import { buildSnippet, cleanMessageId, normaliseSubject } from './threading'
 import { cacheAttachment } from './attachments'
 import { htmlToText } from './html'
@@ -41,10 +45,11 @@ import { htmlToText } from './html'
 /**
  * Files one sent email as a conversation of its own.
  *
- * A NEW conversation every time, deliberately. Header threading then does the
- * rest: the service's own Message-ID is stored on the row, so when the supplier
- * answers, their In-Reply-To finds this thread and the answer lands under the
- * order rather than starting a third one (see threadsForMessageIds).
+ * A NEW conversation every time unless the module names one (`threadKey`),
+ * deliberately. Header threading then does the rest: the service's own
+ * Message-ID is stored on the row, so when the supplier answers, their
+ * In-Reply-To finds this thread and the answer lands under the order rather
+ * than starting a third one (see threadsForMessageIds).
  */
 async function record(email: RecordedOutboundEmail): Promise<void> {
   const inboxId = await getModuleCopyInboxId(email.moduleName)
@@ -54,6 +59,13 @@ async function record(email: RecordedOutboundEmail): Promise<void> {
   // in the gap between a delete and the row being swept.
   const inbox = await getInbox(inboxId)
   if (!inbox) return
+
+  // Mail to one of our own inboxes - the shop telling staff about a new order -
+  // comes straight back through the mail account as a received message. Filing
+  // the sent copy as well shows the same email twice, once as something we
+  // wrote, so only the received one is kept.
+  const ownAddresses = new Set((await listInboxes()).map((i) => normaliseAddress(i.address)))
+  if ([...email.to, ...email.cc].some((a) => ownAddresses.has(normaliseAddress(a)))) return
 
   const text = email.text || htmlToText(email.html)
   const subject = email.subject || '(no subject)'
@@ -67,11 +79,18 @@ async function record(email: RecordedOutboundEmail): Promise<void> {
     ? email.attachments.reduce((total, file) => total + file.content.byteLength, 0)
     : 0
 
-  const threadId = await createOutboundThread({
+  // A module that names the conversation an email belongs to (a shop, per
+  // order) has every email of that name filed on the one thread, whatever the
+  // subject - which is the point, since an order's emails each have their own.
+  // Left unnamed, a conversation each, exactly as before.
+  const threadKey = email.threadKey?.trim() || null
+  const existingThreadId = threadKey ? await findThreadByKey(inboxId, threadKey) : null
+  const threadId = existingThreadId ?? await createOutboundThread({
     inboxId,
     subject,
     subjectNormalised: normaliseSubject(subject),
     preview: buildSnippet(text),
+    threadKey,
   })
 
   const { row } = await insertOutboundMessage({
@@ -120,6 +139,22 @@ async function record(email: RecordedOutboundEmail): Promise<void> {
   })
 
   if (keepFiles) await keepAttachments(row.id, email)
+
+  // A new thread starts out counted and previewed by its creation; one that
+  // already held mail has to be rolled forward, or the list keeps showing the
+  // first email's preview and the order's newest email never moves it up.
+  if (existingThreadId) {
+    await touchThread(threadId, {
+      sentAt: new Date(),
+      direction: 'out',
+      preview: buildSnippet(text),
+      subject,
+      subjectNormalised: normaliseSubject(subject),
+      markUnread: false,
+      inboxId,
+      arrivedNow: false,
+    })
+  }
 }
 
 /**

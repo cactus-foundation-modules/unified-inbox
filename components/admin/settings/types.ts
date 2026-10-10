@@ -85,6 +85,7 @@ export type Settings = {
   backfillMonths: number
   retentionMonths: number | null
   retentionKeepLinked: boolean
+  junkRetentionDays: number | null
   retentionLastRunAt: string | null
   attachmentFetch: 'lazy' | 'always' | 'never'
   autoLink: boolean

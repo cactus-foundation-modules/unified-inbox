@@ -21,10 +21,12 @@ export type CardFieldProps = {
   hint?: string
   disabled?: boolean
   autoFocus?: boolean
+  /** The id of a <datalist> to suggest from. */
+  listId?: string
 }
 
 export function CardField({
-  label, value, onChange, type = 'text', placeholder, hint, disabled, autoFocus,
+  label, value, onChange, type = 'text', placeholder, hint, disabled, autoFocus, listId,
 }: CardFieldProps) {
   const id = useId()
   return (
@@ -38,6 +40,7 @@ export function CardField({
           placeholder={placeholder}
           disabled={disabled}
           autoFocus={autoFocus}
+          list={listId}
           onChange={(event) => onChange(event.target.value)}
         />
         {hint && <span className="uin-field-hint">{hint}</span>}

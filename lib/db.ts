@@ -4,6 +4,7 @@ import { prisma } from '@/lib/db/prisma'
 import { encryptSecret, tryDecryptSecret } from '@/lib/crypto/secrets'
 import { emailEngagementFor, emptyEngagement, type EmailEngagement } from '@/lib/email/tracking/events'
 import { normaliseAddress } from './addresses'
+import { addressKey } from './contacts'
 import { mintPushToken } from './push-checks'
 import { normaliseSubject, type ThreadRef } from './threading'
 import {
@@ -37,6 +38,7 @@ import type {
   UserDefaultInbox,
   Organisation,
   Person,
+  PersonAddress,
   PersonIdentity,
   PostalAddress,
   RecordLink,
@@ -672,6 +674,7 @@ const DEFAULT_SETTINGS: UnifiedInboxSettings = {
   backfillMonths: 12,
   retentionMonths: null,
   retentionKeepLinked: true,
+  junkRetentionDays: 30,
   retentionLastRunAt: null,
   attachmentFetch: 'lazy',
   autoLink: true,
@@ -713,6 +716,9 @@ export async function getSettings(): Promise<UnifiedInboxSettings> {
     // column existed reads undefined, and the cautious answer is the one that
     // keeps mail rather than the one that removes it.
     retentionKeepLinked: r.retention_keep_linked === undefined ? true : !!r.retention_keep_linked,
+    // Absent (a backup older than the column) is the default; present and null
+    // is somebody having switched it off.
+    junkRetentionDays: r.junk_retention_days === undefined ? 30 : r.junk_retention_days === null ? null : Number(r.junk_retention_days),
     retentionLastRunAt: (r.retention_last_run_at as Date | null) ?? null,
     attachmentFetch: (r.attachment_fetch as AttachmentFetchMode) ?? 'lazy',
     autoLink: r.auto_link === undefined ? true : !!r.auto_link,
@@ -779,6 +785,7 @@ export async function updateSettings(data: Partial<UnifiedInboxSettings>): Promi
   if (data.backfillMonths !== undefined) sets.push(Prisma.sql`"backfill_months" = ${data.backfillMonths}`)
   if (data.retentionMonths !== undefined) sets.push(Prisma.sql`"retention_months" = ${data.retentionMonths}`)
   if (data.retentionKeepLinked !== undefined) sets.push(Prisma.sql`"retention_keep_linked" = ${data.retentionKeepLinked}`)
+  if (data.junkRetentionDays !== undefined) sets.push(Prisma.sql`"junk_retention_days" = ${data.junkRetentionDays}`)
   // retentionLastRunAt is deliberately absent: the sweep stamps it through
   // markRetentionRun, and a settings form that could write it would be able to
   // tell the screen a pass happened when none did.
@@ -2571,16 +2578,30 @@ export async function createOutboundThread(data: {
   subject: string | null
   subjectNormalised: string
   preview: string | null
+  /** The name another module gave this conversation (migration 071). */
+  threadKey?: string | null
 }): Promise<string> {
   const rows = await prisma.$queryRaw<{ id: string }[]>`
     INSERT INTO "uin_threads"
       ("inbox_id", "channel", "subject", "subject_normalised", "preview",
-       "last_message_at", "last_direction", "unread", "message_count")
+       "last_message_at", "last_direction", "unread", "message_count", "thread_key")
     VALUES (${data.inboxId}, 'email', ${data.subject}, ${data.subjectNormalised},
-            ${data.preview}, now(), 'out', false, 0)
+            ${data.preview}, now(), 'out', false, 0, ${data.threadKey ?? null})
     RETURNING "id"
   `
   return rows[0]!.id
+}
+
+/** The conversation a module's email of this name is already filed on, oldest
+ *  first so a stray duplicate from a race never takes over from the original. */
+export async function findThreadByKey(inboxId: string, threadKey: string): Promise<string | null> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "uin_threads"
+     WHERE "inbox_id" = ${inboxId} AND "thread_key" = ${threadKey}
+     ORDER BY "created_at" ASC
+     LIMIT 1
+  `
+  return rows[0]?.id ?? null
 }
 
 // ---------------------------------------------------------------------------
@@ -2996,6 +3017,37 @@ export async function binThreadIds(f: {
      WHERE ${visible}
        AND t."merged_into_id" IS NULL
        AND ${binFolderMatch(f.ownerUserId)}
+  `
+  return rows.map((r) => r.id)
+}
+
+/**
+ * Every conversation in one person's Spam folder that a given reader may see, as
+ * ids - what "Delete all" in that folder is about to destroy.
+ *
+ * Built from the same clauses the folder is drawn from (visibility, the folder
+ * itself, and the bin hiding what has been deleted out of it), never from ids in
+ * the browser, for binThreadIds's reasons. Discussions are left out: they belong
+ * to every colleague in them and cannot be junked in the first place.
+ */
+export async function spamThreadIds(f: {
+  /** Whose junk. Already resolved against the addresses the reader may open. */
+  ownerUserId: string
+  /** The reader, for the bin that hides deleted post from the folder. */
+  viewerUserId: string
+  inboxIds: string[]
+  includeUnrouted: boolean
+  providerModules?: string[]
+}): Promise<string[]> {
+  const visible = visibilityClause(f.inboxIds, f.includeUnrouted, f.providerModules ?? [])
+  if (!visible) return []
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT t."id" FROM "uin_threads" t
+     WHERE ${visible}
+       AND t."merged_into_id" IS NULL
+       AND t."channel" <> 'discussion'
+       AND NOT ${binMatch(f.viewerUserId)}
+       AND ${spamFolderMatch(f.ownerUserId)}
   `
   return rows.map((r) => r.id)
 }
@@ -5769,6 +5821,7 @@ function mapPerson(r: Record<string, unknown>): Person {
     organisationName: (r.organisation_name as string | null) ?? null,
     notes: (r.notes as string | null) ?? null,
     origin: ((r.origin as string | null) ?? 'mail') as ContactOrigin,
+    addressLabel: (r.address_label as string | null) ?? null,
     addressLine1: (r.address_line1 as string | null) ?? null,
     addressLine2: (r.address_line2 as string | null) ?? null,
     addressCity: (r.address_city as string | null) ?? null,
@@ -5785,7 +5838,7 @@ const PERSON_SELECT = Prisma.sql`
   p."id", p."display_name", p."first_name", p."last_name", p."job_title", p."website",
   p."primary_email", p."organisation_id", p."notes", p."origin",
   p."address_line1", p."address_line2", p."address_city", p."address_county",
-  p."address_postcode", p."address_country",
+  p."address_postcode", p."address_country", p."address_label",
   p."merged_into_id", p."created_at", p."updated_at", o."name" AS organisation_name`
 
 /** One person, following a merge to whoever they were merged into. Somebody
@@ -5826,7 +5879,7 @@ export type PersonListRow = Person & {
 /** How the contacts list is ordered. By surname is what an address book does;
  *  by when we last heard from them is what an inbox does, and both screens read
  *  this one query. */
-export type PeopleSort = 'name' | 'recent'
+export type PeopleSort = 'name' | 'recent' | 'added' | 'added_oldest'
 
 /** The people directory: everybody we have met, minus anybody who lost a merge.
  *
@@ -5839,8 +5892,8 @@ export async function listPeople(opts: {
   perPage: number
   sort?: PeopleSort
   organisationId?: string | null
-  /** Only the contacts wearing this label. */
-  categoryId?: string | null
+  /** Only the contacts wearing at least one of these labels. */
+  categoryIds?: string[]
 }): Promise<{ rows: PersonListRow[]; total: number }> {
   const term = opts.search?.trim()
   const clauses: Prisma.Sql[] = [Prisma.sql`p."merged_into_id" IS NULL`]
@@ -5854,20 +5907,29 @@ export async function listPeople(opts: {
         OR p."address_postcode" ILIKE ${`%${term}%`}
         OR p."address_city" ILIKE ${`%${term}%`}
         OR o."name" ILIKE ${`%${term}%`}
+        OR EXISTS (SELECT 1 FROM "uin_person_addresses" pa
+                    WHERE pa."person_id" = p."id"
+                      AND (pa."address_postcode" ILIKE ${`%${term}%`} OR pa."address_city" ILIKE ${`%${term}%`}))
         OR EXISTS (SELECT 1 FROM "uin_person_identities" i
                     WHERE i."person_id" = p."id" AND i."value" ILIKE ${`%${term}%`}))`)
   }
   if (opts.organisationId) clauses.push(Prisma.sql`p."organisation_id" = ${opts.organisationId}`)
-  if (opts.categoryId) {
+  if (opts.categoryIds && opts.categoryIds.length > 0) {
     clauses.push(Prisma.sql`EXISTS (SELECT 1 FROM "uin_person_categories" pc
                                      WHERE pc."person_id" = p."id"
-                                       AND pc."category_id" = ${opts.categoryId})`)
+                                       AND pc."category_id" = ANY(${opts.categoryIds}::text[]))`)
   }
   const where = Prisma.join(clauses, ' AND ')
 
+  // The id breaks ties: a bulk import adds a thousand people in one instant,
+  // and without it their order would change from one page to the next.
   const order = opts.sort === 'name'
     ? Prisma.sql`p."last_name" ASC NULLS LAST, p."first_name" ASC NULLS LAST, p."display_name" ASC NULLS LAST`
-    : Prisma.sql`p."updated_at" DESC`
+    : opts.sort === 'added'
+      ? Prisma.sql`p."created_at" DESC, p."id" DESC`
+      : opts.sort === 'added_oldest'
+        ? Prisma.sql`p."created_at" ASC, p."id" ASC`
+        : Prisma.sql`p."updated_at" DESC`
 
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT ${PERSON_SELECT},
@@ -5925,6 +5987,7 @@ export type PersonDetails = Partial<PostalAddress> & {
   lastName?: string | null
   jobTitle?: string | null
   website?: string | null
+  addressLabel?: string | null
 }
 
 /** The columns a person's own details live in, written once and used by both
@@ -5941,6 +6004,7 @@ const PERSON_DETAIL_COLUMNS: ReadonlyArray<[keyof PersonDetails, string]> = [
   ['addressCounty', 'address_county'],
   ['addressPostcode', 'address_postcode'],
   ['addressCountry', 'address_country'],
+  ['addressLabel', 'address_label'],
 ]
 
 export async function createPerson(data: {
@@ -6011,10 +6075,12 @@ export async function addIdentity(data: {
   value: string
   matchValue: string
   source: string | null
+  /** What it is for - "Order", "Delivery". Left off for one nobody has named. */
+  label?: string | null
 }): Promise<boolean> {
   const written = await prisma.$executeRaw`
-    INSERT INTO "uin_person_identities" ("person_id", "kind", "value", "match_value", "source")
-    VALUES (${data.personId}, ${data.kind}, ${data.value}, ${data.matchValue}, ${data.source})
+    INSERT INTO "uin_person_identities" ("person_id", "kind", "value", "match_value", "source", "label")
+    VALUES (${data.personId}, ${data.kind}, ${data.value}, ${data.matchValue}, ${data.source}, ${data.label ?? null})
     ON CONFLICT ("value") DO NOTHING
   `
   // Whether the row went in, which is what the contacts screen needs to tell
@@ -6031,8 +6097,129 @@ function mapIdentity(r: Record<string, unknown>): PersonIdentity {
     value: r.value as string,
     matchValue: (r.match_value as string | null) ?? null,
     source: (r.source as string | null) ?? null,
+    label: (r.label as string | null) ?? null,
     createdAt: r.created_at as Date,
   }
+}
+
+/** Name what an address or number is for, on one this person already holds.
+ *  The person is part of the WHERE, for the same reason as deleting one. A
+ *  label is only ever set, never cleared by being left off: a card that did
+ *  not mention it has not asked for it to go. */
+export async function setIdentityLabel(personId: string, matchValue: string, label: string | null): Promise<void> {
+  if (label === null) return
+  await prisma.$executeRaw`
+    UPDATE "uin_person_identities" SET "label" = ${label}
+     WHERE "person_id" = ${personId} AND "match_value" = ${matchValue}
+  `
+}
+
+/** Take off every phone number this person holds that is not in `keep`, and
+ *  say how many went. What a card with a list of numbers on it means by saving:
+ *  what is listed is what they have. Emails are never touched here - the
+ *  address the site has been writing to is not something a number list can
+ *  take away. */
+export async function deletePhonesExcept(personId: string, keep: string[]): Promise<number> {
+  if (keep.length === 0) {
+    return prisma.$executeRaw`
+      DELETE FROM "uin_person_identities" WHERE "person_id" = ${personId} AND "kind" = 'phone'
+    `
+  }
+  return prisma.$executeRaw`
+    DELETE FROM "uin_person_identities"
+     WHERE "person_id" = ${personId} AND "kind" = 'phone'
+       AND COALESCE("match_value", "value") <> ALL(${keep}::text[])
+  `
+}
+
+function mapPersonAddress(r: Record<string, unknown>): PersonAddress {
+  return {
+    id: r.id as string,
+    personId: r.person_id as string,
+    label: (r.label as string | null) ?? null,
+    addressLine1: (r.address_line1 as string | null) ?? null,
+    addressLine2: (r.address_line2 as string | null) ?? null,
+    addressCity: (r.address_city as string | null) ?? null,
+    addressCounty: (r.address_county as string | null) ?? null,
+    addressPostcode: (r.address_postcode as string | null) ?? null,
+    addressCountry: (r.address_country as string | null) ?? null,
+  }
+}
+
+/** The further addresses on a contact, in the order they were put down. */
+export async function listPersonAddresses(personId: string): Promise<PersonAddress[]> {
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_person_addresses" WHERE "person_id" = ${personId}
+     ORDER BY "position" ASC, "created_at" ASC
+  `
+  return rows.map(mapPersonAddress)
+}
+
+/** The further addresses for a page of people at once, by person id. */
+export async function personAddressesFor(personIds: string[]): Promise<Record<string, PersonAddress[]>> {
+  if (personIds.length === 0) return {}
+  const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
+    SELECT * FROM "uin_person_addresses" WHERE "person_id" = ANY(${personIds}::text[])
+     ORDER BY "position" ASC, "created_at" ASC
+  `
+  const out: Record<string, PersonAddress[]> = {}
+  for (const row of rows) {
+    const address = mapPersonAddress(row)
+    ;(out[address.personId] ??= []).push(address)
+  }
+  return out
+}
+
+/** Make the further addresses on a contact exactly these. What a card with a
+ *  list of addresses on it means by saving: what is listed is what they have.
+ *  Written in one transaction, so a failure leaves the old list in place rather
+ *  than half of the new one. */
+export async function replacePersonAddresses(
+  personId: string,
+  addresses: Array<PostalAddress & { label: string | null }>,
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`DELETE FROM "uin_person_addresses" WHERE "person_id" = ${personId}`
+    let position = 0
+    for (const a of addresses) {
+      await tx.$executeRaw`
+        INSERT INTO "uin_person_addresses"
+          ("person_id", "label", "address_line1", "address_line2", "address_city",
+           "address_county", "address_postcode", "address_country", "position")
+        VALUES (${personId}, ${a.label}, ${a.addressLine1}, ${a.addressLine2}, ${a.addressCity},
+                ${a.addressCounty}, ${a.addressPostcode}, ${a.addressCountry}, ${position})
+      `
+      position += 1
+    }
+    await tx.$executeRaw`UPDATE "uin_people" SET "updated_at" = now() WHERE "id" = ${personId}`
+  })
+}
+
+/** Put one more address on a contact unless they already have it, in their own
+ *  columns or among the further ones. What a paid order does: it adds what it
+ *  knows and never rewrites what somebody typed. Says whether it went in. */
+export async function addPersonAddressIfMissing(
+  personId: string,
+  address: PostalAddress & { label: string | null },
+): Promise<boolean> {
+  const key = addressKey(address)
+  if (!key) return false
+  const person = await getPerson(personId)
+  if (!person) return false
+  const held = [person, ...(await listPersonAddresses(personId))]
+  if (held.some((h) => addressKey(h) === key)) return false
+  const rows = await prisma.$queryRaw<{ next: number }[]>`
+    SELECT COALESCE(MAX("position"), -1) + 1 AS next FROM "uin_person_addresses" WHERE "person_id" = ${personId}
+  `
+  await prisma.$executeRaw`
+    INSERT INTO "uin_person_addresses"
+      ("person_id", "label", "address_line1", "address_line2", "address_city",
+       "address_county", "address_postcode", "address_country", "position")
+    VALUES (${personId}, ${address.label}, ${address.addressLine1}, ${address.addressLine2},
+            ${address.addressCity}, ${address.addressCounty}, ${address.addressPostcode},
+            ${address.addressCountry}, ${Number(rows[0]?.next ?? 0)})
+  `
+  return true
 }
 
 export async function listIdentities(personId: string): Promise<PersonIdentity[]> {
@@ -6115,6 +6302,9 @@ export async function listOrganisations(opts: {
   search?: string | null
   page: number
   perPage: number
+  /** Newest added first (the default for the list) or oldest first. Left off,
+   *  by name. */
+  sort?: 'added' | 'added_oldest'
 }): Promise<{ rows: OrganisationListRow[]; total: number }> {
   const term = opts.search?.trim()
   const where = term
@@ -6128,7 +6318,11 @@ export async function listOrganisations(opts: {
              WHERE p."organisation_id" = g."id" AND p."merged_into_id" IS NULL) AS people_count
       FROM "uin_organisations" g
      WHERE ${where}
-     ORDER BY g."name" ASC
+     ORDER BY ${opts.sort === 'added'
+    ? Prisma.sql`g."created_at" DESC, g."id" DESC`
+    : opts.sort === 'added_oldest'
+      ? Prisma.sql`g."created_at" ASC, g."id" ASC`
+      : Prisma.sql`g."name" ASC`}
      LIMIT ${opts.perPage} OFFSET ${(opts.page - 1) * opts.perPage}
   `
   const counted = await prisma.$queryRaw<{ count: bigint }[]>`
@@ -6558,6 +6752,66 @@ export type OutboundLogRow = {
   engagement: EmailEngagement
 }
 
+/** How many ledger rows are read, and how many of them the timeline keeps. */
+const OUTBOUND_SHOWN = 25
+const OUTBOUND_FETCH = 60
+/** How far apart a ledger row and the copy of it filed as a message may be. The
+ *  copy is written a moment after the send; ten minutes is a long moment. */
+const FILED_COPY_WINDOW_MS = 10 * 60 * 1000
+
+/**
+ * Which of these ledger rows already have a message of their own in a
+ * conversation.
+ *
+ * The site keeps a copy of the mail it sends for the module that asked, as a
+ * message in a conversation, so the same email is now in two places: the ledger
+ * and the inbox. Listing both put every automatic email on a person's page
+ * twice, once as a link into its conversation and once as a bare line. The
+ * conversation is the better of the two - it can be opened - so it is the one
+ * kept.
+ *
+ * Matched on the id the copy carries when it has one, and otherwise on what a
+ * person would match on: the same subject, to the same address, sent within a
+ * few minutes. The second is for copies filed before the id was written down.
+ */
+async function loggedMailAlreadyFiled(
+  rows: Array<{ id: string; toAddress: string; subject: string; sentAt: Date }>,
+): Promise<Set<string>> {
+  if (rows.length === 0) return new Set()
+  const ids = rows.map((r) => r.id)
+  const subjects = [...new Set(rows.map((r) => r.subject.trim().toLowerCase()))]
+  const earliest = new Date(Math.min(...rows.map((r) => r.sentAt.getTime())) - FILED_COPY_WINDOW_MS)
+  const latest = new Date(Math.max(...rows.map((r) => r.sentAt.getTime())) + FILED_COPY_WINDOW_MS)
+  const filed = await prisma.$queryRaw<Array<{
+    email_log_id: string | null
+    subject: string | null
+    sent_at: Date | null
+    to_addresses: string[] | null
+  }>>`
+    SELECT "email_log_id", "subject", "sent_at", "to_addresses"
+      FROM "uin_messages"
+     WHERE "direction" = 'out'
+       AND "channel" = 'email'
+       AND ("email_log_id" = ANY(${ids}::text[])
+            OR ("sent_at" BETWEEN ${earliest} AND ${latest}
+                AND lower(btrim("subject")) = ANY(${subjects}::text[])))
+  `
+  const covered = new Set<string>()
+  for (const row of rows) {
+    const subject = row.subject.trim().toLowerCase()
+    const to = row.toAddress.trim().toLowerCase()
+    const hit = filed.some((m) => {
+      if (m.email_log_id === row.id) return true
+      if (m.email_log_id || !m.sent_at) return false
+      return (m.subject ?? '').trim().toLowerCase() === subject
+        && Math.abs(m.sent_at.getTime() - row.sentAt.getTime()) <= FILED_COPY_WINDOW_MS
+        && (m.to_addresses ?? []).some((a) => a.trim().toLowerCase() === to)
+    })
+    if (hit) covered.add(row.id)
+  }
+  return covered
+}
+
 /**
  * Automated mail this site has sent them (D13).
  *
@@ -6572,7 +6826,9 @@ export type OutboundLogRow = {
  */
 export async function outboundLogForAddresses(addresses: string[]): Promise<OutboundLogRow[]> {
   if (addresses.length === 0) return []
-  const rows = await prisma.emailLog.findMany({
+  // A few more than are shown, because some of what comes back is dropped below
+  // as already being on the page as a conversation.
+  const fetched = await prisma.emailLog.findMany({
     where: { toAddress: { in: addresses, mode: 'insensitive' } },
     select: {
       id: true, toAddress: true, subject: true, templateKey: true,
@@ -6580,8 +6836,10 @@ export async function outboundLogForAddresses(addresses: string[]): Promise<Outb
       transport: true, tracked: true,
     },
     orderBy: { sentAt: 'desc' },
-    take: 25,
+    take: OUTBOUND_FETCH,
   })
+  const covered = await loggedMailAlreadyFiled(fetched)
+  const rows = fetched.filter((row) => !covered.has(row.id)).slice(0, OUTBOUND_SHOWN)
   // One grouped query for the lot. Not allowed to take the timeline down: a
   // person's history without its open counts is still their history.
   const engagement = await emailEngagementFor(rows.map((row) => row.id)).catch((err: unknown) => {
@@ -6767,6 +7025,9 @@ export async function mergePeople(
     const identities = await tx.$queryRaw<{ id: string }[]>`
       SELECT "id" FROM "uin_person_identities" WHERE "person_id" = ${loserId}
     `
+    const addressRows = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "uin_person_addresses" WHERE "person_id" = ${loserId}
+    `
     const threads = await tx.$queryRaw<{ id: string }[]>`
       SELECT "id" FROM "uin_threads" WHERE "person_id" = ${loserId}
     `
@@ -6782,12 +7043,16 @@ export async function mergePeople(
         notes: loser.notes,
       },
       identityIds: identities.map((r) => r.id),
+      addressIds: addressRows.map((r) => r.id),
       threadIds: threads.map((r) => r.id),
       linkIds: links.map((r) => r.id),
     }
 
     await tx.$executeRaw`
       UPDATE "uin_person_identities" SET "person_id" = ${winnerId} WHERE "person_id" = ${loserId}
+    `
+    await tx.$executeRaw`
+      UPDATE "uin_person_addresses" SET "person_id" = ${winnerId} WHERE "person_id" = ${loserId}
     `
     await tx.$executeRaw`
       UPDATE "uin_threads" SET "person_id" = ${winnerId}, "updated_at" = now() WHERE "person_id" = ${loserId}
@@ -6859,10 +7124,12 @@ export async function undoMerge(mergeId: string, userId: string | null): Promise
   const winnerId = row.winner_id as string
   const snapshot = (row.snapshot ?? {}) as {
     identityIds?: string[]
+    addressIds?: string[]
     threadIds?: string[]
     linkIds?: string[]
   }
   const identityIds = snapshot.identityIds ?? []
+  const addressIds = snapshot.addressIds ?? []
   const threadIds = snapshot.threadIds ?? []
   const linkIds = snapshot.linkIds ?? []
 
@@ -6871,6 +7138,12 @@ export async function undoMerge(mergeId: string, userId: string | null): Promise
       await tx.$executeRaw`
         UPDATE "uin_person_identities" SET "person_id" = ${loserId}
          WHERE "id" IN (${Prisma.join(identityIds)}) AND "person_id" = ${winnerId}
+      `
+    }
+    if (addressIds.length > 0) {
+      await tx.$executeRaw`
+        UPDATE "uin_person_addresses" SET "person_id" = ${loserId}
+         WHERE "id" IN (${Prisma.join(addressIds)}) AND "person_id" = ${winnerId}
       `
     }
     if (threadIds.length > 0) {
@@ -7518,6 +7791,40 @@ export async function threadsDueForRetention(
     lastMessageAt: (r.last_message_at as Date | null) ?? null,
     linked: !!r.linked,
   }))
+}
+
+/**
+ * Conversations that have sat in the junk folder past the cutoff, oldest first.
+ *
+ * In the folder for that long means one of two things: somebody marked it as
+ * junk before the cutoff, or the site stamped it as from a blocked sender before
+ * the cutoff. A mark taken off again (Not junk) is a deleted row, so a rescued
+ * conversation is never caught.
+ *
+ * And it must ALSO have been quiet since the cutoff: a reply that arrived after
+ * somebody junked it is words nobody has judged. Records linked to an order,
+ * purchase order or quote are never swept, and neither are discussions, which
+ * belong to every colleague in them.
+ */
+export async function threadsDueForJunkSweep(cutoff: Date, limit: number): Promise<string[]> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT t."id"
+      FROM "uin_threads" t
+     WHERE t."merged_into_id" IS NULL
+       AND t."channel" <> 'discussion'
+       AND COALESCE(t."last_message_at", t."created_at") < ${cutoff}
+       AND NOT EXISTS (SELECT 1 FROM "uin_record_links" rl WHERE rl."thread_id" = t."id")
+       AND (
+         (t."blocked_at" IS NOT NULL AND t."blocked_at" < ${cutoff})
+         OR EXISTS (
+           SELECT 1 FROM "uin_thread_spam" sp
+            WHERE sp."thread_id" = t."id" AND sp."created_at" < ${cutoff}
+         )
+       )
+     ORDER BY COALESCE(t."last_message_at", t."created_at") ASC
+     LIMIT ${limit}
+  `
+  return rows.map((r) => r.id)
 }
 
 /** What the settings screen shows before anybody turns a window on: how many

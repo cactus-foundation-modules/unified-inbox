@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { retentionCutoff, RETENTION_BATCH, STALLED_SEND_MS } from './retention'
+import { junkCutoff, retentionCutoff, RETENTION_BATCH, STALLED_SEND_MS } from './retention'
 
 // Where the retention line falls, which is the only arithmetic in the module
 // that decides whether somebody's mail still exists.
@@ -49,5 +49,23 @@ describe('the budgets', () => {
     // long after that crashed rather than being slow, and marking a send in
     // flight as failed would tell somebody their email did not go when it did.
     expect(STALLED_SEND_MS).toBeGreaterThan(60_000)
+  })
+})
+
+describe('junkCutoff', () => {
+  const now = new Date('2026-10-10T12:00:00Z')
+
+  it('is null when the clean-up is switched off', () => {
+    expect(junkCutoff(null, now)).toBeNull()
+  })
+
+  it('treats nonsense as off rather than as "delete all junk"', () => {
+    for (const value of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(junkCutoff(value, now)).toBeNull()
+    }
+  })
+
+  it('puts the line the given number of days back', () => {
+    expect(junkCutoff(30, now)?.toISOString()).toBe('2026-09-10T12:00:00.000Z')
   })
 })

@@ -288,6 +288,9 @@ export type UnifiedInboxSettings = {
    *  default: somebody who set a twelve month window was thinking about mailing
    *  lists, not about the invoice dispute from eighteen months ago. */
   retentionKeepLinked: boolean
+  /** Days a conversation may sit in the junk folder before the nightly tidy
+   *  removes it for good. Null switches that off. 30 unless changed. */
+  junkRetentionDays: number | null
   /** When the sweep last finished a pass. Read only - the sweep sets it. */
   retentionLastRunAt: Date | null
   attachmentFetch: AttachmentFetchMode
@@ -413,6 +416,8 @@ export type PostalAddress = {
 
 export type Person = PostalAddress & {
   id: string
+  /** What the address in their own columns is - "Billing" - or null. */
+  addressLabel: string | null
   /** The one name everything shows, kept in step with the two boxes below on
    *  every save. Still the fallback for somebody the mail pass met before the
    *  contacts screen existed and whose name has never been split. */
@@ -442,7 +447,18 @@ export type PersonIdentity = {
   /** What matching compares on: lower cased, plus tag removed. */
   matchValue: string | null
   source: string | null
+  /** What this one is for - "Order", "Delivery" - or null for one nobody has
+   *  named. Typed by whoever saved the card, never worked out. */
+  label: string | null
   createdAt: Date
+}
+
+/** A further postal address on a contact, beyond the one in their own columns.
+ *  The label says which it is: "Delivery", "Head office". */
+export type PersonAddress = PostalAddress & {
+  id: string
+  personId: string
+  label: string | null
 }
 
 export type Organisation = PostalAddress & {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { errorResponse } from '@/lib/utils'
-import { sweepAbandonedUploads, sweepRetention, sweepStalledSends } from '@/modules/unified-inbox/lib/retention'
+import { sweepAbandonedUploads, sweepJunk, sweepRetention, sweepStalledSends } from '@/modules/unified-inbox/lib/retention'
 import { sweepAttachmentFiling } from '@/modules/unified-inbox/lib/attachment-backfill'
 import { pruneDeliveries } from '@/modules/unified-inbox/lib/webhooks-db'
 import { pruneNudgeLedger } from '@/modules/unified-inbox/lib/push-db'
@@ -53,6 +53,11 @@ export async function GET(request: NextRequest) {
   // when they do.
   const wokenMentions = await wakeDueMentions()
   const retention = await sweepRetention({ deadline: Date.now() + BUDGET_MS })
+
+  // Junk that has sat in the folder past the window in Settings (30 days unless
+  // changed). Its own pass and its own batch, so a big spam backlog cannot eat
+  // the retention window's share.
+  const junk = await sweepJunk({ deadline: Date.now() + BUDGET_MS })
 
   // What was sent, or given up on, a month ago is a log rather than a queue,
   // and a log nobody prunes is a table nobody meant to create.
@@ -119,6 +124,8 @@ export async function GET(request: NextRequest) {
     attachmentsFiled: filing.filed,
     attachmentsToFile: filing.remaining,
     attachmentFilingFailures: filing.failures,
+    junkConversations: junk.conversations,
+    junkMore: junk.more,
     ...retention,
   })
 }

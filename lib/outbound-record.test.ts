@@ -15,7 +15,10 @@ vi.mock('./module-senders', () => senders)
 
 const db = vi.hoisted(() => ({
   getInbox: vi.fn(),
+  listInboxes: vi.fn(),
   createOutboundThread: vi.fn(),
+  findThreadByKey: vi.fn(),
+  touchThread: vi.fn(),
   insertOutboundMessage: vi.fn(),
   insertOutboundAttachment: vi.fn(),
   settleDelivery: vi.fn(),
@@ -50,6 +53,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   db.getInbox.mockResolvedValue({ id: 'inbox-1', address: 'purchasing@deskwell.co.uk' })
   db.createOutboundThread.mockResolvedValue('thread-1')
+  db.findThreadByKey.mockResolvedValue(null)
+  db.listInboxes.mockResolvedValue([{ id: 'inbox-1', address: 'purchasing@deskwell.co.uk' }])
   db.insertOutboundMessage.mockResolvedValue({ row: { id: 'message-1' }, created: true })
   media.getActiveMediaProvider.mockResolvedValue('B2')
   media.isMediaProviderConfigured.mockReturnValue(true)
@@ -150,5 +155,41 @@ describe('filing a module email', () => {
       expect.objectContaining({ hasAttachments: false }),
     )
     expect(db.insertOutboundAttachment).not.toHaveBeenCalled()
+  })
+})
+
+describe('a module naming the conversation', () => {
+  const ORDER_EMAIL = { ...EMAIL, moduleName: 'shop', threadKey: 'shop-order:ord-1', subject: 'Your order DW-1 is on its way' }
+
+  beforeEach(() => senders.getModuleCopyInboxId.mockResolvedValue('inbox-1'))
+
+  it('starts the thread under that name the first time', async () => {
+    await unifiedInboxOutboundRecord.record(ORDER_EMAIL)
+    expect(db.findThreadByKey).toHaveBeenCalledWith('inbox-1', 'shop-order:ord-1')
+    expect(db.createOutboundThread).toHaveBeenCalledWith(expect.objectContaining({ threadKey: 'shop-order:ord-1' }))
+    expect(db.touchThread).not.toHaveBeenCalled()
+  })
+
+  it('files a later email, whatever its subject, on the thread already there', async () => {
+    db.findThreadByKey.mockResolvedValue('thread-9')
+    await unifiedInboxOutboundRecord.record({ ...ORDER_EMAIL, subject: 'Your delivery is booked in for Tuesday' })
+    expect(db.createOutboundThread).not.toHaveBeenCalled()
+    expect(db.insertOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'thread-9' }))
+    expect(db.touchThread).toHaveBeenCalledWith('thread-9', expect.objectContaining({ direction: 'out', markUnread: false }))
+  })
+
+  it('still files a conversation each when nothing is named', async () => {
+    await unifiedInboxOutboundRecord.record(EMAIL)
+    expect(db.findThreadByKey).not.toHaveBeenCalled()
+    expect(db.createOutboundThread).toHaveBeenCalledWith(expect.objectContaining({ threadKey: null }))
+  })
+})
+
+describe('mail to our own inboxes', () => {
+  it('files no sent copy, because the received one arrives by itself', async () => {
+    senders.getModuleCopyInboxId.mockResolvedValue('inbox-1')
+    await unifiedInboxOutboundRecord.record({ ...EMAIL, moduleName: 'shop', to: ['Purchasing@Deskwell.co.uk'] })
+    expect(db.createOutboundThread).not.toHaveBeenCalled()
+    expect(db.insertOutboundMessage).not.toHaveBeenCalled()
   })
 })

@@ -13,7 +13,7 @@ import { channelLabel } from '@/modules/unified-inbox/lib/list'
 // would quietly detach a live conversation from the person having it. The
 // remove is offered on the ones a person put there.
 
-type Identity = { id: string; kind: string; value: string; source: string | null }
+type Identity = { id: string; kind: string; value: string; source: string | null; label?: string | null }
 
 type Props = {
   personId: string
@@ -28,6 +28,7 @@ export function ContactIdentities({ personId, identities, canEdit }: Props) {
   const [adding, setAdding] = useState(false)
   const [kind, setKind] = useState<'email' | 'phone'>('email')
   const [value, setValue] = useState('')
+  const [label, setLabel] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -55,9 +56,9 @@ export function ContactIdentities({ personId, identities, canEdit }: Props) {
     const ok = await call(`/api/m/unified-inbox/people/${personId}/identities`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind, value: value.trim() }),
+      body: JSON.stringify({ kind, value: value.trim(), label: label.trim() || undefined }),
     })
-    if (ok) { setValue(''); setAdding(false) }
+    if (ok) { setValue(''); setLabel(''); setAdding(false) }
   }
 
   const remove = async (identityId: string) => {
@@ -70,17 +71,17 @@ export function ContactIdentities({ personId, identities, canEdit }: Props) {
     <>
       <ul className="uin-ctx-list">
         {identities.map((identity) => (
-          <li key={identity.id} className="uin-ctx-row">
-            <div className="uin-ctx-main">
-              <span>{identity.value}</span>
-              {identity.kind !== 'email' && (
-                <span className="uin-tag">{channelLabel(identity.kind)}</span>
-              )}
-            </div>
+          <li
+            key={identity.id}
+            className={canEdit && identity.kind !== 'chat' ? 'uin-ctx-row uin-ctx-row--x' : 'uin-ctx-row'}
+          >
+            {/* The cross beside the address, the way it is on the context
+                rail, rather than a second line under it that said the same
+                thing for every address in the list. */}
             {canEdit && identity.kind !== 'chat' && (
               <button
                 type="button"
-                className="uin-ctx-remove"
+                className="uin-ctx-x"
                 disabled={busy}
                 onClick={() => { void remove(identity.id) }}
               >
@@ -88,6 +89,14 @@ export function ContactIdentities({ personId, identities, canEdit }: Props) {
                 <span className="sr-only">Take {identity.value} off this contact</span>
               </button>
             )}
+            <div className="uin-ctx-main">
+              <span>{identity.value}</span>
+              {identity.label ? (
+                <span className="uin-tag">{identity.label}</span>
+              ) : identity.kind !== 'email' && (
+                <span className="uin-tag">{channelLabel(identity.kind)}</span>
+              )}
+            </div>
           </li>
         ))}
         {identities.length === 0 && (
@@ -117,6 +126,15 @@ export function ContactIdentities({ personId, identities, canEdit }: Props) {
             autoFocus
             placeholder={kind === 'email' ? 'name@example.com' : '01234 567890'}
             onChange={(event) => setValue(event.target.value)}
+          />
+          <label className="sr-only" htmlFor="uin-identity-label">What it is for</label>
+          <input
+            id="uin-identity-label"
+            value={label}
+            disabled={busy}
+            maxLength={60}
+            placeholder="What for - Order, Delivery..."
+            onChange={(event) => setLabel(event.target.value)}
           />
           <div className="uin-ctx-add-actions">
             <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => { void add() }}>

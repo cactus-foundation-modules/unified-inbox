@@ -104,8 +104,9 @@ export type InboxParams = {
   contactsView: ContactsView
   /** The organisation whose own card is open, if any. */
   organisationId: string | null
-  /** The label the contacts list is narrowed to, if any. */
-  categoryId: string | null
+  /** The labels the contacts list is narrowed to, if any. A contact wearing
+   *  any one of them is shown. */
+  categoryIds: string[]
   /** Bringing an address book in from a file. */
   importing: boolean
   /** Whether the open card is being corrected rather than read. */
@@ -165,17 +166,26 @@ export type InboxParams = {
 
 export type ContactsView = 'people' | 'organisations'
 
-/** The four things the new-message button can start. `email` is what the button
- *  itself does; the other three are on the little menu beside it. */
-export type ComposeKind = 'email' | 'discussion' | 'sms' | 'call'
+/** The five things the new-message button can start. `email` is what the button
+ *  itself does; the other four are on the little menu beside it. */
+export type ComposeKind = 'email' | 'discussion' | 'sms' | 'call' | 'contact'
 
-const COMPOSE_KINDS: ComposeKind[] = ['email', 'discussion', 'sms', 'call']
+const COMPOSE_KINDS: ComposeKind[] = ['email', 'discussion', 'sms', 'call', 'contact']
 
 /** What `?compose=` says, read defensively. '1' is the email composer and
  *  predates the menu, so every link written before it still opens what it
  *  always opened. Anything else at all opens nothing: a value nobody wrote is a
  *  mistyped address rather than an instruction, and this screen has always
  *  treated it that way. */
+/** `?cat=` holds one label id or several joined with commas - ids are random
+ *  strings with no commas in them, so the comma is free to be the separator.
+ *  Capped, deduplicated and emptied of blanks, since it is typed into an
+ *  address by whoever likes. */
+export function parseCategoryIds(raw: string | undefined): string[] {
+  if (!raw) return []
+  return [...new Set(raw.split(',').map((id) => id.trim()).filter(Boolean))].slice(0, 50)
+}
+
 export function parseComposeKind(raw: string | undefined): ComposeKind | null {
   if (!raw) return null
   if (raw === '1') return 'email'
@@ -288,7 +298,7 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
     campaignId: sp.campaign ? sp.campaign : null,
     contactsView: sp.view === 'organisations' ? 'organisations' : 'people',
     organisationId: sp.org ? sp.org : null,
-    categoryId: sp.cat ? sp.cat : null,
+    categoryIds: parseCategoryIds(sp.cat),
     importing: sp.import === '1',
     editingContact: sp.edit === '1',
     status: rawStatus && TAB_STATUSES.includes(rawStatus) ? rawStatus : 'open',

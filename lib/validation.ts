@@ -350,6 +350,24 @@ export const CallBody = z.object({
  *  longer than this is a paste that went wrong rather than an address. */
 const line = z.string().trim().max(300)
 
+/** What a number or an address is for - "Order", "Delivery". A word or three. */
+const tag = z.string().trim().max(60)
+
+const LabelledPhoneBody = z.object({
+  label: tag.optional(),
+  value: z.string().trim().min(1).max(300),
+})
+
+const LabelledAddressBody = z.object({
+  label: tag.optional(),
+  addressLine1: line.optional(),
+  addressLine2: line.optional(),
+  addressCity: line.optional(),
+  addressCounty: line.optional(),
+  addressPostcode: line.optional(),
+  addressCountry: line.optional(),
+})
+
 export const ContactBody = z.object({
   firstName: line.optional(),
   lastName: line.optional(),
@@ -368,6 +386,11 @@ export const ContactBody = z.object({
   addressCounty: line.optional(),
   addressPostcode: line.optional(),
   addressCountry: line.optional(),
+  addressLabel: tag.optional(),
+  /** Every number, labelled. The whole list when present - see ContactDraft. */
+  phones: z.array(LabelledPhoneBody).max(20).optional(),
+  /** Every further address, labelled. The whole list when present. */
+  addresses: z.array(LabelledAddressBody).max(20).optional(),
   notes: z.string().trim().max(4000).optional(),
 })
 
@@ -377,6 +400,7 @@ export const ContactBody = z.object({
 export const IdentityBody = z.object({
   kind: z.enum(['email', 'phone']),
   value: z.string().trim().min(1).max(300),
+  label: tag.optional(),
 })
 
 export const OrganisationBody = z.object({

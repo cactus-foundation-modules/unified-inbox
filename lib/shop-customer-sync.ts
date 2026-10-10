@@ -1,11 +1,16 @@
 import { prisma } from '@/lib/db/prisma'
 import {
-  addPersonCategories, findOrCreateCategory, findPersonByIdentity, getPerson, getSettings, updatePerson,
+  addPersonAddressIfMissing, addPersonCategories, findOrCreateCategory, findPersonByIdentity, getPerson,
+  getSettings, updatePerson,
 } from './db'
 import { attachContactIdentities, resolveOrganisation, saveContact } from './contact-store'
 import { buildResolutionContext } from './identity'
 import { identityKey, shouldBecomePerson } from './people'
-import { fillInBlanks, isEmptyFillIn, shopCustomerDraft, type ShopOrderCustomer } from './shop-customers'
+import {
+  BILLING_LABEL, fillInBlanks, isEmptyFillIn, shopCustomerDraft, shopCustomerExtras,
+  type ShopOrderCustomer,
+} from './shop-customers'
+import { addressLines } from './contacts'
 
 // ---------------------------------------------------------------------------
 // Somebody paid for an order: put them in the address book.
@@ -98,9 +103,27 @@ export async function addShopCustomerToContacts(orderId: string): Promise<ShopCu
   if (!shouldBecomePerson(draft.email, gate)) return 'colleague'
 
   const categoryId = await findOrCreateCategory(SHOP_CUSTOMER_CATEGORY)
+  const extras = shopCustomerExtras(order)
   const existingId = await findPersonByIdentity([key])
   if (!existingId) {
-    await saveContact(null, draft, { origin: 'order', categoryMode: 'add', extraCategoryIds: [categoryId] })
+    const { personId } = await saveContact(null, draft, {
+      origin: 'order', categoryMode: 'add', extraCategoryIds: [categoryId],
+    })
+    // The delivery number and the delivery address, beside the order's own.
+    for (const phone of extras.phones) {
+      await attachContactIdentities(personId, { phone: phone.value, phoneLabel: phone.label }, 'order')
+    }
+    for (const address of extras.addresses) {
+      await addPersonAddressIfMissing(personId, {
+        label: address.label ?? null,
+        addressLine1: address.addressLine1 ?? null,
+        addressLine2: address.addressLine2 ?? null,
+        addressCity: address.addressCity ?? null,
+        addressCounty: address.addressCounty ?? null,
+        addressPostcode: address.addressPostcode ?? null,
+        addressCountry: address.addressCountry ?? null,
+      })
+    }
     return 'created'
   }
 
@@ -127,7 +150,35 @@ export async function addShopCustomerToContacts(orderId: string): Promise<ShopCu
   // ring about the order. One already held by somebody else is left there.
   // The address is not attached again - it is how they were found, and the
   // same one typed in capitals this time would otherwise sit on the card twice.
-  await attachContactIdentities(person.id, { phone: draft.phone }, 'order')
+  await attachContactIdentities(person.id, { phone: draft.phone, phoneLabel: draft.phoneLabel }, 'order')
+  for (const phone of extras.phones) {
+    await attachContactIdentities(person.id, { phone: phone.value, phoneLabel: phone.label }, 'order')
+  }
+  // Their billing and delivery addresses, each added only where the card does
+  // not already hold it. The billing one is not a "further" address when the
+  // card was blank and has just taken it as its own, so it is offered too and
+  // the same-address check turns it away.
+  const orderAddresses = [
+    ...(addressLines(draft).length > 0 ? [{
+      label: draft.addressLabel ?? BILLING_LABEL,
+      addressLine1: draft.addressLine1 ?? null,
+      addressLine2: draft.addressLine2 ?? null,
+      addressCity: draft.addressCity ?? null,
+      addressCounty: draft.addressCounty ?? null,
+      addressPostcode: draft.addressPostcode ?? null,
+      addressCountry: draft.addressCountry ?? null,
+    }] : []),
+    ...extras.addresses.map((a) => ({
+      label: a.label ?? null,
+      addressLine1: a.addressLine1 ?? null,
+      addressLine2: a.addressLine2 ?? null,
+      addressCity: a.addressCity ?? null,
+      addressCounty: a.addressCounty ?? null,
+      addressPostcode: a.addressPostcode ?? null,
+      addressCountry: a.addressCountry ?? null,
+    })),
+  ]
+  for (const address of orderAddresses) await addPersonAddressIfMissing(person.id, address)
   await addPersonCategories(person.id, [categoryId])
   return 'existing'
 }

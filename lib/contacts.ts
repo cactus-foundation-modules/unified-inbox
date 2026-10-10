@@ -67,7 +67,35 @@ export const CONTACT_FIELD_GROUPS: readonly ContactFieldGroup[] = [
 /** One contact as the form and the importer both hand it over. Every field
  *  optional: a card with nothing but a phone number on it is a perfectly good
  *  contact, and an import sheet with three columns is a perfectly good sheet. */
-export type ContactDraft = Partial<Record<ContactField, string>>
+export type ContactDraft = Partial<Record<ContactField, string>> & {
+  /** What the address in the ordinary boxes is - "Billing". */
+  addressLabel?: string
+  /** What the single `phone` box is for - "Order". */
+  phoneLabel?: string
+  /** Every phone number, each with what it is for. When this is present it is
+   *  the whole list: what is on it is what they have, and any number they held
+   *  that is not on it comes off. Left out, the single `phone` box is all that
+   *  is said and nothing is taken away - which is what an import means. */
+  phones?: LabelledPhone[]
+  /** Every further address, each with what it is for. Present means the whole
+   *  list, the same as `phones`. */
+  addresses?: LabelledAddress[]
+}
+
+/** A number and what it is for - "Order", "Delivery". The label is optional. */
+export type LabelledPhone = { label?: string; value: string }
+
+/** A further address and what it is for. Every line optional, because an
+ *  address with only a postcode on it is still worth keeping. */
+export type LabelledAddress = {
+  label?: string
+  addressLine1?: string
+  addressLine2?: string
+  addressCity?: string
+  addressCounty?: string
+  addressPostcode?: string
+  addressCountry?: string
+}
 
 // ---------------------------------------------------------------------------
 // Names.
@@ -124,6 +152,20 @@ export function addressLines(contact: {
     contact.addressLine1, contact.addressLine2, contact.addressCity,
     contact.addressCounty, contact.addressPostcode, contact.addressCountry,
   ].map((line) => line?.trim() ?? '').filter(Boolean)
+}
+
+/** An address reduced to what makes it the same one: the first line and the
+ *  postcode with case, spacing and punctuation gone. "10 High St, SW1A 1AA" and
+ *  "10 high st  SW1A1AA" are one address; compared as typed they are two. Null
+ *  for one with neither, which has nothing to be the same as. */
+export function addressKey(a: {
+  addressLine1?: string | null
+  addressPostcode?: string | null
+}): string | null {
+  const squash = (v: string | null | undefined) => (v ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+  const line = squash(a.addressLine1)
+  const post = squash(a.addressPostcode)
+  return line || post ? `${line}|${post}` : null
 }
 
 // ---------------------------------------------------------------------------

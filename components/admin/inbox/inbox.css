@@ -3121,6 +3121,38 @@
    by default in every browser, which a delivery address is not. */
 .uin-postal { display: grid; font-style: normal; }
 
+/* A number a line on the card: what it is for, the number, the cross. The two
+   boxes are borderless like every other box in the ruled block, with the same
+   hairline under each line. */
+.uin-multi-row {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.1rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.uin-multi-row input {
+  min-width: 0;
+  border: 0;
+  background: none;
+  padding: 0.35rem 0;
+  border-radius: 0;
+  font-size: 0.875rem;
+  color: var(--color-text);
+}
+.uin-multi-row input:focus { outline: none; box-shadow: none; }
+.uin-multi-label { font-weight: 600; color: var(--color-text-secondary); }
+.uin-multi-add { padding: 0.15rem 0; }
+/* A further address is its own ruled block inside the section, set in from the
+   edge so it reads as belonging to the heading above it. */
+.uin-multi-address {
+  display: grid;
+  margin: 0.4rem 0;
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--color-border);
+}
+
 /* ---- category chips on a card -------------------------------------------
    Ticks in the shape of chips, so what a contact is filed under reads as the
    same object on the card as it does on the row and in the filter above the
@@ -3157,10 +3189,52 @@
    same question as whether the window is. This pane sits beside the list, so a
    window query fired at 1100px on a pane that was 700px wide and split it into
    two columns that did not fit. */
-@container uin-body (min-width: 62rem) {
+@container uin-body (min-width: 44rem) {
   .uin-person { grid-template-columns: minmax(0, 1fr) minmax(14rem, 17rem); }
 }
 .uin-person-main { display: grid; gap: 0.625rem; min-width: 0; }
+/* The context rail is the same element a conversation hangs off the app grid,
+   so it arrives carrying 'grid-area: ctx'. There is no area of that name in
+   THIS grid, and a grid-area naming one that does not exist does not mean
+   "auto" - it makes the browser invent an extra column off the end for it. That
+   was the whole of the page's layout trouble: the details squeezed into a
+   narrow strip on the left, the rail flung to the far edge, and a river of
+   nothing between the two. Placed by the grid's own flow instead, and left to
+   be as tall as its contents rather than a box that scrolls inside a page that
+   already does. */
+.uin-person > .uin-ctx {
+  grid-area: auto;
+  overflow: visible;
+  min-width: 0;
+  border-top: 1px solid var(--color-border);
+  border-left: 0;
+}
+@container uin-body (min-width: 44rem) {
+  .uin-person > .uin-ctx { border-top: 0; border-left: 1px solid var(--color-border); }
+}
+/* The person's icons, on the name's own line between it and the way out. They
+   keep their place at every width, including a phone, where the shared rule
+   would drop a header's controls onto a row of their own. */
+.uin-thread-top > .uin-thread-actions.uin-person-actions {
+  flex: none;
+  margin-left: auto;
+  overflow: visible;
+  padding: 0;
+}
+/* The labels under a person's name sit on the left with the name. The shared
+   row is right-aligned for a list row, where the tags hang off the far edge. */
+.uin-thread-head > .uin-row-tags { justify-content: flex-start; overflow: visible; }
+/* The log under the timeline lines up with the blocks above it. Left bare it
+   was the one thing on the page with no inset. */
+.uin-person-main > details { padding: 0.5rem 0.875rem 0.75rem; }
+/* The two small forms the merge and split buttons open. They borrow the header
+   row's right-hand alignment, which put the search box and the Move them out
+   button at the far edge of the pane with the question over on the left. */
+.uin-ctx-add > .uin-thread-actions { margin-left: 0; flex-wrap: wrap; }
+.uin-ctx-add > .uin-thread-actions > input { flex: 1 1 12rem; width: auto; }
+/* Save and Cancel are a pair of buttons, not a stack of two bars the width of
+   the pane - the shared block is a grid, and a grid stretches what is in it. */
+.uin-card > .uin-actions { display: flex; flex-wrap: wrap; align-items: center; }
 /* What has happened with somebody, down one line with the icons on it. Ruled
    between entries rather than boxed: it is one record read downwards, and a
    card per entry is forty outlines on a busy contact. */
@@ -3177,6 +3251,12 @@
 .uin-timeline-icon { grid-area: icon; color: var(--color-text-muted); line-height: 1; padding-top: 0.15rem; }
 .uin-timeline-row .uin-ctx-main { grid-area: main; }
 .uin-timeline-row .uin-ctx-sub { grid-area: sub; }
+
+/* A postal address with what it is for above it, and a run of them one under
+   another. The label is a small tag rather than a heading: it is a word about
+   the address, not a section of the page. */
+.uin-address-block { display: grid; gap: 0.2rem; justify-items: start; }
+.uin-address-block + .uin-address-block { margin-top: 0.4rem; padding-top: 0.5rem; border-top: 1px solid var(--color-border); width: 100%; }
 
 /* ---- campaigns ---------------------------------------------------------- */
 /* The same email to a great many people, slowly. The screen is the mail
@@ -4870,6 +4950,9 @@
   box-shadow: var(--uin-shine);
 }
 .uin-list-tools > .uin-dropdown { display: inline-flex; }
+/* A group of one is a circle, not a pill with a gap in it. */
+.uin-list-tools-single { padding: 0; width: var(--uin-pill-h); justify-content: center; }
+.uin-list-tools-single .uin-icon-btn { width: 100%; height: 100%; border-radius: var(--radius-full, 9999px); }
 .uin-list-tools .uin-icon-btn {
   width: 2.35rem;
   height: 1.9rem;
@@ -5370,6 +5453,7 @@
   }
   .uin-search-row { flex-wrap: nowrap; }
   .uin-search-row > .uin-list-tools { order: -1; }
+  .uin-search-row > .uin-list-tools.uin-junk-tools { order: 0; }
   .uin-search-row > .uin-find-compose { display: inline-flex; order: 2; }
   /* Only while the list is the thing on the screen: with a conversation open
      the list's column is hidden but still in the markup, so without the

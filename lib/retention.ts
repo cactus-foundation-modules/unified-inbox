@@ -12,6 +12,7 @@ import {
   pruneOrphanPeople,
   retentionDueCounts,
   storedObjectsForThreads,
+  threadsDueForJunkSweep,
   threadsDueForRetention,
 } from './db'
 
@@ -149,6 +150,51 @@ export async function sweepRetention(opts: { deadline: number; now?: Date } = { 
   }
 
   await markRetentionRun()
+  return outcome
+}
+
+/** Junk conversations removed per pass. */
+export const JUNK_BATCH = 50
+
+/** The date a junk conversation must have been junk since to be swept. Null when
+ *  the clean-up is switched off. Pure, like retentionCutoff. */
+export function junkCutoff(days: number | null, now: Date): Date | null {
+  if (days === null || !Number.isFinite(days) || days <= 0) return null
+  return new Date(now.getTime() - Math.floor(days) * 24 * 60 * 60 * 1000)
+}
+
+/**
+ * One pass of the junk clean-up: what has sat in the junk folder longer than the
+ * window is removed for good, bytes first and rows second, in a batch, for
+ * retention's reasons (see sweepRetention). Does nothing when the window is
+ * blank. Selection rules live in threadsDueForJunkSweep.
+ */
+export async function sweepJunk(opts: { deadline: number; now?: Date } = { deadline: Date.now() + 18_000 }): Promise<{
+  conversations: number
+  storedObjects: number
+  storedObjectFailures: number
+  more: boolean
+}> {
+  const outcome = { conversations: 0, storedObjects: 0, storedObjectFailures: 0, more: false }
+  const settings = await getSettings()
+  const cutoff = junkCutoff(settings.junkRetentionDays, opts.now ?? new Date())
+  if (!cutoff) return outcome
+
+  const ids = await threadsDueForJunkSweep(cutoff, JUNK_BATCH)
+  outcome.more = ids.length === JUNK_BATCH
+  if (ids.length === 0) return outcome
+
+  for (const object of await storedObjectsForThreads(ids)) {
+    if (Date.now() > opts.deadline) break
+    try {
+      await releaseStoredObject(object)
+      outcome.storedObjects += 1
+    } catch (err) {
+      outcome.storedObjectFailures += 1
+      console.warn('[unified-inbox] the junk clean-up could not remove a stored attachment:', err)
+    }
+  }
+  outcome.conversations = await deleteThreads(ids)
   return outcome
 }
 

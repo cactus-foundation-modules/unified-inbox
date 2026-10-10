@@ -4,7 +4,9 @@ import { createContext, useCallback, useContext, useState } from 'react'
 import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { AdminTooltip } from '@/components/admin/Tooltip'
 import { ConfirmDialog } from './ConfirmDialog'
+import { BinIcon, DownloadIcon, MergeIcon, PenIcon, SplitIcon } from './icons'
 
 // What can be done to a person beyond correcting their card: the two operations
 // that move addresses about, and the two that answer a request from the person
@@ -311,30 +313,48 @@ const PANELS_ID = 'uin-person-panels'
  *  person's name. */
 export function PersonActionsBar() {
   const a = usePersonActions()
+  const icon = 'uin-icon-btn uin-icon-btn-framed'
   return (
-    <div className="uin-thread-actions">
-      <Link className="btn btn-secondary btn-sm" href={a.editHref}>Edit their details</Link>
+    <div className="uin-thread-actions uin-person-actions">
+      <AdminTooltip body="Edit their details">
+        <Link className={icon} href={a.editHref}>
+          {PenIcon}
+          <span className="sr-only">Edit their details</span>
+        </Link>
+      </AdminTooltip>
       {a.canManage && (
         <>
-          <button type="button" className="btn btn-secondary btn-sm" disabled={a.busy}
-                  onClick={a.toggleMerging} aria-expanded={a.merging} aria-controls={PANELS_ID}>
-            Merge somebody in
-          </button>
-          {a.identities.length > 1 && (
-            <button type="button" className="btn btn-secondary btn-sm" disabled={a.busy}
-                    onClick={a.toggleSplitting} aria-expanded={a.splitting} aria-controls={PANELS_ID}>
-              Split them apart
+          <AdminTooltip body="Merge somebody in">
+            <button type="button" className={icon} disabled={a.busy}
+                    onClick={a.toggleMerging} aria-expanded={a.merging} aria-controls={PANELS_ID}>
+              {MergeIcon}
+              <span className="sr-only">Merge somebody in</span>
             </button>
+          </AdminTooltip>
+          {a.identities.length > 1 && (
+            <AdminTooltip body="Split them apart">
+              <button type="button" className={icon} disabled={a.busy}
+                      onClick={a.toggleSplitting} aria-expanded={a.splitting} aria-controls={PANELS_ID}>
+                {SplitIcon}
+                <span className="sr-only">Split them apart</span>
+              </button>
+            </AdminTooltip>
           )}
           {/* Both of these answer a request from the person themselves, which
               is why they sit together and behind the strongest permission. */}
-          <a className="btn btn-secondary btn-sm" href={`/api/m/unified-inbox/people/${a.personId}/export`}>
-            Download everything we hold
-          </a>
-          <button type="button" className="btn btn-secondary btn-sm" disabled={a.busy}
-                  onClick={a.openErase} aria-expanded={a.erasing} aria-controls={PANELS_ID}>
-            Erase them
-          </button>
+          <AdminTooltip body="Download everything we hold">
+            <a className={icon} href={`/api/m/unified-inbox/people/${a.personId}/export`}>
+              {DownloadIcon}
+              <span className="sr-only">Download everything we hold</span>
+            </a>
+          </AdminTooltip>
+          <AdminTooltip body="Erase them">
+            <button type="button" className={icon} disabled={a.busy}
+                    onClick={a.openErase} aria-expanded={a.erasing} aria-controls={PANELS_ID}>
+              {BinIcon}
+              <span className="sr-only">Erase them</span>
+            </button>
+          </AdminTooltip>
         </>
       )}
     </div>

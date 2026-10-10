@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
   const categoryId = sp.get('category')
 
   const { rows, total } = await listPeople({
-    search, page, perPage, sort, organisationId, categoryId,
+    search, page, perPage, sort, organisationId, categoryIds: categoryId ? [categoryId] : [],
   })
   // One query for the whole page's labels rather than one per row.
   const categories = await categoriesForPeople(rows.map((r) => r.id))

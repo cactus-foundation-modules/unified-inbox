@@ -5,6 +5,7 @@ import {
   fillInBlanks,
   isEmptyFillIn,
   shopCustomerDraft,
+  shopCustomerExtras,
   type ShopOrderCustomer,
 } from './shop-customers'
 import type { Person } from './types'
@@ -51,6 +52,7 @@ function person(overrides: Partial<Person> = {}): Person {
     notes: null,
     origin: 'mail',
     mergedIntoId: null,
+    addressLabel: null,
     addressLine1: null,
     addressLine2: null,
     addressCity: null,
@@ -70,6 +72,8 @@ describe('the card an order makes', () => {
       lastName: 'Smith',
       email: 'jane@acme.co.uk',
       phone: '07700 900123',
+      phoneLabel: 'Order',
+      addressLabel: 'Billing',
       organisation: 'Acme Ltd',
       addressLine1: '12 High Street',
       addressLine2: 'Unit 4',
@@ -164,6 +168,7 @@ describe('filling in somebody already here', () => {
     expect(fill.details).toEqual({
       firstName: 'Jane',
       lastName: 'Smith',
+      addressLabel: 'Billing',
       addressLine1: '12 High Street',
       addressLine2: 'Unit 4',
       addressCity: 'Leeds',
@@ -202,5 +207,32 @@ describe('filling in somebody already here', () => {
   it('gives an address to a card that had none', () => {
     const fill = fillInBlanks(person({ primaryEmail: null }), draft)
     expect(fill.primaryEmail).toBe('jane@acme.co.uk')
+  })
+})
+
+describe('what an order says beyond the card\'s own boxes', () => {
+  it('keeps the delivery number and the delivery address, labelled', () => {
+    expect(shopCustomerExtras(order())).toEqual({
+      phones: [{ label: 'Delivery', value: '0113 000 0000' }],
+      addresses: [{
+        label: 'Delivery',
+        addressLine1: 'Goods In',
+        addressLine2: 'Dock 3',
+        addressCity: 'Leeds',
+        addressCounty: 'West Yorkshire',
+        addressPostcode: 'LS9 9ZZ',
+        addressCountry: 'United Kingdom',
+      }],
+    })
+  })
+
+  it('says nothing twice when delivery is the billing address and number', () => {
+    const same = order({ shippingAddress: ADDRESS, customerPhone: ADDRESS.phone })
+    expect(shopCustomerExtras(same)).toEqual({ phones: [], addresses: [] })
+  })
+
+  it('calls the address on the card delivery when there is no billing one', () => {
+    expect(shopCustomerDraft(order({ billingAddress: null }))?.addressLabel).toBe('Delivery')
+    expect(shopCustomerExtras(order({ billingAddress: null })).addresses).toEqual([])
   })
 })

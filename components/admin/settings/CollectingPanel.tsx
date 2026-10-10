@@ -62,6 +62,7 @@ export function CollectingPanel({ settings, inboxes, connections, retention, blo
         backfillMonths: Number(draft.backfillMonths) || 12,
         retentionMonths: draft.retentionMonths === null ? null : Number(draft.retentionMonths) || null,
         retentionKeepLinked: draft.retentionKeepLinked,
+        junkRetentionDays: draft.junkRetentionDays === null ? null : Number(draft.junkRetentionDays) || null,
         attachmentFetch: draft.attachmentFetch,
         autoLink: draft.autoLink,
         newestFirst: draft.newestFirst,
@@ -142,6 +143,26 @@ export function CollectingPanel({ settings, inboxes, connections, retention, blo
           onChange={(retentionKeepLinked) => setDraft({ ...draft, retentionKeepLinked })}
           hint="Leave this on unless you have a reason not to. It is what stops a tidy-up aimed at old mailing lists taking the correspondence behind a disputed invoice with it."
         />
+        <FieldRow>
+          <div className="field">
+            <label htmlFor={`${fid}-junk`}>Delete junk older than <span style={{ ...MUTED, fontWeight: 400 }}>(days)</span></label>
+            <input
+              id={`${fid}-junk`}
+              type="number"
+              min={1}
+              max={365}
+              value={draft.junkRetentionDays ?? ''}
+              placeholder="Keep junk"
+              onChange={(e) => setDraft({ ...draft, junkRetentionDays: e.target.value === '' ? null : Number(e.target.value) })}
+            />
+            <span className="field-hint">
+              30 unless you change it. Anything that has sat in the junk folder this long, with nothing new
+              said on it since, is removed for good in the nightly tidy-up. Clear the box to keep junk
+              until somebody empties it. Conversations attached to an order, purchase order or quote are
+              never removed this way.
+            </span>
+          </div>
+        </FieldRow>
         {retention && windowEdited && (
           <div className="alert alert-info">
             <p style={{ margin: 0 }}>

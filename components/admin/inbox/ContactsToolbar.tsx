@@ -1,11 +1,13 @@
 import Link from 'next/link'
 import { QueryForm } from './QueryForm'
 import { inboxHref, NEW_CONTACT, type ContactsView } from '@/modules/unified-inbox/lib/list'
-import { PenIcon, SearchIcon } from './icons'
+import { AdminTooltip } from '@/components/admin/Tooltip'
+import { ContactCategoryFilter } from './ContactCategoryFilter'
+import { ImportIcon, PenIcon, SearchIcon, SortIcon } from './icons'
 
 // The address book's own head: which half of it is being listed, a search across
-// it, the labels it is filed under, and the two ways of putting something into
-// it.
+// it, the labels it can be narrowed to and the order it is read in, and the ways of
+// putting something into it.
 //
 // The same shape as the tab row over the conversations, and for the same
 // reason: it is the same kind of choice one level down - what the list under it
@@ -32,8 +34,11 @@ type Props = {
    *  in each. Empty on a site that has never made one, where the row is not
    *  drawn at all rather than drawn empty. */
   categories: Array<{ id: string; name: string; people: number }>
-  /** The one being filtered on, if any. */
-  categoryId: string | null
+  /** The ones being filtered on, if any. */
+  categoryIds: string[]
+  /** Which end of the list to start at: by date added, newest first unless
+   *  this says otherwise. */
+  oldestFirst: boolean
   /** Whether this head carries its own search box. Off on a search's own
    *  screen, where the same box is already drawn across the top of the whole
    *  thing: two search boxes an inch apart, one of which quietly asks a
@@ -45,7 +50,7 @@ type Props = {
 
 export function ContactsToolbar({
   base, params, view, search, peopleCount, organisationCount, canEdit, canImport,
-  categories, categoryId, showSearch,
+  categories, categoryIds, oldestFirst, showSearch,
 }: Props) {
   // Any change starts again at page one and closes whatever card was open - it
   // belongs to the list being left.
@@ -74,9 +79,10 @@ export function ContactsToolbar({
     </Link>
   )
 
-  // Only over the people, and only where there are any: a label is something on
-  // a contact, and a row of filters that narrows nothing is a row in the way.
-  const showCategories = view === 'people' && categories.length > 0
+  // The labels are a filter on people, and only where there are any: a label
+  // is something on a contact, and a button that narrows nothing is in the way.
+  const showFilter = view === 'people' && categories.length > 0
+  const withCategories = (ids: string[]) => ({ cat: ids.length > 0 ? ids.join(',') : null, ...reset })
 
   return (
     <>
@@ -95,25 +101,64 @@ export function ContactsToolbar({
             <button type="submit" className="sr-only">Search</button>
           </QueryForm>
         )}
+        {/* The import, a circle of its own to the left of the filter and the
+            order: bringing a file in is an errand rather than a way of looking
+            at the list, so it is not one of their pair. */}
         {canImport && view === 'people' && (
-          <Link
-            className="btn btn-secondary btn-sm"
-            href={inboxHref(base, params, { import: '1', person: null, org: null, edit: null })}
-          >
-            Import
-          </Link>
+          <div className="uin-list-tools uin-list-tools-single" role="group" aria-label="Import">
+            <AdminTooltip body="Import contacts from a file">
+              <Link
+                className="uin-icon-btn"
+                href={inboxHref(base, params, { import: '1', person: null, org: null, edit: null })}
+              >
+                {ImportIcon}
+                <span className="sr-only">Import contacts from a file</span>
+              </Link>
+            </AdminTooltip>
+          </div>
         )}
-        {canEdit && (
+        {/* Which labels to show, and which end of the list to read from - the
+            same pair the conversation lists carry, with the same shape. */}
+        <div className="uin-list-tools" role="group" aria-label="Filter and order">
+          {showFilter && (
+            <ContactCategoryFilter
+              clearHref={inboxHref(base, params, withCategories([]))}
+              choices={categories.map((category) => ({
+                id: category.id,
+                name: category.name,
+                people: category.people,
+                selected: categoryIds.includes(category.id),
+                href: inboxHref(base, params, withCategories(
+                  categoryIds.includes(category.id)
+                    ? categoryIds.filter((id) => id !== category.id)
+                    : [...categoryIds, category.id],
+                )),
+              }))}
+            />
+          )}
+          <AdminTooltip body={oldestFirst ? 'Oldest added first. Press for newest added first.' : 'Newest added first. Press for oldest added first.'}>
+            <Link
+              className="uin-icon-btn"
+              href={inboxHref(base, params, { sort: oldestFirst ? null : 'oldest', ...reset })}
+              aria-pressed={oldestFirst}
+            >
+              {SortIcon}
+              <span className="sr-only">
+                {oldestFirst ? 'Showing oldest added first. Show newest added first.' : 'Showing newest added first. Show oldest added first.'}
+              </span>
+            </Link>
+          </AdminTooltip>
+        </div>
+        {/* A new PERSON is started from the new-message menu's Contact entry,
+            wherever somebody happens to be standing. Organisations have no
+            such entry, so theirs stays here. */}
+        {canEdit && view === 'organisations' && (
           <Link
             className="uin-compose"
-            href={view === 'organisations'
-              ? inboxHref(base, params, { org: NEW_CONTACT, person: null, import: null, edit: null })
-              : inboxHref(base, params, { person: NEW_CONTACT, org: null, import: null, edit: null })}
+            href={inboxHref(base, params, { org: NEW_CONTACT, person: null, import: null, edit: null })}
           >
             {PenIcon}
-            <span className="uin-compose-words">
-              {view === 'organisations' ? 'New organisation' : 'New contact'}
-            </span>
+            <span className="uin-compose-words">New organisation</span>
           </Link>
         )}
       </div>
@@ -122,39 +167,6 @@ export function ContactsToolbar({
         {half('people', 'People', peopleCount)}
         {half('organisations', 'Organisations', organisationCount)}
       </div>
-
-      {showCategories && (
-        <div className="uin-toolbar">
-          <Link
-            className="uin-chip"
-            aria-current={categoryId ? undefined : 'true'}
-            href={inboxHref(base, params, { cat: null, ...reset })}
-          >
-            Everybody
-          </Link>
-          {categories.map((category) => (
-            <Link
-              key={category.id}
-              className="uin-chip"
-              aria-current={categoryId === category.id ? 'true' : undefined}
-              href={inboxHref(base, params, {
-                // Pressing the one already on takes the filter off, which is what
-                // pressing a pressed thing should do.
-                cat: categoryId === category.id ? null : category.id,
-                ...reset,
-              })}
-            >
-              {category.name}
-              {category.people > 0 && (
-                <span className="uin-tab-count">
-                  {category.people > 999 ? '999+' : category.people}
-                  <span className="sr-only"> contacts</span>
-                </span>
-              )}
-            </Link>
-          ))}
-        </div>
-      )}
     </>
   )
 }

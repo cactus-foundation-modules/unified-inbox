@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import Link from 'next/link'
-import { ChevronDownIcon, ChevronUpIcon, NoteIcon, PenIcon, PhoneIcon, SmsIcon } from './icons'
+import { ChevronDownIcon, ChevronUpIcon, NoteIcon, PenIcon, PeopleIcon, PhoneIcon, SmsIcon } from './icons'
 import { LinkBusy } from './NavProgress'
 
-// Write a message, and the three other things you might have meant.
+// Write a message, and the four other things you might have meant.
 //
 // A split button rather than four buttons: writing an email is what this is
 // pressed for ninety-nine times out of a hundred, and burying it one level down
@@ -45,6 +45,7 @@ const ICONS: Record<string, React.ReactNode> = {
   discussion: NoteIcon,
   call: PhoneIcon,
   sms: SmsIcon,
+  contact: PeopleIcon,
 }
 
 /** How wide the menu is drawn, in pixels, so the maths below can keep it on
@@ -53,7 +54,7 @@ const MENU_WIDTH = 240
 /** Roughly what three entries come to. Only used to decide whether there is
  *  room below the button or whether it should open upwards - being a little out
  *  costs a slightly early flip, not a menu off the bottom of the window. */
-const MENU_HEIGHT = 200
+const MENU_HEIGHT = 260
 const GAP = 6
 
 export function ComposeMenu({ composeHref, entries, upward = false, className }: Props) {

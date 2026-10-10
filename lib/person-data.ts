@@ -9,6 +9,7 @@ import {
   getPerson,
   linksForPerson,
   listIdentities,
+  listPersonAddresses,
   listPersonEvents,
   outboundLogForAddresses,
   personErasePreview,
@@ -16,6 +17,7 @@ import {
   threadIdsForPerson,
   type PersonErasePreview,
 } from './db'
+import { addressLines } from './contacts'
 import { addressesForPerson } from './identity'
 
 // ---------------------------------------------------------------------------
@@ -51,7 +53,10 @@ export type PersonExport = {
     notes: string | null
     knownSince: string
   }
-  identities: Array<{ kind: string; value: string; firstSeen: string }>
+  identities: Array<{ kind: string; value: string; label: string | null; firstSeen: string }>
+  /** Where they are: the address on the card and every further one, each with
+   *  what it is for. */
+  postalAddresses: Array<{ label: string | null; lines: string[] }>
   conversations: Array<{
     id: string
     channel: string
@@ -92,8 +97,9 @@ export async function exportPerson(personId: string): Promise<PersonExport | nul
   const person = await getPerson(personId)
   if (!person) return null
 
-  const [identities, threads, links, events, addresses] = await Promise.all([
+  const [identities, postal, threads, links, events, addresses] = await Promise.all([
     listIdentities(personId),
+    listPersonAddresses(personId),
     exportThreadsForPerson(personId),
     linksForPerson(personId),
     listPersonEvents(personId),
@@ -126,8 +132,13 @@ export async function exportPerson(personId: string): Promise<PersonExport | nul
     identities: identities.map((i) => ({
       kind: i.kind,
       value: i.value,
+      label: i.label,
       firstSeen: i.createdAt.toISOString(),
     })),
+    postalAddresses: [
+      { label: person.addressLabel, lines: addressLines(person) },
+      ...postal.map((a) => ({ label: a.label, lines: addressLines(a) })),
+    ].filter((a) => a.lines.length > 0),
     conversations: threads.map((thread) => ({
       id: thread.id,
       channel: thread.channel,

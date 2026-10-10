@@ -1,5 +1,8 @@
 import { z } from 'zod'
-import { addressLines, contactDisplayName, splitName, type ContactDraft } from './contacts'
+import {
+  addressKey, addressLines, contactDisplayName, splitName,
+  type ContactDraft, type LabelledAddress, type LabelledPhone,
+} from './contacts'
 import type { PersonDetails } from './db'
 import type { Person } from './types'
 
@@ -158,6 +161,11 @@ export function shopCustomerDraft(order: ShopOrderCustomer): ContactDraft | null
     ...nameOf(order, billing),
     email,
     phone: field(order.customerPhone) ?? field(billing?.phone),
+    phoneLabel: ORDER_PHONE_LABEL,
+    // Which of the two this is. An order with no billing address of its own
+    // means "bill me where you deliver", so what is on the card is the delivery
+    // address and is called that - calling it billing would be making it up.
+    addressLabel: hasOwnBilling(order) ? BILLING_LABEL : DELIVERY_LABEL,
     // The company as the shop's own invoice names it: the one given at the
     // checkout, or one left on the address by an order written before that
     // was a separate question.
@@ -169,6 +177,56 @@ export function shopCustomerDraft(order: ShopOrderCustomer): ContactDraft | null
     addressPostcode: field(billing?.postcode),
     addressCountry: field(countryName(billing?.country)),
   }
+}
+
+export const ORDER_PHONE_LABEL = 'Order'
+export const DELIVERY_PHONE_LABEL = 'Delivery'
+export const BILLING_LABEL = 'Billing'
+export const DELIVERY_LABEL = 'Delivery'
+
+/** Whether the order has a billing address of its own that can be read. */
+function hasOwnBilling(order: Pick<ShopOrderCustomer, 'billingAddress'>): boolean {
+  return order.billingAddress !== null && order.billingAddress !== undefined
+    && readAddress(order.billingAddress) !== null
+}
+
+/** What an order says beyond the one number and one address the card has room
+ *  for in its ordinary boxes: the number of whoever is on site for the
+ *  delivery, and the delivery address where it is not the billing one. Each
+ *  labelled, because "Delivery" is the whole of why they are kept apart. */
+export type ShopCustomerExtras = { phones: LabelledPhone[]; addresses: LabelledAddress[] }
+
+export function shopCustomerExtras(order: ShopOrderCustomer): ShopCustomerExtras {
+  const shipping = readAddress(order.shippingAddress)
+  const extras: ShopCustomerExtras = { phones: [], addresses: [] }
+  if (!shipping) return extras
+
+  const orderPhone = field(order.customerPhone) ?? field(billingAddressOf(order)?.phone)
+  const deliveryPhone = field(shipping.phone)
+  if (deliveryPhone && deliveryPhone.replace(/\D/g, '') !== (orderPhone ?? '').replace(/\D/g, '')) {
+    extras.phones.push({ label: DELIVERY_PHONE_LABEL, value: deliveryPhone })
+  }
+
+  // Only worth saying separately when billing is its own address and this is a
+  // different place - otherwise it is already on the card as the address.
+  if (hasOwnBilling(order)) {
+    const delivery: LabelledAddress = {
+      label: DELIVERY_LABEL,
+      addressLine1: field(shipping.line1),
+      addressLine2: field(shipping.line2),
+      addressCity: field(shipping.city),
+      addressCounty: field(shipping.county),
+      addressPostcode: field(shipping.postcode),
+      addressCountry: field(countryName(shipping.country)),
+    }
+    const billing = billingAddressOf(order)
+    const sameAsBilling = addressKey(delivery) !== null
+      && addressKey(delivery) === addressKey({
+        addressLine1: billing?.line1, addressPostcode: billing?.postcode,
+      })
+    if (addressKey(delivery) !== null && !sameAsBilling) extras.addresses.push(delivery)
+  }
+  return extras
 }
 
 /** What an order may write onto somebody who is already in the address book. */
@@ -215,7 +273,7 @@ export function fillInBlanks(person: Person, draft: ContactDraft): ContactFillIn
     addressCountry: draft.addressCountry ?? null,
   }
   if (addressLines(person).length === 0 && addressLines(draftAddress).length > 0) {
-    Object.assign(fill.details, draftAddress)
+    Object.assign(fill.details, draftAddress, { addressLabel: draft.addressLabel ?? null })
   }
 
   if (!person.primaryEmail && draft.email) fill.primaryEmail = draft.email

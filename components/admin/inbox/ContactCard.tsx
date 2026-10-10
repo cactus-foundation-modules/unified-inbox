@@ -6,8 +6,10 @@ import { useRouter } from 'next/navigation'
 import { inboxHref } from '@/modules/unified-inbox/lib/list'
 import { joinCategories, splitCategories, type ContactDraft } from '@/modules/unified-inbox/lib/contacts'
 import { CardField, CardNotes, CardSection } from './ContactFieldRows'
+import { AddressBlocks, LabelSuggestions, PhoneRows } from './ContactMultiFields'
 import { CategoryPicker } from './CategoryPicker'
 import { BackIcon, CloseIcon } from './icons'
+import { ComposeCancel, ComposeModal } from './ComposeModal'
 
 // One contact, written down.
 //
@@ -32,13 +34,33 @@ type Props = {
   /** Where to go when it saves. A new contact opens on their own page; an edit
    *  stays exactly where it was. */
   onSaved?: () => void
+  /** Drawn as a dialog over the list, the way a discussion or a text is, rather
+   *  than in the reading pane. Only ever for a new contact: that is what the
+   *  new-message menu starts, and an edit belongs beside the person it edits. */
+  modal?: boolean
 }
 
 const EMPTY: ContactDraft = {}
 
-export function ContactCard({ base, params, personId, initial, onSaved }: Props) {
+/** What goes over the wire. The numbers and addresses are always sent, as the
+ *  whole list, with the rows nobody filled in taken out: an empty line on the
+ *  card is a place to type, not a number. Sent as a list even when it is empty,
+ *  because an empty list on a card is somebody having taken the last one off. */
+function toBody(draft: ContactDraft) {
+  const { phone: _phone, phones, addresses, ...rest } = draft
+  return {
+    ...rest,
+    phones: (phones ?? []).filter((p) => p.value.trim() !== ''),
+    addresses: (addresses ?? []).filter((a) =>
+      [a.addressLine1, a.addressLine2, a.addressCity, a.addressCounty, a.addressPostcode, a.addressCountry]
+        .some((line) => (line ?? '').trim() !== '')),
+  }
+}
+
+export function ContactCard({ base, params, personId, initial, onSaved, modal = false }: Props) {
   const router = useRouter()
   const listId = useId()
+  const labelListId = `${listId}-labels`
   const [draft, setDraft] = useState<ContactDraft>({ ...EMPTY, ...initial })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -90,7 +112,7 @@ export function ContactCard({ base, params, personId, initial, onSaved }: Props)
         {
           method: personId ? 'PATCH' : 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(draft),
+          body: JSON.stringify(toBody(draft)),
         },
       )
       const body = await response.json().catch(() => null) as
@@ -116,6 +138,117 @@ export function ContactCard({ base, params, personId, initial, onSaved }: Props)
     }
   }
 
+  // Where the cross and Cancel go in the dialog: back to the list, with nothing
+  // started. Anything typed is worth a question first.
+  const closeHref = inboxHref(base, params, {})
+  const guard = Object.values(draft).some((value) => typeof value === 'string' && value.trim() !== '')
+    || (draft.phones ?? []).some((p) => p.value.trim() !== '')
+    || (draft.addresses ?? []).length > 0
+
+  const form = (askToLeave: () => void) => (
+    <div className="uin-card">
+      {error && <div className="alert alert-danger" role="alert">{error}</div>}
+      {refused.length > 0 && (
+        <div className="alert alert-info" role="status">
+          Everything else saved, but {refused.join(' and ')} already belongs to somebody
+          else here, so it was left with them. Merge the two if they are the same person.
+        </div>
+      )}
+
+      <CardSection label="Who they are">
+        <CardField label="First name" value={draft.firstName ?? ''} onChange={set('firstName')} autoFocus />
+        <CardField label="Last name" value={draft.lastName ?? ''} onChange={set('lastName')} />
+        <CardField label="Job title" value={draft.jobTitle ?? ''} onChange={set('jobTitle')} />
+        <div className="uin-field-row">
+          <label htmlFor={`${listId}-org`}>Organisation</label>
+          <div className="uin-field-control">
+            <input
+              id={`${listId}-org`}
+              list={listId}
+              value={draft.organisation ?? ''}
+              onChange={(event) => set('organisation')(event.target.value)}
+            />
+            <datalist id={listId}>
+              {organisations.map((name) => <option key={name} value={name} />)}
+            </datalist>
+          </div>
+        </div>
+        <CategoryPicker
+          available={categories}
+          value={splitCategories(draft.categories)}
+          disabled={busy}
+          /* Always sent, even when it comes to nothing: an empty box on a
+             form means "none of them", which is a thing somebody means. */
+          onChange={(names) => setDraft((current) => ({
+            ...current, categories: joinCategories(names),
+          }))}
+        />
+      </CardSection>
+
+      <CardSection label="How to reach them">
+        <CardField label="Email" type="email" value={draft.email ?? ''} onChange={set('email')} />
+        <PhoneRows
+          phones={draft.phones ?? []}
+          onChange={(phones) => setDraft((current) => ({ ...current, phones }))}
+          labelListId={labelListId}
+          disabled={busy}
+        />
+        <CardField label="Website" type="url" value={draft.website ?? ''} onChange={set('website')} />
+      </CardSection>
+
+      <CardSection label="Where they are">
+        <CardField
+          label="What for"
+          value={draft.addressLabel ?? ''}
+          onChange={set('addressLabel')}
+          placeholder="Billing, Delivery..."
+          listId={labelListId}
+        />
+        <CardField label="Address" value={draft.addressLine1 ?? ''} onChange={set('addressLine1')} />
+        <CardField label="Address 2" value={draft.addressLine2 ?? ''} onChange={set('addressLine2')} />
+        <CardField label="Town" value={draft.addressCity ?? ''} onChange={set('addressCity')} />
+        <CardField label="County" value={draft.addressCounty ?? ''} onChange={set('addressCounty')} />
+        <CardField label="Postcode" value={draft.addressPostcode ?? ''} onChange={set('addressPostcode')} />
+        <CardField label="Country" value={draft.addressCountry ?? ''} onChange={set('addressCountry')} />
+        <AddressBlocks
+          addresses={draft.addresses ?? []}
+          onChange={(addresses) => setDraft((current) => ({ ...current, addresses }))}
+          labelListId={labelListId}
+          disabled={busy}
+        />
+      </CardSection>
+      <LabelSuggestions id={labelListId} />
+
+      <CardNotes value={draft.notes ?? ''} onChange={set('notes')} disabled={busy} />
+
+      <div className="uin-actions">
+        <button type="button" className="btn btn-primary btn-sm" onClick={save} disabled={busy}>
+          {busy ? 'Saving...' : personId ? 'Save changes' : 'Add this contact'}
+        </button>
+        <Link
+          className="btn btn-secondary btn-sm"
+          href={inboxHref(base, params, personId ? { person: personId } : { person: null, import: null })}
+        >
+          Cancel
+        </Link>
+      </div>
+    </div>
+  )
+
+  if (modal) {
+    return (
+      <ComposeModal
+        title="New contact"
+        closeHref={closeHref}
+        guard={guard}
+        noun="contact"
+        focusId="uin-contact-first-name"
+      >
+        {({ askToLeave }) => form(askToLeave)}
+      </ComposeModal>
+    )
+  }
+
   return (
     <div className="uin-thread">
       <div className="uin-thread-head">
@@ -130,74 +263,7 @@ export function ContactCard({ base, params, personId, initial, onSaved }: Props)
       </div>
 
       <div className="uin-thread-body">
-        <div className="uin-card">
-          {error && <div className="alert alert-danger" role="alert">{error}</div>}
-          {refused.length > 0 && (
-            <div className="alert alert-info" role="status">
-              Everything else saved, but {refused.join(' and ')} already belongs to somebody
-              else here, so it was left with them. Merge the two if they are the same person.
-            </div>
-          )}
-
-          <CardSection label="Who they are">
-            <CardField label="First name" value={draft.firstName ?? ''} onChange={set('firstName')} autoFocus />
-            <CardField label="Last name" value={draft.lastName ?? ''} onChange={set('lastName')} />
-            <CardField label="Job title" value={draft.jobTitle ?? ''} onChange={set('jobTitle')} />
-            <div className="uin-field-row">
-              <label htmlFor={`${listId}-org`}>Organisation</label>
-              <div className="uin-field-control">
-                <input
-                  id={`${listId}-org`}
-                  list={listId}
-                  value={draft.organisation ?? ''}
-                  onChange={(event) => set('organisation')(event.target.value)}
-                />
-                <datalist id={listId}>
-                  {organisations.map((name) => <option key={name} value={name} />)}
-                </datalist>
-              </div>
-            </div>
-            <CategoryPicker
-              available={categories}
-              value={splitCategories(draft.categories)}
-              disabled={busy}
-              /* Always sent, even when it comes to nothing: an empty box on a
-                 form means "none of them", which is a thing somebody means. */
-              onChange={(names) => setDraft((current) => ({
-                ...current, categories: joinCategories(names),
-              }))}
-            />
-          </CardSection>
-
-          <CardSection label="How to reach them">
-            <CardField label="Email" type="email" value={draft.email ?? ''} onChange={set('email')} />
-            <CardField label="Phone" type="tel" value={draft.phone ?? ''} onChange={set('phone')} />
-            <CardField label="Website" type="url" value={draft.website ?? ''} onChange={set('website')} />
-          </CardSection>
-
-          <CardSection label="Where they are">
-            <CardField label="Address" value={draft.addressLine1 ?? ''} onChange={set('addressLine1')} />
-            <CardField label="Address 2" value={draft.addressLine2 ?? ''} onChange={set('addressLine2')} />
-            <CardField label="Town" value={draft.addressCity ?? ''} onChange={set('addressCity')} />
-            <CardField label="County" value={draft.addressCounty ?? ''} onChange={set('addressCounty')} />
-            <CardField label="Postcode" value={draft.addressPostcode ?? ''} onChange={set('addressPostcode')} />
-            <CardField label="Country" value={draft.addressCountry ?? ''} onChange={set('addressCountry')} />
-          </CardSection>
-
-          <CardNotes value={draft.notes ?? ''} onChange={set('notes')} disabled={busy} />
-
-          <div className="uin-actions">
-            <button type="button" className="btn btn-primary btn-sm" onClick={save} disabled={busy}>
-              {busy ? 'Saving...' : personId ? 'Save changes' : 'Add this contact'}
-            </button>
-            <Link
-              className="btn btn-secondary btn-sm"
-              href={inboxHref(base, params, personId ? { person: personId } : { person: null, import: null })}
-            >
-              Cancel
-            </Link>
-          </div>
-        </div>
+        {form(() => {})}
       </div>
     </div>
   )

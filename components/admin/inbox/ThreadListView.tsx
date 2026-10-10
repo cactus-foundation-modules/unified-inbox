@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import type { ThreadListRow } from '@/modules/unified-inbox/lib/db'
@@ -26,6 +27,7 @@ import {
 import { AdminTooltip } from '@/components/admin/Tooltip'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Dropdown } from './Dropdown'
+import { BULK_SLOT_ID } from './BulkSlot'
 import { useRegisterRows, useSelection, type PickedRow } from './Selection'
 import { isPhone } from './swipe'
 import { beginThreadDrag, draggedIds, endThreadDrag } from './thread-drag'
@@ -133,6 +135,13 @@ function blockableOf(rows: ThreadListRow[]): string[] {
   return [...found]
 }
 
+// The bulk slot is a fixed element in the panel and is never swapped, so there is
+// nothing to subscribe to: the snapshot is read on the client and the server draws
+// the bar in place, which is also what a folder without tabs keeps doing.
+const noSubscription = () => () => {}
+const findBulkSlot = () => document.getElementById(BULK_SLOT_ID)
+const noSlot = () => null
+
 export function ThreadListView({
   base, params, rows, total, page, openThreadId, staffById, meId, inboxNames,
   neverSynced, spam, spamOwnerName, bin, binOwnerName, canManage, canBlock, searching, now, timezone,
@@ -215,6 +224,14 @@ export function ThreadListView({
    *  being picked, so the bar's Cancel - which empties the pick - is also the
    *  way out of the mode. */
   const selecting = picked.length > 0
+
+  /** The strip where the status tabs are, when this folder has tabs. The bar
+   *  that acts on the pick is drawn there instead of above the rows, with the
+   *  tabs stepping aside while anything is picked (see BulkSlot). Found after
+   *  mount because it belongs to the panel, a sibling of this list; folders
+   *  with no tabs have no slot and keep the bar above the rows. */
+  const bulkSlot = useSyncExternalStore(noSubscription, findBulkSlot, noSlot)
+  const placeBar = (bar: ReactNode) => (bulkSlot ? createPortal(bar, bulkSlot) : bar)
 
   /** Which of the bar's buttons are worth offering.
    *
@@ -804,7 +821,7 @@ export function ThreadListView({
 
   return (
     <>
-      {picked.length > 0 && (
+      {picked.length > 0 && placeBar(
         <div className="uin-bulk">
           <span className="uin-bulk-count">
             {picked.length} selected

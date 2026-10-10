@@ -26,7 +26,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const parsed = IdentityBody.safeParse(await request.json().catch(() => null))
   if (!parsed.success) return errorResponse('That does not look right.')
 
-  const { kind, value } = parsed.data
+  const { kind, value, label } = parsed.data
   const matchValue = kind === 'email' ? identityKey(value) : phoneKey(value)
   if (!matchValue) {
     return errorResponse(kind === 'email'
@@ -39,6 +39,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return errorResponse('Somebody else here already has that. Merge the two if they are the same person.')
   }
 
-  await addIdentity({ personId: person.id, kind, value, matchValue, source: 'manual' })
+  await addIdentity({ personId: person.id, kind, value, matchValue, source: 'manual', label: label || null })
   return NextResponse.json({ ok: true })
 }

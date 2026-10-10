@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import type { ContextSection } from '@/modules/unified-inbox/lib/adapters'
 import type { OutboundLogRow, ThreadListRow, PersonEventRow, MergeRow } from '@/modules/unified-inbox/lib/db'
-import type { ContactCategory, Person, PersonIdentity, RecordLink } from '@/modules/unified-inbox/lib/types'
+import type { ContactCategory, Person, PersonAddress, PersonIdentity, RecordLink } from '@/modules/unified-inbox/lib/types'
 import { channelLabel, formatFull, formatWhen, inboxHref, participantLabel } from '@/modules/unified-inbox/lib/list'
 import { addressLines } from '@/modules/unified-inbox/lib/contacts'
 import { formatInSiteTimezone } from '@/lib/config/timezone'
@@ -33,6 +33,8 @@ type Props = {
   params: Record<string, string>
   person: Person
   identities: PersonIdentity[]
+  /** The further addresses, beyond the one in their own columns. */
+  addresses: PersonAddress[]
   threads: ThreadListRow[]
   outbound: OutboundLogRow[]
   sections: ContextSection[]
@@ -95,7 +97,7 @@ function describeEvent(event: PersonEventRow): string {
 }
 
 export function PersonView({
-  adminPath, base, params, person, identities, threads, outbound, sections, links,
+  adminPath, base, params, person, identities, addresses, threads, outbound, sections, links,
   publicUrls, events, merges, categories, alsoHere, staffById, canEdit, canManage, now,
   timezone,
 }: Props) {
@@ -124,6 +126,10 @@ export function PersonView({
               anything where the list is already beside it. */}
           <div className="uin-thread-top">
           <h2 className="uin-thread-subject">{name}</h2>
+          {/* Beside their name, as icons: what you can do about somebody is
+              part of who they are, and five worded buttons were a row of their
+              own that overflowed the pane. */}
+          {canEdit && <PersonActionsBar />}
           <Link className="uin-thread-close" href={inboxHref(base, params, { person: null })}>
             <span className="uin-back-phone" aria-hidden="true">{BackIcon}<span className="uin-back-words">Back</span></span>
             <span className="uin-back-wide" aria-hidden="true">{CloseIcon}</span>
@@ -154,9 +160,6 @@ export function PersonView({
               ))}
             </div>
           )}
-          {/* Only the buttons live up here, beside their name. What they open
-              is below, where it is free to be as tall as it needs. */}
-          {canEdit && <PersonActionsBar />}
         </div>
 
         <div className="uin-thread-body">
@@ -168,7 +171,7 @@ export function PersonView({
                 <ContactIdentities
                   personId={person.id}
                   identities={identities.map((i) => ({
-                    id: i.id, kind: i.kind, value: i.value, source: i.source,
+                    id: i.id, kind: i.kind, value: i.value, source: i.source, label: i.label,
                   }))}
                   canEdit={canEdit}
                 />
@@ -194,14 +197,28 @@ export function PersonView({
                 )}
               </section>
 
-              {postal.length > 0 && (
+              {(postal.length > 0 || addresses.length > 0) && (
                 <section className="uin-ctx-block">
                   <h3 className="uin-ctx-heading">Where they are</h3>
                   {/* An address on the lines it is posted on. Nobody reads a
-                      postcode out of a comma-separated run. */}
-                  <address className="uin-ctx-sub uin-postal">
-                    {postal.map((line) => <span key={line}>{line}</span>)}
-                  </address>
+                      postcode out of a comma-separated run. Each says what it
+                      is for when it has been told. */}
+                  {postal.length > 0 && (
+                    <div className="uin-address-block">
+                      {person.addressLabel && <span className="uin-tag">{person.addressLabel}</span>}
+                      <address className="uin-ctx-sub uin-postal">
+                        {postal.map((line) => <span key={line}>{line}</span>)}
+                      </address>
+                    </div>
+                  )}
+                  {addresses.map((extra) => (
+                    <div className="uin-address-block" key={extra.id}>
+                      {extra.label && <span className="uin-tag">{extra.label}</span>}
+                      <address className="uin-ctx-sub uin-postal">
+                        {addressLines(extra).map((line) => <span key={line}>{line}</span>)}
+                      </address>
+                    </div>
+                  ))}
                 </section>
               )}
 

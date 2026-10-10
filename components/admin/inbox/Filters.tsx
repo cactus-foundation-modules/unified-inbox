@@ -4,6 +4,7 @@ import { formatCalendarDate, inboxHref } from '@/modules/unified-inbox/lib/list'
 import { BlockedAddresses } from './BlockedAddresses'
 import { ComposeMenu, type ComposeMenuEntry } from './ComposeMenu'
 import { EmptyBinButton } from './EmptyBinButton'
+import { EmptyJunkButton } from './EmptyJunkButton'
 import { QueryForm } from './QueryForm'
 import { FilterIcon, SearchIcon, SortIcon } from './icons'
 
@@ -84,6 +85,9 @@ type Props = {
    *  addresses the site turns away. Null everywhere else, and that is the whole
    *  of the condition: see the note beside the button. */
   blockedAddresses: { canUnblock: boolean } | null
+  /** The Spam folder's Delete all, shown to the left of the blocked addresses.
+   *  Null where there is nothing to delete or the reader may not. */
+  emptyJunk: { inboxId: string | null; ownerName: string | null; count: number; closeHref: string } | null
   /** The Bin folder, where the same slot holds the press that empties it. Null
    *  everywhere else, on an empty bin, and for anybody who may not do the
    *  emptying - which is a stricter grant than the one that fills it, because
@@ -101,7 +105,7 @@ type Props = {
 
 export function Filters({
   base, params, unreadOnly, assignee, search, narrowed, staff, oldestFirst,
-  blockedAddresses, emptyBin, compose,
+  blockedAddresses, emptyJunk, emptyBin, compose,
 }: Props) {
   // Any filter change starts again at page one and closes whatever was open,
   // since the conversation on screen may not survive the new filter. A person's
@@ -149,7 +153,19 @@ export function Filters({
             then have to find their way back from. It is the same list and the
             same route as Settings -> Collecting, not a second one. */}
         {blockedAddresses && (
-          <BlockedAddresses staff={staff} canUnblock={blockedAddresses.canUnblock} />
+          <div className="uin-list-tools uin-junk-tools" role="group" aria-label="Junk folder">
+            {/* Delete all first, so it sits to the left of the blocked
+                addresses: the two errands this folder has, as one pill. */}
+            {emptyJunk && (
+              <EmptyJunkButton
+                inboxId={emptyJunk.inboxId}
+                ownerName={emptyJunk.ownerName}
+                count={emptyJunk.count}
+                closeHref={emptyJunk.closeHref}
+              />
+            )}
+            <BlockedAddresses staff={staff} canUnblock={blockedAddresses.canUnblock} />
+          </div>
         )}
         {/* And, in the Bin folder, the press that empties it - in the same slot
             as the list of blocked addresses above, since a list is one folder

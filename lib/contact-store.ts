@@ -3,11 +3,14 @@ import {
   addPersonCategories,
   createOrganisation,
   createPerson,
+  deletePhonesExcept,
   findCategoryByName,
   findOrCreateCategory,
   findOrganisationByName,
   findPersonByIdentity,
   getPerson,
+  replacePersonAddresses,
+  setIdentityLabel,
   setPersonCategories,
   updatePerson,
   type PersonDetails,
@@ -109,32 +112,71 @@ export async function attachContactIdentities(
     if (!written && (await findPersonByIdentity([emailKey])) !== personId) refused.push(email)
   }
 
-  const phone = clean(draft.phone)
-  const numberKey = phoneKey(phone)
-  if (phone && numberKey) {
+  // A card that carries a list of numbers is saying what they ALL are, labels
+  // and all. One that carries only the single box - an import, a shop order -
+  // is adding a fact and takes nothing away.
+  const listed = draft.phones !== undefined
+  const numbers = listed
+    ? (draft.phones ?? []).map((p) => ({ value: p.value, label: clean(p.label) }))
+    : [{ value: draft.phone ?? '', label: clean(draft.phoneLabel) }]
+  const kept: string[] = []
+  for (const entry of numbers) {
+    const phone = clean(entry.value)
+    const numberKey = phoneKey(phone)
+    if (!phone || !numberKey) continue
     const written = await addIdentity({
-      personId, kind: 'phone', value: phone, matchValue: numberKey, source,
+      personId, kind: 'phone', value: phone, matchValue: numberKey, source, label: entry.label,
     })
-    if (!written && (await findPersonByIdentity([numberKey])) !== personId) refused.push(phone)
+    if (written) {
+      kept.push(numberKey)
+      continue
+    }
+    if ((await findPersonByIdentity([numberKey])) === personId) {
+      kept.push(numberKey)
+      await setIdentityLabel(personId, numberKey, entry.label)
+    } else {
+      refused.push(phone)
+    }
   }
+  if (listed) await deletePhonesExcept(personId, kept)
 
   return refused
 }
 
 /** What goes in the person's own columns, from the card's fields. */
 function detailsFrom(draft: ContactDraft): PersonDetails {
+  // A box the request never mentioned is left as it was; one sent empty is
+  // cleared. The two used to be the same thing, so a save that named only a
+  // phone number quietly wiped the postal address.
+  const box = (value: string | undefined) => (value === undefined ? undefined : clean(value))
   return {
-    firstName: clean(draft.firstName),
-    lastName: clean(draft.lastName),
-    jobTitle: clean(draft.jobTitle),
-    website: clean(draft.website),
-    addressLine1: clean(draft.addressLine1),
-    addressLine2: clean(draft.addressLine2),
-    addressCity: clean(draft.addressCity),
-    addressCounty: clean(draft.addressCounty),
-    addressPostcode: clean(draft.addressPostcode),
-    addressCountry: clean(draft.addressCountry),
+    firstName: box(draft.firstName),
+    lastName: box(draft.lastName),
+    jobTitle: box(draft.jobTitle),
+    website: box(draft.website),
+    addressLine1: box(draft.addressLine1),
+    addressLine2: box(draft.addressLine2),
+    addressCity: box(draft.addressCity),
+    addressCounty: box(draft.addressCounty),
+    addressPostcode: box(draft.addressPostcode),
+    addressCountry: box(draft.addressCountry),
+    addressLabel: box(draft.addressLabel),
   }
+}
+
+/** The further addresses on a card, tidied, and with the entirely empty ones
+ *  dropped - a row somebody added and never filled in is not an address. */
+function extraAddressesFrom(draft: ContactDraft) {
+  return (draft.addresses ?? []).map((a) => ({
+    label: clean(a.label),
+    addressLine1: clean(a.addressLine1),
+    addressLine2: clean(a.addressLine2),
+    addressCity: clean(a.addressCity),
+    addressCounty: clean(a.addressCounty),
+    addressPostcode: clean(a.addressPostcode),
+    addressCountry: clean(a.addressCountry),
+  })).filter((a) => a.addressLine1 || a.addressLine2 || a.addressCity
+    || a.addressCounty || a.addressPostcode || a.addressCountry)
 }
 
 /**
@@ -191,6 +233,7 @@ export async function saveContact(
       ...(notes === undefined ? {} : { notes }),
     })
     const refused = await attachContactIdentities(existing.id, draft, opts.origin)
+    if (draft.addresses !== undefined) await replacePersonAddresses(existing.id, extraAddressesFrom(draft))
     await applyCategories(existing.id, draft, opts)
     return { personId: existing.id, refused }
   }
@@ -204,6 +247,7 @@ export async function saveContact(
     details,
   })
   const refused = await attachContactIdentities(id, draft, opts.origin)
+  if (draft.addresses !== undefined) await replacePersonAddresses(id, extraAddressesFrom(draft))
   await applyCategories(id, draft, opts)
   return { personId: id, refused }
 }

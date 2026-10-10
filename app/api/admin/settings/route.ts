@@ -155,6 +155,7 @@ const Body = z.object({
   backfillMonths: z.number().int().min(1).max(240).optional(),
   retentionMonths: z.number().int().min(1).max(240).nullable().optional(),
   retentionKeepLinked: z.boolean().optional(),
+  junkRetentionDays: z.number().int().min(1).max(365).nullable().optional(),
   attachmentFetch: z.enum(['lazy', 'always', 'never']).optional(),
   autoLink: z.boolean().optional(),
   newestFirst: z.boolean().optional(),

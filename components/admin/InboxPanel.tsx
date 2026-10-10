@@ -39,6 +39,7 @@ import {
   listDrafts,
   listScheduledDrafts,
   listIdentities,
+  listPersonAddresses,
   listCategories,
   listInboxes,
   listMentions,
@@ -100,6 +101,7 @@ import { InboxStyles } from './inbox/styles'
 import { NavRail } from './inbox/NavRail'
 import { CampaignsPanel } from './inbox/campaigns/CampaignsPanel'
 import { StatusTabs } from './inbox/StatusTabs'
+import { TabsOrBulk } from './inbox/BulkSlot'
 import { SearchBar } from './inbox/SearchBar'
 import { Filters } from './inbox/Filters'
 import { ThreadListView } from './inbox/ThreadListView'
@@ -552,6 +554,13 @@ export async function UnifiedInboxPanel({
       href: inboxHref(base, carried, { compose: 'sms', draft: null, id: null, person: null }),
       hint: 'A text message to a mobile.',
     }] : []),
+    // Writing in the address book is the same grant as answering somebody.
+    ...(canEditLinks ? [{
+      key: 'contact',
+      label: 'Contact',
+      href: inboxHref(base, carried, { compose: 'contact', draft: null, id: null, person: null }),
+      hint: 'Add somebody to the address book.',
+    }] : []),
   ]
 
   // ---- one colleague's folders ------------------------------------------
@@ -790,12 +799,12 @@ export async function UnifiedInboxPanel({
         search: params.search,
         page: params.page,
         perPage: PER_PAGE,
-        // Surname order, because that is what an address book is for. The
-        // conversation lists order by when something last happened; a contacts
-        // list ordered that way is a list nobody can find anybody in.
-        sort: 'name',
+        // When they were added, newest first, with the sort button on the list
+        // turning it round. Search is how somebody finds a name; this is how
+        // somebody sees who has just arrived.
+        sort: params.oldestFirst ? 'added_oldest' : 'added',
         organisationId: params.organisationId,
-        categoryId: params.categoryId,
+        categoryIds: params.categoryIds,
       }).then((r) => [r.rows, r.total] as const)
     : [[] as Awaited<ReturnType<typeof listPeople>>['rows'], 0]
   // The labels: the whole list for the filter row, and the page's own in one
@@ -805,7 +814,12 @@ export async function UnifiedInboxPanel({
     ? await categoriesForPeople(contacts.map((c) => c.id))
     : {}
   const [organisations, organisationsTotal] = params.contactsOnly && showingOrganisations
-    ? await listOrganisations({ search: params.search, page: params.page, perPage: PER_PAGE })
+    ? await listOrganisations({
+        search: params.search,
+        page: params.page,
+        perPage: PER_PAGE,
+        sort: params.oldestFirst ? 'added_oldest' : 'added',
+      })
         .then((r) => [r.rows, r.total] as const)
     : [[] as Awaited<ReturnType<typeof listOrganisations>>['rows'], 0]
 
@@ -852,6 +866,23 @@ export async function UnifiedInboxPanel({
         // Their labels have to arrive filled in, or the picker shows every one
         // of them unticked and saving the card would take the lot off.
         const worn = await categoriesForPerson(person.id)
+        // A number is an identity, not a column on the person, so it is not on
+        // the row above. Without it the phone box opened blank on somebody
+        // whose number is plainly shown on their page, and a blank box reads
+        // as "we do not have it". Every number and further address is sent
+        // with it, because saving the card means "this is the whole list".
+        const phones = (await listIdentities(person.id))
+          .filter((i) => i.kind === 'phone')
+          .map((i) => ({ label: i.label ?? '', value: i.value }))
+        const moreAddresses = (await listPersonAddresses(person.id)).map((a) => ({
+          label: a.label ?? '',
+          addressLine1: a.addressLine1 ?? '',
+          addressLine2: a.addressLine2 ?? '',
+          addressCity: a.addressCity ?? '',
+          addressCounty: a.addressCounty ?? '',
+          addressPostcode: a.addressPostcode ?? '',
+          addressCountry: a.addressCountry ?? '',
+        }))
         personPane = (
           <ContactCard
             base={base}
@@ -864,6 +895,9 @@ export async function UnifiedInboxPanel({
               organisation: person.organisationName ?? '',
               categories: joinCategories(worn.map((c) => c.name)),
               email: person.primaryEmail ?? '',
+              phones,
+              addresses: moreAddresses,
+              addressLabel: person.addressLabel ?? '',
               website: person.website ?? '',
               addressLine1: person.addressLine1 ?? '',
               addressLine2: person.addressLine2 ?? '',
@@ -877,7 +911,7 @@ export async function UnifiedInboxPanel({
         )
       } else {
       const query = await buildContextQuery(person.id)
-      const [identities, sections, links, events, merges, worn, alsoHere, addresses] =
+      const [identities, sections, links, events, merges, worn, alsoHere, addresses, personAddresses] =
         await Promise.all([
           listIdentities(person.id),
           query ? loadContext(user, query) : Promise.resolve([]),
@@ -889,6 +923,7 @@ export async function UnifiedInboxPanel({
             ? peopleInOrganisation(person.organisationId, person.id)
             : Promise.resolve([]),
           addressesForPerson(person.id),
+          listPersonAddresses(person.id),
         ])
       // Automated mail the site sent them: order confirmations, purchase order
       // emails and the like. Brevo sends those and they never touch anybody's
@@ -909,6 +944,7 @@ export async function UnifiedInboxPanel({
           params={carried}
           person={person}
           identities={identities}
+          addresses={personAddresses}
           threads={personThreads}
           outbound={outbound}
           sections={sections}
@@ -1659,7 +1695,14 @@ export async function UnifiedInboxPanel({
       ? await latestPhoneOnThread(params.threadId)
       : null
 
-    if (params.composeKind === 'discussion') {
+    if (params.composeKind === 'contact') {
+      // A blank card in a dialog over whatever list is behind it, the same
+      // card the address book's own page uses. Refused rather than drawn when
+      // this reader may not write in the book.
+      composePane = canEditLinks ? (
+        <ContactCard base={base} params={carried} personId={null} initial={{}} modal />
+      ) : cannotWriteInTheBook()
+    } else if (params.composeKind === 'discussion') {
       // Where it goes is settled here rather than asked: the address this
       // person calls their own, which is the answer nine times in ten and the
       // only one a site with personal inboxes wants. Failing that - nobody has
@@ -2227,7 +2270,8 @@ export async function UnifiedInboxPanel({
                 canEdit={canEditLinks}
                 canImport={canManage}
                 categories={categoryList.map((c) => ({ id: c.id, name: c.name, people: c.peopleCount }))}
-                categoryId={params.categoryId}
+                categoryIds={params.categoryIds}
+                oldestFirst={params.oldestFirst}
                 showSearch={!params.searchPage}
               />
             ) : params.mentionsOnly ? (
@@ -2278,6 +2322,16 @@ export async function UnifiedInboxPanel({
                        other grant, the same one shutting the door takes, so the
                        two are asked separately. */
                     blockedAddresses={params.spamOnly && canManage ? { canUnblock: canSendOut } : null}
+                    /* Delete all, in the Spam folder, with the same grant and
+                       the same reasoning as the Bin's button below. */
+                    emptyJunk={params.spamOnly && canManage && total > 0
+                      ? {
+                          inboxId: folderInbox?.id ?? null,
+                          ownerName: folderOwnerName,
+                          count: total,
+                          closeHref: inboxHref(base, carried, { id: null }),
+                        }
+                      : null}
                     /* The Bin, and only where there is something to empty and
                        somebody allowed to empty it. `manage` rather than the
                        grant that fills a bin, and deliberately stricter: putting
@@ -2298,13 +2352,15 @@ export async function UnifiedInboxPanel({
                   />
                 </div>
                 {showStatusTabs && (
-                  <StatusTabs
-                    base={base}
-                    params={carried}
-                    status={status}
-                    counts={statuses}
-                    showUnassigned={showUnassigned}
-                  />
+                  <TabsOrBulk>
+                    <StatusTabs
+                      base={base}
+                      params={carried}
+                      status={status}
+                      counts={statuses}
+                      showUnassigned={showUnassigned}
+                    />
+                  </TabsOrBulk>
                 )}
               </>
             )}

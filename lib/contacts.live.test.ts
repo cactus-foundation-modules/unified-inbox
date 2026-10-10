@@ -414,7 +414,7 @@ describe.runIf(shouldRun)('the address book, against a real database', () => {
     const supplier = (await lib.findCategoryByName('Supplier'))!
     await lib.setPersonCategories(jane.id, [supplier.id])
 
-    const { rows, total } = await lib.listPeople({ page: 1, perPage: 50, categoryId: supplier.id })
+    const { rows, total } = await lib.listPeople({ page: 1, perPage: 50, categoryIds: [supplier.id] })
     expect(total).toBe(1)
     expect(rows[0]!.id).toBe(jane.id)
     expect((await lib.listCategories()).find((c) => c.name === 'Supplier')?.peopleCount).toBe(1)
@@ -502,5 +502,106 @@ describe.runIf(shouldRun)('the address book, against a real database', () => {
     const before = (await lib.listCategories()).find((c) => c.id === supplier.id)!.peopleCount
     await db.$executeRawUnsafe(`DELETE FROM "uin_people" WHERE "id" = $1`, rhys.id)
     expect((await lib.listCategories()).find((c) => c.id === supplier.id)!.peopleCount).toBe(before - 1)
+  })
+
+  it('keeps a number and an address for each thing they are for', async () => {
+    const { personId } = await store.saveContact(null, {
+      firstName: 'Una',
+      lastName: 'Order',
+      email: 'una@labels.test',
+      phones: [
+        { label: 'Order', value: '07700 900111' },
+        { label: 'Delivery', value: '07700 900222' },
+      ],
+      addressLabel: 'Billing',
+      addressLine1: '1 Billing Road',
+      addressPostcode: 'B1 1AA',
+      addresses: [{ label: 'Delivery', addressLine1: '2 Goods In', addressPostcode: 'D2 2BB' }],
+    }, { origin: 'hand' })
+
+    const numbers = (await lib.listIdentities(personId)).filter((i) => i.kind === 'phone')
+    expect(numbers.map((n) => [n.label, n.value]).sort())
+      .toEqual([['Delivery', '07700 900222'], ['Order', '07700 900111']])
+    expect((await lib.getPerson(personId))?.addressLabel).toBe('Billing')
+    const further = await lib.listPersonAddresses(personId)
+    expect(further.map((a) => [a.label, a.addressLine1])).toEqual([['Delivery', '2 Goods In']])
+  })
+
+  it('takes off the numbers and addresses a saved list leaves out, and relabels the rest', async () => {
+    const una = (await lib.listPeople({ search: 'una@labels.test', page: 1, perPage: 5 })).rows[0]!
+    // A card sends every box it has, the address in the ordinary ones included.
+    await store.saveContact(una.id, {
+      addressLabel: 'Billing',
+      addressLine1: '1 Billing Road',
+      addressPostcode: 'B1 1AA',
+      phones: [{ label: 'Mobile', value: '07700 900111' }],
+      addresses: [],
+    }, { origin: 'hand' })
+
+    const numbers = (await lib.listIdentities(una.id)).filter((i) => i.kind === 'phone')
+    expect(numbers.map((n) => [n.label, n.value])).toEqual([['Mobile', '07700 900111']])
+    expect(await lib.listPersonAddresses(una.id)).toEqual([])
+    // The email address is not a number and was never on the list.
+    expect((await lib.listIdentities(una.id)).some((i) => i.kind === 'email')).toBe(true)
+  })
+
+  it('leaves the numbers alone when only the single box is filled in', async () => {
+    const una = (await lib.listPeople({ search: 'una@labels.test', page: 1, perPage: 5 })).rows[0]!
+    await store.saveContact(una.id, { phone: '07700 900333', phoneLabel: 'Work' }, { origin: 'import' })
+    const numbers = (await lib.listIdentities(una.id)).filter((i) => i.kind === 'phone')
+    expect(numbers.map((n) => n.value).sort()).toEqual(['07700 900111', '07700 900333'])
+  })
+
+  it('adds an address a paid order brings only if they do not hold it already', async () => {
+    const una = (await lib.listPeople({ search: 'una@labels.test', page: 1, perPage: 5 })).rows[0]!
+    const delivery = {
+      label: 'Delivery', addressLine1: '2 Goods In', addressLine2: null, addressCity: null,
+      addressCounty: null, addressPostcode: 'D2 2BB', addressCountry: null,
+    }
+    expect(await lib.addPersonAddressIfMissing(una.id, delivery)).toBe(true)
+    // Typed differently, the same place.
+    expect(await lib.addPersonAddressIfMissing(una.id, {
+      ...delivery, addressLine1: '2  goods in', addressPostcode: 'd22bb',
+    })).toBe(false)
+    // And the one in their own columns is not added a second time.
+    expect(await lib.addPersonAddressIfMissing(una.id, {
+      ...delivery, label: 'Billing', addressLine1: '1 Billing Road', addressPostcode: 'B1 1AA',
+    })).toBe(false)
+    expect((await lib.listPersonAddresses(una.id)).length).toBe(1)
+  })
+
+  it('finds somebody by the postcode of a further address, and lists newest first', async () => {
+    const found = await lib.listPeople({ search: 'D2 2BB', page: 1, perPage: 5 })
+    expect(found.rows.map((r) => r.primaryEmail)).toEqual(['una@labels.test'])
+
+    const newest = await lib.listPeople({ page: 1, perPage: 50, sort: 'added' })
+    const oldest = await lib.listPeople({ page: 1, perPage: 50, sort: 'added_oldest' })
+    expect(newest.rows[0]!.primaryEmail).toBe('una@labels.test')
+    expect(oldest.rows.map((r) => r.id)).toEqual(newest.rows.map((r) => r.id).reverse())
+  })
+
+  it('moves further addresses with a merge, puts them back on undo, and lets go on erase', async () => {
+    const una = (await lib.listPeople({ search: 'una@labels.test', page: 1, perPage: 5 })).rows[0]!
+    const other = await store.saveContact(null, { firstName: 'Una', lastName: 'Twin', email: 'twin@labels.test' }, { origin: 'hand' })
+
+    // Una loses to the twin, so her address has to travel to the twin.
+    const merged = await lib.mergePeople(other.personId, una.id, null)
+    if (!('mergeId' in merged)) throw new Error(merged.error)
+    expect((await lib.listPersonAddresses(other.personId)).length).toBe(1)
+    expect((await lib.listPersonAddresses(una.id)).length).toBe(0)
+
+    const undone = await lib.undoMerge(merged.mergeId, null)
+    expect('ok' in undone).toBe(true)
+    expect((await lib.listPersonAddresses(una.id)).length).toBe(1)
+    expect((await lib.listPersonAddresses(other.personId)).length).toBe(0)
+  })
+
+  it('removes further addresses when the contact goes', async () => {
+    const una = (await lib.listPeople({ search: 'una@labels.test', page: 1, perPage: 5 })).rows[0]!
+    await db.$executeRawUnsafe(`DELETE FROM "uin_people" WHERE "id" = $1`, una.id)
+    const left = await db.$queryRawUnsafe<{ n: bigint }[]>(
+      `SELECT COUNT(*)::bigint AS n FROM "uin_person_addresses" WHERE "person_id" = $1`, una.id,
+    )
+    expect(Number(left[0]!.n)).toBe(0)
   })
 })
