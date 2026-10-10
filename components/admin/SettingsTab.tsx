@@ -13,7 +13,7 @@ import { OverviewPanel } from './settings/OverviewPanel'
 import { PeoplePanel } from './settings/PeoplePanel'
 import { ReceiptsPanel } from './settings/ReceiptsPanel'
 import { SUB_TABS, type Note, type Payload, type SubTab } from './settings/types'
-import { MUTED, NoteAlert } from './settings/ui'
+import { MUTED, NoteAlert, PanelActiveContext } from './settings/ui'
 
 // ---------------------------------------------------------------------------
 // Settings for the Unified Inbox.
@@ -263,7 +263,7 @@ export function UnifiedInboxSettingsTab() {
         // as well as off the screen; the inline display is belt and braces
         // against a class that sets one.
         <div key={t.key} hidden={t.key !== tab} style={t.key === tab ? undefined : { display: 'none' }}>
-          {panel(t.key)}
+          <PanelActiveContext.Provider value={t.key === tab}>{panel(t.key)}</PanelActiveContext.Provider>
         </div>
       ))}
     </div>

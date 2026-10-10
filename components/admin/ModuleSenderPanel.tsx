@@ -36,7 +36,6 @@ const CARD: React.CSSProperties = {
   background: 'var(--color-surface)',
   padding: '1rem',
   marginBottom: '1rem',
-  maxWidth: 640,
 }
 
 type InboxOption = { id: string; name: string; address: string }

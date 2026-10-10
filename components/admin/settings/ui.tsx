@@ -1,6 +1,7 @@
 'use client'
 
-import { useId, type CSSProperties, type ReactNode } from 'react'
+import { createContext, useContext, useId, type CSSProperties, type ReactNode } from 'react'
+import { SettingsHeaderActions } from '@/components/admin/SettingsHeaderActions'
 import type { Note } from './types'
 
 // The handful of shapes every panel on this screen is built out of.
@@ -233,21 +234,25 @@ export function EditPanel({ title, children }: { title: string; children: ReactN
   )
 }
 
-/** The row of buttons at the foot of a form, always in the same order and
- *  always in the same place. */
+/** Whether the panel this is rendered in is the one on screen. The settings screen
+ *  keeps a panel it has opened mounted but hidden, so a half-filled form survives a
+ *  trip to another tab - which would leave every hidden panel's Save button sitting
+ *  in the Settings bar at once if nothing said otherwise. */
+export const PanelActiveContext = createContext(true)
+
+/** Shows its children in the Settings bar - top right, beside the page title - but
+ *  only while the panel it belongs to is the one on screen. */
+export function HeaderActions({ children }: { children: ReactNode }) {
+  const active = useContext(PanelActiveContext)
+  if (!active) return null
+  return <SettingsHeaderActions>{children}</SettingsHeaderActions>
+}
+
+/** The buttons that finish a form - Save, and Cancel where there is one. They live
+ *  in the Settings bar rather than at the foot of the form, so they are in reach
+ *  however far down a long form you have scrolled. */
 export function FormActions({ children }: { children: ReactNode }) {
-  return (
-    <div style={{
-      display: 'flex',
-      gap: '0.75rem',
-      flexWrap: 'wrap',
-      marginTop: '1.25rem',
-      paddingTop: '1rem',
-      borderTop: '1px solid var(--color-border)',
-    }}>
-      {children}
-    </div>
-  )
+  return <HeaderActions>{children}</HeaderActions>
 }
 
 /** Nothing here yet, and what to do about it. An empty list used to be one grey

@@ -5,7 +5,7 @@ import { ConfirmDialog } from './inbox/ConfirmDialog'
 // One heading style for every panel on this screen, this one included. The two
 // used to be declared separately and disagree, so the Webhooks heading looked
 // nothing like the five above it.
-import { EditPanel, SETTINGS_SECTION_HEADING } from './settings/ui'
+import { EditPanel, HeaderActions, SETTINGS_SECTION_HEADING } from './settings/ui'
 import type { CredentialSource, SharedWebhookState, WebhookEvent } from '../../lib/webhook-types'
 
 // "When something arrives, tell this address about it."
@@ -622,10 +622,10 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
           </label>
         </div>
 
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void save()}>Save</button>
-          <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => setDraft(null)}>Cancel</button>
-        </div>
+        <HeaderActions>
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>Save webhook</button>
+          <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => setDraft(null)}>Cancel</button>
+        </HeaderActions>
       </EditPanel>
     )
   }
@@ -743,9 +743,11 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
           </div>
         </div>
 
-        <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void saveShared()}>
-          Save shared settings
-        </button>
+        <HeaderActions>
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void saveShared()}>
+            Save shared settings
+          </button>
+        </HeaderActions>
       </div>
 
       {webhooks.length === 0 && !draft && (
