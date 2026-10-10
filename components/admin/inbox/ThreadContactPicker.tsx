@@ -5,10 +5,12 @@ import { useRouter } from 'next/navigation'
 import type { ThreadContact } from '@/modules/unified-inbox/lib/thread-contact'
 import { AdminTooltip } from '@/components/admin/Tooltip'
 import { Dropdown, MenuItem } from './Dropdown'
-import { TickIcon } from './icons'
+import { PenIcon, TickIcon } from './icons'
 
-// Who the conversation is with, at the start of the line under its name - and,
-// the way the name above it renames it, pressing it changes it.
+// The pencil beside who the conversation is with, at the start of the line
+// under its name: pressing it changes who that is. The name itself opens their
+// contact record (see ContactModal) - it used to be this menu, which put a rare
+// job on the one word people press to find out who somebody is.
 //
 // The choice is everybody who actually appears in the conversation (see
 // lib/thread-contact.ts): whoever wrote in, and whoever we wrote to. Picking
@@ -60,11 +62,11 @@ export function ThreadContactPicker({ threadId, label, href, contacts, chosenAdd
 
   return (
     <>
-      <AdminTooltip body="Press to change who this is with">
+      <AdminTooltip body="Change who this is with">
       <Dropdown
-        label={label}
+        label={PenIcon}
         ariaLabel={`With ${label}. Change who this conversation is with`}
-        className="uin-thread-with uin-contact-button"
+        className="uin-contact-button uin-contact-edit"
         disabled={busy}
         width={300}
       >

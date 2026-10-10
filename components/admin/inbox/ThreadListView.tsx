@@ -128,11 +128,17 @@ type Props = {
 function blockableOf(rows: ThreadListRow[]): string[] {
   const found = new Set<string>()
   for (const row of rows) {
-    if (row.startedByUserId) continue
-    const address = normaliseAddress(row.participantAddress ?? '')
-    if (address.includes('@')) found.add(address)
+    const address = blockAddressOf(row)
+    if (address) found.add(address)
   }
   return [...found]
+}
+
+/** The one address a block on this row would refuse, or null. */
+function blockAddressOf(row: ThreadListRow): string | null {
+  if (row.startedByUserId) return null
+  const address = normaliseAddress(row.participantAddress ?? '')
+  return address.includes('@') ? address : null
 }
 
 // The bulk slot is a fixed element in the panel and is never swapped, so there is
@@ -212,6 +218,7 @@ export function ThreadListView({
     status: row.status,
     snoozeUntil: row.snoozeUntil ? row.snoozeUntil.toISOString() : null,
     unread: row.unread,
+    blockAddress: blockAddressOf(row),
   })), [rows])
   useRegisterRows(shape)
 

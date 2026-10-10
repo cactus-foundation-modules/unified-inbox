@@ -82,12 +82,13 @@ import { draftBodyText, forComposer } from '@/modules/unified-inbox/lib/drafts'
 import { canAddProducts as canAddProductsFor, resolveProducts } from '@/modules/unified-inbox/lib/products'
 import { publicRecordUrls } from '@/modules/unified-inbox/lib/record-urls'
 import { addressesForPerson, buildContextQuery } from '@/modules/unified-inbox/lib/identity'
-import { identityKey, isOwnSender, resolveOwnDomains } from '@/modules/unified-inbox/lib/people'
+import { identityKey, isOwnSender, preferContactName, resolveOwnDomains } from '@/modules/unified-inbox/lib/people'
 import { PersonView } from './inbox/PersonView'
 import { ContactsToolbar } from './inbox/ContactsToolbar'
 import { ColumnResizer } from './inbox/ColumnResizer'
 import { ContactsListView } from './inbox/ContactsListView'
 import { OrganisationsListView } from './inbox/OrganisationsListView'
+import { ContactModal } from './inbox/ContactModal'
 import { ContactCard } from './inbox/ContactCard'
 import { OrganisationCard, EMPTY_ORGANISATION } from './inbox/OrganisationCard'
 import { ContactImport } from './inbox/ContactImport'
@@ -385,6 +386,8 @@ export async function UnifiedInboxPanel({
     // The address book's own: which half of it, whose card is open, whether the
     // card is being edited, and whether the importer is up.
     'view', 'org', 'edit', 'import', 'cat',
+    // A contact record open in a dialog over the conversation.
+    'contact',
     // Which campaign is open, and which of its four steps.
     'campaign',
   ] as const) {
@@ -829,14 +832,26 @@ export async function UnifiedInboxPanel({
   // the same question about the same human from a different angle: what have we
   // said to each other, and what does the rest of the site know about them.
   let personPane: React.ReactNode = null
+  // The record open over a conversation (pressing the name under its subject)
+  // is the same page, built the same way, and drawn in a dialog instead of the
+  // reading pane - see ContactModal. Its links drop the dialog, so pressing one
+  // of their other conversations goes there rather than reopening the record.
+  const cardOverThread = !params.personId && !!params.threadId && !!params.contactCardId
+    && params.contactCardId !== NEW_CONTACT
+  const shownPersonId = params.personId ?? (cardOverThread ? params.contactCardId : null)
+  let cardLabel = 'Contact'
+  const personParams: Record<string, string> = cardOverThread
+    ? Object.fromEntries(Object.entries(carried).filter(([key]) => key !== 'contact'))
+    : carried
   if (params.personId === NEW_CONTACT && !params.composing) {
     // A blank card. Writing in the address book is the same grant as answering
     // somebody, so anybody who may reply may add a contact.
     personPane = canEditLinks
       ? <ContactCard base={base} params={carried} personId={null} initial={{}} />
       : cannotWriteInTheBook()
-  } else if (params.personId && !params.composing) {
-    const person = await getPerson(params.personId)
+  } else if (shownPersonId && !params.composing) {
+    const person = await getPerson(shownPersonId)
+    if (person) cardLabel = person.displayName || person.primaryEmail || cardLabel
     if (!person) {
       personPane = personNotHere()
     } else {
@@ -858,7 +873,7 @@ export async function UnifiedInboxPanel({
         && await countThreadsForPerson(person.id) > 0
       if (hidden) {
         personPane = personNotHere()
-      } else if (params.editingContact && canEditLinks) {
+      } else if (params.editingContact && canEditLinks && !cardOverThread) {
         // Somebody the post introduced us to may never have had their name
         // split, so the card opens with a first and last worked out from what
         // we do have rather than with two empty boxes.
@@ -941,7 +956,8 @@ export async function UnifiedInboxPanel({
         <PersonView
           adminPath={adminPath}
           base={base}
-          params={carried}
+          params={personParams}
+          closeHref={cardOverThread ? inboxHref(base, carried, { contact: null }) : undefined}
           person={person}
           identities={identities}
           addresses={personAddresses}
@@ -963,6 +979,17 @@ export async function UnifiedInboxPanel({
       )
       }
     }
+  }
+
+  // Over the conversation rather than instead of it.
+  let contactModal: React.ReactNode = null
+  if (cardOverThread && personPane) {
+    contactModal = (
+      <ContactModal closeHref={inboxHref(base, carried, { contact: null })} label={cardLabel}>
+        {personPane}
+      </ContactModal>
+    )
+    personPane = null
   }
 
   // ---- an organisation's own card, and the importer -----------------------
@@ -1301,10 +1328,9 @@ export async function UnifiedInboxPanel({
       // site's own addresses on exactly the conversations somebody is most
       // likely to be tidying up.
       //
-      // `replyTo` beats `from` for the same reason it does everywhere else in
-      // this module (E13): a sender who nominated a Reply-To is telling us which
-      // of the two addresses is actually theirs, and it is the one a reply would
-      // have gone to.
+      // `from`, not `replyTo`, unlike everywhere else in this module (E13):
+      // collection refuses post by its From address, so a block is only worth
+      // anything on that one - see the note beside spamSender below.
       //
       // A text they sent in (lib/text-links.ts) is passed over: it has a number
       // and no address, and would leave nobody to refuse.
@@ -1326,20 +1352,30 @@ export async function UnifiedInboxPanel({
       const lastExchanged = reversed.find((m) => m.direction === 'in')
         ?? reversed.find((m) => m.direction === 'out')
         ?? null
+      // The contact card's name fills in where the message has none worth
+      // showing - a caller's number, an email with no display name - exactly
+      // as the row does (preferContactName).
+      const contactName = !isDiscussion && thread.personId
+        ? (await getPerson(thread.personId))?.displayName ?? null
+        : null
       const contactLabel = isDiscussion ? null
         : thread.contactName?.trim() || thread.contactAddress?.trim()
           || (lastExchanged
             ? (lastExchanged.direction === 'in'
-              ? lastExchanged.fromName?.trim() || lastExchanged.fromAddress || lastExchanged.fromPhone
-              : lastExchanged.toAddresses[0] ?? lastExchanged.fromPhone)
+              ? preferContactName(lastExchanged.fromName, contactName) || lastExchanged.fromAddress || lastExchanged.fromPhone
+              : preferContactName(null, contactName) || (lastExchanged.toAddresses[0] ?? lastExchanged.fromPhone))
             : null)
           || null
       const contactAddress = (thread.contactAddress
         ?? (lastExchanged
           ? (lastExchanged.direction === 'in' ? lastExchanged.fromAddress : lastExchanged.toAddresses[0] ?? null)
           : null))?.trim().toLowerCase() ?? null
+      // From, never Reply-To. Collection refuses post by its From address (see
+      // shouldJunkSender), so a block on a Reply-To matches nothing: bulk
+      // senders set a fresh reply-xxxx address per message, and blocking one of
+      // those let every later message straight through.
       const spamSender = lastInbound
-        ? normaliseAddress(lastInbound.replyTo || lastInbound.fromAddress || '')
+        ? normaliseAddress(lastInbound.fromAddress || '')
         : ''
       const senderAddress = spamSender.includes('@') ? spamSender : null
       // Whose bin this one would go into, worked out the same way the route
@@ -1513,6 +1549,10 @@ export async function UnifiedInboxPanel({
           /* The same press on the name under the subject, where it is an
              outsider with an address to look for. */
           contactHref={contactAddress ? outsiderLinks[contactAddress] ?? null : null}
+          /* Pressing the name opens their record over the conversation. */
+          contactCardHref={thread.personId && !isDiscussion
+            ? inboxHref(base, carried, { contact: thread.personId })
+            : null}
           otherInboxNames={otherInboxNames}
           /* Only the id and what it was called: who did it and when are the
              merge's own line in the conversation, and the way out of a merge
@@ -2373,6 +2413,7 @@ export async function UnifiedInboxPanel({
             takes the whole width (data-list="full" above) rather than sharing
             it with half a screen that says there is nothing in it. */}
         {opened && <div className="uin-read">{otherPane ?? threadPane}</div>}
+        {contactModal}
 
         {/* The two hairlines between the rail, the list and the conversation,
             made draggable. Last inside the frame so it is over the panes rather

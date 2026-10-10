@@ -68,8 +68,12 @@ type Props = {
    *  conversation they are in - keyed by the address in lower case. Our own
    *  addresses and colleagues' are never in it, so they stay plain text. */
   outsiderLinks: Record<string, string>
-  /** Where the name under the subject goes when pressed, if anywhere. */
+  /** Every conversation with whoever this is with, where they are an outsider
+   *  with an address to look for. */
   contactHref: string | null
+  /** Their contact record, opened in a dialog over this conversation - where
+   *  the name under the subject goes when pressed. Null with no contact. */
+  contactCardHref: string | null
   messages: ThreadMessageView[]
   events: ThreadEventRow[]
   /** Who this conversation can be HANDED to. Narrowed on somebody's own inbox,
@@ -684,7 +688,7 @@ function productsTravel(channel: string): boolean {
 }
 
 export function ThreadPane({
-  base, params, thread, inboxName, contactLabel, outsiderLinks, contactHref, messages, events, staff, taggable, staffById,
+  base, params, thread, inboxName, contactLabel, outsiderLinks, contactHref, contactCardHref, messages, events, staff, taggable, staffById,
   canReply, cannotReplyReason, style, destinationLine,
   replyTo, replyAllTo, replySubject, forwardSubject, draft,
   canAddProducts, draftProducts, canSuggestReplies, newestFirst,
@@ -875,25 +879,44 @@ export function ThreadPane({
           {/* Who it is with rather than how they got in touch - see the note
               where InboxPanel works it out. The channel stays for a discussion,
               which has nobody outside to name. */}
-          {/* Pressing the name changes who it is with - see ThreadContactPicker.
-              Only where there is somebody outside to choose between. */}
-          {contactLabel && contacts.length > 0
+          {/* Pressing the name opens their contact record over the
+              conversation (ContactModal); the pencil beside it changes who the
+              conversation is with (ThreadContactPicker), only where there is
+              somebody outside to choose between. With no record yet, the name
+              goes where it always went: every conversation with them. */}
+          {contactLabel
             ? (
-                <ThreadContactPicker
-                  threadId={thread.id}
-                  label={contactLabel}
-                  href={contactHref}
-                  contacts={contacts}
-                  chosenAddress={thread.contactAddress}
-                />
+                <span className="uin-thread-with-wrap">
+                  {contactCardHref
+                    ? (
+                        <Link
+                          className="uin-thread-with uin-contact-button uin-contact-name"
+                          href={contactCardHref}
+                          scroll={false}
+                          title="Open their contact record"
+                        >
+                          {contactLabel}
+                        </Link>
+                      )
+                    : contactHref
+                    ? (
+                        <Link className="uin-thread-with uin-msg-with" href={contactHref} title="Every conversation with them">
+                          {contactLabel}
+                        </Link>
+                      )
+                    : <span className="uin-thread-with">{contactLabel}</span>}
+                  {contacts.length > 0 && (
+                    <ThreadContactPicker
+                      threadId={thread.id}
+                      label={contactLabel}
+                      href={contactHref}
+                      contacts={contacts}
+                      chosenAddress={thread.contactAddress}
+                    />
+                  )}
+                </span>
               )
-            : contactHref && contactLabel
-            ? (
-                <Link className="uin-thread-with uin-msg-with" href={contactHref} title="Every conversation with them">
-                  {contactLabel}
-                </Link>
-              )
-            : <span className="uin-thread-with">{contactLabel ?? channelLabel(thread.channel)}</span>}
+            : <span className="uin-thread-with">{channelLabel(thread.channel)}</span>}
           {inboxName && <span>&middot; {inboxName}</span>}
           {otherInboxNames.map((name) => <span key={name}>&middot; {name}</span>)}
           <span>&middot; {messages.length} message{messages.length === 1 ? '' : 's'}</span>

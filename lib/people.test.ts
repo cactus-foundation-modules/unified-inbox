@@ -8,6 +8,7 @@ import {
   isPersonalDomain,
   organisationNameFromDomain,
   phoneKey,
+  preferContactName,
   tidyPhone,
   resolveOwnDomains,
   shouldBecomePerson,
@@ -229,5 +230,25 @@ describe('domainOf and isPersonalDomain', () => {
     expect(CONSUMER_DOMAINS.length).toBeGreaterThan(20)
     expect(isPersonalDomain('gmail.com')).toBe(true)
     expect(isPersonalDomain('deskwell.co.uk')).toBe(false)
+  })
+})
+
+describe('preferContactName', () => {
+  it('shows the card name on a call whose name slot is only the number', () => {
+    expect(preferContactName('07445164570', 'Chris Taylor-Guest')).toBe('Chris Taylor-Guest')
+  })
+
+  it('shows the card name on an email with no display name, or only an address', () => {
+    expect(preferContactName(null, 'Ada Lovelace')).toBe('Ada Lovelace')
+    expect(preferContactName('ada@example.com', 'Ada Lovelace')).toBe('Ada Lovelace')
+  })
+
+  it('keeps a real name on the message', () => {
+    expect(preferContactName('Ben Burrows', 'B. Burrows Ltd')).toBe('Ben Burrows')
+  })
+
+  it('falls back to the message when the card is itself only a number', () => {
+    expect(preferContactName('07700900123', '07700900123')).toBe('07700900123')
+    expect(preferContactName(null, '+447700900123')).toBeNull()
   })
 })

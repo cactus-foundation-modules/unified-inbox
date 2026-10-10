@@ -162,6 +162,10 @@ export type InboxParams = {
    *  screen as a conversation, because it answers the same question about the
    *  same human from a different angle. */
   personId: string | null
+  /** A contact record shown in a dialog over the open conversation - pressing
+   *  the name under its subject. Only means anything with a conversation open;
+   *  on its own, `person` is the way to show somebody. */
+  contactCardId: string | null
 }
 
 export type ContactsView = 'people' | 'organisations'
@@ -320,6 +324,7 @@ export function parseInboxParams(sp: Record<string, string> = {}): InboxParams {
     composeKind: parseComposeKind(sp.compose) ?? 'email',
     draftId: sp.draft ? sp.draft : null,
     personId: sp.person ? sp.person : null,
+    contactCardId: sp.contact ? sp.contact : null,
   }
 }
 

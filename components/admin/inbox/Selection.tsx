@@ -41,6 +41,11 @@ export type PickedRow = {
    *  due, and an API that takes ISO wants ISO. */
   snoozeUntil: string | null
   unread: boolean
+  /** Who a block on this row would refuse, normalised, or null where there is
+   *  nobody (a discussion, a caller). The junk button in the open conversation
+   *  offers to block everybody in the pile, and only the list knows who they
+   *  are. */
+  blockAddress: string | null
 }
 
 type Value = {
@@ -91,7 +96,7 @@ function useOnScreen(): [PickedRow[], (rows: PickedRow[]) => void] {
 }
 
 /** Whether two drawings of the list say the same thing. Cheap and exact: the
- *  four fields the pick reads, in order, which is all this has to be right
+ *  five fields the pick reads, in order, which is all this has to be right
  *  about. */
 function same(a: PickedRow[], b: PickedRow[]): boolean {
   if (a.length !== b.length) return false
@@ -102,6 +107,7 @@ function same(a: PickedRow[], b: PickedRow[]): boolean {
       && row.status === other.status
       && row.snoozeUntil === other.snoozeUntil
       && row.unread === other.unread
+      && row.blockAddress === other.blockAddress
   })
 }
 

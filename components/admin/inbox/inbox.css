@@ -2487,6 +2487,10 @@
    screenful, so the card is as tall as what is in it instead of reserving half
    the window for a box nobody is going to fill. */
 .uin-modal-card-short { width: min(32rem, 100%); }
+/* A contact record over the conversation: the address book's own page, head
+   and all, so the card is as wide as a reading pane and as tall as it needs. */
+.uin-modal-card-contact { width: min(60rem, 100%); display: block; overflow-y: auto; }
+.uin-modal-card-contact:focus { outline: none; }
 
 
 /* ---- who the site turns away -------------------------------------------- */
@@ -5114,6 +5118,23 @@
 .uin-contact-button[aria-expanded="true"] { background: var(--color-bg-subtle); }
 .uin-contact-button:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
 .uin-contact-error { font-size: 0.75rem; color: var(--color-danger); }
+/* The name as a link to their contact record (ContactModal), and the pencil
+   beside it that changes who the conversation is with. */
+.uin-thread-with-wrap { display: inline-flex; align-items: center; gap: 0.1rem; }
+.uin-contact-name { color: var(--color-text); text-decoration: none; }
+.uin-contact-name:hover { color: var(--color-text); text-decoration: none; }
+.uin-contact-name:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+.uin-contact-edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0.15rem;
+  color: var(--color-text-muted);
+}
+.uin-contact-edit:hover,
+.uin-contact-edit[aria-expanded="true"] { color: var(--color-text); }
+.uin-contact-edit svg { width: 0.85rem; height: 0.85rem; }
 
 /* ---- the head of an open conversation ----------------------------------- */
 /* Whose it is, as a capsule of two halves: a person, or their name once

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AdminTooltip } from '@/components/admin/Tooltip'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -60,11 +60,13 @@ import { SpamIcon } from './icons'
 //
 // ONE PRESS, HOWEVER MANY CONVERSATIONS ARE TICKED, exactly as the bin beside
 // it: somebody who has picked six in the list and opened one of them to check
-// means the six (see Selection). The door is the exception - it is only ever
-// offered on the sender of the conversation actually being read, because that
-// is the only address this button has been told about, and a dialog that
-// offered to block "them" over a pile of six different senders would be a
-// dialog nobody could answer honestly.
+// means the six (see Selection). The door covers the pile too: every sender in
+// it, named one by one in the dialog so the answer is an honest one - exactly
+// what the bar over the list offers for the same pile. It used to offer only
+// the sender of the conversation being read, which meant somebody who ticked
+// four bits of junk, opened the last to check it and pressed Block them got one
+// sender blocked and three still getting through, with nothing on the screen
+// to say so.
 //
 // THE DOOR HAS TWO SHAPES, and this button asks about whichever one the
 // conversation has. Email is the site's own list of refused addresses and
@@ -177,14 +179,29 @@ export function SpamButton({
    *  not refused yet is the site's own list; a channel that can refuse people
    *  and has not refused this one is the channel's. Never both: a conversation
    *  arrives on one channel, and the one it arrived on is the one to shut. */
-  const shutTheList = canBlock && !!senderAddress && !senderBlocked
-  const shutTheChannel = canBlock && !!channelBlock && !channelBlock.blocked && !shutTheList
-  const worthAsking = shutTheList || shutTheChannel
-
   // This conversation, and everything else ticked in the list beside it.
   const targets = useBulkTargets(threadId)
   const many = targets.length > 1
-  const { clear: dropSelection } = useSelection()
+  const { clear: dropSelection, pickedRows } = useSelection()
+
+  /** Every address the pile could be blocked on: this conversation's sender
+   *  (unless already refused) and whoever sent each ticked one, as the list
+   *  worked them out. Anybody in there blocked already simply stays that way -
+   *  blocking is written ON CONFLICT DO NOTHING. */
+  const blockList = useMemo(() => {
+    if (!canBlock) return []
+    const inPile = new Set(targets)
+    const others = pickedRows
+      .filter((row) => row.id !== threadId && inPile.has(row.id))
+      .map((row) => row.blockAddress)
+      .filter((address): address is string => !!address)
+    return [...new Set([...(senderAddress && !senderBlocked ? [senderAddress] : []), ...others])]
+  }, [canBlock, pickedRows, senderAddress, senderBlocked, targets, threadId])
+
+  const openOnList = canBlock && !!senderAddress && !senderBlocked
+  const shutTheChannel = canBlock && !!channelBlock && !channelBlock.blocked && !openOnList
+  const shutTheList = !shutTheChannel && blockList.length > 0
+  const worthAsking = shutTheList || shutTheChannel
 
   /** Says whether ANY of them moved, which is what the second half of this
    *  press needs to know: a door shut behind post that is still sitting in the
@@ -229,17 +246,26 @@ export function SpamButton({
       // channel to refuse the party on this conversation - for the phone that
       // IS the caller's number - and the site's list refuses an address across
       // every inbox on the site.
-      const response = shutTheChannel
-        ? await fetch(`/api/m/unified-inbox/threads/${threadId}/block`, {
+      if (!shutTheChannel) {
+        const { failed, count } = await runOnMany(blockList, (address) =>
+          fetch('/api/m/unified-inbox/blocked-senders', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ blocked: true }),
-          })
-        : await fetch('/api/m/unified-inbox/blocked-senders', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ address: senderAddress, blocked: true }),
-          })
+            body: JSON.stringify({ address, blocked: true }),
+          }))
+        if (failed === count) {
+          setError(count > 1 ? 'They were moved, but nobody was blocked.' : 'It was moved, but they were not blocked.')
+          return
+        }
+        if (failed > 0) setError(`${failed} of ${count} senders could not be blocked. The rest were.`)
+        refused = count - failed > 1 ? 'The senders stay blocked.' : 'The sender stays blocked.'
+        return
+      }
+      const response = await fetch(`/api/m/unified-inbox/threads/${threadId}/block`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ blocked: true }),
+      })
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as { error?: string } | null
         // The move went through; what failed is the door. Said here rather than
@@ -249,9 +275,7 @@ export function SpamButton({
         setError(body?.error ?? 'It was moved, but they were not blocked.')
         return
       }
-      refused = shutTheChannel
-        ? `They will not get through on ${channelBlock?.label ?? 'that channel'} again.`
-        : 'The sender stays blocked.'
+      refused = `They will not get through on ${channelBlock?.label ?? 'that channel'} again.`
     } catch {
       setError('The site could not be reached, so nobody was blocked.')
     } finally {
@@ -261,7 +285,7 @@ export function SpamButton({
       router.push(closeHref)
     }
   }, [
-    channelBlock, closeHref, dropSelection, offerToPutBack, router, senderAddress, setSpam,
+    blockList, channelBlock, closeHref, dropSelection, offerToPutBack, router, setSpam,
     shutTheChannel, targets, threadId, worthAsking,
   ])
 
@@ -329,7 +353,7 @@ export function SpamButton({
       <ConfirmDialog
         open={asking}
         title={worthAsking
-          ? 'Block them as well?'
+          ? (shutTheList && blockList.length > 1 ? `Block all ${blockList.length} of them as well?` : 'Block them as well?')
           : many
             ? `Move ${targets.length} ${them(targets.length)} to the spam folder?`
             : 'Move it to the spam folder?'}
@@ -358,15 +382,12 @@ export function SpamButton({
             Nothing already here is deleted - this conversation and everything in it stays exactly
             as it is - and you can let them back in from the button at the top of it.
           </> : shutTheList ? <>
-            {/* The door is about the sender of the conversation being READ,
-                even when a pile is on the move: it is the only address this
-                button has been told about, and offering to block "them" over
-                six different senders would be an offer nobody could answer. */}
-            Would you also like to turn <strong>{senderAddress}</strong> away in future?
-            {many ? <> That is the sender of the conversation you are reading; the other{' '}
-              {targets.length - 1} still move, and their senders are left alone.</> : null} Nothing
-            further from them would reach an inbox on this site - shared or personal. It would be
-            dropped straight in here instead, marked as dealt with and left unread, so you can
+            {/* Every sender in the pile, listed underneath when there is more
+                than one, so the answer covers exactly what is on the screen. */}
+            Would you also like to turn{' '}
+            {blockList.length > 1 ? 'these senders' : <strong>{blockList[0]}</strong>} away in
+            future? Nothing further from them would reach an inbox on this site - shared or
+            personal. It would be dropped straight in here instead, marked as dealt with and left unread, so you can
             still see what they sent. They would come out of your contacts, but their
             conversations already here would not be touched, and you can let them back in from
             the Spam folder or from the inbox settings.
@@ -376,9 +397,14 @@ export function SpamButton({
                 the only way back from a press nobody meant. */}
             Press the same button in the Spam folder to bring it straight back.
           </>}
+          {shutTheList && blockList.length > 1 && (
+            <ul>
+              {blockList.map((address) => <li key={address}><strong>{address}</strong></li>)}
+            </ul>
+          )}
         </>}
         confirmLabel={worthAsking
-          ? 'Block them'
+          ? (shutTheList && blockList.length > 1 ? 'Block them all' : 'Block them')
           : many ? `Move all ${targets.length} to spam` : 'Move it to spam'}
         other={worthAsking
           ? { label: many ? 'No, just move them' : 'No, just move it', onClick: () => void moveOnly() }

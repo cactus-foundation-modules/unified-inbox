@@ -32,6 +32,9 @@ type Props = {
   adminPath: string
   base: string
   params: Record<string, string>
+  /** Where the cross goes when the record is open over a conversation (see
+   *  ContactModal) rather than in the reading pane. */
+  closeHref?: string
   person: Person
   identities: PersonIdentity[]
   /** The further addresses, beyond the one in their own columns. */
@@ -98,7 +101,7 @@ function describeEvent(event: PersonEventRow): string {
 }
 
 export function PersonView({
-  adminPath, base, params, person, identities, addresses, threads, outbound, sections, links,
+  adminPath, base, params, closeHref, person, identities, addresses, threads, outbound, sections, links,
   publicUrls, events, merges, categories, alsoHere, staffById, canEdit, canManage, now,
   timezone,
 }: Props) {
@@ -131,7 +134,7 @@ export function PersonView({
               part of who they are, and five worded buttons were a row of their
               own that overflowed the pane. */}
           {canEdit && <PersonActionsBar />}
-          <Link className="uin-thread-close" href={inboxHref(base, params, { person: null })}>
+          <Link className="uin-thread-close" href={closeHref ?? inboxHref(base, params, { person: null })} scroll={false}>
             <span className="uin-back-phone" aria-hidden="true">{BackIcon}<span className="uin-back-words">Back</span></span>
             <span className="uin-back-wide" aria-hidden="true">{CloseIcon}</span>
             <span className="sr-only">Close this person and go back to the list</span>

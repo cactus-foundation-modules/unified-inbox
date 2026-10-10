@@ -5,6 +5,7 @@ import { encryptSecret, tryDecryptSecret } from '@/lib/crypto/secrets'
 import { emailEngagementFor, emptyEngagement, type EmailEngagement } from '@/lib/email/tracking/events'
 import { normaliseAddress } from './addresses'
 import { addressKey } from './contacts'
+import { preferContactName } from './people'
 import { mintPushToken } from './push-checks'
 import { normaliseSubject, type ThreadRef } from './threading'
 import {
@@ -3469,6 +3470,10 @@ function threadListQuery(
            t."last_message_at", t."last_direction", t."unread", t."message_count",
            t."created_at", t."started_by_user_id", t."to_user_ids",
            t."contact_name", t."contact_address",
+           (SELECT COALESCE(pw."display_name", pp."display_name")
+              FROM "uin_people" pp
+              LEFT JOIN "uin_people" pw ON pw."id" = pp."merged_into_id"
+             WHERE pp."id" = t."person_id") AS "person_name",
            COALESCE(
              ARRAY(SELECT ti."inbox_id" FROM "uin_thread_inboxes" ti WHERE ti."thread_id" = t."id"),
              ARRAY[]::text[]
@@ -3545,8 +3550,14 @@ function mapThreadListRow(r: Record<string, unknown>): ThreadListRow {
     // has a number where a correspondent has an address, and the row says
     // whichever of the two there is - "Unknown sender" beside a phone
     // conversation whose number we are holding would be a plain untruth.
+    // The contact card's name fills in where the message has none worth
+    // showing - a caller's number, an email with no display name (see
+    // preferContactName).
     ...(chosenContact(r) ?? {
-      participantName: inbound ? ((r.last_from_name as string | null) ?? null) : null,
+      participantName: preferContactName(
+        inbound ? ((r.last_from_name as string | null) ?? null) : null,
+        (r.person_name as string | null) ?? null,
+      ),
       participantAddress: inbound
         ? ((r.last_from_address as string | null) ?? (r.last_from_phone as string | null) ?? null)
         : (to[0] ?? (r.last_from_phone as string | null) ?? null),

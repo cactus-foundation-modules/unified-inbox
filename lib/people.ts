@@ -284,3 +284,29 @@ export function organisationNameFromDomain(
 function unique(values: string[]): string[] {
   return [...new Set(values)]
 }
+
+/**
+ * The name to show for whoever a conversation is with: the one on their
+ * contact card where the message itself has none worth showing.
+ *
+ * A call or a text carries the caller's number in the name slot, and an email
+ * can arrive with no display name at all - so a conversation with somebody the
+ * address book knows perfectly well read "07445164570" in the list and in its
+ * header. A real name on the message still wins: it is what they called
+ * themselves, today, and it is what the row has always shown. The card only
+ * fills the gap - and only with a name, since an automatic card for a caller
+ * is itself named after the number.
+ */
+export function preferContactName(messageName: string | null | undefined, contactName: string | null | undefined): string | null {
+  const own = messageName?.trim() || null
+  const card = contactName?.trim() || null
+  if (own && isRealName(own)) return own
+  if (card && isRealName(card)) return card
+  return own
+}
+
+/** Whether a name is a name rather than a number or an address standing in for one. */
+function isRealName(name: string): boolean {
+  return /\p{L}/u.test(name) && !name.includes('@')
+}
+
