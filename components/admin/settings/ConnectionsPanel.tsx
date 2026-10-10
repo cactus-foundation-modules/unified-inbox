@@ -295,8 +295,8 @@ export function ConnectionsPanel({ connections, collection, busy, call, setMessa
         </FieldGroup>
 
         <FormActions>
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>Save mail account</button>
           <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>Save mail account</button>
         </FormActions>
       </EditPanel>
     )
@@ -373,7 +373,7 @@ export function ConnectionsPanel({ connections, collection, busy, call, setMessa
         )
       })}
 
-      {editing === null && (
+      {editing === null && connections.length > 0 && (
         <button type="button" className="btn btn-secondary btn-sm" style={{ marginTop: '0.25rem' }} onClick={startNew}>
           Add a mail account
         </button>

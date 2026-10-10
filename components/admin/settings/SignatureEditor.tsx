@@ -8,6 +8,7 @@ import { API } from './api'
 import type { SignatureKind } from './types'
 import type { InboxDraft } from './inbox-draft'
 import { GROUP_LABEL, MUTED } from './ui'
+import { InfoTip } from '@/components/admin/InfoTip'
 
 // Puck and its stylesheet are a large import for a screen most people open to
 // change a folder name, so the signature builder only arrives if they ask for
@@ -136,7 +137,7 @@ export function SignatureEditor({ draft, setDraft }: {
 
       {draft.signatureKind === 'html' && (
         <>
-          <label htmlFor={`${fid}-sig-html`} className="sr-only">The signature markup</label>
+          <label htmlFor={`${fid}-sig-html`} className="sr-only">The signature markup <InfoTip>Tables, inline styles, images and links all come through as written. Scripts and anything that runs on its own - <code>onerror</code> and the like - are removed when you save, because this markup ends up in a customer&rsquo;s inbox rather than in here.</InfoTip></label>
           <textarea
             id={`${fid}-sig-html`}
             rows={12}
@@ -147,11 +148,6 @@ export function SignatureEditor({ draft, setDraft }: {
             placeholder="<table>…</table>"
             style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.8125rem' }}
           />
-          <span className="field-hint" style={{ display: 'block', marginTop: '0.5rem' }}>
-            Tables, inline styles, images and links all come through as written. Scripts and anything
-            that runs on its own - <code>onerror</code> and the like - are removed when you save,
-            because this markup ends up in a customer&rsquo;s inbox rather than in here.
-          </span>
         </>
       )}
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { usePathname } from 'next/navigation'
+import { InfoTip } from '@/components/admin/InfoTip'
 
 // ---------------------------------------------------------------------------
 // The box another module's settings tab shows: which of your inboxes that
@@ -29,14 +30,6 @@ import { usePathname } from 'next/navigation'
 const API = '/api/m/unified-inbox/admin/module-senders'
 
 const MUTED: React.CSSProperties = { color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)' }
-
-const CARD: React.CSSProperties = {
-  border: '1px solid var(--color-border)',
-  borderRadius: 'var(--radius-md)',
-  background: 'var(--color-surface)',
-  padding: '1rem',
-  marginBottom: '1rem',
-}
 
 type InboxOption = { id: string; name: string; address: string }
 
@@ -133,16 +126,16 @@ export function ModuleSenderPanel({ moduleName, what }: ModuleSenderPanelProps) 
   // appear out of nowhere and shove the rest of the page down.
   if (!inboxes) {
     return (
-      <div style={CARD}>
-        <h3 style={{ margin: '0 0 0.75rem', fontSize: 'var(--text-base)' }}>Where this email goes</h3>
+      <div className="card">
+        <h3 className="card-title">Where this email goes</h3>
         <p style={{ ...MUTED, margin: 0 }}>Fetching your addresses&hellip;</p>
       </div>
     )
   }
 
   return (
-    <div style={CARD}>
-      <h3 style={{ margin: '0 0 0.75rem', fontSize: 'var(--text-base)' }}>Where this email goes</h3>
+    <div className="card">
+      <h3 className="card-title">Where this email goes</h3>
 
       {inboxes.length === 0 ? (
         <p style={{ ...MUTED, margin: 0 }}>
@@ -153,7 +146,7 @@ export function ModuleSenderPanel({ moduleName, what }: ModuleSenderPanelProps) 
       ) : (
         <>
           <div className="field">
-            <label htmlFor={`uin-sender-${moduleName}`}>Send {what} from</label>
+            <label htmlFor={`uin-sender-${moduleName}`}>Send {what} from <InfoTip>Pick one of your inboxes and {what} leave as that address, under its own name - and the replies come back to it, in the same conversation as everything else that person has written to you. Left as the site&rsquo;s usual address, nothing changes.</InfoTip></label>
             <select
               id={`uin-sender-${moduleName}`}
               value={inboxId}
@@ -167,15 +160,10 @@ export function ModuleSenderPanel({ moduleName, what }: ModuleSenderPanelProps) 
                 </option>
               ))}
             </select>
-            <span className="field-hint">
-              Pick one of your inboxes and {what} leave as that address, under its own name - and the replies come
-              back to it, in the same conversation as everything else that person has written to you. Left as the
-              site&rsquo;s usual address, nothing changes.
-            </span>
           </div>
 
           <div className="field">
-            <label htmlFor={`uin-copy-${moduleName}`}>Keep a copy of {what} in</label>
+            <label htmlFor={`uin-copy-${moduleName}`}>Keep a copy of {what} in <InfoTip>Each one turns up in that inbox as a conversation of its own, so you can see what was actually sent and any reply lands underneath it. Worth switching on whichever address they go out as: email the site sends for you never appears in a mail folder otherwise, because it does not go through one.</InfoTip></label>
             <select
               id={`uin-copy-${moduleName}`}
               value={copyInboxId}
@@ -189,11 +177,6 @@ export function ModuleSenderPanel({ moduleName, what }: ModuleSenderPanelProps) 
                 </option>
               ))}
             </select>
-            <span className="field-hint">
-              Each one turns up in that inbox as a conversation of its own, so you can see what was actually sent
-              and any reply lands underneath it. Worth switching on whichever address they go out as: email the
-              site sends for you never appears in a mail folder otherwise, because it does not go through one.
-            </span>
           </div>
 
           {status && <p role="status" style={{ ...MUTED, margin: 0, color: 'var(--color-success)' }}>{status}</p>}

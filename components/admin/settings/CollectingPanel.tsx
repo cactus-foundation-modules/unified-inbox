@@ -4,6 +4,7 @@ import { useId, useState } from 'react'
 import type { BlockedSenderRow, Caller, Connection, Inbox, RetentionForecast, Settings, StaffMember } from './types'
 import { BlockedSendersSection } from './BlockedSendersSection'
 import { CheckField, FieldGroup, FieldRow, FormActions, MUTED, Panel } from './ui'
+import { InfoTip } from '@/components/admin/InfoTip'
 
 // ---------------------------------------------------------------------------
 // How much mail is collected, how long it is kept, and how a conversation
@@ -145,7 +146,7 @@ export function CollectingPanel({ settings, inboxes, connections, retention, blo
         />
         <FieldRow>
           <div className="field">
-            <label htmlFor={`${fid}-junk`}>Delete junk older than <span style={{ ...MUTED, fontWeight: 400 }}>(days)</span></label>
+            <label htmlFor={`${fid}-junk`}>Delete junk older than <span style={{ ...MUTED, fontWeight: 400 }}>(days)</span> <InfoTip>30 unless you change it. Anything that has sat in the junk folder this long, with nothing new said on it since, is removed for good in the nightly tidy-up. Clear the box to keep junk until somebody empties it. Conversations attached to an order, purchase order or quote are never removed this way.</InfoTip></label>
             <input
               id={`${fid}-junk`}
               type="number"
@@ -155,12 +156,6 @@ export function CollectingPanel({ settings, inboxes, connections, retention, blo
               placeholder="Keep junk"
               onChange={(e) => setDraft({ ...draft, junkRetentionDays: e.target.value === '' ? null : Number(e.target.value) })}
             />
-            <span className="field-hint">
-              30 unless you change it. Anything that has sat in the junk folder this long, with nothing new
-              said on it since, is removed for good in the nightly tidy-up. Clear the box to keep junk
-              until somebody empties it. Conversations attached to an order, purchase order or quote are
-              never removed this way.
-            </span>
           </div>
         </FieldRow>
         {retention && windowEdited && (
@@ -216,6 +211,7 @@ export function CollectingPanel({ settings, inboxes, connections, retention, blo
           <div className="field">
             <label htmlFor={`${fid}-autocheck`}>
               {allPushed ? 'Refresh the inbox while it is open' : 'Check for new mail while the inbox is open'}
+              <InfoTip>{allPushed ? 'Your mail arrives on its own, so this never opens a mailbox: it redraws the list so new mail appears without you moving, and collects live chat, texts and calls. ' : somePushed ? 'Accounts checked when your provider says mail has arrived are left out of this. ' : ''} This pace is only kept while somebody has the inbox open in the tab they are looking at, and only for people who look after the mail accounts. Anywhere else in the admin area, or in a tab left behind another window, it checks every 5 minutes instead (or at this pace, if it is slower). The more often you ask, the more work your hosting does, so pick the longest wait you can live with.</InfoTip>
             </label>
             <select
               id={`${fid}-autocheck`}
@@ -236,18 +232,6 @@ export function CollectingPanel({ settings, inboxes, connections, retention, blo
               <option value="600">Every 10 minutes</option>
               <option value="1800">Every half hour</option>
             </select>
-            <span className="field-hint">
-              {allPushed
-                ? 'Your mail arrives on its own, so this never opens a mailbox: it redraws the list so new mail appears without you moving, and collects live chat, texts and calls. '
-                : somePushed
-                  ? 'Accounts checked when your provider says mail has arrived are left out of this. '
-                  : ''}
-              This pace is only kept while somebody has the inbox open in the tab they are looking
-              at, and only for people who look after the mail accounts. Anywhere else in the admin
-              area, or in a tab left behind another window, it checks every 5 minutes instead (or at
-              this pace, if it is slower). The more often you ask, the more work your hosting does,
-              so pick the longest wait you can live with.
-            </span>
           </div>
         </FieldRow>
         <CheckField

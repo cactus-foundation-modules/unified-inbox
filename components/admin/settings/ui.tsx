@@ -1,8 +1,9 @@
 'use client'
 
-import { createContext, useContext, useId, type CSSProperties, type ReactNode } from 'react'
+import { Children, createContext, isValidElement, useContext, useId, type CSSProperties, type ReactNode } from 'react'
 import { SettingsHeaderActions } from '@/components/admin/SettingsHeaderActions'
 import type { Note } from './types'
+import { InfoTip } from '@/components/admin/InfoTip'
 
 // The handful of shapes every panel on this screen is built out of.
 //
@@ -63,6 +64,20 @@ export function NoteAlert({ note }: { note: Note | null }) {
   )
 }
 
+/** How many characters of text a heading's explanation runs to. Anything past
+ *  a couple of lines goes behind an (i) beside the heading, the same as every
+ *  other settings page, so the controls are what the eye lands on. */
+function textLength(node: ReactNode): number {
+  let n = 0
+  Children.forEach(node, (child) => {
+    if (typeof child === 'string' || typeof child === 'number') n += String(child).length
+    else if (isValidElement<{ children?: ReactNode }>(child)) n += textLength(child.props.children)
+  })
+  return n
+}
+
+const LONG_HINT = 150
+
 /** One panel of the settings screen: a heading, a sentence saying what it is
  *  for, and whatever the panel puts inside it. */
 export function Panel({ title, blurb, children, style }: {
@@ -71,10 +86,11 @@ export function Panel({ title, blurb, children, style }: {
   children: ReactNode
   style?: CSSProperties
 }) {
+  const tip = blurb != null && textLength(blurb) > LONG_HINT
   return (
     <section className="card settings-fields" style={{ marginBottom: '1.5rem', ...style }}>
-      <h3 style={PANEL_TITLE}>{title}</h3>
-      {blurb && (
+      <h3 style={PANEL_TITLE}>{title}{tip && <InfoTip>{blurb}</InfoTip>}</h3>
+      {blurb && !tip && (
         <p className="field-hint" style={{ margin: '0.375rem 0 1.25rem', maxWidth: '58ch' }}>{blurb}</p>
       )}
       {children}
@@ -91,6 +107,7 @@ export function FieldGroup({ title, hint, children, first }: {
   children: ReactNode
   first?: boolean
 }) {
+  const tip = hint != null && textLength(hint) > LONG_HINT
   return (
     <fieldset
       className="settings-fields"
@@ -101,8 +118,10 @@ export function FieldGroup({ title, hint, children, first }: {
         minInlineSize: 0,
       }}
     >
-      <legend style={{ ...GROUP_TITLE, padding: 0, marginBottom: hint ? '0.25rem' : '0.75rem' }}>{title}</legend>
-      {hint && <p className="field-hint" style={{ margin: '0 0 0.75rem', maxWidth: '58ch' }}>{hint}</p>}
+      <legend style={{ ...GROUP_TITLE, padding: 0, marginBottom: hint && !tip ? '0.25rem' : '0.75rem' }}>
+        {title}{tip && <InfoTip>{hint}</InfoTip>}
+      </legend>
+      {hint && !tip && <p className="field-hint" style={{ margin: '0 0 0.75rem', maxWidth: '58ch' }}>{hint}</p>}
       {children}
     </fieldset>
   )
@@ -111,10 +130,14 @@ export function FieldGroup({ title, hint, children, first }: {
 /** Two fields side by side where there is room, stacked where there is not. A
  *  server name and its port are one answer, not two, and giving the port a
  *  whole row of its own made the form a third longer than it needed to be. */
-export function FieldRow({ children, template = 'repeat(auto-fit, minmax(min(100%, 14rem), 1fr))' }: {
+export function FieldRow({ children, template }: {
   children: ReactNode
   template?: string
 }) {
+  // Without a template of its own the fields simply join the group's two-across
+  // grid, so a row of one pairs up with whatever comes next instead of
+  // stretching across the whole card on its own.
+  if (!template) return <>{children}</>
   return (
     <div style={{ display: 'grid', gridTemplateColumns: template, gap: '0 1rem', alignItems: 'start' }}>
       {children}
@@ -122,8 +145,8 @@ export function FieldRow({ children, template = 'repeat(auto-fit, minmax(min(100
   )
 }
 
-/** A tick box with its label beside it and, usually, a sentence underneath
- *  saying what ticking it does. Written out by hand a dozen times before this
+/** A tick box with its label beside it and, usually, an (i) saying what ticking
+ *  it does. Written out by hand a dozen times before this
  *  existed, and no two of them were indented the same. */
 export function CheckField({ label, checked, onChange, hint, disabled }: {
   label: ReactNode
@@ -133,23 +156,20 @@ export function CheckField({ label, checked, onChange, hint, disabled }: {
   disabled?: boolean
 }) {
   return (
-    // A tick box with a sentence under it needs the whole row; a bare one pairs up.
-    <div className={hint ? 'field field--wide' : 'field'}>
-      <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', fontWeight: 400, cursor: disabled ? 'default' : 'pointer' }}>
+    // What ticking it does sits behind an (i) beside the words, as on every other
+    // settings page, rather than as a paragraph under each box.
+    <div className="field">
+      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 400, cursor: disabled ? 'default' : 'pointer' }}>
         <input
           type="checkbox"
           checked={checked}
           disabled={disabled}
           onChange={(e) => onChange(e.target.checked)}
-          style={{ marginTop: '0.2rem', flexShrink: 0 }}
+          style={{ flexShrink: 0 }}
         />
         <span>{label}</span>
+        {hint && <InfoTip>{hint}</InfoTip>}
       </label>
-      {hint && (
-        // Lined up under the label rather than under the box, so the sentence
-        // reads as belonging to the words next to it.
-        <p className="field-hint" style={{ margin: '0.125rem 0 0 1.5rem', maxWidth: '58ch' }}>{hint}</p>
-      )}
     </div>
   )
 }

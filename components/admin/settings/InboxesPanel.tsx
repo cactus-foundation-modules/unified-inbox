@@ -691,8 +691,8 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, me
         )}
 
         <FormActions>
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>Save inbox</button>
           <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={save}>Save inbox</button>
         </FormActions>
       </EditPanel>
     )
@@ -802,7 +802,7 @@ export function InboxesPanel({ inboxes, connections, access, defaults, users, me
         )
       })}
 
-      {editing === null && (
+      {editing === null && inboxes.length > 0 && (
         <button type="button" className="btn btn-secondary btn-sm" style={{ marginTop: '0.25rem' }} onClick={startNew}>
           Add an inbox
         </button>

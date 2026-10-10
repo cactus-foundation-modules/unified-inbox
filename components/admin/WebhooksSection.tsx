@@ -7,6 +7,7 @@ import { ConfirmDialog } from './inbox/ConfirmDialog'
 // nothing like the five above it.
 import { EditPanel, HeaderActions, SETTINGS_SECTION_HEADING } from './settings/ui'
 import type { CredentialSource, SharedWebhookState, WebhookEvent } from '../../lib/webhook-types'
+import { InfoTip } from '@/components/admin/InfoTip'
 
 // "When something arrives, tell this address about it."
 //
@@ -468,7 +469,7 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
         </fieldset>
 
         <div className="field">
-          <label htmlFor={`${fieldId}-quiet`}>Then keep quiet for <span style={{ ...MUTED, fontWeight: 400 }}>(minutes)</span></label>
+          <label htmlFor={`${fieldId}-quiet`}>Then keep quiet for <span style={{ ...MUTED, fontWeight: 400 }}>(minutes)</span> <InfoTip>After each note, nothing more is sent to this address for this long - anything that happens in the meantime is left for whatever the first note set going to find. Stops an automation being set off again and again while it is still working. 0 sends every one.</InfoTip></label>
           <input
             id={`${fieldId}-quiet`}
             type="number"
@@ -480,11 +481,6 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
             value={draft.quietMinutes}
             onChange={(e) => setDraft({ ...draft, quietMinutes: e.target.value })}
           />
-          <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.375rem 0 0' }}>
-            After each note, nothing more is sent to this address for this long - anything that
-            happens in the meantime is left for whatever the first note set going to find. Stops an
-            automation being set off again and again while it is still working. 0 sends every one.
-          </p>
         </div>
 
         <div className="field">
@@ -505,7 +501,7 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
 
         {draft.payloadStyle === 'literal' && (
           <div className="field">
-            <label htmlFor={`${fieldId}-literal`}>What to send every time</label>
+            <label htmlFor={`${fieldId}-literal`}>What to send every time <InfoTip>Whatever the other end asked you to send it, word for word. If they have not given you anything to put here, the other choice above is the one you want.</InfoTip></label>
             <textarea
               id={`${fieldId}-literal`}
               rows={4}
@@ -513,10 +509,6 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
               placeholder={'{"text": "Something has arrived in the inbox"}'}
               onChange={(e) => setDraft({ ...draft, literalBody: e.target.value })}
             />
-            <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.375rem 0 0' }}>
-              Whatever the other end asked you to send it, word for word. If they have not given
-              you anything to put here, the other choice above is the one you want.
-            </p>
           </div>
         )}
 
@@ -529,17 +521,13 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
                 onChange={(e) => setDraft({ ...draft, includeBody: e.target.checked })}
               />
               Include what the message actually said
+              <InfoTip>Off by default, and worth leaving off unless the other end needs it: switching it on sends a copy of your post - and of what colleagues write to each other - to that address every time.</InfoTip>
             </label>
-            <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.375rem 0 0' }}>
-              Off by default, and worth leaving off unless the other end needs it: switching it on
-              sends a copy of your post - and of what colleagues write to each other - to that
-              address every time.
-            </p>
           </div>
         )}
 
         <div className="field">
-          <label htmlFor={`${fieldId}-secret-source`}>Signing password</label>
+          <label htmlFor={`${fieldId}-secret-source`}>Signing password <InfoTip>A signing password stamps each note, so the far end can tell it really came from your site. {draft.secretSource === 'shared' && !shared.hasSecret && ( <> There is no shared one set yet, so these would go out unsigned until you set one at the top of this page.</> )}</InfoTip></label>
           <select
             id={`${fieldId}-secret-source`}
             value={draft.secretSource}
@@ -549,14 +537,6 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
             <option value="own">Give this one its own</option>
             <option value="none">Do not sign these at all</option>
           </select>
-          <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.375rem 0 0' }}>
-            A signing password stamps each note, so the far end can tell it really came from your
-            site.
-            {draft.secretSource === 'shared' && !shared.hasSecret && (
-              <> There is no shared one set yet, so these would go out unsigned until you set one
-              at the top of this page.</>
-            )}
-          </p>
         </div>
 
         {draft.secretSource === 'own' && (
@@ -577,7 +557,7 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
         )}
 
         <div className="field">
-          <label htmlFor={`${fieldId}-headers-source`}>Extra headers</label>
+          <label htmlFor={`${fieldId}-headers-source`}>Extra headers <InfoTip>This is where a key goes if the address you are telling asks for one. {draft.headersSource === 'shared' && !shared.hasHeaders && ( <> There are no shared ones set yet, so these would go out with none.</> )}</InfoTip></label>
           <select
             id={`${fieldId}-headers-source`}
             value={draft.headersSource}
@@ -587,12 +567,6 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
             <option value="own">Give this one its own</option>
             <option value="none">Send no extra headers</option>
           </select>
-          <p style={{ ...MUTED, fontSize: '0.8125rem', margin: '0.375rem 0 0' }}>
-            This is where a key goes if the address you are telling asks for one.
-            {draft.headersSource === 'shared' && !shared.hasHeaders && (
-              <> There are no shared ones set yet, so these would go out with none.</>
-            )}
-          </p>
         </div>
 
         {draft.headersSource === 'own' && (
@@ -623,8 +597,8 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
         </div>
 
         <HeaderActions>
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>Save webhook</button>
           <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => setDraft(null)}>Cancel</button>
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>Save webhook</button>
         </HeaderActions>
       </EditPanel>
     )
@@ -667,14 +641,7 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
 
   return (
     <section className="card" style={{ marginBottom: '1.5rem' }}>
-      <h3 style={SETTINGS_SECTION_HEADING}>Telling something else when the post arrives</h3>
-      <p style={{ ...MUTED, fontSize: '0.875rem', marginTop: 0 }}>
-        Every time a message lands, a colleague writes in a discussion, somebody is asked to look at
-        something, or a conversation is handed to somebody, this can send a note about it to a web
-        address you choose - useful for setting
-        something else going on its own. Nothing here changes what happens in the inbox itself, and
-        switching it all off breaks nothing.
-      </p>
+      <h3 style={SETTINGS_SECTION_HEADING}>Telling something else when the post arrives <InfoTip>Every time a message lands, a colleague writes in a discussion, somebody is asked to look at something, or a conversation is handed to somebody, this can send a note about it to a web address you choose - useful for setting something else going on its own. Nothing here changes what happens in the inbox itself, and switching it all off breaks nothing.</InfoTip></h3>
 
       {noteBlock}
 
@@ -687,16 +654,11 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
       }}>
         <h4 style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 0.25rem' }}>
           Shared by every subscription
+          <InfoTip>One signing password and one set of extra headers, used by every subscription set to &ldquo;shared&rdquo; below. Change them here and every one of them follows on its next send - which beats typing the same key into five places and remembering all five on the day it is rotated.</InfoTip>
         </h4>
-        <p className="field-hint" style={{ margin: '0 0 0.875rem', maxWidth: '58ch' }}>
-          One signing password and one set of extra headers, used by every subscription set to
-          &ldquo;shared&rdquo; below. Change them here and every one of them follows on its next
-          send - which beats typing the same key into five places and remembering all five on the
-          day it is rotated.
-        </p>
 
         <div className="field">
-          <label htmlFor={`${fieldId}-shared-secret`}>Signing password</label>
+          <label htmlFor={`${fieldId}-shared-secret`}>Signing password <InfoTip>{shared.hasSecret ? 'One is set. It is never shown again, so the box above replaces it rather than editing it.' : 'None set. Subscriptions using the shared one send unsigned until there is one.'}</InfoTip></label>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
             <input
               id={`${fieldId}-shared-secret`}
@@ -713,11 +675,6 @@ export function WebhooksSection({ inboxes }: { inboxes: { id: string; name: stri
               </button>
             )}
           </div>
-          <p className="field-hint" style={{ margin: '0.375rem 0 0' }}>
-            {shared.hasSecret
-              ? 'One is set. It is never shown again, so the box above replaces it rather than editing it.'
-              : 'None set. Subscriptions using the shared one send unsigned until there is one.'}
-          </p>
         </div>
 
         <div className="field">

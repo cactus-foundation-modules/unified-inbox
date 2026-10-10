@@ -58,20 +58,11 @@ export function ReceiptsPanel({ settings, busy, call }: {
           worked out from a tiny invisible picture in the message, so it is a good clue rather than
           proof: some mail apps fetch that picture before anybody has read a word, and when that
           happens you are told so rather than told a fib. Anything sent through your own mail server
-          carries on saying nothing but &ldquo;Sent&rdquo;.
+          carries on saying nothing but &ldquo;Sent&rdquo;. Followed links only show when link
+          tracking is on in your email service&rsquo;s own settings, and some office mail systems
+          check every link the moment it arrives, so a burst of them is usually security, not a reader.
         </>}
       />
-
-      <div className="alert alert-info">
-        <p style={{ margin: 0, fontSize: '0.875rem' }}>
-          <strong>Links followed</strong> ride along with that switch, but only if link tracking is
-          switched on in your email service&rsquo;s own settings - it has to be handling the links in
-          your messages to know one was used. If nothing ever says &ldquo;followed a link&rdquo;,
-          that is the setting to go and look at. Do bear in mind that some office email systems check
-          every link in a message the moment it arrives, so a handful all at once is more likely to
-          be their security than a person having a read.
-        </p>
-      </div>
 
       <CheckField
         label="Ask the person’s own email program for a read receipt"
