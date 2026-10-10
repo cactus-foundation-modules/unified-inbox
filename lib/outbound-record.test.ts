@@ -22,6 +22,8 @@ const db = vi.hoisted(() => ({
   insertOutboundMessage: vi.fn(),
   insertOutboundAttachment: vi.fn(),
   settleDelivery: vi.fn(),
+  reopenOnReply: vi.fn(),
+  recordEvent: vi.fn(),
 }))
 vi.mock('./db', () => db)
 
@@ -54,6 +56,7 @@ beforeEach(() => {
   db.getInbox.mockResolvedValue({ id: 'inbox-1', address: 'purchasing@deskwell.co.uk' })
   db.createOutboundThread.mockResolvedValue('thread-1')
   db.findThreadByKey.mockResolvedValue(null)
+  db.reopenOnReply.mockResolvedValue(null)
   db.listInboxes.mockResolvedValue([{ id: 'inbox-1', address: 'purchasing@deskwell.co.uk' }])
   db.insertOutboundMessage.mockResolvedValue({ row: { id: 'message-1' }, created: true })
   media.getActiveMediaProvider.mockResolvedValue('B2')
@@ -176,6 +179,26 @@ describe('a module naming the conversation', () => {
     expect(db.createOutboundThread).not.toHaveBeenCalled()
     expect(db.insertOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'thread-9' }))
     expect(db.touchThread).toHaveBeenCalledWith('thread-9', expect.objectContaining({ direction: 'out', markUnread: false }))
+  })
+
+  it('opens a done or snoozed order conversation again, and says why', async () => {
+    db.findThreadByKey.mockResolvedValue('thread-9')
+    db.reopenOnReply.mockResolvedValue('snoozed')
+    await unifiedInboxOutboundRecord.record(ORDER_EMAIL)
+    expect(db.reopenOnReply).toHaveBeenCalledWith('thread-9')
+    expect(db.recordEvent).toHaveBeenCalledWith('thread-9', null, 'woken', expect.objectContaining({ was: 'snoozed', cause: 'module-email' }))
+  })
+
+  it('writes no timeline line when the conversation was already open', async () => {
+    db.findThreadByKey.mockResolvedValue('thread-9')
+    db.reopenOnReply.mockResolvedValue(null)
+    await unifiedInboxOutboundRecord.record(ORDER_EMAIL)
+    expect(db.recordEvent).not.toHaveBeenCalled()
+  })
+
+  it('leaves a brand new conversation alone', async () => {
+    await unifiedInboxOutboundRecord.record(ORDER_EMAIL)
+    expect(db.reopenOnReply).not.toHaveBeenCalled()
   })
 
   it('still files a conversation each when nothing is named', async () => {

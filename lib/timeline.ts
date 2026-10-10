@@ -203,6 +203,13 @@ function lineFor(
         }
         return 'Its snooze ran out, so it came back'
       }
+      // An automatic email filed on a conversation a module keeps one of per
+      // order (the shop's order emails): nobody replied, the order moved.
+      if (d.cause === 'module-email') {
+        return d.was === 'done'
+          ? 'Another email was sent to the customer, so it was opened again'
+          : 'Another email was sent to the customer, so it is no longer snoozed'
+      }
       // A reply found in a Sent folder, or an answer typed in a channel's own
       // screens: one of us, but not through this hub.
       const outside = d.direction === 'out'

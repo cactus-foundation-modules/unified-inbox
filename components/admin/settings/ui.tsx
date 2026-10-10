@@ -72,7 +72,7 @@ export function Panel({ title, blurb, children, style }: {
   style?: CSSProperties
 }) {
   return (
-    <section className="card" style={{ marginBottom: '1.5rem', ...style }}>
+    <section className="card settings-fields" style={{ marginBottom: '1.5rem', ...style }}>
       <h3 style={PANEL_TITLE}>{title}</h3>
       {blurb && (
         <p className="field-hint" style={{ margin: '0.375rem 0 1.25rem', maxWidth: '58ch' }}>{blurb}</p>
@@ -93,6 +93,7 @@ export function FieldGroup({ title, hint, children, first }: {
 }) {
   return (
     <fieldset
+      className="settings-fields"
       style={{
         border: 'none',
         padding: 0,
@@ -132,7 +133,8 @@ export function CheckField({ label, checked, onChange, hint, disabled }: {
   disabled?: boolean
 }) {
   return (
-    <div className="field">
+    // A tick box with a sentence under it needs the whole row; a bare one pairs up.
+    <div className={hint ? 'field field--wide' : 'field'}>
       <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', fontWeight: 400, cursor: disabled ? 'default' : 'pointer' }}>
         <input
           type="checkbox"
@@ -220,6 +222,7 @@ export function EditPanel({ title, children }: { title: string; children: ReactN
   return (
     <section
       aria-labelledby={headingId}
+      className="settings-fields"
       style={{
         border: '1px solid var(--color-border-strong)',
         borderRadius: 'var(--radius-md)',

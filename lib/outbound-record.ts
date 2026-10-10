@@ -8,6 +8,8 @@ import {
   insertOutboundAttachment,
   insertOutboundMessage,
   listInboxes,
+  recordEvent,
+  reopenOnReply,
   settleDelivery,
   touchThread,
 } from './db'
@@ -154,6 +156,17 @@ async function record(email: RecordedOutboundEmail): Promise<void> {
       inboxId,
       arrivedNow: false,
     })
+
+    // Another email on an order's conversation is the order moving, which is
+    // the end of whatever was waiting for it: the "done" somebody gave it when
+    // the last email went out, or the sleep they set until the delivery day
+    // (the very email that ends the wait is the courier's window arriving
+    // before it). Left asleep it would sit out of Open with a new email in it
+    // and nobody to see it. The same rule a customer's reply gets, and unlike
+    // a hand-typed reply, which leaves a sleep alone: nobody here chose to
+    // send this one, so there is no sleep it could be part of.
+    const was = await reopenOnReply(threadId)
+    if (was) await recordEvent(threadId, null, 'woken', { was, cause: 'module-email', direction: 'out', messageId: row.id })
   }
 }
 
