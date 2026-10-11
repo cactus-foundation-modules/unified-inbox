@@ -1508,7 +1508,14 @@ export async function touchThread(threadId: string, data: {
    *  backfill is walking through. Only the forward pass of a sweep sets it, and
    *  it is what lets a back-dated email say so - see last_arrived_at below. */
   arrivedNow: boolean
+  /** Take this message's subject as the conversation's title, instead of only
+   *  filling a blank one. For a conversation a module keeps appending to under
+   *  its own key (an order's emails), where the newest email's subject is the
+   *  one that says where the order has got to. Ignored when the mail is dated
+   *  behind what the thread already holds. */
+  retitle?: boolean
 }): Promise<void> {
+  const retitle = data.retitle === true
   await prisma.$executeRaw`
     UPDATE "uin_threads"
        SET "last_message_at" = GREATEST(COALESCE("last_message_at", ${data.sentAt}), ${data.sentAt}),
@@ -1531,8 +1538,15 @@ export async function touchThread(threadId: string, data: {
                                    THEN ${data.direction} ELSE "last_direction" END,
            "preview" = CASE WHEN "last_message_at" IS NULL OR "last_message_at" <= ${data.sentAt}
                             THEN ${data.preview} ELSE "preview" END,
-           "subject" = COALESCE("subject", ${data.subject}),
-           "subject_normalised" = COALESCE(NULLIF("subject_normalised", ''), ${data.subjectNormalised}),
+           "subject" = CASE
+             WHEN ${retitle} AND ${data.subject}::text IS NOT NULL
+                  AND ("last_message_at" IS NULL OR "last_message_at" <= ${data.sentAt})
+             THEN ${data.subject} ELSE COALESCE("subject", ${data.subject}) END,
+           "subject_normalised" = CASE
+             WHEN ${retitle} AND ${data.subject}::text IS NOT NULL
+                  AND ("last_message_at" IS NULL OR "last_message_at" <= ${data.sentAt})
+             THEN ${data.subjectNormalised}
+             ELSE COALESCE(NULLIF("subject_normalised", ''), ${data.subjectNormalised}) END,
            "inbox_id" = COALESCE("inbox_id", ${data.inboxId}),
            "unread" = CASE WHEN ${data.markUnread} THEN true ELSE "unread" END,
            "message_count" = (SELECT COUNT(*) FROM "uin_messages" WHERE "thread_id" = ${threadId}),

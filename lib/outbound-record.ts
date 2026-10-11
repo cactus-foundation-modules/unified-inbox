@@ -155,6 +155,8 @@ async function record(email: RecordedOutboundEmail): Promise<void> {
       markUnread: false,
       inboxId,
       arrivedNow: false,
+      // The order's newest email names the conversation, not its first.
+      retitle: true,
     })
 
     // Another email on an order's conversation is the order moving, which is
