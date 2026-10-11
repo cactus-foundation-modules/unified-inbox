@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useAdminConfirm } from '@/components/admin/useAdminConfirm'
 import { inboxHref } from '@/modules/unified-inbox/lib/list'
 import { campaignApi, when, type CampaignListRow } from './api'
 import { CampaignEditor } from './CampaignEditor'
@@ -63,6 +64,7 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
    *  half-written mailshot and it cannot ask about work it does not know
    *  about. */
   const [unsaved, setUnsaved] = useState(false)
+  const [askConfirm, confirmNode] = useAdminConfirm()
 
   const load = useCallback(async () => {
     const result = await campaignApi.list()
@@ -85,17 +87,19 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
   /**
    * Leave whatever is open, asking first if that would throw work away.
    *
-   * One line, so `window.confirm` is the right size of dialog for it - unlike
-   * the four-line warning in front of sending a campaign all over again, which
+   * A plain yes or no is the right size of dialog for it - unlike the
+   * four-line warning in front of sending a campaign all over again, which
    * has its own panel. Every way OUT of an open campaign goes through here:
    * another campaign, the do-not-email list, the back button on a phone.
    */
-  const mayLeave = useCallback(() => !unsaved || window.confirm(
-    'There are unsaved changes to the campaign you have open. Leave them behind?',
-  ), [unsaved])
+  const mayLeave = useCallback(async () => !unsaved || await askConfirm({
+    title: 'Leave this campaign?',
+    message: 'There are unsaved changes to the campaign you have open. Leave them behind?',
+    confirmLabel: 'Leave them behind',
+  }), [unsaved, askConfirm])
 
-  const leave = useCallback((changes: Record<string, string | null>) => {
-    if (mayLeave()) go(changes)
+  const leave = useCallback(async (changes: Record<string, string | null>) => {
+    if (await mayLeave()) go(changes)
   }, [go, mayLeave])
 
   const create = useCallback(async () => {
@@ -103,7 +107,7 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
     if (!name) return
     // Asked BEFORE the campaign is made: a refusal after it exists leaves an
     // empty campaign in the list that nobody asked for.
-    if (!mayLeave()) return
+    if (!(await mayLeave())) return
     // The address is chosen on the Who step. Starting with the first one the
     // person may send from is a sensible guess and saves a click on the site
     // where there is only one.
@@ -124,6 +128,7 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
 
   return (
     <>
+      {confirmNode}
       <div className="uin-col">
         <div className="uin-col-head">
           <div className="uin-col-title">
