@@ -845,30 +845,42 @@ export async function syncAllProviders(opts: { deadline?: number } = {}): Promis
   if (providers.length === 0) return []
 
   const watermarks = await providerWatermarks()
-  const firstPassSince = new Date(Date.now() - FIRST_PASS_DAYS * 86_400_000)
 
   const outcomes: ProviderOutcome[] = []
   for (const resolved of providers) {
     if (opts.deadline !== undefined && Date.now() >= opts.deadline) break
     outcomes.push(
-      await syncProvider(resolved, {
-        // The newest thing we hold from them, less the grace window - see
-        // REVISION_GRACE_MS for what that is covering and why it is cheap.
-        //
-        // Never closer in than the first-pass window. Once one conversation on
-        // a channel moves the watermark forward, anything older that was never
-        // copied - a voicemail on a number nobody had rung yet - would never
-        // appear at all. Re-listing back to the first-pass floor is cheap:
-        // settled conversations fail one date check and are not opened.
-        since: watermarks[resolved.id]
-          ? new Date(Math.min(
-              watermarks[resolved.id]!.getTime() - REVISION_GRACE_MS,
-              firstPassSince.getTime(),
-            ))
-          : firstPassSince,
-        deadline: opts.deadline,
-      }),
+      await syncProvider(resolved, { since: listSince(watermarks, resolved.id), deadline: opts.deadline }),
     )
   }
   return outcomes
+}
+
+// The newest thing we hold from a channel, less the grace window - see
+// REVISION_GRACE_MS for what that is covering and why it is cheap.
+//
+// Never closer in than the first-pass window. Once one conversation on a
+// channel moves the watermark forward, anything older that was never copied - a
+// voicemail on a number nobody had rung yet - would never appear at all.
+// Re-listing back to the first-pass floor is cheap: settled conversations fail
+// one date check and are not opened.
+function listSince(watermarks: Record<string, Date | undefined>, key: string): Date {
+  const firstPassSince = new Date(Date.now() - FIRST_PASS_DAYS * 86_400_000)
+  const mark = watermarks[key]
+  return mark
+    ? new Date(Math.min(mark.getTime() - REVISION_GRACE_MS, firstPassSince.getTime()))
+    : firstPassSince
+}
+
+/**
+ * One channel, now - for when its module has just announced something new
+ * (`core.conversation-arrived`, see lib/conversation-arrived.ts). The same pass
+ * the timer makes for that channel, so the two can overlap harmlessly: every
+ * write below is keyed on the far end's own ids.
+ */
+export async function syncOneProvider(key: string, opts: { deadline?: number } = {}): Promise<ProviderOutcome | null> {
+  const resolved = (await allConversationProviders()).find((p) => p.id === key)
+  if (!resolved) return null
+  const watermarks = await providerWatermarks()
+  return syncProvider(resolved, { since: listSince(watermarks, key), deadline: opts.deadline })
 }

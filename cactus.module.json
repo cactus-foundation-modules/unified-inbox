@@ -1,9 +1,9 @@
 {
   "name": "unified-inbox",
-  "version": "0.1.122",
+  "version": "0.1.123",
   "tablePrefix": "uin_",
   "description": "Every conversation with every customer and supplier in one place - email, live chat, contact form, calls, texts and WhatsApp - with your own records beside them.",
-  "requiresCoreVersion": "0.5.1772",
+  "requiresCoreVersion": "0.5.1779",
   "migrationCatchups": {
     "041_spam": "none"
   },
@@ -102,6 +102,13 @@
       "serverOnly": true,
       "import": "./lib/destinations",
       "component": "unifiedInboxMessageDestinations"
+    },
+    {
+      "point": "core.conversation-arrived",
+      "id": "unified-inbox-conversation-arrived",
+      "serverOnly": true,
+      "import": "./lib/conversation-arrived",
+      "component": "unifiedInboxConversationArrived"
     },
     {
       "point": "shop.order-paid",
