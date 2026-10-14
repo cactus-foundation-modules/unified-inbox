@@ -85,6 +85,7 @@ export async function buildCampaignMessage(ctx: CampaignMessageContext): Promise
   const { campaign, step, recipient, inbox } = ctx
 
   const person = {
+    title: recipient.title,
     firstName: recipient.firstName,
     lastName: recipient.lastName,
     displayName: recipient.displayName,

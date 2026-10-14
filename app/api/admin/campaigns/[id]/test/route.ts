@@ -73,6 +73,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       campaignId: campaign.id,
       personId: null,
       address: to,
+      title: sample?.title ?? null,
       firstName: sample?.firstName ?? user.displayName?.split(' ')[0] ?? null,
       lastName: sample?.lastName ?? null,
       displayName: sample?.displayName ?? user.displayName ?? null,

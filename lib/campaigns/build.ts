@@ -171,6 +171,7 @@ function toSeed(candidate: AudienceCandidate) {
   return {
     personId: candidate.personId,
     address: candidate.address,
+    title: candidate.title ?? null,
     firstName: candidate.firstName,
     lastName: candidate.lastName,
     displayName: candidate.displayName,

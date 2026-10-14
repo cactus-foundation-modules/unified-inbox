@@ -904,6 +904,7 @@ export async function UnifiedInboxPanel({
             params={carried}
             personId={person.id}
             initial={{
+              title: person.title ?? '',
               firstName: person.firstName ?? split.firstName,
               lastName: person.lastName ?? split.lastName,
               jobTitle: person.jobTitle ?? '',

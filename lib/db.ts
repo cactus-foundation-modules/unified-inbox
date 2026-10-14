@@ -5837,6 +5837,7 @@ function mapPerson(r: Record<string, unknown>): Person {
   return {
     id: r.id as string,
     displayName: (r.display_name as string | null) ?? null,
+    title: (r.title as string | null) ?? null,
     firstName: (r.first_name as string | null) ?? null,
     lastName: (r.last_name as string | null) ?? null,
     jobTitle: (r.job_title as string | null) ?? null,
@@ -5863,7 +5864,7 @@ function mapPerson(r: Record<string, unknown>): Person {
 }
 
 const PERSON_SELECT = Prisma.sql`
-  p."id", p."display_name", p."first_name", p."last_name", p."job_title", p."website",
+  p."id", p."display_name", p."title", p."first_name", p."last_name", p."job_title", p."website",
   p."primary_email", p."organisation_id", p."notes", p."origin",
   p."address_line1", p."address_line2", p."address_city", p."address_county",
   p."address_postcode", p."address_country", p."address_label",
@@ -6012,6 +6013,7 @@ export async function findPersonByIdentity(matchValues: string[]): Promise<strin
  *  the difference between a form that saved two fields and a form that wiped
  *  the other eleven. */
 export type PersonDetails = Partial<PostalAddress> & {
+  title?: string | null
   firstName?: string | null
   lastName?: string | null
   jobTitle?: string | null
@@ -6023,6 +6025,7 @@ export type PersonDetails = Partial<PostalAddress> & {
  *  the insert and the update - a field added to one and forgotten in the other
  *  is a field that saves on the edit form and vanishes on the new one. */
 const PERSON_DETAIL_COLUMNS: ReadonlyArray<[keyof PersonDetails, string]> = [
+  ['title', 'title'],
   ['firstName', 'first_name'],
   ['lastName', 'last_name'],
   ['jobTitle', 'job_title'],

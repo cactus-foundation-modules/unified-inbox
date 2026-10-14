@@ -153,6 +153,7 @@ function detailsFrom(draft: ContactDraft): PersonDetails {
   // phone number quietly wiped the postal address.
   const box = (value: string | undefined) => (value === undefined ? undefined : clean(value))
   return {
+    title: box(draft.title),
     firstName: box(draft.firstName),
     lastName: box(draft.lastName),
     jobTitle: box(draft.jobTitle),

@@ -369,6 +369,7 @@ const LabelledAddressBody = z.object({
 })
 
 export const ContactBody = z.object({
+  title: line.optional(),
   firstName: line.optional(),
   lastName: line.optional(),
   jobTitle: line.optional(),

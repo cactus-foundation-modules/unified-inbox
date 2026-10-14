@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { extractTitle, titleCase } from './contacts'
 import {
   addressLines,
   buildImportTemplateCsv,
@@ -249,5 +250,27 @@ describe('the blank template', () => {
     const [header] = parseCsv(buildImportTemplateCsv())
     expect(header).toEqual(CONTACT_FIELDS.map((f) => CONTACT_FIELD_LABELS[f]))
     expect(guessColumnMap(header!)).toEqual([...CONTACT_FIELDS])
+  })
+})
+
+describe('titleCase and extractTitle', () => {
+  it('cases people, hyphens, apostrophes and particles', () => {
+    expect(titleCase('thomas-botfield')).toBe('Thomas-Botfield')
+    expect(titleCase('JOHN')).toBe('John')
+    expect(titleCase("o'brien")).toBe("O'Brien")
+    expect(titleCase('mcdonald')).toBe('McDonald')
+    expect(titleCase('McDonald')).toBe('McDonald')
+    expect(titleCase('van der berg')).toBe('Van der Berg')
+  })
+  it('cases companies but keeps initials and legal suffixes', () => {
+    expect(titleCase('ACME OFFICE SUPPLIES LTD', { company: true })).toBe('Acme Office Supplies Ltd')
+    expect(titleCase('BDO consulting uk', { company: true })).toBe('BDO Consulting UK')
+    expect(titleCase('the joe\'s diner and bar', { company: true })).toBe("The Joe's Diner and Bar")
+  })
+  it('lifts a leading title out of a name', () => {
+    expect(extractTitle('Dr. John Smith')).toEqual({ title: 'Dr', rest: 'John Smith' })
+    expect(extractTitle('mrs jane smith')).toEqual({ title: 'Mrs', rest: 'jane smith' })
+    expect(extractTitle('Lord')).toEqual({ title: null, rest: 'Lord' })
+    expect(extractTitle('Jane Smith')).toEqual({ title: null, rest: 'Jane Smith' })
   })
 })

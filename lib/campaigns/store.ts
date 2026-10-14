@@ -95,6 +95,7 @@ function mapRecipient(r: Record<string, unknown>): CampaignRecipient {
     campaignId: r.campaign_id as string,
     personId: (r.person_id as string | null) ?? null,
     address: r.address as string,
+    title: (r.title as string | null) ?? null,
     firstName: (r.first_name as string | null) ?? null,
     lastName: (r.last_name as string | null) ?? null,
     displayName: (r.display_name as string | null) ?? null,
@@ -387,6 +388,7 @@ export async function listAudienceCandidates(categoryIds: string[]): Promise<Aud
 
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT p."id"        AS person_id,
+           p."title",
            p."first_name",
            p."last_name",
            p."display_name",
@@ -404,6 +406,7 @@ export async function listAudienceCandidates(categoryIds: string[]): Promise<Aud
   return rows.map((r) => ({
     personId: r.person_id as string,
     address: (r.address as string | null) ?? '',
+    title: (r.title as string | null) ?? null,
     firstName: (r.first_name as string | null) ?? null,
     lastName: (r.last_name as string | null) ?? null,
     displayName: (r.display_name as string | null) ?? null,
@@ -455,6 +458,7 @@ export async function recentlyMailedAmong(addresses: string[], since: Date): Pro
 export type RecipientSeed = {
   personId: string | null
   address: string
+  title?: string | null
   firstName: string | null
   lastName: string | null
   displayName: string | null
@@ -471,18 +475,19 @@ export async function insertRecipients(
   if (rows.length === 0) return 0
   return await prisma.$executeRaw`
     INSERT INTO "uin_campaign_recipients"
-      ("campaign_id", "person_id", "address", "first_name", "last_name",
+      ("campaign_id", "person_id", "address", "title", "first_name", "last_name",
        "display_name", "organisation_name", "state", "due_at")
-    SELECT ${campaignId}, x."person_id", x."address", x."first_name", x."last_name",
+    SELECT ${campaignId}, x."person_id", x."address", x."title", x."first_name", x."last_name",
            x."display_name", x."organisation_name", 'queued', ${dueAt}
       FROM unnest(
              ${rows.map((r) => r.personId)}::text[],
              ${rows.map((r) => r.address)}::text[],
+             ${rows.map((r) => r.title ?? null)}::text[],
              ${rows.map((r) => r.firstName)}::text[],
              ${rows.map((r) => r.lastName)}::text[],
              ${rows.map((r) => r.displayName)}::text[],
              ${rows.map((r) => r.organisationName)}::text[]
-           ) AS x("person_id", "address", "first_name", "last_name",
+           ) AS x("person_id", "address", "title", "first_name", "last_name",
                   "display_name", "organisation_name")
     ON CONFLICT DO NOTHING
   `
@@ -498,19 +503,20 @@ export async function insertSkipped(
   if (rows.length === 0) return 0
   return await prisma.$executeRaw`
     INSERT INTO "uin_campaign_recipients"
-      ("campaign_id", "person_id", "address", "first_name", "last_name",
+      ("campaign_id", "person_id", "address", "title", "first_name", "last_name",
        "display_name", "organisation_name", "state", "reason")
-    SELECT ${campaignId}, x."person_id", x."address", x."first_name", x."last_name",
+    SELECT ${campaignId}, x."person_id", x."address", x."title", x."first_name", x."last_name",
            x."display_name", x."organisation_name", 'skipped', x."reason"
       FROM unnest(
              ${rows.map((r) => r.personId)}::text[],
              ${rows.map((r) => r.address)}::text[],
+             ${rows.map((r) => r.title ?? null)}::text[],
              ${rows.map((r) => r.firstName)}::text[],
              ${rows.map((r) => r.lastName)}::text[],
              ${rows.map((r) => r.displayName)}::text[],
              ${rows.map((r) => r.organisationName)}::text[],
              ${rows.map((r) => r.reason)}::text[]
-           ) AS x("person_id", "address", "first_name", "last_name",
+           ) AS x("person_id", "address", "title", "first_name", "last_name",
                   "display_name", "organisation_name", "reason")
     ON CONFLICT DO NOTHING
   `

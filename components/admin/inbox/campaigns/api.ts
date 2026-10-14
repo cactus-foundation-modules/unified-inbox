@@ -66,6 +66,7 @@ export type RecipientView = {
   id: string
   address: string
   displayName: string | null
+  title?: string | null
   firstName: string | null
   lastName: string | null
   organisationName: string | null

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import {
-  addressKey, addressLines, contactDisplayName, splitName,
+  addressKey, addressLines, contactDisplayName, extractTitle, splitName, titleCase,
   type ContactDraft, type LabelledAddress, type LabelledPhone,
 } from './contacts'
 import type { MarketingConsentRecord, PersonDetails } from './db'
@@ -134,16 +134,38 @@ function sameName(a: string, b: string): boolean {
  * when it names the same person. An invoice addressed to "Sue in Accounts"
  * says who opens the post, not who placed the order.
  */
-function nameOf(order: ShopOrderCustomer, billing: OrderAddress | null): { firstName?: string; lastName?: string } {
+function nameOf(
+  order: ShopOrderCustomer,
+  billing: OrderAddress | null,
+): { title?: string; firstName?: string; lastName?: string } {
   const full = tidy(order.customerName)
   const first = tidy(billing?.firstName)
   const last = tidy(billing?.lastName)
   const joined = [first, last].filter((part): part is string => !!part).join(' ')
+  // Names come off the checkout as typed - "dr john SMITH", "thomas-botfield" -
+  // so a title is lifted out of the front and the rest put in title case. A
+  // title typed into the first-name box ("Dr" / "Smith") is found by looking at
+  // the two boxes as one name and splitting again.
   if (joined && (!full || sameName(joined, full))) {
-    return { firstName: first ?? undefined, lastName: last ?? undefined }
+    const { title, rest } = extractTitle(joined)
+    if (title) {
+      const restLast = last && rest.toLowerCase().endsWith(last.toLowerCase()) ? last : null
+      const restFirst = restLast ? rest.slice(0, rest.length - restLast.length).trim() : rest
+      return {
+        title,
+        firstName: field(titleCase(restFirst)),
+        lastName: field(titleCase(restLast)),
+      }
+    }
+    return { firstName: field(titleCase(first)), lastName: field(titleCase(last)) }
   }
-  const split = splitName(full)
-  return { firstName: field(split.firstName), lastName: field(split.lastName) }
+  const { title, rest } = extractTitle(full)
+  const split = splitName(rest)
+  return {
+    title: title ?? undefined,
+    firstName: field(titleCase(split.firstName)),
+    lastName: field(titleCase(split.lastName)),
+  }
 }
 
 /**
@@ -175,7 +197,7 @@ export function shopCustomerDraft(order: ShopOrderCustomer): ContactDraft | null
     // The company as the shop's own invoice names it: the one given at the
     // checkout, or one left on the address by an order written before that
     // was a separate question.
-    organisation: field(order.customerOrganisation) ?? field(billing?.company),
+    organisation: field(titleCase(field(order.customerOrganisation) ?? field(billing?.company), { company: true })),
     addressLine1: field(billing?.line1),
     addressLine2: field(billing?.line2),
     addressCity: field(billing?.city),
@@ -286,6 +308,8 @@ export type ContactFillIn = {
  */
 export function fillInBlanks(person: Person, draft: ContactDraft): ContactFillIn {
   const fill: ContactFillIn = { details: {} }
+
+  if (!tidy(person.title) && draft.title) fill.details.title = draft.title
 
   const hasName = !!(tidy(person.firstName) || tidy(person.lastName))
   if (!hasName && (draft.firstName || draft.lastName)) {

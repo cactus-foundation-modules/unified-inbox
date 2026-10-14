@@ -52,6 +52,7 @@ export async function GET(request: NextRequest) {
     people: rows.map((p) => ({
       id: p.id,
       name: p.displayName,
+      title: p.title,
       firstName: p.firstName,
       lastName: p.lastName,
       jobTitle: p.jobTitle,

@@ -17,7 +17,7 @@
  *  purpose: to somebody filling in a card, a number is a field like any other.
  */
 export const CONTACT_FIELDS = [
-  'firstName', 'lastName', 'jobTitle', 'organisation', 'categories',
+  'title', 'firstName', 'lastName', 'jobTitle', 'organisation', 'categories',
   'email', 'phone', 'website',
   'addressLine1', 'addressLine2', 'addressCity', 'addressCounty', 'addressPostcode', 'addressCountry',
   'notes',
@@ -32,6 +32,7 @@ export function isContactField(value: unknown): value is ContactField {
 /** What each field is called in front of somebody who is looking at their own
  *  spreadsheet on the other monitor. British throughout: a county, a postcode. */
 export const CONTACT_FIELD_LABELS: Record<ContactField, string> = {
+  title: 'Title',
   firstName: 'First name',
   lastName: 'Last name',
   jobTitle: 'Job title',
@@ -55,7 +56,7 @@ export type ContactFieldGroup = { label: string; fields: readonly ContactField[]
  *  read in the same order. Covers every field exactly once - contacts.test.ts
  *  asserts that, so a field added later cannot go missing from either screen. */
 export const CONTACT_FIELD_GROUPS: readonly ContactFieldGroup[] = [
-  { label: 'Who they are', fields: ['firstName', 'lastName', 'jobTitle', 'organisation', 'categories'] },
+  { label: 'Who they are', fields: ['title', 'firstName', 'lastName', 'jobTitle', 'organisation', 'categories'] },
   { label: 'How to reach them', fields: ['email', 'phone', 'website'] },
   {
     label: 'Where they are',
@@ -136,6 +137,108 @@ export function splitName(full: string | null | undefined): { firstName: string;
   const words = trimmed.split(' ')
   if (words.length === 1) return { firstName: words[0]!, lastName: '' }
   return { firstName: words.slice(0, -1).join(' '), lastName: words[words.length - 1]! }
+}
+
+/** Titles recognised at the front of a name, by the way somebody types them
+ *  (lower case, no full stop), and what they are filed as. */
+const TITLES: Readonly<Record<string, string>> = {
+  mr: 'Mr', mister: 'Mr', mrs: 'Mrs', miss: 'Miss', ms: 'Ms', mx: 'Mx',
+  dr: 'Dr', doctor: 'Dr', prof: 'Prof', professor: 'Prof',
+  rev: 'Rev', reverend: 'Rev', sir: 'Sir', dame: 'Dame', lord: 'Lord', lady: 'Lady',
+  master: 'Master', madam: 'Madam', madame: 'Madam',
+}
+
+/**
+ * A title at the front of a name pulled out of it: "Dr. John Smith" is the
+ * title "Dr" and the name "John Smith".
+ *
+ * Only a leading word counts, and only when something is left once it is gone -
+ * a customer whose whole name is "Lord" has a name, not a title. Anything after
+ * the name ("Jane Smith MBE") is left where it is.
+ */
+export function extractTitle(full: string | null | undefined): { title: string | null; rest: string } {
+  const trimmed = (full ?? '').trim().replace(/\s+/g, ' ')
+  const match = /^([A-Za-z]+)\.?(?:\s+|$)(.*)$/.exec(trimmed)
+  const title = match ? TITLES[match[1]!.toLowerCase()] : undefined
+  if (!match || !title || !match[2]) return { title: null, rest: trimmed }
+  return { title, rest: match[2] }
+}
+
+/** A title as typed ("DR.", "mrs") filed the way the card shows it, or the
+ *  text itself, tidied, when it is not one we know. */
+export function normaliseTitle(value: string | null | undefined): string | null {
+  const trimmed = (value ?? '').trim().replace(/\.$/, '').trim()
+  if (!trimmed) return null
+  return TITLES[trimmed.toLowerCase()] ?? titleCase(trimmed)
+}
+
+/** Words that stay lower case inside a surname - "van der Berg", "de la Cruz" -
+ *  but never at the front of one. */
+const NAME_PARTICLES = new Set(['van', 'von', 'de', 'der', 'den', 'la', 'du', 'di', 'da', 'del', 'ter'])
+/** Company words with a settled way of being written. */
+const COMPANY_WORDS: Readonly<Record<string, string>> = {
+  ltd: 'Ltd', llp: 'LLP', plc: 'PLC', llc: 'LLC', cic: 'CIC', cio: 'CIO', uk: 'UK', usa: 'USA',
+  nhs: 'NHS', bbc: 'BBC', it: 'IT', hr: 'HR', pr: 'PR', av: 'AV', and: 'and', of: 'of', the: 'the',
+}
+
+function capitalise(word: string): string {
+  return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+}
+
+/** One run of letters between hyphens and slashes, cased. */
+function caseSegment(segment: string, company: boolean, shouting = false): string {
+  if (!segment) return segment
+  // Already mixed case - McDonald, iPhone, eBay - is somebody's own spelling.
+  if (segment !== segment.toLowerCase() && segment !== segment.toUpperCase()) return segment
+  // A single letter before an apostrophe is O'Brien, D'Arcy; anything longer is
+  // a possessive or a contraction and keeps what follows lower case.
+  const apostrophe = segment.indexOf("'")
+  if (apostrophe > 0) {
+    const head = segment.slice(0, apostrophe)
+    const tail = segment.slice(apostrophe + 1)
+    return head.length === 1
+      ? `${head.toUpperCase()}'${caseSegment(tail, company, shouting)}`
+      : `${capitalise(head)}'${tail.toLowerCase()}`
+  }
+  if (company) {
+    const known = COMPANY_WORDS[segment.toLowerCase()]
+    if (known) return known
+    // BDO, GSK, TFL: a short word in capitals is initials - unless the whole
+    // name is in capitals, when only the vowel-less ones can be told apart.
+    if (segment === segment.toUpperCase()) {
+      if (!shouting && segment.length <= 3) return segment
+      if (shouting && segment.length <= 4 && !/[AEIOUY]/.test(segment)) return segment
+    }
+  } else if (/^mc[a-z]/i.test(segment)) {
+    return `Mc${capitalise(segment.slice(2))}`
+  }
+  return capitalise(segment)
+}
+
+/**
+ * Names, and company names, in title case: "thomas-botfield" becomes
+ * "Thomas-Botfield" and "ACME OFFICE SUPPLIES LTD" becomes "Acme Office
+ * Supplies Ltd".
+ *
+ * A word is only touched when it is wholly lower or wholly upper case. The
+ * checkout cannot tell "McDonald" from a typing mistake and the cost of being
+ * wrong is the customer's own name in their own inbox, so a spelling that
+ * already has a capital in the middle is taken to be deliberate.
+ *
+ * `company` keeps what a company name needs - LLP, PLC, UK, vowel-less initials
+ * like BDO - and, as a person's name does not, lowers "and" and "of".
+ */
+export function titleCase(value: string | null | undefined, opts: { company?: boolean } = {}): string {
+  const company = opts.company ?? false
+  const text = (value ?? '').trim().replace(/\s+/g, ' ')
+  const shouting = text === text.toUpperCase()
+  const words = text.split(' ').filter(Boolean)
+  return words.map((word, index) => {
+    if (!company && index > 0 && NAME_PARTICLES.has(word.toLowerCase())) return word.toLowerCase()
+    const cased = word.split(/([-/])/).map((part) => caseSegment(part, company, shouting)).join('')
+    // "and", "of", "the" are only small words in the middle of a name.
+    return company && index === 0 ? cased.charAt(0).toUpperCase() + cased.slice(1) : cased
+  }).join(' ')
 }
 
 /** A postal address on the lines it is posted on, with the empty ones left out
@@ -292,9 +395,10 @@ function normaliseHeader(header: string): string {
  *  Contacts, Mailchimp and every accounts package that has ever exported a
  *  customer list. First match wins, so the list is ordered by how sure it is. */
 const HEADER_ALIASES: Record<ContactField, readonly string[]> = {
+  title: ['title', 'nameprefix', 'prefix', 'salutation', 'honorific', 'courtesytitle', 'personaltitle'],
   firstName: ['firstname', 'givenname', 'forename', 'first', 'contactfirstname'],
   lastName: ['lastname', 'surname', 'familyname', 'last', 'contactlastname'],
-  jobTitle: ['jobtitle', 'title', 'position', 'role', 'jobposition'],
+  jobTitle: ['jobtitle', 'position', 'role', 'jobposition'],
   organisation: [
     'organisation', 'organization', 'company', 'companyname', 'organisationname',
     'organizationname', 'business', 'businessname', 'account', 'accountname', 'employer',

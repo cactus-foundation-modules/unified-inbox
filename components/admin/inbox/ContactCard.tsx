@@ -157,7 +157,18 @@ export function ContactCard({ base, params, personId, initial, onSaved, modal = 
       )}
 
       <CardSection label="Who they are">
-        <CardField label="First name" value={draft.firstName ?? ''} onChange={set('firstName')} autoFocus />
+        <CardField
+          label="Title"
+          value={draft.title ?? ''}
+          onChange={set('title')}
+          placeholder="Mr, Mrs, Miss, Dr..."
+          listId={`${listId}-titles`}
+          autoFocus
+        />
+        <datalist id={`${listId}-titles`}>
+          {['Mr', 'Mrs', 'Miss', 'Ms', 'Mx', 'Dr', 'Prof', 'Rev', 'Sir', 'Dame'].map((t) => <option key={t} value={t} />)}
+        </datalist>
+        <CardField label="First name" value={draft.firstName ?? ''} onChange={set('firstName')} />
         <CardField label="Last name" value={draft.lastName ?? ''} onChange={set('lastName')} />
         <CardField label="Job title" value={draft.jobTitle ?? ''} onChange={set('jobTitle')} />
         <div className="uin-field-row">

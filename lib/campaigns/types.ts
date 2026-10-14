@@ -107,6 +107,7 @@ export type CampaignRecipient = {
   campaignId: string
   personId: string | null
   address: string
+  title: string | null
   firstName: string | null
   lastName: string | null
   displayName: string | null
@@ -163,6 +164,8 @@ export type CampaignTally = Record<RecipientState, number> & { total: number }
  *  row when the list is built, never read back through to the address book -
  *  see migration 027 for why. */
 export type RecipientNames = {
+  /** Optional so a recipient built before migration 076 reads as no title. */
+  title?: string | null
   firstName: string | null
   lastName: string | null
   displayName: string | null

@@ -422,6 +422,8 @@ export type Person = PostalAddress & {
    *  every save. Still the fallback for somebody the mail pass met before the
    *  contacts screen existed and whose name has never been split. */
   displayName: string | null
+  /** Mr, Mrs, Miss, Dr... - shown before the first name, never part of displayName. */
+  title: string | null
   firstName: string | null
   lastName: string | null
   jobTitle: string | null

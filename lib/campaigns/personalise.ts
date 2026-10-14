@@ -3,7 +3,7 @@ import type { RecipientNames } from './types'
 // ---------------------------------------------------------------------------
 // Putting somebody's name in the message.
 //
-// The whole of the personalisation story, and it is deliberately small: five
+// The whole of the personalisation story, and it is deliberately small: six
 // merge tags, each with a fallback typed beside it, and no expressions, no
 // conditionals and no loops. A mailshot language is a language somebody has to
 // learn and a language this module would then have to keep working for ever.
@@ -25,12 +25,13 @@ import type { RecipientNames } from './types'
 /** The tags this understands. Nothing else is a tag, and the editor says so
  *  before a campaign can start rather than after it has sent four hundred
  *  emails saying "Dear {{firstname}}". */
-export const MERGE_TAGS = ['first_name', 'last_name', 'full_name', 'company', 'email'] as const
+export const MERGE_TAGS = ['title', 'first_name', 'last_name', 'full_name', 'company', 'email'] as const
 
 export type MergeTag = (typeof MERGE_TAGS)[number]
 
 /** What each one is for, on the little reference beside the editor. */
 export const MERGE_TAG_HELP: Record<MergeTag, string> = {
+  title: 'Their title - Mr, Mrs, Dr and so on',
   first_name: 'Their first name',
   last_name: 'Their surname',
   full_name: 'Their whole name, as the address book holds it',
@@ -54,6 +55,8 @@ function valueFor(tag: MergeTag, person: RecipientNames): string {
   const first = person.firstName?.trim() ?? ''
   const last = person.lastName?.trim() ?? ''
   switch (tag) {
+    case 'title':
+      return person.title?.trim() ?? ''
     case 'first_name':
       // The display name's first word is a reasonable answer for somebody whose
       // name has never been split - "Jane Smith" collected off a From line -

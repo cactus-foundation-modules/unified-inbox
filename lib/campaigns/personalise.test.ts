@@ -9,7 +9,7 @@ import {
 } from './personalise'
 import type { RecipientNames } from './types'
 
-// Merge tags. The whole feature is five tags and a fallback, and every test
+// Merge tags. The whole feature is six tags and a fallback, and every test
 // below is a way somebody's address book is actually shaped.
 
 const jane: RecipientNames = {
@@ -112,5 +112,12 @@ describe('the preview', () => {
   it('fills in the subject as well as the body', () => {
     expect(previewFor({ subject: 'A question, {{first_name|there}}', body: 'Hello {{first_name|there}}' }, nameless))
       .toEqual({ subject: 'A question, there', body: 'Hello there' })
+  })
+})
+
+describe('the title tag', () => {
+  it('fills in a title and falls back when there is none', () => {
+    expect(personalise('Dear {{title|Sir or Madam}} {{last_name}}', { ...jane, title: 'Dr' })).toBe('Dear Dr Smith')
+    expect(personalise('Dear {{title|Sir or Madam}} {{last_name}}', jane)).toBe('Dear Sir or Madam Smith')
   })
 })

@@ -44,6 +44,7 @@ function person(overrides: Partial<Person> = {}): Person {
   return {
     id: 'p1',
     displayName: 'jane',
+    title: null,
     firstName: null,
     lastName: null,
     jobTitle: null,
@@ -278,5 +279,16 @@ describe('the marketing answer an order carries', () => {
     expect(shopOrderConsent(order({ marketingConsent: null, createdAt: placed }))).toBeNull()
     expect(shopOrderConsent(order())).toBeNull()
     expect(shopOrderConsent(order({ marketingConsent: true, createdAt: null }))).toBeNull()
+  })
+})
+
+describe('order names are tidied', () => {
+  it('title-cases, and lifts the title out', () => {
+    const draft = shopCustomerDraft(order({
+      customerName: 'dr JOHN thomas-botfield', billingAddress: null, customerOrganisation: 'ACME LTD',
+    }))
+    expect(draft).toMatchObject({
+      title: 'Dr', firstName: 'John', lastName: 'Thomas-Botfield', organisation: 'Acme Ltd',
+    })
   })
 })
