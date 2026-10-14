@@ -274,3 +274,11 @@ describe('titleCase and extractTitle', () => {
     expect(extractTitle('Jane Smith')).toEqual({ title: null, rest: 'Jane Smith' })
   })
 })
+
+describe('titleCase company acronyms', () => {
+  it('keeps capitals in a mixed-case name, recases a shouted one', () => {
+    expect(titleCase('TCHC Group', { company: true })).toBe('TCHC Group')
+    expect(titleCase('Unite Group plc', { company: true })).toBe('Unite Group PLC')
+    expect(titleCase('GEOSEC ITALIA', { company: true })).toBe('Geosec Italia')
+  })
+})

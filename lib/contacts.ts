@@ -203,10 +203,11 @@ function caseSegment(segment: string, company: boolean, shouting = false): strin
   if (company) {
     const known = COMPANY_WORDS[segment.toLowerCase()]
     if (known) return known
-    // BDO, GSK, TFL: a short word in capitals is initials - unless the whole
-    // name is in capitals, when only the vowel-less ones can be told apart.
+    // BDO, GSK, TFL: a word in capitals inside a name that is otherwise in mixed
+    // case is an acronym (TCHC, UCEA) - unless the whole name is in capitals,
+    // when only the short vowel-less ones can be told apart.
     if (segment === segment.toUpperCase()) {
-      if (!shouting && segment.length <= 3) return segment
+      if (!shouting) return segment
       if (shouting && segment.length <= 4 && !/[AEIOUY]/.test(segment)) return segment
     }
   } else if (/^mc[a-z]/i.test(segment)) {
