@@ -34,7 +34,7 @@ function entries(mod: { manifest: unknown }): Entry[] {
 }
 
 const CONTACT_FORM = manifest('contact-form')
-const LIVE_CHAT = manifest('live-chat')
+const LIVE_CHAT = manifest('chat')
 const TWILIO = manifest('twilio')
 const HUB = manifest('unified-inbox')
 const ALL = [CONTACT_FORM, LIVE_CHAT, TWILIO, HUB]
@@ -42,7 +42,7 @@ const ALL = [CONTACT_FORM, LIVE_CHAT, TWILIO, HUB]
 describe('the channels publish what core is looking for', () => {
   it.each([
     ['contact-form', CONTACT_FORM],
-    ['live-chat', LIVE_CHAT],
+    ['chat', LIVE_CHAT],
     ['twilio', TWILIO],
   ])('%s publishes a conversation provider', (_name, mod) => {
     const provider = entries(mod).find((e) => e.point === 'core.conversation-provider')
@@ -57,8 +57,8 @@ describe('the channels publish what core is looking for', () => {
 
   it('is found by the resolver core suppresses with', () => {
     expect([...conversationProviderModuleNames(ALL)].sort()).toEqual([
+      'chat',
       'contact-form',
-      'live-chat',
       'twilio',
     ])
   })
@@ -73,7 +73,7 @@ describe('what happens when the hub is installed', () => {
     const providers = conversationProviderModuleNames(ALL)
     const withTabs = ALL.filter((m) => entries(m).some((e) => e.point === 'core.inbox-tabs'))
     const suppressed = withTabs.filter((m) => providers.has(m.name)).map((m) => m.name)
-    expect(suppressed.sort()).toEqual(['contact-form', 'live-chat'])
+    expect(suppressed.sort()).toEqual(['chat', 'contact-form'])
   })
 
   it('leaves the phone alone, because it never had an inbox tab to take', () => {
@@ -100,7 +100,7 @@ describe('what happens when the hub is not installed', () => {
 describe('every channel is answerable on a core that carries the seam', () => {
   it.each([
     ['contact-form', CONTACT_FORM],
-    ['live-chat', LIVE_CHAT],
+    ['chat', LIVE_CHAT],
     ['twilio', TWILIO],
   ])('%s asks for a core new enough to have it', (_name, mod) => {
     const required = (mod.manifest as { requiresCoreVersion: string }).requiresCoreVersion
