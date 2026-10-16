@@ -110,6 +110,28 @@ export function replyStyleFor(
   return styles.length === 0 ? base : { ...base, styles }
 }
 
+/**
+ * Whether a reply to this message is an email even though the conversation it
+ * sits on belongs to a channel.
+ *
+ * A merge keeps the OLDEST conversation as the winner, so an email merged into
+ * a live chat that began first becomes a conversation whose `providerModule` is
+ * the chat's - and every reply on it went down the chat road: no formatting, no
+ * attachments, no forward, and no email ever sent. Messages a channel ingested
+ * are stamped `source: 'provider'`; anything else on a channel conversation got
+ * there by mail and has to be answered by mail.
+ *
+ * Only a conversation filed in an address can be answered that way, because the
+ * email road sends from one. An unfiled enquiry has nowhere to send from, so it
+ * stays the channel's.
+ */
+export function answersByEmail(
+  thread: { providerModule: string | null; filed: boolean },
+  message: { source: string | null } | null,
+): boolean {
+  return !!thread.providerModule && thread.filed && !!message && message.source !== 'provider'
+}
+
 /** In the order the buttons are drawn in, so two channels declaring the same
  *  three do not draw them in two different orders. */
 const STYLE_NAMES: readonly TextStyleName[] = ['bold', 'italic', 'strikethrough', 'monospace']

@@ -1,4 +1,6 @@
 import { providerForKey } from './provider-registry'
+import { answersByEmail } from './channel-reply'
+import { replyAnchorSource } from './db'
 import { threadAccessKind, type ThreadShape } from './access'
 
 /**
@@ -26,4 +28,20 @@ export async function leavesByEmailRoad(
   const channel = await providerForKey(thread.providerModule)
   if (channel?.provider.capabilities?.email !== true) return false
   return mode === 'forward' || threadAccessKind(thread) === 'filed'
+}
+
+/**
+ * The conversation as this particular reply should be routed. An email merged
+ * into a channel conversation (see `answersByEmail`) is answered by email, so
+ * for the purposes of sending it is not a channel conversation at all.
+ */
+export async function routedThread<T extends ThreadShape & { providerModule: string | null }>(
+  thread: T | null,
+  inReplyToMessageId?: string | null,
+): Promise<T | null> {
+  if (!thread?.providerModule || threadAccessKind(thread) !== 'filed') return thread
+  const source = await replyAnchorSource(thread.id ?? '', inReplyToMessageId)
+  return answersByEmail({ providerModule: thread.providerModule, filed: true }, source === null ? null : { source })
+    ? { ...thread, providerModule: null }
+    : thread
 }

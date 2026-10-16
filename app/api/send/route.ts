@@ -7,7 +7,7 @@ import { defaultInboxIdFor, discardDraftAfterSend, getThread, standDownScheduled
 import { applyFollowUpAfterSend } from '@/modules/unified-inbox/lib/follow-up'
 import { sendMessage } from '@/modules/unified-inbox/lib/send'
 import { sendProviderReply } from '@/modules/unified-inbox/lib/provider-send'
-import { leavesByEmailRoad } from '@/modules/unified-inbox/lib/email-road'
+import { leavesByEmailRoad, routedThread } from '@/modules/unified-inbox/lib/email-road'
 import { providerForKey, visibleChannelKeys } from '@/modules/unified-inbox/lib/provider-registry'
 import { SendBody } from '@/modules/unified-inbox/lib/validation'
 
@@ -73,7 +73,9 @@ export async function POST(request: Request) {
   }
   const body = parsed.data
 
-  const thread = body.threadId ? await getThread(body.threadId) : null
+  const thread = body.threadId
+    ? await routedThread(await getThread(body.threadId), body.inReplyToMessageId)
+    : null
 
   // ---- a channel somebody else owns --------------------------------------
   //

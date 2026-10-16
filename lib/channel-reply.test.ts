@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  answersByEmail,
   CHANNEL_REPLY_STYLE,
   EMAIL_REPLY_STYLE,
   replyDestination,
@@ -99,5 +100,22 @@ describe('replyDestination', () => {
       .toBe('This goes back on Live chat.')
     expect(replyDestination({ channelLabel: 'Live chat', party: '  ', name: '  ' }))
       .toBe('This goes back on Live chat.')
+  })
+})
+
+describe('answersByEmail', () => {
+  const chat = { providerModule: 'chat', filed: true }
+  it('answers an email merged into a chat by email', () => {
+    expect(answersByEmail(chat, { source: 'imap' })).toBe(true)
+  })
+  it('leaves a message the channel ingested to the channel', () => {
+    expect(answersByEmail(chat, { source: 'provider' })).toBe(false)
+  })
+  it('leaves an unfiled conversation to the channel', () => {
+    expect(answersByEmail({ ...chat, filed: false }, { source: 'imap' })).toBe(false)
+  })
+  it('does nothing on a plain email conversation or with no message', () => {
+    expect(answersByEmail({ providerModule: null, filed: true }, { source: 'imap' })).toBe(false)
+    expect(answersByEmail(chat, null)).toBe(false)
   })
 })

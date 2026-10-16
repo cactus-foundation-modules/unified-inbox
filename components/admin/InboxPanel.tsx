@@ -95,7 +95,7 @@ import { ContactImport } from './inbox/ContactImport'
 import { joinCategories, splitName } from '@/modules/unified-inbox/lib/contacts'
 import { forwardSubject, replyRecipients, replySubject } from '@/modules/unified-inbox/lib/compose'
 import { channelLabel, chooseSendingInbox, effectiveInboxParam, formatWhen, inboxHref, isSearching, NEW_CONTACT, parseInboxParams, PER_PAGE, shownCount, sortByChannelOrder } from '@/modules/unified-inbox/lib/list'
-import { replyDestination, replyStyleFor } from '@/modules/unified-inbox/lib/channel-reply'
+import { answersByEmail, replyDestination, replyStyleFor } from '@/modules/unified-inbox/lib/channel-reply'
 import { pushProviderRead } from '@/modules/unified-inbox/lib/provider-read'
 import { providerForKey, visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
 import { InboxStyles } from './inbox/styles'
@@ -1282,9 +1282,17 @@ export async function UnifiedInboxPanel({
       // round one already holds the answer. Asking again here, and twice more
       // below, was three extra round trips for anybody who is not an admin -
       // exactly the waste the note beside canSendOut warns about.
+      // An email merged into a chat conversation is answered by email, however
+      // the conversation began - see answersByEmail. Decided by the newest
+      // message that came in, the one a plain reply answers.
+      const newestIncoming = [...messages].reverse().find((m) => m.direction === 'in') ?? null
+      const emailAnswered = answersByEmail(
+        { providerModule: thread.providerModule, filed: !!thread.inboxId },
+        newestIncoming,
+      )
       const canReplyHere = isDiscussion
         ? Promise.resolve(false)
-        : thread.providerModule
+        : thread.providerModule && !emailAnswered
           ? Promise.resolve((channel?.canReply ?? false) && canSendOut)
           : thread.inboxId
             ? canReplyToInbox(user, thread.inboxId)
@@ -1460,7 +1468,11 @@ export async function UnifiedInboxPanel({
       // is what stopped every WhatsApp message being answered at all: the To
       // line came back empty, because a WhatsApp conversation has a number on
       // it and no address anywhere, and an empty To line disables Send.
-      const style = replyStyleFor(thread, channel?.textStyles, channel?.email === true)
+      const style = replyStyleFor(
+        emailAnswered ? { providerModule: null } : thread,
+        channel?.textStyles,
+        channel?.email === true,
+      )
       const destinationLine = style.addressed
         ? null
         : replyDestination({

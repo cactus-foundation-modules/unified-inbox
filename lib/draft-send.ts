@@ -1,4 +1,4 @@
-import { leavesByEmailRoad } from './email-road'
+import { leavesByEmailRoad, routedThread } from './email-road'
 import { plainTextToHtml } from './scheduled'
 import { draftBodyText } from './drafts'
 import { sendMessage } from './send'
@@ -54,9 +54,11 @@ export function draftSendingInboxId(
  */
 export async function postDraft(
   draft: Draft,
-  thread: ThreadRow | null,
+  channelThread: ThreadRow | null,
   options: { sentByUserId: string; idempotencyKey: string },
 ): Promise<DraftPostResult> {
+  // An email merged into a chat is still answered by email - see routedThread.
+  const thread = await routedThread(channelThread, draft.inReplyToMessageId)
   // A conversation another module owns - a chat, an enquiry, a text. It goes
   // back out the way it came in.
   //

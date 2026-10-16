@@ -2313,6 +2313,26 @@ export async function newestMessageOnThread(
   return rows[0] ? mapQuotable(rows[0]) : null
 }
 
+/** How the message a reply answers got here - `provider` for one a channel
+ *  ingested, anything else for mail. The one named, or with none named the
+ *  newest that came in. Null when there is no such message. */
+export async function replyAnchorSource(
+  threadId: string,
+  messageId?: string | null,
+): Promise<string | null> {
+  const rows = messageId
+    ? await prisma.$queryRaw<{ source: string | null }[]>`
+        SELECT "source" FROM "uin_messages"
+         WHERE "id" = ${messageId} AND "thread_id" = ${threadId}
+      `
+    : await prisma.$queryRaw<{ source: string | null }[]>`
+        SELECT "source" FROM "uin_messages"
+         WHERE "thread_id" = ${threadId} AND "direction" = 'in'
+         ORDER BY "sent_at" DESC LIMIT 1
+      `
+  return rows[0] ? rows[0].source ?? '' : null
+}
+
 export type QuotableMessage = {
   id: string
   messageIdHeader: string | null
