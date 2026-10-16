@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Puck } from '@puckeditor/core'
 import type { Data } from '@puckeditor/core'
 import '@puckeditor/core/no-external.css'
+import { tabbedFieldsOverride } from '@/lib/puck/tabs/TabbedFieldsOverride'
 import { emailSignaturePuckConfig, setEmailEditorPalette } from '@/lib/puck/email-config'
 import { paletteFromTokens } from '@/lib/email/palette'
 import { withImagePickerFields } from '@/lib/puck/MediaPickerField'
@@ -62,7 +63,7 @@ export default function SignaturePuckEditor({ value, onChange }: Props) {
   // disabled, so there is only ever one thing to press.
   // Puck's override type insists on an element rather than null, so the header
   // is rendered as an empty fragment.
-  const overrides = useMemo(() => ({ header: () => <></> }), [])
+  const overrides = useMemo(() => ({ header: () => <></>, fields: tabbedFieldsOverride }), [])
 
   const handleChange = useCallback((data: Data) => {
     if (!seenFirstChange.current) { seenFirstChange.current = true; return }
