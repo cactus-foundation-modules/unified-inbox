@@ -113,6 +113,18 @@ export function Dropdown({
     )
   }, [open, place, width])
 
+  // A panel can change what it holds while it is open - Send it later swaps a
+  // short menu for the calendar - and the placement above was worked out for
+  // the short one. Placed again whenever the panel changes size, or the
+  // calendar opens off the bottom of the window with its buttons out of reach.
+  useEffect(() => {
+    const node = panel.current
+    if (!open || !node || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => place(node.offsetHeight, node.offsetWidth))
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [open, at !== null, place]) // eslint-disable-line react-hooks/exhaustive-deps -- re-subscribes once the panel exists; `at` itself must not retrigger
+
   useEffect(() => {
     if (!open) return
     // Pointerdown rather than click, so a press that lands on a link elsewhere
