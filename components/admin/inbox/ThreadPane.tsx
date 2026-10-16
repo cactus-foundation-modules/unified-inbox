@@ -92,6 +92,15 @@ type Props = {
    *  and what a reply on it can carry. Worked out on the server from the
    *  channel that owns it - see lib/channel-reply.ts. */
   style: ReplyStyle
+  /** Messages on a channel conversation that came in by mail (an email merged
+   *  into a chat). Answered by email whatever `style` says - see
+   *  answersByEmail. Empty on nearly every conversation. */
+  emailMessageIds?: string[]
+  /** The message a plain reply answers. */
+  newestIncomingId?: string | null
+  /** The channel's name when its conversation can also be answered by email
+   *  (the visitor left an address). Null otherwise. */
+  alsoByEmail?: string | null
   /** Who the reply goes to, in words, where the conversation decides that
    *  itself rather than asking. Null on email. */
   destinationLine: string | null
@@ -689,7 +698,7 @@ function productsTravel(channel: string): boolean {
 
 export function ThreadPane({
   base, params, thread, inboxName, contactLabel, outsiderLinks, contactHref, contactCardHref, messages, events, staff, taggable, staffById,
-  canReply, cannotReplyReason, style, destinationLine,
+  canReply, cannotReplyReason, style, emailMessageIds = [], newestIncomingId = null, alsoByEmail = null, destinationLine,
   replyTo, replyAllTo, replySubject, forwardSubject, draft,
   canAddProducts, draftProducts, canSuggestReplies, newestFirst,
   canDeleteMessages, canManage, blockState, spamState, binState, now, timezone, heldDrafts, viewerUserId, othersDrafts, focusDraft = null,
@@ -1044,6 +1053,9 @@ export function ThreadPane({
                conversation another module owns, so it is not offered on one. */
             canForward={canReply && style.forward}
             style={style}
+            emailMessageIds={emailMessageIds}
+            newestIncomingId={newestIncomingId}
+            alsoByEmail={alsoByEmail}
             destinationLine={destinationLine}
             staff={taggable}
             cannotReplyReason={cannotReplyReason}
@@ -1113,7 +1125,8 @@ export function ThreadPane({
                     actOn={message.id}
                     canReply={canReply}
                     canReplyAll={canReply && replyAllTo.length > replyTo.length}
-                    canForward={canReply && style.forward}
+                    canForward={canReply && (style.forward || emailMessageIds.includes(message.id))}
+                    alsoByEmail={emailMessageIds.includes(message.id) || replyTo.length === 0 ? null : alsoByEmail}
                     /* Not where the foot of the message already carries the
                        far-end Delete: that one asks the channel to get rid of
                        it at the phone company as well, and two controls a few
@@ -1154,6 +1167,9 @@ export function ThreadPane({
                conversation another module owns, so it is not offered on one. */
             canForward={canReply && style.forward}
             style={style}
+            emailMessageIds={emailMessageIds}
+            newestIncomingId={newestIncomingId}
+            alsoByEmail={alsoByEmail}
             destinationLine={destinationLine}
             staff={taggable}
             cannotReplyReason={cannotReplyReason}

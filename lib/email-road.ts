@@ -31,17 +31,32 @@ export async function leavesByEmailRoad(
 }
 
 /**
- * The conversation as this particular reply should be routed. An email merged
- * into a channel conversation (see `answersByEmail`) is answered by email, so
- * for the purposes of sending it is not a channel conversation at all.
+ * The conversation as this particular reply should be routed, and whether the
+ * reply is an email that merely sits on a channel's conversation.
+ *
+ * Two things make a reply on a channel's conversation an email. The message
+ * being answered came in by mail (see `answersByEmail` - an email merged into a
+ * chat). Or the reply carries a subject: a channel that takes no subject never
+ * has one, so a subject on a reply to a chat is somebody having picked "reply
+ * by email" on it. Said that way, rather than with a flag, so a saved or
+ * scheduled draft - which carries the subject - sends the way it was written.
+ * A channel answered by email already takes a subject, and is left alone.
+ *
+ * Either way the thread comes back with no channel, so it takes the email road.
  */
 export async function routedThread<T extends ThreadShape & { providerModule: string | null }>(
   thread: T | null,
-  inReplyToMessageId?: string | null,
-): Promise<T | null> {
-  if (!thread?.providerModule || threadAccessKind(thread) !== 'filed') return thread
-  const source = await replyAnchorSource(thread.id ?? '', inReplyToMessageId)
-  return answersByEmail({ providerModule: thread.providerModule, filed: true }, source === null ? null : { source })
-    ? { ...thread, providerModule: null }
-    : thread
+  options: { inReplyToMessageId?: string | null; subject?: string | null } = {},
+): Promise<{ thread: T | null; byEmail: boolean }> {
+  if (!thread?.providerModule) return { thread, byEmail: false }
+  const channel = await providerForKey(thread.providerModule)
+  const filed = threadAccessKind(thread) === 'filed'
+  if (channel?.provider.capabilities?.email !== true && options.subject?.trim()) {
+    return { thread: { ...thread, providerModule: null }, byEmail: true }
+  }
+  if (!filed) return { thread, byEmail: false }
+  const source = await replyAnchorSource(thread.id ?? '', options.inReplyToMessageId)
+  return answersByEmail({ providerModule: thread.providerModule, filed }, source === null ? null : { source })
+    ? { thread: { ...thread, providerModule: null }, byEmail: true }
+    : { thread, byEmail: false }
 }

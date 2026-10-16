@@ -5,7 +5,7 @@ import { Composer } from './Composer'
 import { useComposerOpen } from './composer-open'
 import { alignToTop } from './pane-scroll'
 import type { DraftForComposer } from '@/modules/unified-inbox/lib/drafts'
-import type { ReplyStyle } from '@/modules/unified-inbox/lib/channel-reply'
+import { EMAIL_REPLY_STYLE, type ReplyStyle } from '@/modules/unified-inbox/lib/channel-reply'
 import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 import type { QuotedPreview } from '@/modules/unified-inbox/lib/quoted-preview'
 
@@ -24,6 +24,13 @@ type SlotProps = {
   canForward: boolean
   /** How this conversation is answered - see lib/channel-reply.ts. */
   style: ReplyStyle
+  /** Messages that came in by mail on a conversation a channel owns; a reply
+   *  to one of them gets the email box. */
+  emailMessageIds: string[]
+  /** The message a reply with none named answers. */
+  newestIncomingId: string | null
+  /** See ThreadPane. Not used here, passed through to be stripped. */
+  alsoByEmail?: string | null
   /** Who the reply goes to, in words, where the conversation decides it. */
   destinationLine: string | null
   staff: Array<{ id: string; name: string }>
@@ -82,10 +89,24 @@ export function ComposerSlot(props: SlotProps) {
   }, [at, mode])
 
   if (!opened) return null
+  const { emailMessageIds, newestIncomingId, alsoByEmail, ...rest } = props
+  // The box follows the message being answered: an email in a chat is written
+  // as an email, a chat message in the same conversation as a chat.
+  const target = opened.messageId ?? props.draft?.inReplyToMessageId ?? newestIncomingId
+  // A draft with a subject on it was written as an email (a channel takes
+  // none), so it opens as one.
+  const askedForEmail = opened.via === 'email'
+    || (!!alsoByEmail && !!props.draft?.subject?.trim())
+  const asEmail = askedForEmail || (target !== null && emailMessageIds.includes(target))
   return (
     <div id="uin-composer" ref={slot}>
       <Composer
-        {...props}
+        key={asEmail ? 'email' : 'channel'}
+        {...rest}
+        startWithSubject={askedForEmail}
+        style={asEmail ? EMAIL_REPLY_STYLE : props.style}
+        destinationLine={asEmail ? null : props.destinationLine}
+        canForward={props.canForward || asEmail}
         requestedMode={opened.mode}
         requestedAt={opened.at}
         requestedReplyToId={opened.messageId}

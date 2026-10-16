@@ -73,9 +73,12 @@ export async function POST(request: Request) {
   }
   const body = parsed.data
 
-  const thread = body.threadId
-    ? await routedThread(await getThread(body.threadId), body.inReplyToMessageId)
-    : null
+  const channelThread = body.threadId ? await getThread(body.threadId) : null
+  const routed = await routedThread(
+    channelThread,
+    { inReplyToMessageId: body.inReplyToMessageId, subject: body.subject },
+  )
+  const thread = routed.thread
 
   // ---- a channel somebody else owns --------------------------------------
   //
@@ -132,6 +135,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ messageId: result.messageId, threadId: thread.id, alreadySent: false })
   }
 
+  // An email sent on a channel's conversation answers to the channel's own
+  // permission, exactly as a reply down the channel would have.
+  if (routed.byEmail && channelThread?.providerModule && threadAccessKind(channelThread) === 'channel') {
+    const allowed = await visibleChannelKeys(user)
+    if (!allowed.includes(channelThread.providerModule)) {
+      return errorResponse('You do not have permission to answer this conversation.', 403)
+    }
+  }
+
   if (forwardsByEmail && thread?.providerModule && threadAccessKind(thread) === 'channel') {
     // The channel's own permission still governs who may read the enquiry, and
     // so who may pass it on.
@@ -145,7 +157,7 @@ export async function POST(request: Request) {
   // An enquiry is often not filed in any address, so a forward of one goes from
   // the sender's own default when nothing else says.
   const inboxId = body.inboxId ?? thread?.inboxId
-    ?? (forwardsByEmail ? await defaultInboxIdFor(user.id) : null)
+    ?? (forwardsByEmail || routed.byEmail ? await defaultInboxIdFor(user.id) : null)
   if (!inboxId) {
     return errorResponse(
       'This conversation is not filed in an inbox yet, so there is nothing to send it from.',

@@ -118,6 +118,10 @@ type Props = {
    *  one quoted under the answer. Null where the box was opened for the
    *  conversation rather than for a message in it, which means the newest. */
   requestedReplyToId?: string | null
+  /** Opened as an email on a conversation a channel owns: the Subject line
+   *  starts open, on what it would have said, because it is the one thing an
+   *  email has that the channel did not. */
+  startWithSubject?: boolean
   /** Every message on the conversation a reply could quote. The box shows the
    *  one it is actually quoting, folded away - see lib/quoted-preview.ts. */
   quotedPreviews: QuotedPreview[]
@@ -132,7 +136,7 @@ type Props = {
 export function Composer({
   threadId, inboxId, replyTo, replyAllTo, canReply, canForward, style: replyStyle, destinationLine, staff,
   cannotReplyReason, replySubject, forwardSubject, draft, canAddProducts, draftProducts,
-  requestedMode, requestedAt, requestedReplyToId, quotedPreviews, canSuggestReplies, timezone,
+  requestedMode, requestedAt, requestedReplyToId, startWithSubject = false, quotedPreviews, canSuggestReplies, timezone,
 }: Props) {
   const router = useRouter()
   const { close: closeComposer } = useComposerOpen()
@@ -199,13 +203,13 @@ export function Composer({
   )
   const [cc, setCc] = useState((draft?.cc ?? []).join(', '))
   const [bcc, setBcc] = useState((draft?.bcc ?? []).join(', '))
-  const [subject, setSubject] = useState(draft?.subject ?? '')
+  const [subject, setSubject] = useState(draft?.subject ?? (startWithSubject ? replySubject : ''))
   // Each of the three lines is closed until somebody wants it - and open from
   // the start on a draft that already has something on it, because a saved Bcc
   // that nobody could see would be the worst of both worlds.
   const [showCc, setShowCc] = useState((draft?.cc ?? []).length > 0)
   const [showBcc, setShowBcc] = useState((draft?.bcc ?? []).length > 0)
-  const [showSubject, setShowSubject] = useState(!!draft?.subject?.trim())
+  const [showSubject, setShowSubject] = useState(!!draft?.subject?.trim() || startWithSubject)
   /** Whether the box is drawn over the whole screen rather than under the
    *  conversation. State, not a route: the reply is half written, and a
    *  navigation would take it off the page. */
@@ -600,7 +604,7 @@ export function Composer({
             bcc: splitAddresses(bcc),
             // Left out is "whatever the server would have called it", which is
             // what every reply nobody touched the subject on wants.
-            subject: subject.trim() || undefined,
+            subject: subject.trim() || (startWithSubject ? defaultSubject : undefined),
             // Already markup. It is sanitised on the server, at the last gate
             // before it leaves, exactly as a pasted signature is.
             bodyHtml: text,
@@ -674,8 +678,8 @@ export function Composer({
       setBusyWith(null)
     }
   }, [
-    attachments, bcc, cc, defaultRecipients, draftId, mentions, mode, needsSomebody, products,
-    recipients, replyToId, router, style.addressed, subject, text, threadId,
+    attachments, bcc, cc, defaultRecipients, defaultSubject, draftId, mentions, mode, needsSomebody, products,
+    recipients, replyToId, router, startWithSubject, style.addressed, subject, text, threadId,
   ])
 
   /** What a save sends. In one place because two things send it: the save that
@@ -693,7 +697,7 @@ export function Composer({
     to: mode === 'note' ? [] : splitAddresses(recipients),
     cc: splitAddresses(cc),
     bcc: splitAddresses(bcc),
-    subject: subject.trim() || null,
+    subject: subject.trim() || (startWithSubject ? defaultSubject : null),
     body: text,
     bodyFormat: 'html' as const,
     attachments: attachments.map(({ key, url, filename, contentType, sizeBytes }) => ({
@@ -717,7 +721,7 @@ export function Composer({
     // watching, so the instruction rides on the draft too.
     snoozeUntil: sleepUntil ? sleepUntil.toISOString() : null,
   }), [
-    attachments, bcc, cc, draftId, mode, products, recipients, replyToId, subject, text, threadId,
+    attachments, bcc, cc, defaultSubject, draftId, mode, products, recipients, replyToId, startWithSubject, subject, text, threadId,
   ])
 
   /** Puts the box down as a draft, with or without a time on it. Saving and

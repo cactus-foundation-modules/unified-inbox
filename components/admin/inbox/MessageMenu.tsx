@@ -74,6 +74,10 @@ type Props = {
    *  channel it came from and cannot be forwarded anywhere, and the send route
    *  refuses one - so the entry that would ask for it is not drawn. */
   canForward: boolean
+  /** The name of the channel this conversation lives on ("Live chat"), when the
+   *  visitor has also given an email address and so can be answered either
+   *  way. Null everywhere else, and the arrow is then a plain Reply. */
+  alsoByEmail: string | null
   /** Whether this message can be thrown away out of this conversation. Takes
    *  the grant to manage the addresses, and is deliberately NOT offered on a
    *  message that already carries the far-end Delete button in its foot: that
@@ -102,7 +106,7 @@ type Props = {
 }
 
 export function MessageMenu({
-  threadId, messageId, actOn, canReply, canReplyAll, canForward,
+  threadId, messageId, actOn, canReply, canReplyAll, canForward, alsoByEmail,
   canDeleteHere, canSplit, textTo, isText, canMoveToPhone, base, params,
 }: Props) {
   const router = useRouter()
@@ -256,7 +260,20 @@ export function MessageMenu({
         )}
       </Dropdown>
 
-      {showReply && (
+      {showReply && alsoByEmail && !replyByText && (
+        <Dropdown
+          className="uin-icon-btn"
+          label={ReplyIcon}
+          ariaLabel="Reply to this message"
+          title="Reply"
+          align="end"
+          width={200}
+        >
+          <MenuItem onClick={() => toggle('reply', messageId)}>Reply on {alsoByEmail}</MenuItem>
+          <MenuItem onClick={() => toggle('reply', messageId, 'email')}>Reply by email</MenuItem>
+        </Dropdown>
+      )}
+      {showReply && !(alsoByEmail && !replyByText) && (
         <button
           type="button"
           className="uin-icon-btn"

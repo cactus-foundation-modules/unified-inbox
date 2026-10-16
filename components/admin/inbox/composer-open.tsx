@@ -28,7 +28,7 @@ import type { ComposerMode } from './Composer'
 // this - the cross in its corner shuts it - and the slot renders the box, so
 // keeping both in one module would have the two importing each other.
 
-type Opened = { mode: ComposerMode; at: number; messageId: string | null } | null
+type Opened = { mode: ComposerMode; at: number; messageId: string | null; via: 'email' | null } | null
 
 type ComposerOpenValue = {
   opened: Opened
@@ -36,7 +36,7 @@ type ComposerOpenValue = {
    *  `messageId` is the message the button was pressed on, which is the one
    *  the reply quotes - null where the box was opened for the conversation
    *  rather than for anything in it, which means the newest message. */
-  toggle: (mode: ComposerMode, messageId?: string | null) => void
+  toggle: (mode: ComposerMode, messageId?: string | null, via?: 'email' | null) => void
   /** Shuts it outright, whatever it was open as. What the cross in the corner
    *  of the box does once the question about the draft has been answered. */
   close: () => void
@@ -54,17 +54,19 @@ export function ComposerOpenProvider({
   initialMode, children,
 }: { initialMode: ComposerMode | null; children: ReactNode }) {
   const [opened, setOpened] = useState<Opened>(
-    initialMode ? { mode: initialMode, at: 0, messageId: null } : null,
+    initialMode ? { mode: initialMode, at: 0, messageId: null, via: null } : null,
   )
 
   // `at` counts presses, so pressing Forward while a forward is already open
   // still reaches the composer as a fresh instruction rather than as no change
   // at all. Which matters once somebody has switched mode inside the box.
-  const toggle = useCallback((mode: ComposerMode, messageId: string | null = null) => {
+  const toggle = useCallback((
+    mode: ComposerMode, messageId: string | null = null, via: 'email' | null = null,
+  ) => {
     setOpened((current) => (
-      current?.mode === mode && current.messageId === messageId
+      current?.mode === mode && current.messageId === messageId && current.via === via
         ? null
-        : { mode, at: (current?.at ?? 0) + 1, messageId }
+        : { mode, at: (current?.at ?? 0) + 1, messageId, via }
     ))
   }, [])
 

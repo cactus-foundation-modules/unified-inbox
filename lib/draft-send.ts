@@ -58,7 +58,11 @@ export async function postDraft(
   options: { sentByUserId: string; idempotencyKey: string },
 ): Promise<DraftPostResult> {
   // An email merged into a chat is still answered by email - see routedThread.
-  const thread = await routedThread(channelThread, draft.inReplyToMessageId)
+  const routed = await routedThread(channelThread, {
+    inReplyToMessageId: draft.inReplyToMessageId,
+    subject: draft.subject,
+  })
+  const thread = routed.thread
   // A conversation another module owns - a chat, an enquiry, a text. It goes
   // back out the way it came in.
   //
@@ -96,7 +100,7 @@ export async function postDraft(
   }
 
   const inboxId = draftSendingInboxId(draft, thread)
-    ?? (forwardsByEmail ? await defaultInboxIdFor(options.sentByUserId) : null)
+    ?? (forwardsByEmail || routed.byEmail ? await defaultInboxIdFor(options.sentByUserId) : null)
   if (!inboxId) {
     return { ok: false, reason: 'There is no address left to send it from, so it stayed here.' }
   }

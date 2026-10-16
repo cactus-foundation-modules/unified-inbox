@@ -124,7 +124,12 @@ export function renderProductTable(products: readonly ProductChoice[]): string {
  * options in brackets, the price after a dash, and the link under it where
  * there is one.
  */
-export function renderProductText(products: readonly ProductChoice[]): string {
+export function renderProductText(
+  products: readonly ProductChoice[],
+  /** The channel shows `[words](address)` as a link: the name becomes the link
+   *  and the bare address is not printed beside it. */
+  options: { markdownLinks?: boolean } = {},
+): string {
   if (products.length === 0) return ''
   return products
     .map((product) => {
@@ -133,6 +138,10 @@ export function renderProductText(products: readonly ProductChoice[]): string {
         product.options ? `(${product.options})` : '',
       ].filter(Boolean).join(' ')
       const price = priceLine(product)
+      if (options.markdownLinks && product.url) {
+        const label = head.replace(/[[\]]/g, '')
+        return price ? `[${label}](${product.url}) - ${price}` : `[${label}](${product.url})`
+      }
       const line = price ? `${head} - ${price}` : head
       return product.url ? `${line}\n${product.url}` : line
     })

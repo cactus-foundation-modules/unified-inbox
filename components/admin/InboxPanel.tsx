@@ -1283,17 +1283,30 @@ export async function UnifiedInboxPanel({
       // below, was three extra round trips for anybody who is not an admin -
       // exactly the waste the note beside canSendOut warns about.
       // An email merged into a chat conversation is answered by email, however
-      // the conversation began - see answersByEmail. Decided by the newest
-      // message that came in, the one a plain reply answers.
-      const newestIncoming = [...messages].reverse().find((m) => m.direction === 'in') ?? null
-      const emailAnswered = answersByEmail(
-        { providerModule: thread.providerModule, filed: !!thread.inboxId },
-        newestIncoming,
-      )
+      // the conversation began - see answersByEmail. Which ones are mail is
+      // handed to the pane, which picks the box per message being answered.
+      const emailMessageIds = messages
+        .filter((m) => m.direction !== 'note' && answersByEmail(
+          { providerModule: thread.providerModule, filed: !!thread.inboxId },
+          m,
+        ))
+        .map((m) => m.id)
+      // A chat (or any channel with no address of its own) whose visitor left an
+      // email address can also be answered by email, from the address the
+      // conversation is filed in or the reader's default.
+      const alsoByEmail = thread.providerModule && channel && channel.email !== true && !isDiscussion
+        ? channel.label
+        : null
+      const newestIncomingId = [...messages].reverse().find((m) => m.direction === 'in')?.id ?? null
       const canReplyHere = isDiscussion
         ? Promise.resolve(false)
-        : thread.providerModule && !emailAnswered
-          ? Promise.resolve((channel?.canReply ?? false) && canSendOut)
+        : thread.providerModule
+          ? (emailMessageIds.length > 0 && thread.inboxId
+            ? Promise.all([
+              Promise.resolve((channel?.canReply ?? false) && canSendOut),
+              canReplyToInbox(user, thread.inboxId),
+            ]).then(([viaChannel, viaInbox]) => viaChannel || viaInbox)
+            : Promise.resolve((channel?.canReply ?? false) && canSendOut))
           : thread.inboxId
             ? canReplyToInbox(user, thread.inboxId)
             : Promise.resolve(false)
@@ -1468,11 +1481,7 @@ export async function UnifiedInboxPanel({
       // is what stopped every WhatsApp message being answered at all: the To
       // line came back empty, because a WhatsApp conversation has a number on
       // it and no address anywhere, and an empty To line disables Send.
-      const style = replyStyleFor(
-        emailAnswered ? { providerModule: null } : thread,
-        channel?.textStyles,
-        channel?.email === true,
-      )
+      const style = replyStyleFor(thread, channel?.textStyles, channel?.email === true)
       const destinationLine = style.addressed
         ? null
         : replyDestination({
@@ -1583,6 +1592,9 @@ export async function UnifiedInboxPanel({
           textTo={textTo}
           cannotReplyReason={cannotReplyReason}
           style={style}
+          emailMessageIds={emailMessageIds}
+          newestIncomingId={newestIncomingId}
+          alsoByEmail={alsoByEmail}
           destinationLine={destinationLine}
           replyTo={[...reply.to, ...reply.cc]}
           replyAllTo={[...replyAll.to, ...replyAll.cc]}

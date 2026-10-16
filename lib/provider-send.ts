@@ -16,6 +16,7 @@ import { gatherAttachments, type SendRequest } from './send'
 import { htmlToText } from './html'
 import { applyTextStyles } from './text-styles'
 import { resolveProducts } from './products'
+import { markdownLinksToHtml } from './markdown-links'
 import { renderProductTable, renderProductText } from './products/render'
 import { flattenWithProducts, refKey, slotRefs } from './products/slots'
 import type { ProductRef } from './products/types'
@@ -74,6 +75,9 @@ export async function replyWords(
   /** What this channel writes emphasis as, straight off its own capabilities.
    *  Absent for a channel that takes plain words. */
   styles?: ConversationTextStyles | null,
+  /** The channel shows `[words](address)` as a link, so a product is its name
+   *  as the link instead of its name with the address printed beneath. */
+  markdownLinks = false,
 ): Promise<string> {
   /** The markers first, then the tags away: the emphasis lives in the tags, so
    *  once htmlToText has been over it there is nothing left to mark. */
@@ -89,7 +93,7 @@ export async function replyWords(
     bodyHtml,
     (ref) => {
       const choice = byKey.get(refKey(ref))
-      return choice ? renderProductText([choice]) : null
+      return choice ? renderProductText([choice], { markdownLinks }) : null
     },
     flatten,
   )
@@ -98,7 +102,7 @@ export async function replyWords(
     .map((one) => one.choice)
     .filter((choice) => !slotted.has(refKey(choice)))
   if (trailing.length === 0) return words
-  return [words, renderProductText(trailing)].filter(Boolean).join('\n\n')
+  return [words, renderProductText(trailing, { markdownLinks })].filter(Boolean).join('\n\n')
 }
 
 /**
@@ -208,6 +212,7 @@ export async function sendProviderReply(input: {
         input.body.html,
         input.products ?? [],
         resolved.provider.capabilities?.textStyles ?? null,
+        resolved.provider.capabilities?.markdownLinks === true,
       )
       : input.body.text
   ).trim()
@@ -277,7 +282,7 @@ export async function sendProviderReply(input: {
     fromPhone: null,
     subject: thread.subject,
     bodyText: body,
-    bodyHtml: email?.html ?? null,
+    bodyHtml: email?.html ?? (resolved.provider.capabilities?.markdownLinks === true ? markdownLinksToHtml(body) : null),
     snippet: buildSnippet(body),
     sentAt,
   })
