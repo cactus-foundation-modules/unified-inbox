@@ -1297,6 +1297,23 @@ export async function UnifiedInboxPanel({
       const alsoByEmail = thread.providerModule && channel && channel.email !== true && !isDiscussion
         ? channel.label
         : null
+      // Who a reply by email on one of those goes to. The newest message is as
+      // often our own chat reply, which carries no address, and a visitor may
+      // only have given theirs after their first message - so it is the newest
+      // address they did give, or failing that the one somebody here chose for
+      // the conversation. Without this the reply arrow had nobody to email and
+      // quietly dropped the "Reply by email" choice.
+      const partyMessage = alsoByEmail && reply.to.length === 0
+        ? [...messages].reverse().find((m) => m.direction === 'in' && (m.replyTo || m.fromAddress)) ?? null
+        : null
+      const partyAddress = partyMessage
+        ? { fromAddress: partyMessage.fromAddress, replyTo: partyMessage.replyTo }
+        : alsoByEmail && reply.to.length === 0 && thread.contactAddress
+          ? { fromAddress: thread.contactAddress, replyTo: null }
+          : null
+      const emailReply = partyAddress
+        ? replyRecipients({ ...partyAddress, toAddresses: [], ccAddresses: [] }, 'reply', ownAddresses)
+        : reply
       const newestIncomingId = [...messages].reverse().find((m) => m.direction === 'in')?.id ?? null
       const canReplyHere = isDiscussion
         ? Promise.resolve(false)
@@ -1596,8 +1613,8 @@ export async function UnifiedInboxPanel({
           newestIncomingId={newestIncomingId}
           alsoByEmail={alsoByEmail}
           destinationLine={destinationLine}
-          replyTo={[...reply.to, ...reply.cc]}
-          replyAllTo={[...replyAll.to, ...replyAll.cc]}
+          replyTo={[...emailReply.to, ...emailReply.cc]}
+          replyAllTo={partyAddress ? [...emailReply.to] : [...replyAll.to, ...replyAll.cc]}
           replySubject={replySubjectLine}
           forwardSubject={forwardSubjectLine}
           draft={ownDraft ? forComposer(ownDraft) : null}

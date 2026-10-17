@@ -7602,9 +7602,15 @@ export async function insertProviderMessage(data: ProviderMessageInput): Promise
 /** Brings a provider message we already hold up to the channel's current words,
  *  and hands back its id either way so late attachments can still be filed.
  *
- *  Only ever the body. Who it was from, when it was sent and which conversation
- *  it belongs to are what the message IS; a channel that changed its mind about
- *  those is describing a different message and should give it a different id.
+ *  The body, and a blank sender filled in. Who it was from, when it was sent and
+ *  which conversation it belongs to are what the message IS; a channel that
+ *  changed its mind about those is describing a different message and should
+ *  give it a different id. But a live chat visitor often says who they are
+ *  after their first message, and that is the channel learning a name it never
+ *  had rather than changing its mind - so an empty name, address or number on
+ *  a message that came IN takes the one now known, and one already there is
+ *  never touched. Without it the conversation's opening messages stayed
+ *  anonymous for ever, and the reply arrow had no address to offer email on.
  *
  *  The text is only written when it has actually changed, so an unchanged
  *  message costs one comparison in Postgres rather than a write and a row
@@ -7615,6 +7621,9 @@ async function refreshProviderMessage(data: ProviderMessageInput): Promise<strin
        SET "body_text" = ${data.bodyText},
            "body_html" = ${data.bodyHtml},
            "snippet"   = ${data.snippet},
+           "from_name"    = CASE WHEN "direction" = 'in' THEN COALESCE(NULLIF("from_name", ''), ${data.fromName}) ELSE "from_name" END,
+           "from_address" = CASE WHEN "direction" = 'in' THEN COALESCE(NULLIF("from_address", ''), ${data.fromAddress}) ELSE "from_address" END,
+           "from_phone"   = CASE WHEN "direction" = 'in' THEN COALESCE(NULLIF("from_phone", ''), ${data.fromPhone}) ELSE "from_phone" END,
            -- New words, perhaps, for the forgiving search to collect.
            "search_terms_at" = NULL
      WHERE "thread_id" = ${data.threadId}
