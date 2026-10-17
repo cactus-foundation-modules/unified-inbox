@@ -83,6 +83,9 @@ type Props = {
    *  it puts "Reply by text message" beside "Reply on Live chat". Null on an
    *  email, and on a message in a chat that arrived by email. */
   chatLabel: string | null
+  /** The chat has ended and takes no more messages, so nothing is offered that
+   *  would put words in it. */
+  chatEnded: boolean
   /** Our own sent chat message or text: there is nothing to answer, so no
    *  reply arrow. */
   noReply: boolean
@@ -116,7 +119,7 @@ type Props = {
 }
 
 export function MessageMenu({
-  threadId, messageId, actOn, canReply, canReplyAll, canForward, alsoByEmail, chatLabel, noReply, knownSubject,
+  threadId, messageId, actOn, canReply, canReplyAll, canForward, alsoByEmail, chatLabel, chatEnded, noReply, knownSubject,
   canDeleteHere, canSplit, textTo, isText, canMoveToPhone, base, params,
 }: Props) {
   const router = useRouter()
@@ -235,11 +238,13 @@ export function MessageMenu({
     setAskingSubject(false)
     toggle('reply', messageId, 'email', subject)
   }
-  const showReply = canReply && !noReply && (!isText || replyByText)
   // A chat with a mobile on it is answered on the chat, by text, or (where the
   // visitor left an address) by email, so the arrow opens a short menu.
   const textFromChat = chatLabel !== null && textTo !== null && !replyByText
   const replyMenu = (alsoByEmail !== null && !replyByText) || textFromChat
+  // An ended chat with no email and no mobile has no way left to answer it.
+  const deadChat = chatEnded && chatLabel !== null && !replyByText && !replyMenu
+  const showReply = canReply && !noReply && !deadChat && (!isText || replyByText)
 
   return (
     <span className="uin-msg-tools">
@@ -293,7 +298,7 @@ export function MessageMenu({
           align="end"
           width={200}
         >
-          <MenuItem onClick={() => toggle('reply', messageId)}>Reply on {alsoByEmail ?? chatLabel}</MenuItem>
+          {!chatEnded && <MenuItem onClick={() => toggle('reply', messageId)}>Reply on {alsoByEmail ?? chatLabel}</MenuItem>}
           {alsoByEmail !== null && (
             <MenuItem
               onClick={() => {
@@ -329,7 +334,7 @@ export function MessageMenu({
           open={texting}
           threadId={threadId}
           to={textTo}
-          chatLabel={chatLabel}
+          chatLabel={chatEnded ? null : chatLabel}
           onClose={() => setTexting(false)}
         />
       )}

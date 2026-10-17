@@ -101,6 +101,9 @@ type Props = {
   /** The channel's name when its conversation can also be answered by email
    *  (the visitor left an address). Null otherwise. */
   alsoByEmail?: string | null
+  /** The chat has been ended, so it takes no more messages: the entries that
+   *  answer on the chat itself are not offered. */
+  chatEnded?: boolean
   /** Who the reply goes to, in words, where the conversation decides that
    *  itself rather than asking. Null on email. */
   destinationLine: string | null
@@ -698,7 +701,7 @@ function productsTravel(channel: string): boolean {
 
 export function ThreadPane({
   base, params, thread, inboxName, contactLabel, outsiderLinks, contactHref, contactCardHref, messages, events, staff, taggable, staffById,
-  canReply, cannotReplyReason, style, emailMessageIds = [], newestIncomingId = null, alsoByEmail = null, destinationLine,
+  canReply, cannotReplyReason, style, emailMessageIds = [], newestIncomingId = null, alsoByEmail = null, chatEnded = false, destinationLine,
   replyTo, replyAllTo, replySubject, forwardSubject, draft,
   canAddProducts, draftProducts, canSuggestReplies, newestFirst,
   canDeleteMessages, canManage, blockState, spamState, binState, now, timezone, heldDrafts, viewerUserId, othersDrafts, focusDraft = null,
@@ -1128,6 +1131,7 @@ export function ThreadPane({
                     canForward={canReply && (style.forward || emailMessageIds.includes(message.id))}
                     alsoByEmail={emailMessageIds.includes(message.id) || replyTo.length === 0 ? null : alsoByEmail}
                     chatLabel={emailMessageIds.includes(message.id) ? null : alsoByEmail}
+                    chatEnded={chatEnded}
                     /* Nothing to answer on something we sent ourselves: a chat
                        message or a text of ours has no arrow. Our emails keep
                        theirs. */

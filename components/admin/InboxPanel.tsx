@@ -1352,6 +1352,20 @@ export async function UnifiedInboxPanel({
         }
       })()
 
+      // Whether the chat has been ended. An ended chat takes no more messages,
+      // so the chat entries come off the reply menu and the text dialog. Asked
+      // of the module that owns it, and only where a chat could be answered.
+      const chatEndedAsked = (async (): Promise<boolean> => {
+        if (!alsoByEmail || !thread.providerModule || !thread.externalId) return false
+        const resolved = await providerForKey(thread.providerModule)
+        if (!resolved) return false
+        try {
+          return (await resolved.provider.thread(thread.externalId))?.summary.status === 'closed'
+        } catch {
+          return false
+        }
+      })()
+
       // Junk, as this reader sees it, and whether the sender is already refused.
       //
       // Two questions rather than one because they have two different scopes:
@@ -1453,7 +1467,7 @@ export async function UnifiedInboxPanel({
       // the hints and the public links are asked of what comes back here.
       const [
         canReply, blockState, isSpam, isBinned, senderBlocked, ask,
-        links, kindOptions, senderModules, merges, contextQuery, canSuggest, textTo,
+        links, kindOptions, senderModules, merges, contextQuery, canSuggest, textTo, chatEnded,
       ] = await Promise.all([
         canReplyHere,
         blockStateAsked,
@@ -1488,6 +1502,7 @@ export async function UnifiedInboxPanel({
               allowed ? threadTextNumber(thread, await siteDiallingCode()) : null
             ))
           : Promise.resolve(null),
+        chatEndedAsked,
       ])
 
       // HOW this one is answered, as against whether it may be. An email is
@@ -1612,6 +1627,7 @@ export async function UnifiedInboxPanel({
           emailMessageIds={emailMessageIds}
           newestIncomingId={newestIncomingId}
           alsoByEmail={alsoByEmail}
+          chatEnded={chatEnded}
           destinationLine={destinationLine}
           replyTo={[...emailReply.to, ...emailReply.cc]}
           replyAllTo={partyAddress ? [...emailReply.to] : [...replyAll.to, ...replyAll.cc]}
