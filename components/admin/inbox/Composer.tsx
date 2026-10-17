@@ -122,6 +122,9 @@ type Props = {
    *  starts open, on what it would have said, because it is the one thing an
    *  email has that the channel did not. */
   startWithSubject?: boolean
+  /** A subject somebody chose before the box opened (reply by email on a
+   *  chat, which has none of its own). Wins over the usual "Re: ...". */
+  startSubject?: string | null
   /** Every message on the conversation a reply could quote. The box shows the
    *  one it is actually quoting, folded away - see lib/quoted-preview.ts. */
   quotedPreviews: QuotedPreview[]
@@ -136,7 +139,7 @@ type Props = {
 export function Composer({
   threadId, inboxId, replyTo, replyAllTo, canReply, canForward, style: replyStyle, destinationLine, staff,
   cannotReplyReason, replySubject, forwardSubject, draft, canAddProducts, draftProducts,
-  requestedMode, requestedAt, requestedReplyToId, startWithSubject = false, quotedPreviews, canSuggestReplies, timezone,
+  requestedMode, requestedAt, requestedReplyToId, startWithSubject = false, startSubject = null, quotedPreviews, canSuggestReplies, timezone,
 }: Props) {
   const router = useRouter()
   const { close: closeComposer } = useComposerOpen()
@@ -203,7 +206,7 @@ export function Composer({
   )
   const [cc, setCc] = useState((draft?.cc ?? []).join(', '))
   const [bcc, setBcc] = useState((draft?.bcc ?? []).join(', '))
-  const [subject, setSubject] = useState(draft?.subject ?? (startWithSubject ? replySubject : ''))
+  const [subject, setSubject] = useState(draft?.subject ?? startSubject ?? (startWithSubject ? replySubject : ''))
   // Each of the three lines is closed until somebody wants it - and open from
   // the start on a draft that already has something on it, because a saved Bcc
   // that nobody could see would be the worst of both worlds.

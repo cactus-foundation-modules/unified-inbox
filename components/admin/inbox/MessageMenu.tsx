@@ -78,6 +78,16 @@ type Props = {
    *  visitor has also given an email address and so can be answered either
    *  way. Null everywhere else, and the arrow is then a plain Reply. */
   alsoByEmail: string | null
+  /** The name of the live chat this message sits on ("Live chat"), whether or
+   *  not the visitor left an email address. With a mobile on the conversation
+   *  it puts "Reply by text message" beside "Reply on Live chat". Null on an
+   *  email, and on a message in a chat that arrived by email. */
+  chatLabel: string | null
+  /** Our own sent chat message or text: there is nothing to answer, so no
+   *  reply arrow. */
+  noReply: boolean
+  /** A subject already set on a draft for this conversation, or null. */
+  knownSubject: string | null
   /** Whether this message can be thrown away out of this conversation. Takes
    *  the grant to manage the addresses, and is deliberately NOT offered on a
    *  message that already carries the far-end Delete button in its foot: that
@@ -106,7 +116,7 @@ type Props = {
 }
 
 export function MessageMenu({
-  threadId, messageId, actOn, canReply, canReplyAll, canForward, alsoByEmail,
+  threadId, messageId, actOn, canReply, canReplyAll, canForward, alsoByEmail, chatLabel, noReply, knownSubject,
   canDeleteHere, canSplit, textTo, isText, canMoveToPhone, base, params,
 }: Props) {
   const router = useRouter()
@@ -114,6 +124,9 @@ export function MessageMenu({
   const [busy, setBusy] = useState(false)
   const [asking, setAsking] = useState<'delete' | 'split' | 'to-phone' | null>(null)
   const [texting, setTexting] = useState(false)
+  const [askingSubject, setAskingSubject] = useState(false)
+  const [subjectDraft, setSubjectDraft] = useState('')
+  const [subjectError, setSubjectError] = useState('')
   const [error, setError] = useState('')
 
   /** Back to unread, so it is still waiting tomorrow. A conversation-wide
@@ -215,7 +228,18 @@ export function MessageMenu({
   // Without one there is no arrow on it at all: an email reply to a text has
   // nobody to go to.
   const replyByText = isText && textTo !== null
-  const showReply = canReply && (!isText || replyByText)
+
+  function confirmSubject() {
+    const subject = subjectDraft.trim()
+    if (!subject) { setSubjectError('Give the email a subject first.'); return }
+    setAskingSubject(false)
+    toggle('reply', messageId, 'email', subject)
+  }
+  const showReply = canReply && !noReply && (!isText || replyByText)
+  // A chat with a mobile on it is answered on the chat, by text, or (where the
+  // visitor left an address) by email, so the arrow opens a short menu.
+  const textFromChat = chatLabel !== null && textTo !== null && !replyByText
+  const replyMenu = (alsoByEmail !== null && !replyByText) || textFromChat
 
   return (
     <span className="uin-msg-tools">
@@ -230,7 +254,7 @@ export function MessageMenu({
       >
         {canReplyAll && !isText && <MenuItem onClick={() => toggle('reply-all', messageId)}>Reply all</MenuItem>}
         {canForward && !isText && <MenuItem onClick={() => toggle('forward', messageId)}>Forward</MenuItem>}
-        {textTo && (
+        {textTo && chatLabel === null && (
           <MenuItem onClick={() => { setError(''); setTexting(true) }}>Send text message</MenuItem>
         )}
         {/* Only where there is no arrow beside these dots. On a conversation
@@ -260,7 +284,7 @@ export function MessageMenu({
         )}
       </Dropdown>
 
-      {showReply && alsoByEmail && !replyByText && (
+      {showReply && replyMenu && (
         <Dropdown
           className="uin-icon-btn"
           label={ReplyIcon}
@@ -269,11 +293,24 @@ export function MessageMenu({
           align="end"
           width={200}
         >
-          <MenuItem onClick={() => toggle('reply', messageId)}>Reply on {alsoByEmail}</MenuItem>
-          <MenuItem onClick={() => toggle('reply', messageId, 'email')}>Reply by email</MenuItem>
+          <MenuItem onClick={() => toggle('reply', messageId)}>Reply on {alsoByEmail ?? chatLabel}</MenuItem>
+          {alsoByEmail !== null && (
+            <MenuItem
+              onClick={() => {
+                // A chat has no subject of its own, and "Re: Live chat" is not
+                // one anybody wants to send: ask what the email is about first.
+                if (knownSubject) { toggle('reply', messageId, 'email'); return }
+                setSubjectError('')
+                setAskingSubject(true)
+              }}
+            >
+              Reply by email
+            </MenuItem>
+          )}
+          {textFromChat && <MenuItem onClick={() => { setError(''); setTexting(true) }}>Reply by text message</MenuItem>}
         </Dropdown>
       )}
-      {showReply && !(alsoByEmail && !replyByText) && (
+      {showReply && !replyMenu && (
         <button
           type="button"
           className="uin-icon-btn"
@@ -292,6 +329,7 @@ export function MessageMenu({
           open={texting}
           threadId={threadId}
           to={textTo}
+          chatLabel={chatLabel}
           onClose={() => setTexting(false)}
         />
       )}
@@ -302,6 +340,33 @@ export function MessageMenu({
       {error && (
         <span style={{ color: 'var(--color-destructive-hover)' }} role="alert">{error}</span>
       )}
+
+      <ConfirmDialog
+        open={askingSubject}
+        title="What is the email about?"
+        initialFocus="#uin-reply-subject-ask"
+        body={
+          <>
+            <label htmlFor="uin-reply-subject-ask">Subject</label>
+            <input
+              id="uin-reply-subject-ask"
+              type="text"
+              className="uin-text-dialog-box"
+              value={subjectDraft}
+              maxLength={200}
+              placeholder="Your enquiry, your order, ..."
+              onChange={(event) => { setSubjectDraft(event.target.value); setSubjectError('') }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') { event.preventDefault(); confirmSubject() }
+              }}
+            />
+            {subjectError && <p style={{ color: 'var(--color-destructive-hover)' }} role="alert">{subjectError}</p>}
+          </>
+        }
+        confirmLabel="Write the email"
+        onCancel={() => setAskingSubject(false)}
+        onConfirm={confirmSubject}
+      />
 
       <ConfirmDialog
         open={asking === 'split'}

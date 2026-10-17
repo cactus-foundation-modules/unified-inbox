@@ -1483,7 +1483,7 @@ export async function UnifiedInboxPanel({
         // the dots beside Reply. Only on an email conversation somebody may
         // answer, on a site that can send texts at all - smsReady is the cheap
         // question round one already asked.
-        smsReady && !isDiscussion && !thread.providerModule && thread.personId
+        smsReady && !isDiscussion && (thread.providerModule ? thread.channel === 'chat' : !!thread.personId)
           ? canReplyHere.then(async (allowed) => (
               allowed ? threadTextNumber(thread, await siteDiallingCode()) : null
             ))

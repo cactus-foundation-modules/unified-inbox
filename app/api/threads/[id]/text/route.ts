@@ -4,6 +4,8 @@
 // Offered from the dots beside Reply when their contact card has a mobile on
 // it. The number is read off the card HERE, never taken from the browser, so
 // a text sent from this conversation can only go to the person it is with.
+// On a live chat the number is the one the visitor left, asked of the chat
+// module (lib/text-links.ts), and the text can also be put in the chat.
 //
 // It goes out through core's SMS seam (lib/auth/sms.ts) exactly as a text from
 // the compose menu does, and this module still holds no telephony credentials.
@@ -20,8 +22,9 @@ import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { getActiveSmsProvider } from '@/lib/auth/sms'
 import { siteDiallingCode } from '@/lib/phone.server'
-import { canOpenThread, canReplyToInbox } from '@/modules/unified-inbox/lib/access'
+import { canOpenThread, canReplyToInbox, threadAccessKind } from '@/modules/unified-inbox/lib/access'
 import { getThreadDetail, recordEvent, reopenOnOurReply } from '@/modules/unified-inbox/lib/db'
+import { sendProviderReply } from '@/modules/unified-inbox/lib/provider-send'
 import { standDownScheduled } from '@/modules/unified-inbox/lib/stand-down'
 import { linkTextsToThread, recordSentText, threadTextNumber } from '@/modules/unified-inbox/lib/text-links'
 import { ThreadTextBody } from '@/modules/unified-inbox/lib/validation'
@@ -47,7 +50,10 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   if (thread.mergedIntoId) {
     return errorResponse('That conversation has been merged into another one. Text them from that one.', 400)
   }
-  if (!thread.inboxId || !(await canReplyToInbox(user, thread.inboxId))) {
+  // A channel's own conversation (a live chat nobody has filed in an address) is
+  // answered by whoever may open it, which canOpenThread has just settled.
+  const channelOwned = !!thread.providerModule && threadAccessKind(thread) === 'channel'
+  if (!channelOwned && (!thread.inboxId || !(await canReplyToInbox(user, thread.inboxId)))) {
     return errorResponse('You do not have permission to answer this conversation.', 403)
   }
 
@@ -77,7 +83,12 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   // Recorded only once it has genuinely gone. The note first: if writing the
   // message fails, the channel's copy still arrives on the next collection and
   // lands here, which is where it belongs.
-  await linkTextsToThread({ phone: to, threadId: thread.id, since, userId: user.id })
+  // Only an email conversation takes over the texts that come back from this
+  // number; a live chat is not given them, so a chat does not quietly start
+  // collecting every text that person ever sends.
+  if (!thread.providerModule) {
+    await linkTextsToThread({ phone: to, threadId: thread.id, since, userId: user.id })
+  }
   const sentAt = new Date()
   const messageId = await recordSentText({
     threadId: thread.id,
@@ -102,5 +113,23 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     senderUserId: user.id,
   })
 
-  return NextResponse.json({ ok: true, to, messageId })
+  // Also in the live chat: the same words go to the visitor through the chat
+  // module like any chat reply, and sit in the conversation as one. The text
+  // has already gone, so a chat that will not take it is reported rather than
+  // failed - telling them "nothing was sent" would be a lie that ends in a
+  // second text.
+  let chatSent: boolean | undefined
+  let chatError: string | undefined
+  if (parsed.data.alsoChat && thread.providerModule) {
+    const result = await sendProviderReply({
+      threadId: thread.id,
+      body: { text: parsed.data.body },
+      authorUserId: user.id,
+      authorName: user.displayName ?? null,
+    })
+    chatSent = result.ok
+    if (!result.ok) chatError = result.reason
+  }
+
+  return NextResponse.json({ ok: true, to, messageId, chatSent, chatError })
 }

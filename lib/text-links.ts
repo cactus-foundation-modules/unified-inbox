@@ -2,6 +2,7 @@ import { prisma } from '@/lib/db/prisma'
 import { listIdentities, recomputeThreadCounters, touchThread } from './db'
 import { isSideText, textableNumber, type TextLink } from './text-rules'
 import { buildSnippet } from './threading'
+import { providerForKey } from './provider-registry'
 
 // ---------------------------------------------------------------------------
 // Texting somebody from an email conversation, and filing their reply there.
@@ -44,14 +45,27 @@ export const SENT_TEXT_PREFIX = 'uin-out:text:'
 
 /**
  * The number an email conversation's person can be texted on, or null when
- * there is not one - or when the conversation is not an email one: a phone or
- * chat conversation is already answered down its own channel.
+ * there is not one - or when the conversation is not an email one: a phone
+ * conversation is already answered down its own channel.
+ *
+ * A live chat is the exception. Its visitor may have left a mobile beside their
+ * name, which only the chat module holds, so it is asked for through the
+ * conversation seam (never read from the chat's tables) and goes through the
+ * same mobile check as a number off a contact card.
  */
 export async function threadTextNumber(
-  thread: { channel: string; providerModule: string | null; personId: string | null },
+  thread: { channel: string; providerModule: string | null; personId: string | null; externalId?: string | null },
   diallingCode: string,
 ): Promise<string | null> {
-  if (thread.channel !== 'email' || thread.providerModule || !thread.personId) return null
+  if (thread.providerModule) {
+    if (thread.channel !== 'chat' || !thread.externalId) return null
+    const resolved = await providerForKey(thread.providerModule)
+    if (!resolved) return null
+    const detail = await resolved.provider.thread(thread.externalId).catch(() => null)
+    const phone = detail?.summary.participant?.phone
+    return phone ? textableNumber([phone], diallingCode) : null
+  }
+  if (thread.channel !== 'email' || !thread.personId) return null
   const identities = await listIdentities(thread.personId)
   return textableNumber(
     identities.filter((identity) => identity.kind === 'phone').map((identity) => identity.value),

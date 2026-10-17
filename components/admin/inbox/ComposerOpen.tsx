@@ -101,9 +101,10 @@ export function ComposerSlot(props: SlotProps) {
   return (
     <div id="uin-composer" ref={slot}>
       <Composer
-        key={asEmail ? 'email' : 'channel'}
+        key={asEmail ? `email:${opened.subject ?? ''}` : 'channel'}
         {...rest}
         startWithSubject={askedForEmail}
+        startSubject={opened.via === 'email' ? opened.subject : null}
         style={asEmail ? EMAIL_REPLY_STYLE : props.style}
         destinationLine={asEmail ? null : props.destinationLine}
         canForward={props.canForward || asEmail}

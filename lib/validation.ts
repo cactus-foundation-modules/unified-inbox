@@ -327,6 +327,9 @@ export const SmsBody = z.object({
  *  point a text from this conversation at somebody else. Bounded as above. */
 export const ThreadTextBody = z.object({
   body: z.string().trim().min(1, 'There is nothing to send yet.').max(640),
+  /** On a live chat: also put the same words in the chat, so the visitor sees
+   *  them there too and the conversation keeps them. */
+  alsoChat: z.boolean().optional(),
 })
 
 /** Ringing somebody. Two-leg: the site calls whoever pressed the button first,

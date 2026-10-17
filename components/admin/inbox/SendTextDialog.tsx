@@ -30,22 +30,30 @@ type Props = {
   threadId: string
   /** Where it will go, as the card has it, for reading rather than editing. */
   to: string
+  /** The name of the live chat this conversation is on ("Live chat"), when the
+   *  same words can also be put in it. Null on an email conversation. */
+  chatLabel?: string | null
   onClose: () => void
 }
 
-export function SendTextDialog({ open, threadId, to, onClose }: Props) {
+export function SendTextDialog({ open, threadId, to, chatLabel = null, onClose }: Props) {
   const router = useRouter()
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [alsoChat, setAlsoChat] = useState(false)
+  // The text went but the chat would not take it: shown, and the box locked,
+  // because sending again would text them twice.
+  const [partial, setPartial] = useState('')
   const inFlight = useRef(false)
   const { segments, perSegment } = segmentsFor(text)
 
   const close = useCallback(() => {
     if (inFlight.current) return
     setError('')
+    if (partial) { setPartial(''); setText(''); router.refresh() }
     onClose()
-  }, [onClose])
+  }, [onClose, partial, router])
 
   const send = useCallback(async () => {
     if (!text.trim()) {
@@ -60,11 +68,15 @@ export function SendTextDialog({ open, threadId, to, onClose }: Props) {
       const response = await fetch(`/api/m/unified-inbox/threads/${threadId}/text`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body: text.trim() }),
+        body: JSON.stringify({ body: text.trim(), ...(chatLabel && alsoChat ? { alsoChat: true } : {}) }),
       })
-      const data = (await response.json().catch(() => null)) as { error?: string } | null
+      const data = (await response.json().catch(() => null)) as { error?: string; chatSent?: boolean; chatError?: string } | null
       if (!response.ok) {
         setError(refusal(response.status, data?.error ?? null))
+        return
+      }
+      if (data?.chatSent === false) {
+        setPartial(`The text was sent, but it could not be put in ${chatLabel ?? 'the chat'}: ${data.chatError ?? 'it would not go.'}`)
         return
       }
       setText('')
@@ -78,7 +90,7 @@ export function SendTextDialog({ open, threadId, to, onClose }: Props) {
       inFlight.current = false
       setBusy(false)
     }
-  }, [onClose, router, text, threadId])
+  }, [alsoChat, chatLabel, onClose, router, text, threadId])
 
   return (
     <ConfirmDialog
@@ -87,7 +99,7 @@ export function SendTextDialog({ open, threadId, to, onClose }: Props) {
       initialFocus="#uin-thread-text"
       body={
         <>
-          <p>To <strong>{to}</strong>, from the site&apos;s own number. It is kept in this conversation, and so is their reply.</p>
+          <p>To <strong>{to}</strong>, from the site&apos;s own number. {chatLabel ? 'It is kept in this conversation.' : 'It is kept in this conversation, and so is their reply.'}</p>
           <label className="sr-only" htmlFor="uin-thread-text">Your text</label>
           <textarea
             id="uin-thread-text"
@@ -95,7 +107,7 @@ export function SendTextDialog({ open, threadId, to, onClose }: Props) {
             rows={5}
             value={text}
             maxLength={640}
-            disabled={busy}
+            disabled={busy || !!partial}
             onChange={(event) => { setText(event.target.value); setError('') }}
             placeholder="Keep it short. This is a text, not an email."
           />
@@ -107,6 +119,13 @@ export function SendTextDialog({ open, threadId, to, onClose }: Props) {
                 : `${segments} texts. They are charged one at a time.`}
             {perSegment === SEGMENT_CHARS_UNICODE && ' A curly quote or emoji shortens every one of them.'}
           </p>
+          {chatLabel && (
+            <label className="uin-text-dialog-also" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input type="checkbox" checked={alsoChat} disabled={busy || !!partial} onChange={(event) => setAlsoChat(event.target.checked)} />
+              Also send in {chatLabel}
+            </label>
+          )}
+          {partial && <p role="alert">{partial}</p>}
           {/* Same colour as the other refusals on this screen: --color-danger
               measures under AA on this ground at this size. */}
           {error && (
@@ -114,10 +133,10 @@ export function SendTextDialog({ open, threadId, to, onClose }: Props) {
           )}
         </>
       }
-      confirmLabel={busy ? 'Sending...' : 'Send text'}
+      confirmLabel={busy ? 'Sending...' : partial ? 'Done' : 'Send text'}
       busy={busy}
       onCancel={close}
-      onConfirm={() => void send()}
+      onConfirm={() => { if (partial) close(); else void send() }}
     />
   )
 }

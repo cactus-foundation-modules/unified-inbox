@@ -1127,6 +1127,14 @@ export function ThreadPane({
                     canReplyAll={canReply && replyAllTo.length > replyTo.length}
                     canForward={canReply && (style.forward || emailMessageIds.includes(message.id))}
                     alsoByEmail={emailMessageIds.includes(message.id) || replyTo.length === 0 ? null : alsoByEmail}
+                    chatLabel={emailMessageIds.includes(message.id) ? null : alsoByEmail}
+                    /* Nothing to answer on something we sent ourselves: a chat
+                       message or a text of ours has no arrow. Our emails keep
+                       theirs. */
+                    noReply={message.direction === 'out' && (sideText || message.channel === 'sms' || (thread.channel === 'chat' && !emailMessageIds.includes(message.id)))}
+                    /* A subject already chosen for this conversation (a saved
+                       draft's), so replying by email need not ask again. */
+                    knownSubject={draft?.subject?.trim() || null}
                     /* Not where the foot of the message already carries the
                        far-end Delete: that one asks the channel to get rid of
                        it at the phone company as well, and two controls a few
