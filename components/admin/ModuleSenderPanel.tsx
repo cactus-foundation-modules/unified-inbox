@@ -200,3 +200,7 @@ export function PurchaseOrdersSenderPanel() {
 export function ShopSenderPanel() {
   return <ModuleSenderPanel moduleName="shop" what="your order emails" />
 }
+
+export function AiCallAnsweringSenderPanel() {
+  return <ModuleSenderPanel moduleName="ai-call-answering" what="the order links the phone assistant emails" />
+}

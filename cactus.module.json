@@ -1,6 +1,6 @@
 {
   "name": "unified-inbox",
-  "version": "0.1.134",
+  "version": "0.1.135",
   "tablePrefix": "uin_",
   "notificationKinds": [
     {"id": "mention", "label": "Asked about a conversation", "description": "A colleague has been asked to look at a conversation.", "dedupePrefix": "unified-inbox:mention:"},
@@ -42,6 +42,14 @@
       "host": "shop.settings-notifications",
       "import": "./components/admin/ModuleSenderPanel",
       "component": "ShopSenderPanel"
+    },
+    {
+      "id": "unified-inbox-ai-call-answering-sender",
+      "label": "Sending address",
+      "permission": "unifiedinbox.manage",
+      "host": "ai-call-answering.settings-emails",
+      "import": "./components/admin/ModuleSenderPanel",
+      "component": "AiCallAnsweringSenderPanel"
     }
   ],
   "extensionPoints": [
