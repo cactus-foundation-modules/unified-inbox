@@ -202,5 +202,5 @@ export function ShopSenderPanel() {
 }
 
 export function AiCallAnsweringSenderPanel() {
-  return <ModuleSenderPanel moduleName="ai-call-answering" what="the order links the phone assistant emails" />
+  return <ModuleSenderPanel moduleName="ai-call-answering" what="the emails the phone assistant sends (order links and call summaries)" />
 }
