@@ -1,6 +1,6 @@
 {
   "name": "unified-inbox",
-  "version": "0.1.137",
+  "version": "0.1.138",
   "tablePrefix": "uin_",
   "notificationKinds": [
     {"id": "mention", "label": "Asked about a conversation", "description": "A colleague has been asked to look at a conversation.", "dedupePrefix": "unified-inbox:mention:"},

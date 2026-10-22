@@ -1,11 +1,12 @@
 import { prisma } from '@/lib/db/prisma'
 import {
   addPersonAddressIfMissing, addPersonCategories, findOrCreateCategory, findPersonByIdentity, getPerson,
-  getSettings, recordMarketingConsent, updatePerson,
+  getSettings, listIdentities, mergePeople, recordMarketingConsent, updatePerson,
 } from './db'
 import { attachContactIdentities, resolveOrganisation, saveContact } from './contact-store'
 import { buildResolutionContext } from './identity'
-import { identityKey, shouldBecomePerson } from './people'
+import { identityKey, phoneKey, shouldBecomePerson } from './people'
+import { siteDiallingCode } from '@/lib/phone.server'
 import {
   BILLING_LABEL, fillInBlanks, isEmptyFillIn, shopCustomerDraft, shopCustomerExtras, shopOrderConsent,
   type ShopOrderCustomer,
@@ -39,7 +40,11 @@ import { addressLines } from './contacts'
 //   work address is not a customer.
 //
 //   An address or a number somebody else already holds stays where it is. Two
-//   contacts claiming one phone number is a merge for a person to decide on.
+//   contacts claiming one phone number is a merge for a person to decide on -
+//   with one exception: a holder that is only a number the phone assistant or a
+//   text once came from (no name, no address, nothing else on the card) has
+//   nobody to disagree with. The customer absorbs it, so the call history comes
+//   with the number instead of the number being refused.
 //
 // Every one of them is filed under Customers, new or already known: somebody
 // who emailed in March and ordered in April is as much a customer as somebody who
@@ -62,6 +67,30 @@ export type ShopCustomerOutcome =
   | 'colleague'
   | 'no-order'
   | 'no-address'
+
+/** Somebody a call or text from this number created, and nothing more: no
+ *  name of their own, no address, nothing but phone numbers. */
+async function isNumberOnlyContact(personId: string): Promise<boolean> {
+  const person = await getPerson(personId)
+  if (!person || person.mergedIntoId || person.origin !== 'mail') return false
+  if (person.primaryEmail || person.firstName || person.lastName || person.organisationId || person.notes) return false
+  const identities = await listIdentities(personId)
+  if (identities.length === 0 || identities.some((identity) => identity.kind !== 'phone')) return false
+  return !person.displayName || identities.some((identity) => identity.value === person.displayName)
+}
+
+/** Numbers this customer was refused because a number-only contact holds them:
+ *  that contact is folded into the customer (a merge that can be undone). */
+async function absorbNumberOnlyHolders(personId: string, refused: string[]): Promise<void> {
+  if (refused.length === 0) return
+  const diallingCode = await siteDiallingCode()
+  for (const phone of refused) {
+    const key = phoneKey(phone, diallingCode)
+    const holderId = key ? await findPersonByIdentity([key]) : null
+    if (!holderId || holderId === personId || !(await isNumberOnlyContact(holderId))) continue
+    await mergePeople(personId, holderId, null)
+  }
+}
 
 export async function readOrderCustomer(orderId: string): Promise<ShopOrderCustomer | null> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
@@ -117,13 +146,16 @@ export async function addShopCustomerToContacts(orderId: string): Promise<ShopCu
   const extras = shopCustomerExtras(order)
   const existingId = await findPersonByIdentity([key])
   if (!existingId) {
-    const { personId } = await saveContact(null, draft, {
+    const created = await saveContact(null, draft, {
       origin: 'order', categoryMode: 'add', extraCategoryIds: [categoryId],
     })
+    const { personId } = created
     // The delivery number and the delivery address, beside the order's own.
+    const refused = [...created.refused]
     for (const phone of extras.phones) {
-      await attachContactIdentities(personId, { phone: phone.value, phoneLabel: phone.label }, 'order')
+      refused.push(...await attachContactIdentities(personId, { phone: phone.value, phoneLabel: phone.label }, 'order'))
     }
+    await absorbNumberOnlyHolders(personId, refused)
     for (const address of extras.addresses) {
       await addPersonAddressIfMissing(personId, {
         label: address.label ?? null,
@@ -163,10 +195,11 @@ export async function addShopCustomerToContacts(orderId: string): Promise<ShopCu
   // ring about the order. One already held by somebody else is left there.
   // The address is not attached again - it is how they were found, and the
   // same one typed in capitals this time would otherwise sit on the card twice.
-  await attachContactIdentities(person.id, { phone: draft.phone, phoneLabel: draft.phoneLabel }, 'order')
+  const refused = await attachContactIdentities(person.id, { phone: draft.phone, phoneLabel: draft.phoneLabel }, 'order')
   for (const phone of extras.phones) {
-    await attachContactIdentities(person.id, { phone: phone.value, phoneLabel: phone.label }, 'order')
+    refused.push(...await attachContactIdentities(person.id, { phone: phone.value, phoneLabel: phone.label }, 'order'))
   }
+  await absorbNumberOnlyHolders(person.id, refused)
   // Their billing and delivery addresses, each added only where the card does
   // not already hold it. The billing one is not a "further" address when the
   // card was blank and has just taken it as its own, so it is offered too and

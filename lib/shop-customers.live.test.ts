@@ -219,7 +219,7 @@ describe.runIf(shouldRun)('shop customers into the address book, against a real 
       `SELECT "value" FROM "uin_person_identities" WHERE "person_id" = $1 AND "kind" = 'phone'`,
       [row!.id],
     )
-    expect(numbers.map((n) => n.value)).toEqual(['07700 900123'])
+    expect(numbers.map((n) => n.value)).toEqual(['07700900123'])
 
     const { rows: orgs } = await client.query(
       `SELECT "name", "origin" FROM "uin_organisations" WHERE "id" = $1`,
@@ -286,7 +286,7 @@ describe.runIf(shouldRun)('shop customers into the address book, against a real 
       `SELECT "value" FROM "uin_person_identities" WHERE "person_id" = $1 AND "kind" = 'phone'`,
       [personId],
     )
-    expect(numbers.map((n) => n.value)).toEqual(['01904 000111'])
+    expect(numbers.map((n) => n.value)).toEqual(['01904000111'])
     expect(await categoriesOf(personId)).toEqual(['customers', 'Supplier'])
   })
 
@@ -299,9 +299,28 @@ describe.runIf(shouldRun)('shop customers into the address book, against a real 
     const { rows } = await client.query(
       `SELECT p."primary_email" FROM "uin_person_identities" i
          JOIN "uin_people" p ON p."id" = i."person_id"
-        WHERE i."value" = '07700 900123'`,
+        WHERE i."value" = '07700900123'`,
     )
     expect(rows).toEqual([{ primary_email: 'jane@acme.co.uk' }])
+  })
+
+  it('takes over a contact that is only the number a call came from', async () => {
+    // What the phone assistant leaves behind: a person with a number and nothing else.
+    const placeholder = await lib.createPerson({ displayName: null, primaryEmail: null, organisationId: null })
+    const store = await import('./contact-store')
+    await store.attachContactIdentities(placeholder, { phone: '07700 900456' }, 'provider')
+
+    const id = await placeOrder({ email: 'bea@jones.co.uk', name: 'Bea Jones', phone: '07700 900456' })
+    expect(await sync.addShopCustomerToContacts(id)).toBe('created')
+
+    const { rows } = await client.query(
+      `SELECT p."primary_email", p."merged_into_id" FROM "uin_person_identities" i
+         JOIN "uin_people" p ON p."id" = i."person_id"
+        WHERE i."kind" = 'phone' AND i."value" LIKE '07700%456'`,
+    )
+    expect(rows).toEqual([{ primary_email: 'bea@jones.co.uk', merged_into_id: null }])
+    const { rows: old } = await client.query(`SELECT "merged_into_id" FROM "uin_people" WHERE "id" = $1`, [placeholder])
+    expect(old[0]?.merged_into_id).not.toBeNull()
   })
 
   it('never makes a contact of a colleague', async () => {
