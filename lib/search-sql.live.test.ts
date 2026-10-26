@@ -325,6 +325,22 @@ describe.runIf(shouldRun)('the search queries, against a real database', () => {
     expect(await subjectsOf({ withText: 'nobody@nowhere.example' })).toEqual([])
   })
 
+  it('finds an address in the search box when it was only ever sent to or copied in', async () => {
+    // Nobody at customers.example ever wrote in, so the address is on no From
+    // line and in no body - the To line is the only place it lives.
+    expect(await subjectsOf({ search: 'everyone@customers.example' }))
+      .toEqual(['50% off storage until Friday'])
+    // Copied in, and only on the conversation this reader may open.
+    expect(await subjectsOf({ search: 'accounts@example.co.uk' }))
+      .toEqual(['Invoice 4021 for the boardroom chairs'])
+    // Part of one still counts, as it does on the To line of the dialog.
+    expect(await subjectsOf({ search: '@customers.example' }))
+      .toEqual(['50% off storage until Friday'])
+    // A plain word is not asked of the recipients, or "accounts" would be
+    // everything ever sent to accounts@.
+    expect(await subjectsOf({ search: 'everyone' })).toEqual([])
+  })
+
   it('takes a wildcard in the search box literally', async () => {
     // Unescaped, this matches every row in the table and the results are
     // nonsense. Escaped, it finds the one message with a percent sign in it.

@@ -3221,11 +3221,25 @@ function filterClauses(f: ThreadListFilters): Prisma.Sql[] {
     // fragment of a reference - "0025" of PO-00025 - still finds it. That half
     // is asked of uin_threads alone, which is one row per conversation rather
     // than one per message, and is cheap without an index of its own.
+    //
+    // An address typed into the box also counts when it is on the To or Cc
+    // line. The index only carries who a message came FROM, so a customer the
+    // site wrote to first and who never wrote back was unfindable by their own
+    // address - which is the first thing anybody types. Only for a single word
+    // with an @ in it: every word matched against the recipients would have
+    // "accounts" bring back everything ever sent to accounts@.
+    const recipients = !/\s/.test(q) && q.includes('@')
+      ? Prisma.sql` OR EXISTS (
+      SELECT 1 FROM "uin_messages" mr
+       WHERE mr."thread_id" = t."id"
+         AND array_to_string(mr."to_addresses" || mr."cc_addresses", ' ') ILIKE ${likeContains(q)}
+    )`
+      : Prisma.empty
     where.push(Prisma.sql`(EXISTS (
       SELECT 1 FROM "uin_messages" ms
        WHERE ms."thread_id" = t."id"
          AND ${SEARCH_VECTOR} @@ ${searchQuery(q)}
-    ) OR t."subject" ILIKE ${likeContains(q)})`)
+    ) OR t."subject" ILIKE ${likeContains(q)}${recipients})`)
   }
   // The narrower cuts, one EXISTS each. Separate rather than folded into one
   // subquery on purpose: "from the supplier" and "with something attached" are
