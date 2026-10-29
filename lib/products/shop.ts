@@ -590,7 +590,14 @@ export const shopProducts: ProductSource = {
     `
     const row = rows[0]
     if (!row) return null
-    if (!row.catalogue_hidden) return { moduleName: 'shop', kind: 'product', id: row.id }
+    if (!row.catalogue_hidden) {
+      // A link carrying the shopper's picks that settles on one variation is
+      // that variation; fewer picks than that stay the listing.
+      const picked = (await variationsAvailable()) ? await variationNamedByPicks(row.id, url) : null
+      return picked
+        ? { moduleName: 'shop', kind: 'variation', id: picked }
+        : { moduleName: 'shop', kind: 'product', id: row.id }
+    }
     if (!(await variationsAvailable())) return null
 
     const variants = await prisma.$queryRaw<{ id: string }[]>`
@@ -602,4 +609,56 @@ export const shopProducts: ProductSource = {
     `
     return variants[0] ? { moduleName: 'shop', kind: 'variation', id: row.id } : null
   },
+}
+
+/** The name an option's query parameter goes by on the storefront: lowercased,
+ *  accents folded, runs of anything else hyphenated. Restated from the
+ *  variations module, which this one does not import. */
+function optionParamKey(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+/** The one enabled variation of a listing that a link's query picks
+ *  (`?headrest=without-headrest&frame-colour=white`), or null when the picks
+ *  name none or leave several. Picks for options the listing lacks are ignored,
+ *  and a pick that contradicts a variation rules it out. */
+async function variationNamedByPicks(listingId: string, address: string): Promise<string | null> {
+  const picks = new Map<string, string>()
+  try {
+    new URL(address.trim()).searchParams.forEach((value, key) => {
+      if (value && !picks.has(key)) picks.set(key, value)
+    })
+  } catch {
+    return null
+  }
+  if (picks.size === 0) return null
+
+  const rows = await prisma.$queryRaw<{ id: string; pairs: [string, string][] | null }[]>`
+    SELECT v."child_product_id" AS "id",
+           (SELECT json_agg(json_build_array(o."name", ov."slug") ORDER BY o."position" ASC, ov."position" ASC)
+              FROM "svr_variant_values" vv
+              JOIN "svr_option_values" ov ON ov."id" = vv."option_value_id"
+              JOIN "svr_options" o ON o."id" = ov."option_id"
+             WHERE vv."variant_id" = v."id") AS "pairs"
+      FROM "svr_variants" v
+      JOIN "shp_products" c ON c."id" = v."child_product_id"
+     WHERE v."product_id" = ${listingId} AND v."enabled" = true AND c."status" = 'ACTIVE'
+  `.catch(() => [] as { id: string; pairs: [string, string][] | null }[])
+
+  const matches = rows.filter((row) => {
+    let hits = 0
+    for (const [name, slug] of row.pairs ?? []) {
+      const wanted = picks.get(optionParamKey(name))
+      if (wanted === undefined) continue
+      if (wanted !== slug) return false
+      hits += 1
+    }
+    return hits > 0
+  })
+  return matches.length === 1 ? matches[0]!.id : null
 }

@@ -24,7 +24,7 @@ function bareHost(host: string): string {
  * where every product page lived before the setting existed and old links still
  * get pasted. A bare `/<slug>` is only read on a shop that publishes its products
  * there - on any other, a single word after the domain is a page, not a product.
- * The query string and the fragment are ignored: neither one chooses the product.
+ * The query string and the fragment are ignored here: neither one chooses the product (a variation's picks are read by the source).
  */
 export function slugFromProductAddress(
   address: string,
