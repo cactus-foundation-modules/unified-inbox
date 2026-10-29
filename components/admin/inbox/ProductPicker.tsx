@@ -407,3 +407,13 @@ function Variations({ list, already, onPick }: {
 export function productKey(item: { moduleName: string; kind: string; id: string }): string {
   return keyOf(item)
 }
+
+/** The product a pasted address is the page of, or null when it is not one -
+ *  or the catalogue could not be asked, which is the same answer to somebody
+ *  pasting a link: it goes in as a link. */
+export async function productForAddress(url: string): Promise<ProductChoice | null> {
+  const res = await fetch(`/api/m/unified-inbox/products?${new URLSearchParams({ url }).toString()}`)
+  if (!res.ok) return null
+  const data = (await res.json().catch(() => null)) as { item?: ProductChoice | null } | null
+  return data?.item ?? null
+}

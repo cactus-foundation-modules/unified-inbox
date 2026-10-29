@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
-import { listVariations, searchProducts } from '@/modules/unified-inbox/lib/products'
+import { listVariations, productFromUrl, searchProducts } from '@/modules/unified-inbox/lib/products'
 
 // The catalogue, for putting something out of it on a message.
 //
@@ -33,6 +33,14 @@ export async function GET(request: NextRequest) {
     if (!moduleName) return errorResponse('Say which module the listing belongs to.')
     const items = await listVariations(user, moduleName, listing.slice(0, 200))
     return NextResponse.json({ items }, { headers: { 'Cache-Control': 'no-store' } })
+  }
+
+  // A pasted address: the one product it is the page of, or nothing. Too long
+  // to be an address is not an address.
+  const address = params.get('url')
+  if (address !== null) {
+    const item = address.length <= 2000 ? await productFromUrl(user, address) : null
+    return NextResponse.json({ item }, { headers: { 'Cache-Control': 'no-store' } })
   }
 
   const term = (params.get('q') ?? '').slice(0, 100)

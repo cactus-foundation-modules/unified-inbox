@@ -10,7 +10,8 @@ import {
   taxSuffix,
   type PriceDisplay,
 } from './price'
-import type { ProductChoice, ProductSource, ResolvedProduct } from './types'
+import { slugFromProductAddress } from './address'
+import type { ProductChoice, ProductRef, ProductSource, ResolvedProduct } from './types'
 import { VARIATION_LIMIT } from './types'
 
 // What the shop sells, for putting on a message.
@@ -523,5 +524,40 @@ export const shopProducts: ProductSource = {
     }
 
     return out
+  },
+
+  /**
+   * The product behind a pasted address.
+   *
+   * A listing is a product on sale and in the catalogue. A row hidden from the
+   * catalogue is only worth anything as a variation - the hidden child its
+   * listing publishes at its own slug - and only while shop-variations is here
+   * to say so and has it switched on. Anything else hidden is hidden on purpose.
+   */
+  async findByUrl(url): Promise<ProductRef | null> {
+    const settings = await readPageSettings()
+    const slug = slugFromProductAddress(url, settings.siteUrl, settings.rootStyle)
+    if (!slug) return null
+
+    const rows = await prisma.$queryRaw<{ id: string; catalogue_hidden: boolean }[]>`
+      SELECT p."id", p."catalogue_hidden"
+        FROM "shp_products" p
+       WHERE p."slug" = ${slug}
+         AND p."status" = 'ACTIVE'
+       LIMIT 1
+    `
+    const row = rows[0]
+    if (!row) return null
+    if (!row.catalogue_hidden) return { moduleName: 'shop', kind: 'product', id: row.id }
+    if (!(await variationsAvailable())) return null
+
+    const variants = await prisma.$queryRaw<{ id: string }[]>`
+      SELECT v."child_product_id" AS "id"
+        FROM "svr_variants" v
+       WHERE v."child_product_id" = ${row.id}
+         AND v."enabled" = true
+       LIMIT 1
+    `
+    return variants[0] ? { moduleName: 'shop', kind: 'variation', id: row.id } : null
   },
 }

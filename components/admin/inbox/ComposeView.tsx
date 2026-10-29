@@ -19,7 +19,7 @@ import {
 } from '@/modules/unified-inbox/lib/drafts'
 import { describeSendAt, plainTextToHtml, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
 import { AttachmentChips, AttachmentPicker, plainReason, type Attachment } from './AttachmentPicker'
-import { ProductPicker, productKey } from './ProductPicker'
+import { ProductPicker, productForAddress, productKey } from './ProductPicker'
 import { AttachmentDropNotice, AttachmentDropOverlay } from './AttachmentDropChrome'
 import { useAttachmentDrop } from './useAttachmentDrop'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -184,6 +184,18 @@ export function ComposeView({
   // Typed since the last time any of it was put down somewhere. Deliberately
   // not "is there text": text that has just been saved is not at risk.
   const [dirty, setDirty] = useState(false)
+  /** A pasted product address, as the same block the catalogue would have put
+   *  in - and on the message from that moment, exactly as if it had been
+   *  picked. Null leaves the address as the link it was. */
+  const pasteProduct = useCallback(async (url: string): Promise<string | null> => {
+    const item = await productForAddress(url)
+    if (!item) return null
+    setPicked((prev) =>
+      prev.some((p) => productKey(p) === productKey(item)) ? prev : [...prev, item],
+    )
+    setDirty(true)
+    return slotHtml(item)
+  }, [])
 
   /** A file dragged onto the dialog, rather than found in the library. The
    *  whole card is the target, not just the box: somebody dragging a quote at
@@ -601,6 +613,7 @@ export function ComposeView({
           <RichText
             id="uin-new-text"
             handleRef={editor}
+            onPasteAddress={canAddProducts ? pasteProduct : undefined}
             value={text}
             onChange={(html) => {
               setText(html)

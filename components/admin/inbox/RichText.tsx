@@ -8,6 +8,7 @@ import { BLOCK_CLASS, BLOCK_OFF_CLASS, openUpAround } from '@/modules/unified-in
 import {
   anchorAtCaret, linkifyEditable, openableHref, type LinkifyMode,
 } from '@/modules/unified-inbox/lib/richtext-links'
+import { isSingleAddress } from '@/modules/unified-inbox/lib/products/address'
 import { LinkIcon, ListIcon, NumberedListIcon, PaletteIcon } from './icons'
 
 // The writing box, with enough formatting to write an email in and no more.
@@ -112,6 +113,9 @@ type RichTextValue = {
   /** Turn the bare web addresses in the box into links - see
    *  lib/richtext-links.ts for which ones, and when. */
   linkify: (mode: LinkifyMode) => void
+  /** What a pasted web address should become instead of words, or null to keep
+   *  it as words - see Props. Absent where nothing is offered. */
+  pasteAddress?: (url: string) => Promise<string | null>
   placeholder: string
   label: string
 }
@@ -143,13 +147,20 @@ type Props = {
    *  drew the provider - the catalogue picker, which puts a product where the
    *  caret is. */
   handleRef?: { current: RichTextHandle | null }
+  /** Asked about a paste that is one web address and nothing else: markup to
+   *  drop in instead - a product block, today - or null for the address as
+   *  words, which is what every other paste gets. The box has no idea what a
+   *  product is; whatever drew it does. */
+  onPasteAddress?: (url: string) => Promise<string | null>
   /** The box and the buttons, in whatever order the composer wants them. */
   children: ReactNode
 }
 
 /** Holds the writing box and the commands that act on it. Draw a RichTextBox
  *  inside it for the words, and a RichTextTools wherever the buttons belong. */
-export function RichText({ id, value, onChange, placeholder, label, handleRef, children }: Props) {
+export function RichText({
+  id, value, onChange, placeholder, label, handleRef, onPasteAddress, children,
+}: Props) {
   const box = useRef<HTMLDivElement | null>(null)
   /** Where the caret was when the link box was opened. */
   const savedRange = useRef<Range | null>(null)
@@ -288,12 +299,12 @@ export function RichText({ id, value, onChange, placeholder, label, handleRef, c
 
   const api = useMemo<RichTextValue>(
     () => ({
-      id, attach, emit, exec, rememberSelection, restoreSelection, insertHtml, linkify, placeholder,
-      label,
+      id, attach, emit, exec, rememberSelection, restoreSelection, insertHtml, linkify,
+      pasteAddress: onPasteAddress, placeholder, label,
     }),
     [
-      attach, emit, exec, id, insertHtml, label, linkify, placeholder, rememberSelection,
-      restoreSelection,
+      attach, emit, exec, id, insertHtml, label, linkify, onPasteAddress, placeholder,
+      rememberSelection, restoreSelection,
     ],
   )
 
@@ -308,7 +319,10 @@ const BUBBLE_ROOM = 280
 
 /** The words themselves. */
 export function RichTextBox() {
-  const { id, attach, emit, exec, rememberSelection, linkify, placeholder, label } = useRichText()
+  const {
+    id, attach, emit, exec, rememberSelection, restoreSelection, insertHtml, linkify, pasteAddress,
+    placeholder, label,
+  } = useRichText()
   /** The link the caret is in, when it is in one, and where to draw the
    *  bubble for it. A link in an editable box cannot be followed by pressing
    *  it - the press puts the caret there, which is what a writing box is for -
@@ -426,6 +440,23 @@ export function RichTextBox() {
           event.preventDefault()
           const text = event.clipboardData.getData('text/plain')
           if (!text) return
+          // One address on its own may be the page of something the site
+          // sells, in which case it goes in as the same block the catalogue
+          // would have put there. Asked first and answered in a moment; where
+          // the caret was is kept for the answer, and anything that is not a
+          // product goes in as the words it always did.
+          if (pasteAddress && isSingleAddress(text)) {
+            const url = text.trim()
+            rememberSelection()
+            void pasteAddress(url).catch(() => null).then((html) => {
+              if (html) { insertHtml(html); return }
+              restoreSelection()
+              exec('insertText', url)
+              linkify('typing')
+              emit()
+            })
+            return
+          }
           exec('insertText', text)
           linkify('typing')
           emit()

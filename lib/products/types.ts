@@ -148,4 +148,14 @@ export type ProductSource = {
    * picture and the shop's tax settings to arrive at one.
    */
   pageUrls(refs: readonly ProductRef[]): Promise<Map<string, string>>
+  /**
+   * The product a pasted address is the page of, or null when it is not one of
+   * this source's pages - or is one, but of something no longer on sale.
+   *
+   * pageUrls() run backwards, and held to the same rule: only what a customer
+   * could actually be sent to. The reference comes back bare; resolve() is what
+   * turns it into something to print, so a pasted link and a picked product go
+   * through exactly the same door.
+   */
+  findByUrl(url: string): Promise<ProductRef | null>
 }

@@ -86,6 +86,28 @@ export async function listVariations(
 }
 
 /**
+ * The product a pasted address is the page of, as the picker would have handed
+ * it over, or null when it is not one this viewer could have picked.
+ *
+ * Gated exactly as the picker is: an address is only a quicker way of choosing
+ * something, never a way round being allowed to choose it. The first source to
+ * recognise the address wins; one that fails costs itself and nothing else.
+ */
+export async function productFromUrl(user: SessionUser, url: string): Promise<ProductChoice | null> {
+  for (const source of await usableProductSources(user)) {
+    try {
+      const ref = await source.findByUrl(url)
+      if (!ref) continue
+      const [found] = await source.resolve([ref])
+      if (found) return found.choice
+    } catch (err) {
+      console.error(`[unified-inbox] could not read a ${source.moduleName} product address:`, err)
+    }
+  }
+  return null
+}
+
+/**
  * Where the customer would see each of these, keyed `moduleName:kind:id`.
  *
  * Not gated on anybody's permissions, for the plainer of the two reasons
