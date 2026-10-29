@@ -2,6 +2,7 @@ import { hasPermissions } from '@/lib/permissions/check'
 import type { SessionUser } from '@/lib/auth/session'
 import { existingTables, installedModuleNames } from '../installed'
 import { shopProducts } from './shop'
+import { refKey } from './slots'
 import type { ProductChoice, ProductRef, ProductSource, ResolvedProduct } from './types'
 import { PRODUCT_SEARCH_LIMIT } from './types'
 
@@ -183,9 +184,9 @@ export async function resolveProducts(refs: readonly ProductRef[]): Promise<Reso
   // Back into the order they were picked in, which is the order they were meant
   // to be read in. Anything a source could not find is simply not here.
   const byKey = new Map(
-    settled.flat().map((r) => [`${r.choice.moduleName}:${r.choice.kind}:${r.choice.id}`, r]),
+    settled.flat().map((r) => [refKey(r.choice), r]),
   )
   return refs
-    .map((ref) => byKey.get(`${ref.moduleName}:${ref.kind}:${ref.id}`))
+    .map((ref) => byKey.get(refKey(ref)))
     .filter((r): r is ResolvedProduct => r !== undefined)
 }

@@ -435,6 +435,7 @@ export const shopProducts: ProductSource = {
 
     const settings = await readSettings()
     const found = new Map<string, ProductChoice>()
+    const listingRows = new Map<string, Record<string, unknown>>()
 
     if (productIds.length > 0) {
       const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
@@ -458,6 +459,7 @@ export const shopProducts: ProductSource = {
           variationCount: range?.count ?? 0,
         })
         found.set(`product:${choice.id}`, choice)
+        listingRows.set(choice.id, row)
       }
     }
 
@@ -497,8 +499,12 @@ export const shopProducts: ProductSource = {
 
     const out: ResolvedProduct[] = []
     for (const ref of refs) {
-      const choice = found.get(`${ref.kind}:${ref.id}`)
+      let choice = found.get(`${ref.kind}:${ref.id}`)
       if (!choice) continue
+      const row = listingRows.get(ref.id)
+      if (ref.kind === 'product' && ref.picks && row && (await variationsAvailable())) {
+        choice = await narrowByPicks(choice, row, ref.picks, settings)
+      }
       out.push({
         choice,
         link: {
@@ -592,10 +598,11 @@ export const shopProducts: ProductSource = {
     if (!row) return null
     if (!row.catalogue_hidden) {
       // A link carrying the shopper's picks that settles on one variation is
-      // that variation; fewer picks than that stay the listing.
-      const picked = (await variationsAvailable()) ? await variationNamedByPicks(row.id, url) : null
-      return picked
-        ? { moduleName: 'shop', kind: 'variation', id: picked }
+      // that variation; picks that leave several stay the listing, narrowed.
+      const named = (await variationsAvailable()) ? await namedByPicks(row.id, url) : null
+      if (named?.single) return { moduleName: 'shop', kind: 'variation', id: named.single }
+      return named?.picks
+        ? { moduleName: 'shop', kind: 'product', id: row.id, picks: named.picks }
         : { moduleName: 'shop', kind: 'product', id: row.id }
     }
     if (!(await variationsAvailable())) return null
@@ -611,6 +618,136 @@ export const shopProducts: ProductSource = {
   },
 }
 
+type PairedVariation = {
+  id: string
+  price: unknown
+  sale_price: unknown
+  image_url: string | null
+  /** [option name, value slug, value label] in display order. */
+  pairs: [string, string, string][] | null
+}
+
+/** A listing's switched-on variations with their options taken apart, in the
+ *  order the shop arranged them. */
+async function pairedVariations(listingId: string): Promise<PairedVariation[]> {
+  return prisma.$queryRaw<PairedVariation[]>`
+    SELECT c."id", c."price", c."sale_price",
+           -- A variation with no photograph of its own shows its listing's.
+           COALESCE(
+             (SELECT m."url" FROM "shp_product_media" m
+               WHERE m."product_id" = c."id" AND m."type" = 'IMAGE'
+               ORDER BY m."is_primary" DESC, m."position" ASC
+               LIMIT 1),
+             (SELECT m."url" FROM "shp_product_media" m
+               WHERE m."product_id" = v."product_id" AND m."type" = 'IMAGE'
+               ORDER BY m."is_primary" DESC, m."position" ASC
+               LIMIT 1)
+           ) AS "image_url",
+           (SELECT json_agg(json_build_array(o."name", ov."slug", ov."label") ORDER BY o."position" ASC, ov."position" ASC)
+              FROM "svr_variant_values" vv
+              JOIN "svr_option_values" ov ON ov."id" = vv."option_value_id"
+              JOIN "svr_options" o ON o."id" = ov."option_id"
+             WHERE vv."variant_id" = v."id") AS "pairs"
+      FROM "svr_variants" v
+      JOIN "shp_products" c ON c."id" = v."child_product_id"
+     WHERE v."product_id" = ${listingId} AND v."enabled" = true AND c."status" = 'ACTIVE'
+     ORDER BY v."position" ASC
+  `.catch(() => [] as PairedVariation[])
+}
+
+/** The variations a set of `key -> value slug` picks agrees with, and the picks
+ *  (as `key.slug+key.slug`) that did the agreeing. Picks for options the listing
+ *  lacks are ignored and a pick that contradicts a variation rules it out. */
+function matchPicks(
+  rows: readonly PairedVariation[],
+  picks: ReadonlyMap<string, string>,
+): { rows: PairedVariation[]; hits: [name: string, label: string, key: string, slug: string][] } {
+  let matched: PairedVariation[] = []
+  let hits: [string, string, string, string][] = []
+  for (const row of rows) {
+    const here: [string, string, string, string][] = []
+    let conflict = false
+    for (const [name, slug, label] of row.pairs ?? []) {
+      const key = optionParamKey(name)
+      const wanted = picks.get(key)
+      if (wanted === undefined) continue
+      if (wanted === slug) here.push([name, label, key, slug])
+      else conflict = true
+    }
+    if (conflict || here.length === 0) continue
+    matched.push(row)
+    hits = here
+  }
+  return { rows: matched, hits }
+}
+
+const SAFE_PART = /^[a-z0-9-]+$/
+
+function picksString(hits: readonly [string, string, string, string][]): string | null {
+  const parts = hits
+    .filter(([, , key, slug]) => SAFE_PART.test(key) && SAFE_PART.test(slug))
+    .map(([, , key, slug]) => `${key}.${slug}`)
+    .sort()
+  return parts.length > 0 ? parts.join('+') : null
+}
+
+function picksFromQuery(address: string): Map<string, string> {
+  const picks = new Map<string, string>()
+  try {
+    new URL(address.trim()).searchParams.forEach((value, key) => {
+      if (value && !picks.has(key)) picks.set(key, value)
+    })
+  } catch {
+    // An address that does not parse has no picks.
+  }
+  return picks
+}
+
+/** What a link's query picks on a listing: the one variation it settles on, or
+ *  - when several are left - the picks themselves, so the listing can be shown
+ *  narrowed to them. Null when the picks name nothing. */
+async function namedByPicks(
+  listingId: string,
+  address: string,
+): Promise<{ single: string | null; picks: string | null } | null> {
+  const picks = picksFromQuery(address)
+  if (picks.size === 0) return null
+  const found = matchPicks(await pairedVariations(listingId), picks)
+  if (found.rows.length === 1) return { single: found.rows[0]!.id, picks: null }
+  if (found.rows.length > 1) return { single: null, picks: picksString(found.hits) }
+  return null
+}
+
+/** The listing as a link with only some options chosen sees it: the options
+ *  that were picked, the first match's picture, and the cheapest of the
+ *  matches. Unchanged when the picks no longer name anything. */
+async function narrowByPicks(
+  choice: ProductChoice,
+  listingRow: Record<string, unknown>,
+  picks: string,
+  settings: ShopSettings,
+): Promise<ProductChoice> {
+  const wanted = new Map<string, string>()
+  for (const pair of picks.split('+')) {
+    const [key, slug] = pair.split('.')
+    if (key && slug) wanted.set(key, slug)
+  }
+  const found = matchPicks(await pairedVariations(choice.id), wanted)
+  const first = found.rows[0]
+  if (!first) return choice
+  const prices = found.rows.map((r) => effectivePrice(toNumber(r.price) ?? 0, toNumber(r.sale_price), settings.saleEnabled))
+  const cheapest = Math.min(...prices)
+  const narrowed = toChoice({ ...listingRow, image_url: first.image_url ?? listingRow.image_url }, settings, {
+    kind: 'product',
+    options: found.hits.map((h) => h[1]).join(' / ') || null,
+    optionPairs: found.hits.map((h) => ({ option: h[0], value: h[1] })),
+    from: { amount: cheapest, varies: Math.max(...prices) - cheapest > 0.005 },
+    variationCount: found.rows.length,
+  })
+  const query = found.hits.map((h) => `${encodeURIComponent(h[2])}=${encodeURIComponent(h[3])}`).join('&')
+  return { ...narrowed, picks, url: narrowed.url ? `${narrowed.url}?${query}` : null }
+}
+
 /** The name an option's query parameter goes by on the storefront: lowercased,
  *  accents folded, runs of anything else hyphenated. Restated from the
  *  variations module, which this one does not import. */
@@ -621,44 +758,4 @@ function optionParamKey(name: string): string {
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-}
-
-/** The one enabled variation of a listing that a link's query picks
- *  (`?headrest=without-headrest&frame-colour=white`), or null when the picks
- *  name none or leave several. Picks for options the listing lacks are ignored,
- *  and a pick that contradicts a variation rules it out. */
-async function variationNamedByPicks(listingId: string, address: string): Promise<string | null> {
-  const picks = new Map<string, string>()
-  try {
-    new URL(address.trim()).searchParams.forEach((value, key) => {
-      if (value && !picks.has(key)) picks.set(key, value)
-    })
-  } catch {
-    return null
-  }
-  if (picks.size === 0) return null
-
-  const rows = await prisma.$queryRaw<{ id: string; pairs: [string, string][] | null }[]>`
-    SELECT v."child_product_id" AS "id",
-           (SELECT json_agg(json_build_array(o."name", ov."slug") ORDER BY o."position" ASC, ov."position" ASC)
-              FROM "svr_variant_values" vv
-              JOIN "svr_option_values" ov ON ov."id" = vv."option_value_id"
-              JOIN "svr_options" o ON o."id" = ov."option_id"
-             WHERE vv."variant_id" = v."id") AS "pairs"
-      FROM "svr_variants" v
-      JOIN "shp_products" c ON c."id" = v."child_product_id"
-     WHERE v."product_id" = ${listingId} AND v."enabled" = true AND c."status" = 'ACTIVE'
-  `.catch(() => [] as { id: string; pairs: [string, string][] | null }[])
-
-  const matches = rows.filter((row) => {
-    let hits = 0
-    for (const [name, slug] of row.pairs ?? []) {
-      const wanted = picks.get(optionParamKey(name))
-      if (wanted === undefined) continue
-      if (wanted !== slug) return false
-      hits += 1
-    }
-    return hits > 0
-  })
-  return matches.length === 1 ? matches[0]!.id : null
 }

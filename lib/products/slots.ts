@@ -44,8 +44,12 @@ const REF_PREFIX = 'uin-ps--'
 /** How a product is keyed everywhere in this module: the picker, the composer's
  *  own list and the send path all compare on this and nothing else. */
 export function refKey(ref: ProductRef | ProductChoice): string {
-  return `${ref.moduleName}:${ref.kind}:${ref.id}`
+  return `${ref.moduleName}:${ref.kind}:${ref.id}${ref.picks ? `~${ref.picks}` : ''}`
 }
+
+/** What a picks string may look like: `key.slug` pairs joined by '+', and
+ *  nothing a class token or a query string would need escaping for. */
+export const PICKS_PATTERN = /^[a-z0-9-]+\.[a-z0-9-]+(\+[a-z0-9-]+\.[a-z0-9-]+)*$/
 
 /** Written in a template rather than imported: the one escaper this module could
  *  borrow lives in core's email blocks, and that file pulls the Puck helpers in
@@ -61,7 +65,7 @@ function escapeHtml(value: string): string {
 
 /** The class token that carries the reference. */
 export function refClass(ref: ProductRef | ProductChoice): string {
-  return `${REF_PREFIX}${ref.moduleName}--${ref.kind}--${ref.id}`
+  return `${REF_PREFIX}${ref.moduleName}--${ref.kind}--${ref.id}${ref.picks ? `~${ref.picks}` : ''}`
 }
 
 /** The reference back out of one class token, or null for a token that is not
@@ -72,10 +76,15 @@ export function parseRefClass(token: string): ProductRef | null {
   const parts = token.slice(REF_PREFIX.length).split('--')
   if (parts.length < 3) return null
   const [moduleName, kind, ...rest] = parts
-  const id = rest.join('--')
+  const joined = rest.join('--')
+  const tilde = joined.indexOf('~')
+  const id = tilde === -1 ? joined : joined.slice(0, tilde)
+  const picks = tilde === -1 ? '' : joined.slice(tilde + 1)
   if (!moduleName || !id) return null
   if (kind !== 'product' && kind !== 'variation') return null
-  return { moduleName, kind, id }
+  if (!picks) return { moduleName, kind, id }
+  // Picks only narrow a listing, and only in the shape we write them.
+  return kind === 'product' && PICKS_PATTERN.test(picks) ? { moduleName, kind, id, picks } : null
 }
 
 /** The price as one line: 'From £419.00 + VAT'. The same sentence

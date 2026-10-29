@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
+import type { ProductChoice, ProductRef } from '@/modules/unified-inbox/lib/products/types'
+import { refKey } from '@/modules/unified-inbox/lib/products/slots'
 import { CloseIcon } from './icons'
 
 // Putting something out of the site's own catalogue on a message.
@@ -44,8 +45,8 @@ type Props = {
   chosen: readonly ProductChoice[]
 }
 
-function keyOf(item: { moduleName: string; kind: string; id: string }): string {
-  return `${item.moduleName}:${item.kind}:${item.id}`
+function keyOf(item: ProductRef | ProductChoice): string {
+  return refKey(item)
 }
 
 /** The price as one line: 'From £419.00 + VAT'. The same sentence the email
@@ -404,7 +405,7 @@ function Variations({ list, already, onPick }: {
 /** The key a product is removed by, and the one the picker compares against.
  *  Exported so both composers and the preview speak the same language about
  *  which product is which without any of them inventing a second scheme. */
-export function productKey(item: { moduleName: string; kind: string; id: string }): string {
+export function productKey(item: ProductRef | ProductChoice): string {
   return keyOf(item)
 }
 

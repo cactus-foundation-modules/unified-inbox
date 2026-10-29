@@ -29,6 +29,11 @@ export type ProductRef = {
   moduleName: string
   kind: ProductKind
   id: string
+  /** The options a pasted link fixed on a listing without naming one variation
+   *  - `headrest.without-headrest+finish.grey-oak`, option key and value slug,
+   *  sorted by key. Absent on everything else. Only ever narrows what the shop
+   *  already sells: it names nothing that is not a real option value. */
+  picks?: string
 }
 
 export type ProductKind = 'product' | 'variation'
@@ -38,6 +43,8 @@ export type ProductChoice = {
   moduleName: string
   kind: ProductKind
   id: string
+  /** The picks a listing was narrowed by (see ProductRef.picks). */
+  picks?: string
   /** What it is called, exactly as the shop calls it. */
   name: string
   /** The options that make this variation - 'Black / High back' - or null on a

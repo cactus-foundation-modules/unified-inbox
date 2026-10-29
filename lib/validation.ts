@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { PICKS_PATTERN } from './products/slots'
 
 // Shared between the create and the edit route, so an inbox cannot be saved
 // through one of them with a field the other would have refused.
@@ -72,6 +73,7 @@ const ProductRefBody = z.object({
   moduleName: z.string().min(1).max(100),
   kind: z.enum(['product', 'variation']),
   id: z.string().min(1).max(200),
+  picks: z.string().max(400).regex(PICKS_PATTERN).optional(),
 })
 
 /** What the composer posts to send a message. Deliberately strict: an
