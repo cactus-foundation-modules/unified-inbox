@@ -4,8 +4,8 @@ import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
 import { getActiveMediaProvider, isMediaProviderConfigured } from '@/lib/config/env'
-import { headMediaSize, isS3Provider, mediaKeyPrefix, uploadMedia } from '@/lib/media/upload'
-import { workerUrl } from '@/lib/media/worker-url'
+import { deleteMedia, headMediaSize, mediaKeyPrefix, requireMediaUrl, uploadMedia } from '@/lib/media/upload'
+import { canTakeDirectUpload, directUploadTarget } from '@/lib/media/direct-upload-target'
 import { signUploadToken, verifyUploadToken } from '@/lib/media/upload-token'
 import { ATTACHMENT_FOLDER, outboundUploadKey, safeFilename } from '@/modules/unified-inbox/lib/attachments'
 import { recordOutboundUpload } from '@/modules/unified-inbox/lib/db'
@@ -74,19 +74,23 @@ export async function POST(request: Request) {
     const refusal = refuseDroppedFile({ name: filename, type: declaredType, size: sizeBytes })
     if (refusal) return errorResponse(refusal, 400)
 
-    const base = workerUrl()
+    // Through the Worker, or a presigned bucket url when the owner serves straight
+    // from the bucket - core decides (lib/media/direct-upload-target.ts).
+    const direct = canTakeDirectUpload(provider)
     if (action === 'prepare') {
-      if (!base || !isS3Provider(provider)) {
+      const key = `${outboundUploadKey(provider, randomUUID(), filename)}.${DIRECT_UPLOAD_EXTENSION}`
+      const target = direct ? await directUploadTarget(provider, key, DIRECT_CONTENT_TYPE, sizeBytes) : null
+      if (!target) {
         return NextResponse.json({ available: false, maxSizeBytes: MAX_SERVER_UPLOAD_BYTES })
       }
-      const key = `${outboundUploadKey(provider, randomUUID(), filename)}.${DIRECT_UPLOAD_EXTENSION}`
       const { token } = signUploadToken(key)
       return NextResponse.json({
         available: true,
-        uploadUrl: `${base}/${key}`,
+        uploadUrl: target.uploadUrl,
         key,
         token,
         contentType: DIRECT_CONTENT_TYPE,
+        ...(target.presigned ? { presigned: true } : {}),
       })
     }
 
@@ -95,7 +99,7 @@ export async function POST(request: Request) {
       const token = typeof body?.token === 'string' ? body.token : ''
       const expectedPrefix = `${mediaKeyPrefix(provider)}${ATTACHMENT_FOLDER}/outbound/`
       const expectedSuffix = `-${safeFilename(filename)}.${DIRECT_UPLOAD_EXTENSION}`
-      if (!base || !isS3Provider(provider) || !key.startsWith(expectedPrefix) || !key.endsWith(expectedSuffix)) {
+      if (!direct || !key.startsWith(expectedPrefix) || !key.endsWith(expectedSuffix)) {
         return errorResponse('That upload does not belong to this message.', 400)
       }
       if (!token || !verifyUploadToken(key, token)) return errorResponse('That upload has expired. Try attaching the file again.', 403)
@@ -106,10 +110,16 @@ export async function POST(request: Request) {
         return errorResponse(`"${filename}" reached storage, but its size could not be checked. Try attaching it again.`, 502)
       }
       const storedRefusal = refuseDroppedFile({ name: filename, type: declaredType, size: storedSize })
-      if (storedRefusal) return errorResponse(storedRefusal, 400)
+      if (storedRefusal) {
+        // Nothing will ever point at a refused upload, so it is not left in the
+        // bucket. Matters most straight to the bucket (direct serving mode), where
+        // no Worker stood in front of the PUT to turn it away first.
+        await deleteMedia(provider, key).catch((err) => console.error(`[unified-inbox] could not remove refused upload ${key}:`, err))
+        return errorResponse(storedRefusal, 400)
+      }
 
       const contentType = typeForUpload(filename, null)
-      const url = `${base}/${key}`
+      const url = requireMediaUrl(provider, key)
       await recordOutboundUpload({
         authorUserId: user.id,
         mediaKey: key,

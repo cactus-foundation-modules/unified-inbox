@@ -8,6 +8,7 @@ import {
   refuseDroppedFile,
 } from '@/modules/unified-inbox/lib/uploads'
 import type { Attachment } from './AttachmentPicker'
+import { directUploadHeaders } from '@/lib/media/direct-upload-headers'
 
 // Dragging a file onto a message you are writing.
 //
@@ -126,17 +127,24 @@ export async function uploadAttachmentFile(file: File, signal: AbortSignal): Pro
     )
   }
 
-  const put = await fetch(ticket.uploadUrl, {
-    method: 'PUT',
-    headers: {
-      authorization: `Bearer ${ticket.token}`,
-      'content-type': ticket.contentType,
-    },
-    body: file,
-    signal,
-  })
+  let put: Response
+  try {
+    put = await fetch(ticket.uploadUrl, {
+      method: 'PUT',
+      headers: directUploadHeaders(ticket, ticket.contentType),
+      body: file,
+      signal,
+    })
+  } catch (err) {
+    // Straight to the bucket, a refusal before anything moves is nearly always
+    // its CORS rules; the browser reports nothing more than a failed fetch.
+    if (ticket.presigned && !signal.aborted) {
+      throw new Error(`"${file.name}" could not be sent to your storage bucket. Check the bucket's CORS rules with the Test CORS button in Settings → Media.`)
+    }
+    throw err
+  }
   if (!put.ok) {
-    if (put.status === 415) {
+    if (put.status === 415 && !ticket.presigned) {
       throw new Error('Your media service needs updating before it will accept larger email attachments. Go to Settings → Media and deploy the Worker again, then try once more.')
     }
     throw new Error(await responseReason(put, `"${file.name}" could not be sent to your file storage.`))

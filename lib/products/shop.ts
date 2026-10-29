@@ -294,6 +294,32 @@ async function fromPrices(
   return out
 }
 
+/**
+ * A picture for every listing that has none of its own, borrowed from its first
+ * switched-on variation that has one - which is where a range photographed
+ * finish by finish keeps all its photographs, and what its storefront page
+ * opens on. Fills `image_url` in place, and only where it is empty; a site
+ * without shop-variations simply keeps the gaps.
+ */
+async function borrowVariationImages(rows: Record<string, unknown>[]): Promise<void> {
+  const bare = rows.filter((r) => !r.image_url).map((r) => r.id as string)
+  if (bare.length === 0 || !(await variationsAvailable())) return
+  const found = await prisma
+    .$queryRaw<{ product_id: string; url: string }[]>`
+      SELECT DISTINCT ON (v."product_id") v."product_id", m."url"
+        FROM "svr_variants" v
+        JOIN "shp_product_media" m ON m."product_id" = v."child_product_id" AND m."type" = 'IMAGE'
+       WHERE v."product_id" IN (${inList(bare)})
+         AND v."enabled" = true
+       ORDER BY v."product_id", v."position" ASC, m."is_primary" DESC, m."position" ASC
+    `
+    .catch(() => [] as { product_id: string; url: string }[])
+  const byId = new Map(found.map((f) => [f.product_id, f.url]))
+  for (const row of rows) {
+    if (!row.image_url) row.image_url = byId.get(row.id as string) ?? null
+  }
+}
+
 export const shopProducts: ProductSource = {
   moduleName: 'shop',
   permission: 'shop.products',
@@ -329,6 +355,7 @@ export const shopProducts: ProductSource = {
        LIMIT ${limit}
     `
 
+    await borrowVariationImages(rows)
     const from = await fromPrices(rows.map((r) => r.id as string), settings)
     return rows.map((row) => {
       const range = from.get(row.id as string) ?? null
@@ -355,10 +382,17 @@ export const shopProducts: ProductSource = {
 
     const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
       SELECT c."id", c."name", c."slug", c."sku", c."price", c."sale_price", c."tax_class_id",
-             (SELECT m."url" FROM "shp_product_media" m
-               WHERE m."product_id" = c."id" AND m."type" = 'IMAGE'
-               ORDER BY m."is_primary" DESC, m."position" ASC
-               LIMIT 1) AS "image_url",
+             -- A variation with no photograph of its own shows its listing's.
+             COALESCE(
+               (SELECT m."url" FROM "shp_product_media" m
+                  WHERE m."product_id" = c."id" AND m."type" = 'IMAGE'
+                  ORDER BY m."is_primary" DESC, m."position" ASC
+                  LIMIT 1),
+               (SELECT m."url" FROM "shp_product_media" m
+                  WHERE m."product_id" = v."product_id" AND m."type" = 'IMAGE'
+                  ORDER BY m."is_primary" DESC, m."position" ASC
+                  LIMIT 1)
+             ) AS "image_url",
              (SELECT string_agg(ov."label", ' / ' ORDER BY o."position" ASC, ov."position" ASC)
                 FROM "svr_variant_values" vv
                 JOIN "svr_option_values" ov ON ov."id" = vv."option_value_id"
@@ -414,6 +448,7 @@ export const shopProducts: ProductSource = {
            AND p."status" = 'ACTIVE'
            AND p."catalogue_hidden" = false
       `
+      await borrowVariationImages(rows)
       const from = await fromPrices(rows.map((r) => r.id as string), settings)
       for (const row of rows) {
         const range = from.get(row.id as string) ?? null
@@ -429,10 +464,17 @@ export const shopProducts: ProductSource = {
     if (variationIds.length > 0 && (await variationsAvailable())) {
       const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
         SELECT c."id", c."name", c."slug", c."sku", c."price", c."sale_price", c."tax_class_id",
-               (SELECT m."url" FROM "shp_product_media" m
-                 WHERE m."product_id" = c."id" AND m."type" = 'IMAGE'
-                 ORDER BY m."is_primary" DESC, m."position" ASC
-                 LIMIT 1) AS "image_url",
+               -- A variation with no photograph of its own shows its listing's.
+               COALESCE(
+                 (SELECT m."url" FROM "shp_product_media" m
+                    WHERE m."product_id" = c."id" AND m."type" = 'IMAGE'
+                    ORDER BY m."is_primary" DESC, m."position" ASC
+                    LIMIT 1),
+                 (SELECT m."url" FROM "shp_product_media" m
+                    WHERE m."product_id" = v."product_id" AND m."type" = 'IMAGE'
+                    ORDER BY m."is_primary" DESC, m."position" ASC
+                    LIMIT 1)
+               ) AS "image_url",
                (SELECT string_agg(ov."label", ' / ' ORDER BY o."position" ASC, ov."position" ASC)
                   FROM "svr_variant_values" vv
                   JOIN "svr_option_values" ov ON ov."id" = vv."option_value_id"
