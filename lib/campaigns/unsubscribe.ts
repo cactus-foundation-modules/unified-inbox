@@ -1,4 +1,5 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac } from 'node:crypto'
+import { activeKey, readingKeys, verifyWithAnyKey } from '@/lib/crypto/keyring'
 import { normaliseAddress } from '../addresses'
 
 // ---------------------------------------------------------------------------
@@ -18,7 +19,10 @@ import { normaliseAddress } from '../addresses'
 //
 //   Nobody can unsubscribe anybody else by editing a number in the address bar.
 //   The signature is over the address itself, keyed to this site's own
-//   ENCRYPTION_KEY, so a token only opts out the address it was made for.
+//   ENCRYPTION_KEY, so a token only opts out the address it was made for. New
+//   links are signed with the site's active key and checked against every key
+//   it has had (core's lib/crypto/keyring.ts), so "for ever" survives a change
+//   of key.
 //
 //   The address is in the link in the clear, which is deliberate: the page has
 //   to be able to say WHICH address it is about before somebody confirms, and
@@ -38,40 +42,34 @@ const TOKEN_CHARS = 22
 /** Why a separate key rather than the encryption key itself: this one is
  *  handed out in every message that leaves, and a value derived for exactly one
  *  purpose cannot be replayed against anything else that shares the secret. */
-function signingKey(): Buffer {
-  const hex = process.env.ENCRYPTION_KEY
-  if (!hex || hex.length !== 64 || !/^[0-9a-fA-F]+$/.test(hex)) {
-    throw new Error('ENCRYPTION_KEY is not set, so campaign unsubscribe links cannot be signed.')
-  }
+function subKey(hex: string): Buffer {
   return createHmac('sha256', Buffer.from(hex, 'hex'))
     .update('unified-inbox/campaign-unsubscribe/v1')
     .digest()
+}
+
+function tokenWith(hex: string, address: string): string {
+  return createHmac('sha256', subKey(hex))
+    .update(normaliseAddress(address))
+    .digest('base64url')
+    .slice(0, TOKEN_CHARS)
 }
 
 /** The token for one address. Same address, same token, every time - so a
  *  second campaign to the same person carries the same link, and a link somebody
  *  bookmarked in January still works in June. */
 export function unsubscribeToken(address: string): string {
-  const key = normaliseAddress(address)
-  return createHmac('sha256', signingKey())
-    .update(key)
-    .digest('base64url')
-    .slice(0, TOKEN_CHARS)
+  const hex = activeKey()
+  if (!hex) throw new Error('ENCRYPTION_KEY is not set, so campaign unsubscribe links cannot be signed.')
+  return tokenWith(hex, address)
 }
 
-/** Whether this token really belongs to this address. Compared in constant
- *  time, because a token is a credential however short its life. */
+/** Whether this token really belongs to this address, under any key the site
+ *  has had. Compared in constant time, because a token is a credential however
+ *  short its life. */
 export function tokenMatches(address: string, given: string): boolean {
-  let expected: string
-  try {
-    expected = unsubscribeToken(address)
-  } catch {
-    return false
-  }
-  const a = Buffer.from(expected)
-  const b = Buffer.from(given)
-  if (a.length !== b.length) return false
-  return timingSafeEqual(a, b)
+  if (readingKeys().length === 0) return false
+  return verifyWithAnyKey(given, (hex) => tokenWith(hex, address))
 }
 
 /**

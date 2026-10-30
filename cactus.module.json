@@ -1,13 +1,13 @@
 {
   "name": "unified-inbox",
-  "version": "0.1.144",
+  "version": "0.1.145",
   "tablePrefix": "uin_",
   "notificationKinds": [
     {"id": "mention", "label": "Asked about a conversation", "description": "A colleague has been asked to look at a conversation.", "dedupePrefix": "unified-inbox:mention:"},
     {"id": "auth", "label": "Mail account will not let us in", "description": "A mail account stopped accepting its password, so mail is not being collected.", "dedupePrefix": "unified-inbox:auth:"}
   ],
   "description": "Every conversation with every customer and supplier in one place - email, live chat, contact form, calls, texts and WhatsApp - with your own records beside them.",
-  "requiresCoreVersion": "0.5.1900",
+  "requiresCoreVersion": "0.5.1904",
   "migrationCatchups": {
     "041_spam": "none"
   },
