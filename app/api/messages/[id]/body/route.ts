@@ -8,6 +8,7 @@ import { canOpenThread } from '@/modules/unified-inbox/lib/access'
 import { getMessageHtml } from '@/modules/unified-inbox/lib/db'
 import { buildMessageDocument, messageDocumentCsp } from '@/modules/unified-inbox/lib/message-document'
 import { restoreRemoteImages } from '@/modules/unified-inbox/lib/remote-images'
+import { publicOrigin } from '@/lib/security/public-origin'
 
 // One message's own HTML, as a whole document, for the frame the thread view
 // renders it in (E16). Never inline in the admin: email markup carries its own
@@ -53,7 +54,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   // silently. Both the address this request arrived on and the one the site is
   // configured with, because a site reached on more than one name would
   // otherwise work on whichever of them the setting happens to say.
-  const origins = [request.nextUrl.origin, originOf(getSiteUrlOrNull())]
+  const origins = [publicOrigin(request), originOf(getSiteUrlOrNull())]
 
   return new NextResponse(document, {
     headers: {

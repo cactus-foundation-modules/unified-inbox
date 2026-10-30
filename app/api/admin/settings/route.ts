@@ -26,6 +26,7 @@ import { pushUrl } from '@/modules/unified-inbox/lib/push-checks'
 import { getSiteUrlOrNull } from '@/lib/config/env'
 import { existingTables, installedModuleNames } from '@/modules/unified-inbox/lib/installed'
 import { gatherMessageHandlers } from '@/modules/unified-inbox/lib/message-handlers'
+import { publicOrigin } from '@/lib/security/public-origin'
 
 // Everything the settings screen draws, in one request: the mail accounts, the
 // inboxes hanging off them, who may read which, the module's own settings, and
@@ -64,7 +65,7 @@ export async function GET(request: NextRequest) {
   // The address a provider rings to say mail has arrived, for the accounts
   // switched over to that. The site's own address where it knows it, so the
   // one pasted into the provider is not a preview or a localhost.
-  const siteUrl = getSiteUrlOrNull() ?? request.nextUrl.origin
+  const siteUrl = getSiteUrlOrNull() ?? publicOrigin(request)
 
   return NextResponse.json({
     connections: connections.map((c) => ({
