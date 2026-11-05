@@ -799,14 +799,21 @@ export function Composer({
     }
   }, [draftPayload, router])
 
-  const discard = useCallback(async () => {
-    if (!draftId) return
-    if (inFlight.current) return
+  const discard = useCallback(async (): Promise<boolean> => {
+    if (!draftId) return false
+    if (inFlight.current) return false
     inFlight.current = true
     setBusyWith('discard')
     setError('')
     try {
-      await fetch(`/api/m/unified-inbox/drafts/${draftId}`, { method: 'DELETE' })
+      const response = await fetch(`/api/m/unified-inbox/drafts/${draftId}`, { method: 'DELETE' })
+      // A refusal is not a deletion: saying "thrown away" over a draft the
+      // server kept is how one ends up stuck in Drafts with nothing said.
+      if (!response.ok) {
+        const data = await response.json().catch(() => null)
+        setError(plainReason(data?.error, 'That draft could not be thrown away.'))
+        return false
+      }
       setDraftId(null)
       setText('')
       setForwardTo('')
@@ -822,8 +829,10 @@ export function Composer({
       setDirty(false)
       setNote('')
       router.refresh()
+      return true
     } catch {
       setError('The site could not be reached. Nothing was thrown away.')
+      return false
     } finally {
       inFlight.current = false
       setBusyWith(null)
@@ -1656,7 +1665,7 @@ export function Composer({
               setClosing(false)
               // A draft that was saved earlier goes with it; one that was never
               // saved has nothing to delete, and the box simply shuts.
-              if (draftId) void discard().then(() => closeComposer())
+              if (draftId) void discard().then((gone) => { if (gone) closeComposer() })
               else closeComposer()
             },
           }}

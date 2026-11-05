@@ -550,7 +550,12 @@ export function ComposeView({
     setBusyWith('discard')
     setError('')
     try {
-      await fetch(`/api/m/unified-inbox/drafts/${draftId}`, { method: 'DELETE' })
+      const response = await fetch(`/api/m/unified-inbox/drafts/${draftId}`, { method: 'DELETE' })
+      if (!response.ok) {
+        const data = await response.json().catch(() => null)
+        setError(plainReason(data?.error, 'That draft could not be thrown away.'))
+        return
+      }
       setDirty(false)
       // Only once the deletion has actually happened. Unlike the plain close
       // above, there is a failure to report here, and a dialog that had already
