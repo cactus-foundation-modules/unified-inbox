@@ -1,6 +1,6 @@
 {
   "name": "unified-inbox",
-  "version": "0.1.147",
+  "version": "0.1.148",
   "tablePrefix": "uin_",
   "notificationKinds": [
     {"id": "mention", "label": "Asked about a conversation", "description": "A colleague has been asked to look at a conversation.", "dedupePrefix": "unified-inbox:mention:"},
@@ -53,6 +53,13 @@
     }
   ],
   "extensionPoints": [
+    {
+      "point": "members.admin-member-detail",
+      "id": "unified-inbox-member-threads",
+      "permission": "unifiedinbox.view",
+      "import": "./components/admin/MemberThreadsSection",
+      "component": "unifiedInboxMemberThreadsSection"
+    },
     {
       "point": "core.inbox-tabs",
       "id": "unified-inbox",

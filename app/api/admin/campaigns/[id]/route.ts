@@ -11,6 +11,7 @@ import { sameCategoryIds } from '@/modules/unified-inbox/lib/campaigns/guards'
 import { assessReadiness } from '@/modules/unified-inbox/lib/campaigns/readiness'
 import { OPEN_WINDOW, clockToMinute, forecastFinish, isCalendarDate } from '@/modules/unified-inbox/lib/campaigns/window'
 import {
+  campaignEngagement,
   campaignTally,
   deleteCampaign,
   exclusionSummary,
@@ -22,6 +23,8 @@ import {
   updateCampaign,
 } from '@/modules/unified-inbox/lib/campaigns/store'
 import { previewFor } from '@/modules/unified-inbox/lib/campaigns/personalise'
+import { designWords, sameDesign } from '@/modules/unified-inbox/lib/campaigns/design'
+import { listPublishedEmailWrappers } from '@/lib/email/wrapper'
 import { CampaignPatchBody } from '@/modules/unified-inbox/lib/validation'
 
 // One campaign: reading it, correcting it, and throwing it away.
@@ -43,12 +46,14 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const campaign = await getCampaign(id)
   if (!campaign) return errorResponse('That campaign is no longer here.', 404)
 
-  const [steps, tally, timezone, settings, exclusions] = await Promise.all([
+  const [steps, tally, timezone, settings, exclusions, engagement, wrappers] = await Promise.all([
     listSteps(id),
     campaignTally(id),
     getSiteTimezone(),
     getSettings(),
     exclusionSummary(id),
+    campaignEngagement(id),
+    listPublishedEmailWrappers(),
   ])
   const inbox = campaign.inboxId ? await getInbox(campaign.inboxId) : null
 
@@ -77,8 +82,12 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     campaign,
     steps,
     tally,
+    engagement,
     exclusions,
     previews,
+    // The site's own email designs, for the "send it inside one" choice. Names
+    // only: the design itself is applied at the moment of sending.
+    wrappers: wrappers.map((w) => ({ id: w.id, name: w.name })),
     readiness,
     timezone,
     finishesAbout: remaining > 0
@@ -192,8 +201,14 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const existing = await listSteps(id)
     const firstChanged = steps.find((s) => s.stepIndex === 0)
     const currentFirst = existing.find((s) => s.stepIndex === 0)
+    // A design arriving undefined is a design left as it is, so it is compared
+    // as the stored one; null is somebody going back to the plain box.
+    const firstDesign = firstChanged?.bodyDesign === undefined ? currentFirst?.bodyDesign : firstChanged.bodyDesign
+    const firstBody = firstDesign ? designWords(firstDesign) : firstChanged?.body
     if (!isDraft && firstChanged && currentFirst
-      && (firstChanged.body !== currentFirst.body || (firstChanged.subject ?? null) !== currentFirst.subject)) {
+      && (firstBody !== currentFirst.body
+        || (firstChanged.subject ?? null) !== currentFirst.subject
+        || !sameDesign(firstDesign ?? null, currentFirst.bodyDesign))) {
       return errorResponse(
         'The message itself cannot be changed once it has started sending - some people have had the old one. '
         + 'The follow-ups can still be edited.',
@@ -208,6 +223,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     ...(data.includeUnsubscribe !== undefined ? { includeUnsubscribe: data.includeUnsubscribe } : {}),
     ...(data.copyToSent !== undefined ? { copyToSent: data.copyToSent } : {}),
     ...(data.excludeColleagues !== undefined ? { excludeColleagues: data.excludeColleagues } : {}),
+    ...(data.useWrapper !== undefined ? { useWrapper: data.useWrapper } : {}),
+    ...(data.wrapperLayoutId !== undefined ? { wrapperLayoutId: data.wrapperLayoutId } : {}),
     ...(startAt !== undefined ? { startAt } : {}),
     ...(window ? { window } : {}),
   })
@@ -215,12 +232,23 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   if (data.categoryIds !== undefined) await setCampaignCategories(id, data.categoryIds)
 
   if (steps !== undefined) {
-    await replaceSteps(id, steps.map((step) => ({
-      stepIndex: step.stepIndex,
-      waitDays: step.stepIndex === 0 ? null : (step.waitDays ?? 3),
-      subject: step.subject ?? null,
-      body: step.body,
-    })))
+    // The steps are replaced as a set, so a design not sent back with this save
+    // has to be carried over from what is stored or it would be lost.
+    const stored = await listSteps(id)
+    await replaceSteps(id, steps.map((step) => {
+      const design = step.bodyDesign === undefined
+        ? (stored.find((s) => s.stepIndex === step.stepIndex)?.bodyDesign ?? null)
+        : step.bodyDesign
+      return {
+        stepIndex: step.stepIndex,
+        waitDays: step.stepIndex === 0 ? null : (step.waitDays ?? 3),
+        subject: step.subject ?? null,
+        // A designed message's words are worked out here from the design
+        // itself, never taken from the copy that arrived beside it.
+        body: design ? designWords(design) : step.body,
+        bodyDesign: design,
+      }
+    }))
   }
 
   return NextResponse.json({ ok: true })

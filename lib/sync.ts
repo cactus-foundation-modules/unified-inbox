@@ -55,6 +55,7 @@ import { prepareInboundHtml, htmlToText } from './html'
 import { chooseRelayCopy, RELAY_COPY_WINDOW_MS } from './relay-copy'
 import { readReadReceipt } from './receipts'
 import { readBounce } from './bounces'
+import { isCampaignMessageId } from './campaigns/store'
 import { clashMessage, mailboxClashes } from './reply-catcher-guard'
 import { credentialsForConnection, explainImapError, listFolders, openMailbox } from './imap'
 import { PUSH_MAX_ROUNDS, dueOnSchedule, rangAgain } from './push-checks'
@@ -949,6 +950,14 @@ async function fileMessage(
   // carried on this one flag through the filing below.
   const junk = shouldJunkSender({ direction, fromAddress, blocked: ctx.blockedSenders })
 
+  // A campaign's own copy of something it sent, filed in the Sent folder
+  // because the campaign asked for that. It is filed - the conversation is
+  // where a reply will land - but it arrives done and leaves every other
+  // conversation's state alone: a mailshot is not a colleague answering
+  // somebody, so it wakes nothing, stands nothing down and opens nothing.
+  // Only the sending side is asked, which is the only side a copy can be.
+  const campaignCopy = direction === 'out' && await isCampaignMessageId(identity)
+
   const automated = classifyAutomated({
     autoSubmitted: headerValue(parsed, 'auto-submitted'),
     precedence: headerValue(parsed, 'precedence'),
@@ -1082,6 +1091,7 @@ async function fileMessage(
       // silent folder is a folder nobody opens.
       unread: junk || (input.direction === 'in' && !automated),
       blocked: junk,
+      done: campaignCopy,
     })
 
     const written = await insertMessage({
@@ -1206,7 +1216,7 @@ async function fileMessage(
     // Each line carries the message that caused it, so the conversation shows
     // "a reply arrived, so it is no longer snoozed" directly above the reply -
     // not wherever the clock on the collecting pass happened to put it.
-    if (!automated && !junk) {
+    if (!automated && !junk && !campaignCopy) {
       const was = await reopenOnReply(thread)
       if (was) await recordEvent(thread, null, 'woken', { was, direction: input.direction, messageId: written })
       // And out of the bin, for the same reason: nobody threw THIS away. See
@@ -1234,7 +1244,7 @@ async function fileMessage(
     // And only for post arriving now. The backfill reads history, and a reply
     // from last March being read in for the first time has not overtaken
     // anything anybody wrote this morning.
-    if (!automated && !junk && pass === 'forward') {
+    if (!automated && !junk && !campaignCopy && pass === 'forward') {
       await standDownScheduled({
         threadId: thread,
         messageId: written,

@@ -99,6 +99,7 @@ import { answersByEmail, replyDestination, replyStyleFor } from '@/modules/unifi
 import { pushProviderRead } from '@/modules/unified-inbox/lib/provider-read'
 import { providerForKey, visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
 import { InboxStyles } from './inbox/styles'
+import { NoZoom } from './inbox/NoZoom'
 import { NavRail } from './inbox/NavRail'
 import { CampaignsPanel } from './inbox/campaigns/CampaignsPanel'
 import { StatusTabs } from './inbox/StatusTabs'
@@ -2093,6 +2094,7 @@ export async function UnifiedInboxPanel({
       return (
         <div className="uin-page">
           <InboxStyles />
+          <NoZoom />
           <NavProgress routeKey={routeKey} />
           <ColumnResizer handles={false} />
           <div className="uin-app uin-app-wide">
@@ -2109,6 +2111,7 @@ export async function UnifiedInboxPanel({
     return (
       <div className="uin-page">
         <InboxStyles />
+        <NoZoom />
         <NavProgress routeKey={routeKey} />
         {/* The same frame as the inbox, so the rail, the list and the pane are
             the same widths and the same edges on both screens - and so the
@@ -2273,6 +2276,7 @@ export async function UnifiedInboxPanel({
     // scroll container and kill the sticky frame inside it.
     <div className="uin-page">
       <InboxStyles />
+      <NoZoom />
       <NavProgress routeKey={routeKey} />
       <MailViewBeacon />
 

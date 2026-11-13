@@ -74,6 +74,13 @@ const FRAME_STYLES = `
      wrong answers. */
   #uin-fit.uin-fitted { overflow: hidden; }
   #uin-doc { transform-origin: 0 0; }
+  /* Asked for by the full-screen view: a message narrower than the frame sits
+     in the middle of it. fit-content is the message's own width, capped at the
+     frame's unless it cannot be narrower, so ordinary text still runs the full width and only something
+     written as a narrow column is centred. A message too WIDE is scaled by
+     fitToWidth with a width in pixels wider than the room, which makes the auto
+     margins nothing - so it still scales from the left edge, as it must. */
+  body.uin-centred #uin-doc { width: fit-content; margin-inline: auto; }
   a { color: #14532d; }
   pre { white-space: pre-wrap; }
   details.uin-quote { margin-top: 1rem; }
@@ -173,7 +180,10 @@ function frameScript(nonce: string): string {
   function fitToWidth(){
     if (!fit || !page) return;
     page.style.transform = 'none';
-    page.style.width = 'auto';
+    // Empty rather than 'auto', so the stylesheet's own width is what comes
+    // back - which is auto, except on a centred message, where it is
+    // fit-content and an inline 'auto' would quietly undo the centring.
+    page.style.width = '';
     fit.style.height = 'auto';
     // Nothing is clipped until this pass has decided to scale something. See
     // the stylesheet: a box that clips without scaling is a message with its
@@ -332,10 +342,12 @@ export type MessageDocumentOptions = {
   /** Where the quoted history is folded away behind a toggle. Off for a
    *  forwarded message the reader opened deliberately. */
   collapseQuoted?: boolean
+  /** Centre a message narrower than the frame. See FRAME_STYLES. */
+  centred?: boolean
 }
 
 /** Wrap the message's own markup in a whole document, quoted history folded. */
-export function buildMessageDocument({ html, nonce, collapseQuoted = true }: MessageDocumentOptions): string {
+export function buildMessageDocument({ html, nonce, collapseQuoted = true, centred = false }: MessageDocumentOptions): string {
   let content = openLinksInNewTab(html)
   if (collapseQuoted) {
     const at = quotedHtmlIndex(content)
@@ -365,7 +377,7 @@ export function buildMessageDocument({ html, nonce, collapseQuoted = true }: Mes
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>${FRAME_STYLES}</style></head>
-<body><!--email_off--><div id="uin-fit"><div id="uin-doc">${content}</div></div><!--/email_off-->${frameScript(nonce)}</body></html>`
+<body${centred ? ' class="uin-centred"' : ''}><!--email_off--><div id="uin-fit"><div id="uin-doc">${content}</div></div><!--/email_off-->${frameScript(nonce)}</body></html>`
 }
 
 /**

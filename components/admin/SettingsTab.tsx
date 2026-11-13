@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { TabStrip } from '@/components/admin/TabStrip'
 import { WebhooksSection } from './WebhooksSection'
 import { InboxStyles } from './inbox/styles'
+import { NoZoom } from './inbox/NoZoom'
 import { API, OFFLINE } from './settings/api'
 import { ChannelsPanel } from './settings/ChannelsPanel'
 import { CollectingPanel } from './settings/CollectingPanel'
@@ -213,6 +214,7 @@ export function UnifiedInboxSettingsTab() {
     <div>
       {/* The module's own stylesheet, for the are-you-sure dialogs below. */}
       <InboxStyles />
+      <NoZoom />
       <p style={{ ...MUTED, marginBottom: '1.25rem', maxWidth: '70ch' }}>
         One place for every conversation with a customer or a supplier. Point it at the mail account
         you already use, tell it which addresses people write to, and decide who is allowed to read

@@ -50,6 +50,9 @@
 .uin-page {
   max-width: 100%;
   overflow-x: clip;
+  /* Pans, never zooms - see NoZoom.tsx for why, and for the two other halves
+     of it that this alone cannot do on iOS. */
+  touch-action: pan-x pan-y;
 }
 
 /* ---- the frame the whole screen lives in -------------------------------- */
@@ -134,11 +137,24 @@
    --admin-mobile-topbar-height is core's own token for the bar; the fallback
    is what the bar has always measured, for a core that predates the token. */
 @media (max-width: 768px) {
+  /* The sideways half of the bleed is the PAGE's, not the frame's. The page
+     clips its own sideways overflow (see .uin-page above), and a frame pulled
+     out past it by a negative margin was clipped straight back - so on a phone
+     the outer half-rem of everything along both edges was cut off: the left
+     end of the first status pill, the right side of the search button, the
+     times down the list. Widening the page itself moves the clip out with it.
+     max-width has to give way too, or 100% holds the page to its old width
+     and the margin only slides it left. Only a page that holds the frame:
+     the settings screens share the class and keep core's padding. */
+  .uin-page:has(.uin-app) {
+    margin-inline: calc(-1 * var(--space-2, 0.5rem));
+    max-width: calc(100% + 2 * var(--space-2, 0.5rem));
+  }
   .uin-app {
     top: var(--admin-mobile-topbar-height, 52px);
     height: calc(100vh - var(--admin-mobile-topbar-height, 52px));
     height: calc(100svh - var(--admin-mobile-topbar-height, 52px));
-    margin: calc(-1 * var(--space-2, 0.5rem));
+    margin: calc(-1 * var(--space-2, 0.5rem)) 0;
     border-radius: 0;
     border-left: 0;
     border-right: 0;
@@ -3547,6 +3563,60 @@
 }
 .uin-camp-tag:hover { color: var(--color-text); border-style: solid; }
 
+/* A designed message: what it is, and the way into the designer. */
+.uin-camp-design-card {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem;
+  border: 1px dashed var(--color-border); border-radius: var(--radius, 0.375rem);
+  background: var(--color-surface-raised); padding: 0.625rem 0.75rem;
+}
+.uin-camp-design-card > span { flex: 1 1 14rem; font-size: 0.8125rem; color: var(--color-text-secondary); }
+.uin-camp-field > .uin-camp-label { font-size: 0.75rem; font-weight: 600; color: var(--color-text-secondary); }
+.uin-camp-format { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; font-size: 0.8125rem; }
+.uin-camp-format label { display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; }
+
+/* The designer, popped out over everything. Put on the body through a portal,
+   so it uses core's tokens only - nothing from .uin-page reaches it. */
+.uin-camp-designer {
+  position: fixed; inset: 0; z-index: 10002;
+  display: flex; flex-direction: column;
+  background: var(--color-surface); color: var(--color-text);
+}
+.uin-camp-designer-head {
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1rem;
+  padding: calc(0.5rem + env(safe-area-inset-top, 0px)) 1rem 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.uin-camp-designer-title { display: grid; gap: 0.1rem; min-width: 0; }
+.uin-camp-designer-title span { font-size: 0.75rem; color: var(--color-text-secondary); }
+.uin-camp-designer-tags {
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.5rem;
+  padding: 0.4rem 1rem; border-bottom: 1px solid var(--color-border);
+  font-size: 0.75rem; color: var(--color-text-secondary); background: var(--color-surface-raised);
+}
+.uin-camp-designer-tags code {
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.6875rem;
+  padding: 0.05rem 0.3rem; border: 1px solid var(--color-border); border-radius: var(--radius-sm, 0.25rem);
+  color: var(--color-text); user-select: all;
+}
+.uin-camp-designer-canvas { flex: 1; min-height: 0; overflow: hidden; position: relative; }
+.uin-camp-designer-canvas .Puck { height: 100%; }
+
+/* What became of it: the headline numbers above the table. */
+.uin-camp-stats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 7.5rem), 1fr)); gap: 0.5rem;
+}
+.uin-camp-stat {
+  border: 1px solid var(--color-border); border-radius: var(--radius, 0.375rem);
+  background: var(--color-surface-raised); padding: 0.5rem 0.625rem;
+  display: grid; gap: 0.1rem; text-align: left; font: inherit; color: inherit; cursor: pointer;
+}
+div.uin-camp-stat { cursor: default; }
+.uin-camp-stat[aria-pressed="true"] { border-color: var(--color-primary); box-shadow: inset 0 0 0 1px var(--color-primary); }
+.uin-camp-stat b { font-size: 1.125rem; font-weight: 650; }
+.uin-camp-stat span { font-size: 0.75rem; color: var(--color-text-secondary); }
+.uin-camp-table td.uin-camp-when { white-space: nowrap; font-size: 0.8125rem; }
+.uin-camp-table td.uin-camp-when[data-empty="true"] { color: var(--color-text-muted); }
+
 /* What it will look like, for three real people off the list. */
 .uin-camp-preview {
   border: 1px solid var(--color-border); border-radius: var(--radius, 0.375rem);
@@ -5617,3 +5687,105 @@
   .uin-app[data-open="1"] .uin-rail-search,
   .uin-app[data-open="1"] .uin-compose-split { display: none; }
 }
+
+/* ---- a phone: room round the edges of the sideways-scrolling rows ------- */
+/* The status pills and the open conversation's controls each scroll sideways
+   in a box that clips, and the first and last pill in each sat flush against
+   that box - so the round end of the pill, its glass highlight and its focus
+   ring were all cut square. A few pixels of padding inside the box, taken
+   back off its margin, gives the round ends their room without moving
+   anything else on the screen. The cross that shuts a conversation on a phone
+   was 2rem across with its icon nearly touching the edges; a finger gets the
+   same 2.5rem every other icon button has. */
+@media (max-width: 768px) {
+  .uin-tabs {
+    padding-inline: 0.25rem;
+    margin-inline: -0.25rem;
+    scroll-padding-inline: 0.25rem;
+  }
+  /* Where the list's head has folded into the column (see the phone rules for
+     .uin-col-head above), the tabs carry that rule's 0.625rem side margin,
+     at a weight this one has to match to win back the quarter-rem. */
+  .uin-col-head:has(> .uin-col-find) > .uin-tabs { margin-inline: calc(0.625rem - 0.25rem); }
+}
+@media (max-width: 639px) {
+  .uin-thread-actions {
+    padding-inline: 0.25rem;
+    margin-inline: -0.25rem;
+    scroll-padding-inline: 0.25rem;
+  }
+}
+@media (max-width: 639px) and (pointer: coarse) {
+  .uin-thread-close-end { width: 2.5rem; height: 2.5rem; padding: 0.4rem; }
+}
+
+/* ---- one message, full screen ------------------------------------------- */
+/* "Open full screen" on a message's dots. A phone's only: anywhere wider the
+   message already has a pane of its own. See MessageFullScreen. Put on the body
+   through a portal, so nothing here can lean on .uin-page's own variables -
+   which is why it uses core's tokens only. */
+.uin-menu-item.uin-menu-item-phone { display: none; }
+@media (max-width: 768px) {
+  .uin-menu-item.uin-menu-item-phone { display: flex; }
+}
+.uin-fullmsg {
+  position: fixed;
+  inset: 0;
+  z-index: 10002;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.uin-fullmsg-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: calc(0.5rem + env(safe-area-inset-top, 0px)) calc(0.75rem + env(safe-area-inset-right, 0px)) 0.5rem calc(0.75rem + env(safe-area-inset-left, 0px));
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.uin-fullmsg-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.uin-fullmsg-subject,
+.uin-fullmsg-from {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.uin-fullmsg-subject { font-size: 0.9375rem; font-weight: 650; }
+.uin-fullmsg-from { font-size: 0.8125rem; color: var(--color-text-secondary); }
+.uin-fullmsg-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 0;
+  border-radius: var(--radius-full, 9999px);
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  color: var(--color-text);
+  cursor: pointer;
+}
+.uin-fullmsg-close:hover { background: color-mix(in srgb, var(--color-text) 12%, transparent); }
+.uin-fullmsg-close:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: 2px; }
+.uin-fullmsg-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.uin-fullmsg-body {
+  padding: 0.75rem calc(0.75rem + env(safe-area-inset-right, 0px)) calc(1.5rem + env(safe-area-inset-bottom, 0px)) calc(0.75rem + env(safe-area-inset-left, 0px));
+}
+/* Plain text has no width of its own to centre, so it is given a reading
+   column, in the middle, the width a line of prose is comfortable at. */
+.uin-fullmsg-text { max-width: 42rem; margin-inline: auto; }

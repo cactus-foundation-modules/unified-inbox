@@ -39,13 +39,14 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
   const showImages = request.nextUrl.searchParams.get('images') === '1'
   const collapseQuoted = request.nextUrl.searchParams.get('quoted') !== '1'
+  const centred = request.nextUrl.searchParams.get('centre') === '1'
   let html = message.html ?? ''
   if (showImages) {
     html = restoreRemoteImages(html, (index) => `/api/m/unified-inbox/messages/${id}/image/${index}`)
   }
 
   const nonce = nanoid(16)
-  const document = buildMessageDocument({ html, nonce, collapseQuoted })
+  const document = buildMessageDocument({ html, nonce, collapseQuoted, centred })
 
   // Where the pictures are allowed to come from, written out in full. The frame
   // has no origin of its own - it is sandboxed without allow-same-origin, which

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { PICKS_PATTERN } from './products/slots'
+import { CampaignDesignBody } from './campaigns/design'
 
 // Shared between the create and the edit route, so an inbox cannot be saved
 // through one of them with a field the other would have refused.
@@ -506,6 +507,10 @@ export const CampaignStepBody = z.object({
   /** As typed, not as HTML: what goes back into the box has to be what came out
    *  of it, and the markup is made at the moment of sending. */
   body: z.string().max(100_000),
+  /** The message built in the designer, or null for one typed in the box. When
+   *  it is set, the server works `body` out from it rather than trusting the
+   *  copy that arrived. Undefined leaves a stored design as it is. */
+  bodyDesign: CampaignDesignBody.nullable().optional(),
 })
 
 export const CampaignBody = z.object({
@@ -515,6 +520,10 @@ export const CampaignBody = z.object({
   includeUnsubscribe: z.boolean().optional(),
   copyToSent: z.boolean().optional(),
   excludeColleagues: z.boolean().optional(),
+  /** Inside one of the site's own email designs, and which one - null for the
+   *  site's default. */
+  useWrapper: z.boolean().optional(),
+  wrapperLayoutId: z.string().min(1).max(64).nullable().optional(),
   /** The labels it goes to. Empty means the whole address book, which is what
    *  "everyone" on the Who step asks for. */
   categoryIds: z.array(z.string().min(1)).max(50).optional(),
@@ -553,6 +562,11 @@ export const CampaignRestartBody = z.object({
  *  the progress table rather than waiting for the clock. */
 export const CampaignSendNowBody = z.object({
   recipientId: z.string().min(1).max(64),
+})
+
+/** Putting a finished campaign away, or bringing it back. */
+export const CampaignArchiveBody = z.object({
+  archived: z.boolean(),
 })
 
 /** Sending yourself one, which is what unlocks the start button. */

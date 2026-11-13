@@ -14,6 +14,7 @@ import {
   setCampaignCategories,
 } from '@/modules/unified-inbox/lib/campaigns/store'
 import { CampaignBody } from '@/modules/unified-inbox/lib/validation'
+import { designWords } from '@/modules/unified-inbox/lib/campaigns/design'
 
 // The campaigns themselves: the list, and starting a new one.
 //
@@ -23,13 +24,16 @@ import { CampaignBody } from '@/modules/unified-inbox/lib/validation'
 // a site give one without the other.
 export const maxDuration = 60
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const user = await getSessionFromCookie()
   if (!user) return errorResponse('Not authenticated', 401)
   if (!await hasPermission(user, 'unifiedinbox.campaigns')) return errorResponse('Forbidden', 403)
 
+  // ?archived=1 is the Archived tab: the finished campaigns somebody has put
+  // away. Without it, everything that has not been.
+  const archived = request.nextUrl.searchParams.get('archived') === '1'
   const timezone = await getSiteTimezone()
-  const campaigns = await listCampaigns()
+  const campaigns = await listCampaigns({ archived })
 
   // The counts ride along, because a list of campaigns with no numbers on it is
   // a list of names. One query each, and the list is short by nature - a site
@@ -80,7 +84,8 @@ export async function POST(request: NextRequest) {
         stepIndex: step.stepIndex,
         waitDays: step.stepIndex === 0 ? null : (step.waitDays ?? 3),
         subject: step.subject ?? null,
-        body: step.body,
+        body: step.bodyDesign ? designWords(step.bodyDesign) : step.body,
+        bodyDesign: step.bodyDesign ?? null,
       }))
     : [{ stepIndex: 0, waitDays: null, subject: null, body: '' }])
 

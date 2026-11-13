@@ -25,7 +25,7 @@ import type { RecipientNames } from './types'
 /** The tags this understands. Nothing else is a tag, and the editor says so
  *  before a campaign can start rather than after it has sent four hundred
  *  emails saying "Dear {{firstname}}". */
-export const MERGE_TAGS = ['title', 'first_name', 'last_name', 'full_name', 'company', 'email'] as const
+export const MERGE_TAGS = ['title', 'first_name', 'last_name', 'full_name', 'company', 'email', 'unsubscribe_url'] as const
 
 export type MergeTag = (typeof MERGE_TAGS)[number]
 
@@ -37,7 +37,13 @@ export const MERGE_TAG_HELP: Record<MergeTag, string> = {
   full_name: 'Their whole name, as the address book holds it',
   company: 'The company they are at',
   email: 'The address this is going to',
+  unsubscribe_url: 'Their own unsubscribe link - put it behind a button or a link wherever you like',
 }
+
+/** Tags that stand for an address rather than a word. Nothing to fall back on
+ *  - a link with a fallback is a link that goes nowhere - so they are never
+ *  warned about for lacking one, and the buttons insert them bare. */
+export const LINK_TAGS: ReadonlySet<MergeTag> = new Set<MergeTag>(['unsubscribe_url'])
 
 // A tag, and the fallback after the bar. The fallback deliberately cannot
 // contain a brace: an unclosed tag inside a fallback is a puzzle nobody should
@@ -71,6 +77,10 @@ function valueFor(tag: MergeTag, person: RecipientNames): string {
       return person.organisationName?.trim() ?? ''
     case 'email':
       return person.address
+    case 'unsubscribe_url':
+      // Only ever known at the moment of sending, when the link is signed for
+      // this one address. A preview has none, and says so with its fallback.
+      return person.unsubscribeUrl ?? ''
   }
 }
 
@@ -84,13 +94,38 @@ function valueFor(tag: MergeTag, person: RecipientNames): string {
  * pair of braces in a customer's inbox.
  */
 export function personalise(text: string, person: RecipientNames): string {
-  return text.replace(TAG_RE, (_match, rawName: string, rawFallback?: string) => {
+  return replaceTags(text, person, (value) => value)
+}
+
+/**
+ * The same substitution, with each filled-in value handed to `place` to decide
+ * what actually goes into the text. personalise() puts the value straight in;
+ * the designed message (design.ts) swaps each one for a placeholder its block
+ * renderer fills and escapes for whatever kind of field it is in.
+ */
+export function replaceTags(
+  text: string,
+  person: RecipientNames,
+  place: (value: string) => string,
+  /** Tags that belong to somebody else and are to be left exactly as written -
+   *  the site's own ({{siteName}}, {{year}}) in a designed message, which the
+   *  email blocks fill themselves. */
+  keep?: (name: string) => boolean,
+): string {
+  return text.replace(TAG_RE, (match: string, rawName: string, rawFallback?: string) => {
+    if (keep && rawFallback === undefined && keep(rawName)) return match
     const fallback = (rawFallback ?? '').trim()
     const name = rawName.toLowerCase()
-    if (!isMergeTag(name)) return fallback
+    if (!isMergeTag(name)) return place(fallback)
     const value = valueFor(name, person).trim()
-    return value || fallback
+    return place(value || fallback)
   })
+}
+
+/** Whether a piece of text carries the unsubscribe link itself, which counts
+ *  as a way to opt out whether or not the footer is switched on. */
+export function usesUnsubscribeTag(text: string): boolean {
+  return tagsIn(text).some((t) => t.name === 'unsubscribe_url')
 }
 
 /** Every tag written in a piece of text, in the order they appear. */
@@ -119,7 +154,7 @@ export function unknownTags(text: string): string[] {
  *  say so. */
 export function tagsWithoutFallback(text: string): string[] {
   const bare = tagsIn(text)
-    .filter((t) => isMergeTag(t.name) && !t.fallback && t.name !== 'email')
+    .filter((t) => isMergeTag(t.name) && !t.fallback && t.name !== 'email' && !LINK_TAGS.has(t.name))
     .map((t) => t.name)
   return [...new Set(bare)]
 }

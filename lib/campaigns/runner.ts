@@ -8,6 +8,7 @@ import { appendToSent } from '../append'
 import { deliver, campaignTransportForInbox } from '../transport'
 import { bounceVerdict, dayIsFull, isCampaignWideFailure } from './guards'
 import { buildCampaignMessage } from './message'
+import { hasOptedOutOfMarketing } from './consent'
 import { addSuppression, isSuppressed } from './store'
 import {
   abandonLane,
@@ -398,6 +399,16 @@ async function sendToRecipient(
   if (await isSuppressed(recipient.address)) {
     await setRecipientState(recipient.id, 'unsubscribed', {
       reason: 'They asked not to be emailed again before this reached them.',
+    })
+    return { kind: 'skipped' }
+  }
+
+  // Said no to marketing since the list was built - at the checkout, on the
+  // phone to a colleague, on their account. The same check the list was built
+  // with, asked again now, for the same fortnight's reason as the one above.
+  if (await hasOptedOutOfMarketing(recipient.address)) {
+    await setRecipientState(recipient.id, 'unsubscribed', {
+      reason: 'They asked not to be sent marketing email before this reached them.',
     })
     return { kind: 'skipped' }
   }

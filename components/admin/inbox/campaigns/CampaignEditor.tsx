@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { useAdminConfirm } from '@/components/admin/useAdminConfirm'
 import {
   campaignApi,
   when,
@@ -57,6 +58,10 @@ type Props = {
    *  so the column beside this can ask before it navigates away and takes the
    *  half-written follow-up with it. */
   onUnsavedChange: (unsaved: boolean) => void
+  /** The campaign has been deleted, archived or brought back, so it is no
+   *  longer on the list this screen was opened from. Said with what happened,
+   *  for the list to show. */
+  onMoved: (what: string, archived: boolean | null) => void
 }
 
 /**
@@ -78,7 +83,7 @@ type Editing = {
 }
 
 export function CampaignEditor({
-  campaignId, inboxes, categories, tickUrl, onStatusChanged, onBack, onUnsavedChange,
+  campaignId, inboxes, categories, tickUrl, onStatusChanged, onBack, onUnsavedChange, onMoved,
 }: Props) {
   const [editing, setEditing] = useState<Editing | null>(null)
   const [error, setError] = useState('')
@@ -153,6 +158,7 @@ export function CampaignEditor({
       onStatusChanged={onStatusChanged}
       onBack={onBack}
       onReload={load}
+      onMoved={onMoved}
     />
   )
 }
@@ -181,14 +187,14 @@ function stillSaveable(
     excludeColleagues: server.excludeColleagues,
     steps: typed.steps.map((step) => (
       step.stepIndex === 0 && firstFromServer
-        ? { ...step, subject: firstFromServer.subject, body: firstFromServer.body }
+        ? { ...step, subject: firstFromServer.subject, body: firstFromServer.body, bodyDesign: firstFromServer.bodyDesign }
         : step
     )),
   }
 }
 
 function Campaign({
-  editing, inboxes, categories, tickUrl, onChange, onStatusChanged, onReload, onBack,
+  editing, inboxes, categories, tickUrl, onChange, onStatusChanged, onReload, onBack, onMoved,
 }: {
   editing: Editing
   inboxes: CampaignInbox[]
@@ -198,6 +204,7 @@ function Campaign({
   onStatusChanged: () => void
   onReload: () => Promise<void>
   onBack: () => void
+  onMoved: (what: string, archived: boolean | null) => void
 }) {
   const { detail, baseline: saved, draft } = editing
   const { campaign, readiness, timezone, tally } = detail
@@ -210,6 +217,7 @@ function Campaign({
    *  than a window.confirm: what this is about to do takes four lines to say,
    *  and a browser dialog cannot say them. */
   const [restarting, setRestarting] = useState(false)
+  const [askConfirm, confirmNode] = useAdminConfirm()
 
   const running = campaign.status === 'running'
   const settled = campaign.status === 'done' || campaign.status === 'stopped'
@@ -347,6 +355,41 @@ function Campaign({
     onStatusChanged()
   }, [campaign.id, onReload, onStatusChanged])
 
+  /**
+   * Throw a draft away. Only a draft: nothing has gone out of one, so there is
+   * no record anybody could want later. A campaign that has sent anything is
+   * archived instead, which keeps who got it and what they did about it.
+   */
+  const remove = useCallback(async () => {
+    const ok = await askConfirm({
+      title: 'Delete this draft?',
+      message: `"${campaign.name}" and everything written in it will be gone for good. Nothing has been sent from it.`,
+      confirmLabel: 'Delete it',
+    })
+    if (!ok) return
+    setBusy(true)
+    setError('')
+    const result = await campaignApi.remove(campaign.id)
+    setBusy(false)
+    if (!result.ok) { setError(result.error); return }
+    onMoved(`"${campaign.name}" has been deleted.`, null)
+  }, [askConfirm, campaign.id, campaign.name, onMoved])
+
+  /** Put a finished campaign away in the Archived tab, or bring it back. */
+  const archive = useCallback(async (archived: boolean) => {
+    setBusy(true)
+    setError('')
+    const result = await campaignApi.archive(campaign.id, archived)
+    setBusy(false)
+    if (!result.ok) { setError(result.error); return }
+    onMoved(
+      archived
+        ? `"${campaign.name}" is in the Archived tab now, with everything that happened to it.`
+        : `"${campaign.name}" is back on the main list.`,
+      archived,
+    )
+  }, [campaign.id, campaign.name, onMoved])
+
   const sendTest = useCallback(async (to: string): Promise<string | null> => {
     if (!await save()) return 'Nothing was sent, because the campaign could not be saved.'
     const result = await campaignApi.test(campaign.id, to, 0)
@@ -357,6 +400,7 @@ function Campaign({
 
   return (
     <>
+      {confirmNode}
       <div className="uin-camp-head">
         {/* The way back to the list, on a phone only: there the list is not on
             the screen beside this, and the rail's Campaigns link is behind a
@@ -380,6 +424,7 @@ function Campaign({
           />
           <div className="uin-camp-meta">
             <span className="uin-camp-pill" data-state={campaign.status}>{statusWord(campaign.status)}</span>
+            {campaign.archivedAt && <span className="uin-camp-pill" data-state="archived">Archived</span>}
             <span>{summarise(detail)}</span>
             {detail.finishesAbout && <span>Finishes about {when(detail.finishesAbout, timezone)}</span>}
           </div>
@@ -562,6 +607,21 @@ function Campaign({
                   : 'Not ready yet - see “Before it can go” above.'}
         </span>
         <div className="uin-camp-actions">
+          {campaign.status === 'draft' && (
+            <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={() => void remove()}>
+              Delete draft
+            </button>
+          )}
+          {settled && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={busy}
+              onClick={() => void archive(!campaign.archivedAt)}
+            >
+              {campaign.archivedAt ? 'Back to the main list' : 'Archive'}
+            </button>
+          )}
           {settled && !restarting && (
             <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => setRestarting(true)}>
               Send it all again

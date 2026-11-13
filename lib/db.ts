@@ -1345,6 +1345,9 @@ export async function createThread(data: {
    *  UNREAD by the caller, which is what lets the Spam folder say how much has
    *  arrived. See migration 044. */
   blocked?: boolean
+  /** Born done, and nothing else: a campaign's own copy of a message it sent,
+   *  found in the Sent folder. Nobody needs to do anything about it. */
+  done?: boolean
 }): Promise<string> {
   const rows = await prisma.$queryRaw<{ id: string }[]>`
     INSERT INTO "uin_threads"
@@ -1353,7 +1356,7 @@ export async function createThread(data: {
        "status", "blocked_at")
     VALUES (${data.inboxId}, 'email', ${data.subject}, ${data.subjectNormalised}, ${data.preview},
             ${data.lastMessageAt}, ${data.lastDirection}, ${data.unread}, 0,
-            ${data.blocked ? 'done' : 'open'}, ${data.blocked ? new Date() : null})
+            ${data.blocked || data.done ? 'done' : 'open'}, ${data.blocked ? new Date() : null})
     RETURNING "id"
   `
   return rows[0]!.id

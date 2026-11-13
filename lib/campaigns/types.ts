@@ -1,3 +1,5 @@
+import type { CampaignDesign } from './design'
+
 // Shapes the campaign half of the module shares. Rows come back from raw SQL as
 // snake_case records and are mapped into these in lib/campaigns/store.ts, so
 // nothing outside that file ever handles a raw column name - the same bargain
@@ -88,6 +90,12 @@ export type Campaign = {
   updatedAt: Date
   startedAt: Date | null
   finishedAt: Date | null
+  /** Sent inside one of the site's own email designs (M077). */
+  useWrapper: boolean
+  /** Which design; null means the site's default one. */
+  wrapperLayoutId: string | null
+  /** Put away off the main list, record intact (M077). */
+  archivedAt: Date | null
 }
 
 /** The message, or one of the chases after it. Step 0 is the message. */
@@ -99,7 +107,12 @@ export type CampaignStep = {
   waitDays: number | null
   /** Null on a chase, which means "Re: whatever step 0 said". */
   subject: string | null
+  /** The words. For a designed message, the plain-text reading of the design,
+   *  which is what the checks and the text half of the email read. */
   body: string
+  /** The message built in the designer, as the designer's own document, or
+   *  null for one typed in the plain box (M077). */
+  bodyDesign: CampaignDesign | null
 }
 
 export type CampaignRecipient = {
@@ -171,4 +184,7 @@ export type RecipientNames = {
   displayName: string | null
   organisationName: string | null
   address: string
+  /** Their own signed unsubscribe link - only ever known at the moment of
+   *  sending, so absent everywhere else (previews, the audience build). */
+  unsubscribeUrl?: string | null
 }

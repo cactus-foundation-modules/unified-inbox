@@ -1,3 +1,4 @@
+import type { CampaignDesign } from '@/modules/unified-inbox/lib/campaigns/design'
 import type {
   CampaignPauseKind,
   CampaignStatus,
@@ -47,6 +48,11 @@ export type CampaignView = {
   startedAt: string | null
   finishedAt: string | null
   window: CampaignWindowView
+  /** Sent inside one of the site's email designs, and which (null: default). */
+  useWrapper: boolean
+  wrapperLayoutId: string | null
+  /** Put away in the Archived tab. */
+  archivedAt: string | null
 }
 
 export type CampaignListRow = CampaignView & {
@@ -60,6 +66,8 @@ export type StepView = {
   waitDays: number | null
   subject: string | null
   body: string
+  /** Built in the designer, or null for the plain box. */
+  bodyDesign: CampaignDesign | null
 }
 
 export type RecipientView = {
@@ -75,7 +83,25 @@ export type RecipientView = {
   lastSentAt: string | null
   repliedAt: string | null
   reason: string | null
+  /** The first moment each of these happened, across every step they had. */
+  firstSentAt: string | null
+  deliveredAt: string | null
+  openedAt: string | null
+  clickedAt: string | null
+  unsubscribedAt: string | null
+  bouncedAt: string | null
 }
+
+/** Each person counted once, however many steps they had. */
+export type EngagementView = {
+  sent: number
+  delivered: number
+  opened: number
+  clicked: number
+  unsubscribed: number
+}
+
+export type EngagementFilterView = 'opened' | 'unopened' | 'clicked' | 'unsubscribed'
 
 export type Readiness = { problems: string[]; warnings: string[] }
 
@@ -83,6 +109,9 @@ export type CampaignDetail = {
   campaign: CampaignView
   steps: StepView[]
   tally: CampaignTally
+  engagement: EngagementView
+  /** The site's published email designs, for the "send it inside one" box. */
+  wrappers: Array<{ id: string; name: string }>
   exclusions: Array<{ reason: string; count: number }>
   previews: Array<{ address: string; subject: string; body: string }>
   readiness: Readiness
@@ -126,7 +155,15 @@ async function send<T>(url: string, init?: RequestInit): Promise<{ ok: true; dat
 }
 
 export const campaignApi = {
-  list: () => send<{ campaigns: CampaignListRow[]; timezone: string }>(`${BASE}/campaigns`),
+  list: (archived = false) =>
+    send<{ campaigns: CampaignListRow[]; timezone: string }>(`${BASE}/campaigns${archived ? '?archived=1' : ''}`),
+
+  /** Put a finished campaign away in the Archived tab, or bring it back. */
+  archive: (id: string, archived: boolean) =>
+    send<{ ok: true }>(`${BASE}/campaigns/${id}/archive`, {
+      method: 'POST',
+      body: JSON.stringify({ archived }),
+    }),
 
   create: (name: string, inboxId: string | null) =>
     send<{ id: string }>(`${BASE}/campaigns`, {
@@ -182,9 +219,15 @@ export const campaignApi = {
       body: JSON.stringify({ to, stepIndex }),
     }),
 
-  recipients: (id: string, params: { state?: string | null; q?: string | null; page: number }) => {
+  recipients: (id: string, params: {
+    state?: string | null
+    engagement?: EngagementFilterView | null
+    q?: string | null
+    page: number
+  }) => {
     const search = new URLSearchParams({ page: String(params.page) })
     if (params.state) search.set('state', params.state)
+    if (params.engagement) search.set('engagement', params.engagement)
     if (params.q) search.set('q', params.q)
     return send<{ rows: RecipientView[]; total: number; page: number; perPage: number }>(
       `${BASE}/campaigns/${id}/recipients?${search.toString()}`,

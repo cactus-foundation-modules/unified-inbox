@@ -41,10 +41,11 @@ type Props = {
   categories: CampaignCategory[]
   /** Which campaign is open, from the address bar. */
   campaignId: string | null
-  /** Only 'suppressions' means anything now: the do-not-email list is the one
-   *  thing on this screen that is not a campaign. Links made before the editor
-   *  became one page carry who/what/when/watch/progress, and every one of them
-   *  now opens the campaign itself, which is where all of that lives. */
+  /** 'suppressions' is the do-not-email list, the one thing on this screen that
+   *  is not a campaign. 'archived' is the Archived tab: finished campaigns put
+   *  away, still openable, record intact. Links made before the editor became
+   *  one page carry who/what/when/watch/progress, and every one of them now
+   *  opens the campaign itself, which is where all of that lives. */
   view: string | null
   /** The address a pinger can be pointed at, with its key already in it. Shown
    *  once, on the campaign that is running, because the pace of the whole
@@ -65,9 +66,13 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
    *  about. */
   const [unsaved, setUnsaved] = useState(false)
   const [askConfirm, confirmNode] = useAdminConfirm()
+  /** What just happened to a campaign that left this list - deleted, archived,
+   *  brought back - said where the list is, since the campaign is gone from it. */
+  const [notice, setNotice] = useState('')
+  const archived = view === 'archived'
 
   const load = useCallback(async () => {
-    const result = await campaignApi.list()
+    const result = await campaignApi.list(archived)
     if (!result.ok) {
       setError(result.error)
       return
@@ -75,7 +80,7 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
     setRows(result.data.campaigns)
     setTimezone(result.data.timezone)
     setError('')
-  }, [])
+  }, [archived])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- delegating to an async loader; every setState runs after an await
   useEffect(() => { void load() }, [load])
@@ -126,24 +131,41 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
   const anyRunning = (rows ?? []).some((row) => row.status === 'running')
   const suppressing = view === 'suppressions'
 
+  /** The campaign open beside this has been deleted, archived or brought back.
+   *  Close it - it is not on this list any more - and say what happened. */
+  const moved = useCallback((what: string) => {
+    setNotice(what)
+    setUnsaved(false)
+    go({ campaign: null })
+    void load()
+  }, [go, load])
+
   return (
     <>
       {confirmNode}
       <div className="uin-col">
         <div className="uin-col-head">
           <div className="uin-col-title">
-            <h2>Campaigns</h2>
+            <h2>{archived ? 'Archived campaigns' : 'Campaigns'}</h2>
             <span className="uin-col-total">
               {rows === null ? '' : rows.length === 1 ? '1 campaign' : `${rows.length.toLocaleString('en-GB')} campaigns`}
             </span>
           </div>
 
           <div className="uin-camp-actions">
-            {inboxes.length > 0 && (
+            {inboxes.length > 0 && !archived && (
               <button type="button" className="btn btn-primary btn-sm" onClick={() => setCreating(true)}>
                 New campaign
               </button>
             )}
+            <button
+              type="button"
+              className={`btn btn-sm ${archived ? 'btn-primary' : 'btn-secondary'}`}
+              aria-pressed={archived}
+              onClick={() => { setNotice(''); void leave({ campaign: null, view: archived ? null : 'archived' }) }}
+            >
+              {archived ? 'Back to campaigns' : 'Archived'}
+            </button>
             <button
               type="button"
               className={`btn btn-sm ${suppressing ? 'btn-primary' : 'btn-secondary'}`}
@@ -182,6 +204,7 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
 
         <div className="uin-col-scroll">
           {error && <div className="alert alert-danger" role="alert">{error}</div>}
+          {notice && <div className="alert alert-info" role="status">{notice}</div>}
 
           {inboxes.length === 0 && (
             <div className="uin-empty">
@@ -193,7 +216,15 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
 
           {rows === null && inboxes.length > 0 && <div className="uin-empty">Looking&hellip;</div>}
 
-          {rows !== null && rows.length === 0 && inboxes.length > 0 && !creating && (
+          {rows !== null && rows.length === 0 && archived && (
+            <div className="uin-empty">
+              <strong>Nothing archived</strong>
+              A finished campaign can be put away here from its own page, with everything that happened to it -
+              who got it, who read it, who unsubscribed - kept exactly as it was.
+            </div>
+          )}
+
+          {rows !== null && rows.length === 0 && inboxes.length > 0 && !creating && !archived && (
             <div className="uin-empty">
               <strong>No campaigns yet</strong>
               A campaign sends the same email to a list of your contacts, one at a time, slowly, inside working
@@ -210,7 +241,7 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
                     timezone={timezone}
                     inbox={inboxes.find((i) => i.id === row.inboxId) ?? null}
                     open={row.id === campaignId}
-                    onOpen={() => leave({ campaign: row.id, view: null })}
+                    onOpen={() => { setNotice(''); void leave({ campaign: row.id, view: archived ? 'archived' : null }) }}
                   />
                 </li>
               ))}
@@ -231,8 +262,9 @@ export function CampaignsPanel({ base, params, inboxes, categories, campaignId, 
             categories={categories}
             tickUrl={tickUrl}
             onStatusChanged={load}
-            onBack={() => leave({ campaign: null, view: null })}
+            onBack={() => leave({ campaign: null, view: archived ? 'archived' : null })}
             onUnsavedChange={setUnsaved}
+            onMoved={moved}
           />
         </div>
       ) : (

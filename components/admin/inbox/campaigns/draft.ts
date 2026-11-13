@@ -26,6 +26,10 @@ export type CampaignDraft = {
   includeSignature: boolean
   includeUnsubscribe: boolean
   copyToSent: boolean
+  /** Inside one of the site's own email designs. */
+  useWrapper: boolean
+  /** Which one, "" for the site's default. */
+  wrapperLayoutId: string
   steps: StepView[]
   /** Wall clock for the datetime box, "" for "as soon as it is started". */
   startAt: string
@@ -59,6 +63,8 @@ export function draftFrom(detail: CampaignDetail): CampaignDraft {
     includeSignature: campaign.includeSignature,
     includeUnsubscribe: campaign.includeUnsubscribe,
     copyToSent: campaign.copyToSent,
+    useWrapper: campaign.useWrapper,
+    wrapperLayoutId: campaign.wrapperLayoutId ?? '',
     steps: detail.steps.map((step) => ({ ...step })),
     startAt: campaign.startAt ? toLocalInput(campaign.startAt, detail.timezone) : '',
     dayFrom: allDay ? '' : clock(w.startMinute),
@@ -92,11 +98,16 @@ export function toPatch(draft: CampaignDraft, options: { audience: boolean }): R
     includeSignature: draft.includeSignature,
     includeUnsubscribe: draft.includeUnsubscribe,
     copyToSent: draft.copyToSent,
+    useWrapper: draft.useWrapper,
+    wrapperLayoutId: draft.wrapperLayoutId || null,
     steps: draft.steps.map((step) => ({
       stepIndex: step.stepIndex,
       waitDays: step.stepIndex === 0 ? null : (step.waitDays ?? 3),
       subject: step.subject,
       body: step.body,
+      // Always sent, null included: null is going back to the plain box, and
+      // leaving it out would keep whatever design was stored.
+      bodyDesign: step.bodyDesign ?? null,
     })),
     startAt: draft.startAt || null,
     window: {

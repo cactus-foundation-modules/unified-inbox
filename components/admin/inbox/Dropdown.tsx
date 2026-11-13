@@ -159,14 +159,14 @@ export function Dropdown({
   // thirty-odd day buttons are not a menu and taking the focus onto one of them
   // would be nobody's idea of where the menu starts.
   useEffect(() => {
-    if (open) panel.current?.querySelector<HTMLElement>('[data-menu-item]')?.focus()
+    if (open) shownItems(panel.current)[0]?.focus()
   }, [open])
 
   /** Up and down walk the entries and stop at the ends. Wrapping round a list
    *  this short reads as a bug. */
   const onPanelKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
-    const items = Array.from(panel.current?.querySelectorAll<HTMLElement>('[data-menu-item]') ?? [])
+    const items = shownItems(panel.current)
     if (items.length === 0) return
     event.preventDefault()
     const from = items.indexOf(document.activeElement as HTMLElement)
@@ -233,10 +233,21 @@ export function Dropdown({
  *  Pressing one shuts the panel, because a menu that stays open over the thing
  *  it has just changed is a menu in the way. `keepOpen` is for the one entry
  *  that does not choose anything: Day & Time swaps what is in the panel. */
+/** The entries actually drawn. An entry can be in the markup and switched off
+ *  by the stylesheet on some screens - "Open full screen" is a phone's only -
+ *  and focusing one of those does nothing, which would leave a menu opened from
+ *  the keyboard with nothing in it focused and the arrows stuck on a ghost. */
+function shownItems(panel: HTMLElement | null): HTMLElement[] {
+  return Array.from(panel?.querySelectorAll<HTMLElement>('[data-menu-item]') ?? [])
+    .filter((item) => item.getClientRects().length > 0)
+}
+
 export function MenuItem({
-  onClick, disabled, children, hint, icon, after, keepOpen,
+  onClick, disabled, children, hint, icon, after, keepOpen, className,
 }: {
   onClick: () => void
+  /** Added to the item's own class - for an entry only some screens show. */
+  className?: string
   disabled?: boolean
   children: ReactNode
   hint?: ReactNode
@@ -250,7 +261,7 @@ export function MenuItem({
       type="button"
       role="menuitem"
       data-menu-item=""
-      className="uin-menu-item"
+      className={className ? `uin-menu-item ${className}` : 'uin-menu-item'}
       disabled={disabled}
       onClick={() => {
         if (!keepOpen) close()

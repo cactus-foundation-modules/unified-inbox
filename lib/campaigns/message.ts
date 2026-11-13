@@ -1,10 +1,13 @@
 import { getSiteUrlOrNull } from '@/lib/config/env'
+import { getSiteEmailContext, htmlToPlainText } from '@/lib/email/render'
+import { getEmailPalette, resolveEmailWrapper, wrapEmailHtml } from '@/lib/email/wrapper'
 import { assembleBody, messageIdHeader, outgoingHeaders, replySubject } from '../compose'
 import { plainTextToHtml } from '../scheduled'
 import { renderInboxSignature } from '../signature'
 import { replyToWorthSending, sendingIdentity, type SendableMessage } from '../transport'
 import type { Inbox } from '../types'
-import { personalise } from './personalise'
+import { personalise, usesUnsubscribeTag } from './personalise'
+import { isEmptyDesign, renderCampaignDesign } from './design'
 import { unsubscribeFooter, unsubscribeHeaders, unsubscribeUrl } from './unsubscribe'
 import type { Campaign, CampaignRecipient, CampaignStep } from './types'
 
@@ -84,6 +87,15 @@ export type CampaignMessageContext = {
 export async function buildCampaignMessage(ctx: CampaignMessageContext): Promise<BuiltCampaignMessage> {
   const { campaign, step, recipient, inbox } = ctx
 
+  // The unsubscribe link is made whenever anything will carry it: the footer,
+  // or the message itself through {{unsubscribe_url}} - a designed email with
+  // its own "unsubscribe" button in the small print, typically. Either way the
+  // mail program's own unsubscribe button gets the same link in the headers.
+  const linkInMessage = usesUnsubscribeTag(step.body) || usesUnsubscribeTag(step.subject ?? '')
+  const unsubscribe = campaign.includeUnsubscribe || linkInMessage
+    ? buildUnsubscribe(recipient.address, campaign.id)
+    : null
+
   const person = {
     title: recipient.title,
     firstName: recipient.firstName,
@@ -91,6 +103,7 @@ export async function buildCampaignMessage(ctx: CampaignMessageContext): Promise
     displayName: recipient.displayName,
     organisationName: recipient.organisationName,
     address: recipient.address,
+    unsubscribeUrl: unsubscribe?.url ?? null,
   }
 
   // A chase with no subject of its own answers the first message. One with a
@@ -103,7 +116,26 @@ export async function buildCampaignMessage(ctx: CampaignMessageContext): Promise
     ? personalise(rawSubject, person)
     : replySubject(personalise(rawSubject, person))
 
-  const bodyText = personalise(step.body, person)
+  // The site's palette and its own merge values, wanted by a designed message
+  // and by the site's email design alike - and by nothing else, so only asked
+  // for when one of them is in play.
+  const designed = !isEmptyDesign(step.bodyDesign)
+  const look = designed || campaign.useWrapper
+    ? await Promise.all([getEmailPalette(), getSiteEmailContext()])
+    : null
+  const siteVars: Record<string, string> = look
+    ? { siteName: look[1].siteName, siteUrl: look[1].siteUrl, logoUrl: look[1].logoUrl, year: look[1].year }
+    : {}
+
+  const bodyHtml = designed && look && step.bodyDesign
+    ? renderCampaignDesign({
+        design: step.bodyDesign,
+        person,
+        vars: siteVars,
+        colours: look[0].colours,
+        fonts: look[0].fonts,
+      })
+    : plainTextToHtml(personalise(step.body, person))
 
   const signature = campaign.includeSignature
     ? await renderInboxSignature(inbox)
@@ -111,18 +143,33 @@ export async function buildCampaignMessage(ctx: CampaignMessageContext): Promise
 
   const messageId = ctx.messageId
 
-  const footer = campaign.includeUnsubscribe
-    ? buildFooter(recipient.address, campaign.id, ctx.siteName, ctx.postalAddress)
+  const footer = campaign.includeUnsubscribe && unsubscribe
+    ? { ...unsubscribeFooter(unsubscribe.url, { siteName: ctx.siteName, postalAddress: ctx.postalAddress }) }
     : null
 
-  const body = assembleBody({
-    bodyHtml: plainTextToHtml(bodyText),
+  const assembled = assembleBody({
+    bodyHtml,
     signature,
     // The footer rides in the quoted slot rather than being glued on after,
     // so it lands below the signature in both the markup and the plain text
     // without this file having to know how either of them is put together.
     quoted: footer ? { html: footer.html, text: footer.text } : null,
   })
+
+  // A designed message's plain-text half is read off what was rendered, so it
+  // carries the same words - names filled in - rather than the raw design.
+  const body = {
+    html: campaign.useWrapper && look
+      ? wrapEmailHtml({
+          bodyHtml: assembled.html,
+          subject,
+          vars: siteVars,
+          palette: look[0],
+          layout: await resolveEmailWrapper(campaign.wrapperLayoutId),
+        })
+      : assembled.html,
+    text: designed ? htmlToPlainText(assembled.html) : assembled.text,
+  }
 
   const headers: Record<string, string> = {
     ...outgoingHeaders({
@@ -135,7 +182,7 @@ export async function buildCampaignMessage(ctx: CampaignMessageContext): Promise
         ? { trackingTag: campaignTag(ctx.sendId) }
         : {}),
     }),
-    ...(footer ? unsubscribeHeaders(footer.url) : {}),
+    ...(unsubscribe ? unsubscribeHeaders(unsubscribe.url) : {}),
   }
 
   return {
@@ -163,27 +210,24 @@ export async function buildCampaignMessage(ctx: CampaignMessageContext): Promise
       // to the junk folder, and five thousand copies of a PDF through somebody's
       // own mailbox is a bad afternoon for everybody.
       attachments: [],
-      // Never the site's own tracking. Mailshots stay on Brevo, which counts
-      // them itself and carries the unsubscribe link; a campaign going out over
-      // an SMTP inbox is counted by nobody rather than by a second counter.
-      tracking: false,
+      // The site's own open and click counting, when the site has asked to be
+      // told what became of its mail. Core only ever applies it to mail going
+      // out over a mailbox's own server - over Brevo, Brevo counts and the
+      // tracking tag above brings its answer home - so between the two every
+      // campaign send can say whether it arrived and whether it was read. The
+      // tag doubles as the reference, so an open finds its send row without a
+      // message row in between (see own-tracking.ts).
+      tracking: ctx.trackOpens ? { ref: campaignTag(ctx.sendId) } : false,
     },
   }
 }
 
-function buildFooter(
-  address: string,
-  campaignId: string,
-  siteName: string,
-  postalAddress: string | null,
-): { html: string; text: string; url: string } {
+function buildUnsubscribe(address: string, campaignId: string): { url: string } {
   const siteUrl = getSiteUrlOrNull()
   if (!siteUrl) {
     throw new Error('This site has no web address set, so an unsubscribe link cannot be made.')
   }
-  const url = unsubscribeUrl(siteUrl, address, campaignId)
-  const footer = unsubscribeFooter(url, { siteName, postalAddress })
-  return { ...footer, url }
+  return { url: unsubscribeUrl(siteUrl, address, campaignId) }
 }
 
 /** The Message-ID as a header value, for anything that has to quote it. */

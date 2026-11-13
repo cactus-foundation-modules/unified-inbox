@@ -21,6 +21,7 @@ import {
   settleDelivery,
   stagedUploadKeys,
   threadHasLink,
+  touchThread,
   getMessage,
   getSettings,
   listAttachmentsForMessage,
@@ -508,6 +509,10 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
     await recordEvent(threadId, request.authorUserId, 'woken', { was: 'done', ours: true, messageId: row.id })
   }
 
+  // And to the top of the list, where the newest word on it belongs. See
+  // floatAfterOurSend.
+  if (prepared.threadId) await floatAfterOurSend(threadId, buildSnippet(body.text))
+
   // A colleague has answered, so anybody ELSE'S reply waiting to go out on this
   // conversation is stood down before it answers the same thing twice. Never
   // the sender's own - they knew it was there. Not for a forward: that went to
@@ -787,9 +792,44 @@ export async function retrySend(messageId: string): Promise<SendResult> {
     providerMessageId: cleanMessageId(outcome.providerMessageId),
     tracking: outcome.tracking,
   })
+  // A retry that finally lands is our reply going out, late - so it does what
+  // the first attempt would have done to the conversation had it worked.
+  if (await reopenOnOurReply(message.threadId)) {
+    await recordEvent(message.threadId, null, 'woken', { was: 'done', ours: true, messageId })
+  }
+  await floatAfterOurSend(message.threadId, buildSnippet(sendable.text))
   await copyToSentFolder({ messageId, inbox, identity, sendable, sentAt: new Date() })
 
   return { ok: true, messageId, threadId: message.threadId, alreadySent: false }
+}
+
+/**
+ * Moves a conversation to the top of the list once our email on it has gone.
+ *
+ * The list is ordered on the conversation's last_message_at, and an email
+ * typed here never came back through the collecting pass to move it - the
+ * copy in the Sent folder is turned away as one we already hold - so a reply
+ * left its conversation exactly where the customer's last word had put it,
+ * often several screens down. Texts and module emails already roll it forward
+ * (touchThread); this is the same courtesy for a hand-typed email.
+ *
+ * Stamped with now, not the row's sent_at, because settleDelivery has just
+ * rewritten sent_at to now() in the database and the two would only differ by
+ * the round trip. Subject, inbox and unread are left exactly as they were:
+ * touchThread only fills a blank subject and inbox, and markUnread false
+ * leaves the flag alone.
+ */
+async function floatAfterOurSend(threadId: string, snippet: string): Promise<void> {
+  await touchThread(threadId, {
+    sentAt: new Date(),
+    direction: 'out',
+    preview: snippet || null,
+    subject: null,
+    subjectNormalised: '',
+    markUnread: false,
+    inboxId: null,
+    arrivedNow: false,
+  })
 }
 
 /**

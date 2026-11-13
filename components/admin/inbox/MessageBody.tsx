@@ -69,9 +69,13 @@ type Props = {
    *  already been read. On in the writing box, where the whole point of showing
    *  the message is to see everything that will go out beneath the reply. */
   showQuoted?: boolean
+  /** Sit a message narrower than the frame in the middle of it, rather than
+   *  against the left edge. The full-screen view asks for this; the thread
+   *  keeps every message on the same left edge as the header above it. */
+  centred?: boolean
 }
 
-export function MessageBody({ messageId, hasRemoteImages, ownSender, showQuoted = false }: Props) {
+export function MessageBody({ messageId, hasRemoteImages, ownSender, showQuoted = false, centred = false }: Props) {
   const frame = useRef<HTMLIFrameElement | null>(null)
   const [height, setHeight] = useState(OPENING_HEIGHT)
   const [showImages, setShowImages] = useState(ownSender)
@@ -155,7 +159,7 @@ export function MessageBody({ messageId, hasRemoteImages, ownSender, showQuoted 
     setRestored(true)
   }, [messageId, ownSender])
 
-  const query = [showImages ? 'images=1' : '', showQuoted ? 'quoted=1' : ''].filter(Boolean).join('&')
+  const query = [showImages ? 'images=1' : '', showQuoted ? 'quoted=1' : '', centred ? 'centre=1' : ''].filter(Boolean).join('&')
   const src = `/api/m/unified-inbox/messages/${encodeURIComponent(messageId)}/body${query ? `?${query}` : ''}`
 
   const failed = failedSrc === src

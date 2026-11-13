@@ -1,9 +1,15 @@
 'use client'
 
 import { useState } from 'react'
-import { MERGE_TAGS, MERGE_TAG_HELP } from '@/modules/unified-inbox/lib/campaigns/personalise'
+import dynamic from 'next/dynamic'
+import { LINK_TAGS, MERGE_TAGS, MERGE_TAG_HELP, type MergeTag } from '@/modules/unified-inbox/lib/campaigns/personalise'
+import { designWords, isEmptyDesign, type CampaignDesign } from '@/modules/unified-inbox/lib/campaigns/design'
 import { when, type CampaignDetail, type StepView } from '../api'
 import type { CampaignDraft } from '../draft'
+
+// Loaded the first time somebody opens it: the designer and its stylesheet are
+// a large import for a button most campaigns never press.
+const CampaignDesigner = dynamic(() => import('../CampaignDesigner'), { ssr: false })
 
 // What it says: the message, the chases after it, and how it is signed off.
 //
@@ -31,6 +37,8 @@ export function WhatSection({
   const [testing, setTesting] = useState(false)
   const [testNotice, setTestNotice] = useState('')
   const [testError, setTestError] = useState('')
+  /** Which message the designer is open on, if it is. */
+  const [designing, setDesigning] = useState<number | null>(null)
 
   const update = (index: number, patch: Partial<StepView>) => {
     onChange({ steps: draft.steps.map((s) => s.stepIndex === index ? { ...s, ...patch } : s) })
@@ -46,8 +54,23 @@ export function WhatSection({
     const next = nextIndex
     if (next > 3) return
     onChange({
-      steps: [...draft.steps, { id: `new-${next}`, stepIndex: next, waitDays: 3, subject: null, body: '' }],
+      steps: [...draft.steps, { id: `new-${next}`, stepIndex: next, waitDays: 3, subject: null, body: '', bodyDesign: null }],
     })
+  }
+
+  /** The designer has handed a design back. Its words become the message's
+   *  plain-text reading straight away, so the checks and the preview on this
+   *  page read what was designed rather than what was typed before. */
+  const adoptDesign = (index: number, design: CampaignDesign) => {
+    update(index, { bodyDesign: design, body: designWords(design) })
+    setDesigning(null)
+  }
+
+  /** Back to the plain box. What the design said comes with it as the starting
+   *  text, rather than an empty box. */
+  const switchToTyped = (index: number) => {
+    const step = draft.steps.find((s) => s.stepIndex === index)
+    update(index, { bodyDesign: null, body: step?.bodyDesign ? designWords(step.bodyDesign) : (step?.body ?? '') })
   }
 
   /**
@@ -71,10 +94,13 @@ export function WhatSection({
     })
   }
 
-  const insertTag = (index: number, tag: string) => {
+  const insertTag = (index: number, tag: MergeTag) => {
     const body = draft.steps.find((s) => s.stepIndex === index)?.body ?? ''
-    update(index, { body: `${body}{{${tag}|there}}` })
+    // A link has nothing to fall back on, so it goes in bare.
+    update(index, { body: `${body}${LINK_TAGS.has(tag) ? `{{${tag}}}` : `{{${tag}|there}}`}` })
   }
+
+  const designingStep = designing === null ? null : draft.steps.find((s) => s.stepIndex === designing) ?? null
 
   const sendTest = async () => {
     setTesting(true)
@@ -155,38 +181,90 @@ export function WhatSection({
             )}
           </div>
 
-          <div className="uin-camp-field">
-            <label htmlFor={`body-${entry.stepIndex}`}>Message</label>
-            <textarea
-              id={`body-${entry.stepIndex}`}
-              className="form-control"
-              rows={entry.stepIndex === 0 ? 12 : 7}
-              value={entry.body}
-              readOnly={entry.stepIndex === 0 && firstLocked}
-              onChange={(event) => update(entry.stepIndex, { body: event.target.value })}
-            />
-            {/* Not offered on a message that has gone out. The box beside them
-                is read-only, but the buttons wrote to it anyway - one press
-                added a tag nobody could see or take out again, and the save
-                after it was refused for changing a message people have had. */}
-            <div className="uin-camp-tags" hidden={entry.stepIndex === 0 && firstLocked}>
-              {MERGE_TAGS.map((tag) => (
-                <button
-                  key={tag}
-                  type="button"
-                  className="uin-camp-tag"
-                  title={`${MERGE_TAG_HELP[tag]}. Click to add it at the end.`}
-                  onClick={() => insertTag(entry.stepIndex, tag)}
-                >
-                  {`{{${tag}}}`}
-                </button>
-              ))}
-            </div>
-            <span className="uin-camp-hint">
-              Write <code>{'{{first_name|there}}'}</code> and anybody with no first name on their record gets
-              &ldquo;there&rdquo; instead of a gap.
-            </span>
-          </div>
+          {(() => {
+            const locked = entry.stepIndex === 0 && firstLocked
+            const designed = entry.bodyDesign !== null && entry.bodyDesign !== undefined
+            return (
+              <div className="uin-camp-field">
+                <span className="uin-camp-label" id={`format-${entry.stepIndex}`}>Message</span>
+                {/* Typed, the way a person writes an email - still the standing
+                    advice for a campaign. Designed, for when it should look like
+                    the site: headings, pictures, buttons. */}
+                {!locked && (
+                  <div className="uin-camp-format" role="radiogroup" aria-labelledby={`format-${entry.stepIndex}`}>
+                    <label>
+                      <input
+                        type="radio"
+                        name={`format-${entry.stepIndex}`}
+                        checked={!designed}
+                        onChange={() => switchToTyped(entry.stepIndex)}
+                      />
+                      Typed, like an ordinary email
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name={`format-${entry.stepIndex}`}
+                        checked={designed}
+                        onChange={() => setDesigning(entry.stepIndex)}
+                      />
+                      Designed, with headings, pictures and buttons
+                    </label>
+                  </div>
+                )}
+
+                {designed ? (
+                  <div className="uin-camp-design-card">
+                    <span>
+                      {isEmptyDesign(entry.bodyDesign)
+                        ? 'Nothing in the design yet.'
+                        : `Designed - ${entry.bodyDesign?.content?.length ?? 0} block${entry.bodyDesign?.content?.length === 1 ? '' : 's'}. `
+                          + 'Send yourself a test to see it as it will arrive.'}
+                    </span>
+                    {!locked && (
+                      <button type="button" className="btn btn-secondary btn-sm" onClick={() => setDesigning(entry.stepIndex)}>
+                        Open the designer
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <label className="sr-only" htmlFor={`body-${entry.stepIndex}`}>The message, typed</label>
+                    <textarea
+                      id={`body-${entry.stepIndex}`}
+                      className="form-control"
+                      rows={entry.stepIndex === 0 ? 12 : 7}
+                      value={entry.body}
+                      readOnly={locked}
+                      onChange={(event) => update(entry.stepIndex, { body: event.target.value })}
+                    />
+                    {/* Not offered on a message that has gone out. The box beside them
+                        is read-only, but the buttons wrote to it anyway - one press
+                        added a tag nobody could see or take out again, and the save
+                        after it was refused for changing a message people have had. */}
+                    <div className="uin-camp-tags" hidden={locked}>
+                      {MERGE_TAGS.map((tag) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          className="uin-camp-tag"
+                          title={`${MERGE_TAG_HELP[tag]}. Click to add it at the end.`}
+                          onClick={() => insertTag(entry.stepIndex, tag)}
+                        >
+                          {`{{${tag}}}`}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+                <span className="uin-camp-hint">
+                  Write <code>{'{{first_name|there}}'}</code> and anybody with no first name on their record gets
+                  &ldquo;there&rdquo; instead of a gap. <code>{'{{unsubscribe_url}}'}</code> is their own
+                  unsubscribe link, for a button or a line of small print of your own.
+                </span>
+              </div>
+            )
+          })()}
         </div>
       ))}
 
@@ -222,11 +300,45 @@ export function WhatSection({
             <br />
             <span className="uin-camp-hint">
               Strongly recommended. Marketing email in the UK is expected to carry a way to opt out, and without one
-              people press the spam button instead - which does far more damage. Anybody who has already opted out is
-              left out either way.
+              people press the spam button instead - which does far more damage. Pressing it takes them off every
+              campaign and marks them as not wanting marketing email, on their contact and their account alike.
+              Anybody who has already opted out is left out either way.
             </span>
           </span>
         </label>
+        <label className="uin-camp-check">
+          <input
+            type="checkbox"
+            checked={draft.useWrapper}
+            disabled={detail.wrappers.length === 0 && !draft.useWrapper}
+            onChange={(event) => onChange({ useWrapper: event.target.checked })}
+          />
+          <span>
+            Send it inside the site&rsquo;s email design
+            <br />
+            <span className="uin-camp-hint">
+              {detail.wrappers.length === 0
+                ? 'There is no email design published yet. Build one under Layouts and it can be used here.'
+                : 'The same logo, colours and small print as the site\u2019s own emails. Off by default - a campaign that reads like a person wrote it tends to be read.'}
+            </span>
+          </span>
+        </label>
+        {draft.useWrapper && detail.wrappers.length > 1 && (
+          <div className="uin-camp-field" style={{ maxWidth: '22rem' }}>
+            <label htmlFor="uin-camp-wrapper">Which design</label>
+            <select
+              id="uin-camp-wrapper"
+              className="form-control"
+              value={draft.wrapperLayoutId}
+              onChange={(event) => onChange({ wrapperLayoutId: event.target.value })}
+            >
+              <option value="">The site&rsquo;s default</option>
+              {detail.wrappers.map((wrapper) => (
+                <option key={wrapper.id} value={wrapper.id}>{wrapper.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <label className="uin-camp-check">
           <input
             type="checkbox"
@@ -240,6 +352,15 @@ export function WhatSection({
           </span>
         </label>
       </div>
+
+      {designingStep && (
+        <CampaignDesigner
+          value={designingStep.bodyDesign}
+          title={designingStep.stepIndex === 0 ? 'the message' : `follow-up ${designingStep.stepIndex}`}
+          onDone={(design) => adoptDesign(designingStep.stepIndex, design)}
+          onCancel={() => setDesigning(null)}
+        />
+      )}
 
       {detail.previews.length > 0 && (
         <details className="uin-camp-why">

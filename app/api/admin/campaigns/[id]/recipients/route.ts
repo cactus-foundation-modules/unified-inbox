@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
-import { getCampaign, listRecipients, listSendsForRecipient } from '@/modules/unified-inbox/lib/campaigns/store'
+import {
+  getCampaign,
+  listRecipients,
+  listSendsForRecipient,
+  type EngagementFilter,
+} from '@/modules/unified-inbox/lib/campaigns/store'
 import { RECIPIENT_STATES, type RecipientState } from '@/modules/unified-inbox/lib/campaigns/types'
 
 // The Watch table: everybody on the campaign and where they have got to.
@@ -14,6 +19,9 @@ import { RECIPIENT_STATES, type RecipientState } from '@/modules/unified-inbox/l
 export const maxDuration = 60
 
 const PER_PAGE = 50
+
+/** The "who read it" slices, beside the recipient states. */
+const ENGAGEMENT: readonly EngagementFilter[] = ['opened', 'unopened', 'clicked', 'unsubscribed']
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getSessionFromCookie()
@@ -32,7 +40,12 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const page = Math.max(1, parseInt(url.get('page') ?? '1', 10) || 1)
   const search = (url.get('q') ?? '').trim().slice(0, 200) || null
 
-  const { rows, total } = await listRecipients(id, { state, search, page, perPage: PER_PAGE })
+  const rawEngagement = url.get('engagement')
+  const engagement = rawEngagement && (ENGAGEMENT as readonly string[]).includes(rawEngagement)
+    ? rawEngagement as EngagementFilter
+    : null
+
+  const { rows, total } = await listRecipients(id, { state, engagement, search, page, perPage: PER_PAGE })
 
   // What went to one person, when a row is opened. Only for the page on screen,
   // which is fifty queries at worst and none at all until somebody asks.

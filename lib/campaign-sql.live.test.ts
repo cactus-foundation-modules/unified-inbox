@@ -80,6 +80,7 @@ async function connect(uri: string, extension: Extension): Promise<ExtendedPrism
 }
 
 type Store = typeof import('./campaigns/store')
+type Consent = typeof import('./campaigns/consent')
 
 describe.runIf(shouldRun)('the campaign queries, against a real database', () => {
   let vps: VpsConfig
@@ -87,13 +88,15 @@ describe.runIf(shouldRun)('the campaign queries, against a real database', () =>
   let database: TestDatabase
   let db: ExtendedPrismaClient
   let store: Store
+  let consent: Consent
   let inboxId: string
 
   beforeAll(async () => {
-    if (!process.env.OVH_SERVER || !process.env.OVH_USER || !process.env.OVH_PASSWORD) {
+    if (!process.env.OVH_SERVER || !process.env.OVH_USER
+      || (!process.env.OVH_PASSWORD && !process.env.OVH_SSH_KEY)) {
       throw new Error(
-        'OVH_SERVER, OVH_USER and OVH_PASSWORD are needed for this suite. '
-        + 'Export them from the Deskwell workspace .env - a skip here is a fail.',
+        'OVH_SERVER, OVH_USER and OVH_SSH_KEY (or OVH_PASSWORD) are needed for this suite. '
+        + 'See ~/bin/cactus-db-gates.sh for the values - a skip here is a fail.',
       )
     }
     vps = vpsConfigFromEnv()
@@ -127,6 +130,7 @@ describe.runIf(shouldRun)('the campaign queries, against a real database', () =>
     inboxId = inbox[0]!.id
 
     store = await import('./campaigns/store')
+    consent = await import('./campaigns/consent')
   }, 600_000)
 
   afterAll(async () => {
@@ -277,6 +281,170 @@ describe.runIf(shouldRun)('the campaign queries, against a real database', () =>
     await store.abandonLane(inboxId)
     expect(await store.claimLaneNow(inboxId, now, stale)).toBe(true)
     await store.abandonLane(inboxId)
+  })
+
+  // ---- M077: archive, design, delivery view, opt-outs -----------------------
+
+  it('keeps archived campaigns off the main list, and brings one back when it can send again', async () => {
+    const id = await store.createCampaign({ name: 'Put away', inboxId, createdBy: 'tester' })
+    await store.setCampaignStatus(id, 'done', { finishedAt: new Date() })
+    await store.setCampaignArchived(id, true)
+
+    expect((await store.listCampaigns()).some((c) => c.id === id)).toBe(false)
+    const archived = await store.listCampaigns({ archived: true })
+    expect(archived.find((c) => c.id === id)?.archivedAt).toBeInstanceOf(Date)
+
+    // Topped up and going again: nothing that can send may hide in the archive.
+    await store.setCampaignStatus(id, 'running', { startedAt: new Date() })
+    expect((await store.getCampaign(id))?.archivedAt).toBeNull()
+
+    await store.setCampaignStatus(id, 'stopped')
+    await store.setCampaignArchived(id, true)
+    await store.resetCampaignForNewRun(id)
+    expect((await store.getCampaign(id))?.archivedAt).toBeNull()
+  })
+
+  it('stores the email design option', async () => {
+    const id = await store.createCampaign({ name: 'Wrapped', inboxId, createdBy: 'tester' })
+    expect((await store.getCampaign(id))?.useWrapper).toBe(false)
+    await store.updateCampaign(id, { useWrapper: true, wrapperLayoutId: 'layout-1' })
+    const campaign = await store.getCampaign(id)
+    expect(campaign?.useWrapper).toBe(true)
+    expect(campaign?.wrapperLayoutId).toBe('layout-1')
+  })
+
+  it('keeps a designed message as a document, and a typed one as none', async () => {
+    const id = await store.createCampaign({ name: 'Designed', inboxId, createdBy: 'tester' })
+    const design = { root: { props: {} }, content: [{ type: 'EmailHeading', props: { text: "It's {{first_name|you}}" } }] }
+    await store.replaceSteps(id, [
+      { stepIndex: 0, waitDays: null, subject: 'Hi', body: "It's {{first_name|you}}", bodyDesign: design },
+      { stepIndex: 1, waitDays: 3, subject: null, body: 'Typed', bodyDesign: null },
+    ])
+    const steps = await store.listSteps(id)
+    expect(steps[0]?.bodyDesign).toEqual(design)
+    expect(steps[1]?.bodyDesign).toBeNull()
+  })
+
+  it('reports who it reached, who opened it and who unsubscribed, once each', async () => {
+    const id = await store.createCampaign({ name: 'Watched', inboxId, createdBy: 'tester' })
+    await store.insertRecipients(id, [seed('read@example.co.uk'), seed('unread@example.co.uk'), seed('waiting@example.co.uk')], new Date())
+    const { rows } = await store.listRecipients(id, { state: null, search: null, page: 1, perPage: 50 })
+    const byAddress = (a: string) => rows.find((r) => r.address === a)!
+
+    for (const [address, messageId] of [['read@example.co.uk', 'm-read@x'], ['unread@example.co.uk', 'm-unread@x']] as const) {
+      const recipient = byAddress(address)
+      const sendId = await store.startSend({ campaignId: id, recipientId: recipient.id, stepIndex: 0, address, messageId })
+      await store.settleSend(sendId!, { ok: true, sentAt: new Date(), providerMessageId: null })
+      if (address === 'read@example.co.uk') {
+        await store.recordSendEvent(sendId!, { kind: 'opened', occurredAt: new Date() })
+        await store.recordSendEvent(sendId!, { kind: 'clicked', occurredAt: new Date(), detail: 'https://x' })
+      }
+    }
+    await store.advanceRecipient(byAddress('read@example.co.uk').id, {
+      sentAt: new Date(), messageId: 'm-read@x', subject: 'Hi', nextStepIndex: null, nextDueAt: null,
+    })
+
+    expect(await store.isCampaignMessageId('m-read@x')).toBe(true)
+    expect(await store.isCampaignMessageId('somebody-else@x')).toBe(false)
+
+    // The person who has had everything presses the link in it.
+    await store.unsubscribeEverywhere('READ@example.co.uk', new Date(), { markFinished: true })
+
+    const reach = await store.campaignEngagement(id)
+    expect(reach).toEqual({ sent: 2, delivered: 1, opened: 1, clicked: 1, unsubscribed: 1 })
+
+    const opened = await store.listRecipients(id, { engagement: 'opened', search: null, page: 1, perPage: 50 })
+    expect(opened.rows.map((r) => r.address)).toEqual(['read@example.co.uk'])
+    // An open is proof it arrived, where the mail service never said so.
+    expect(opened.rows[0]?.deliveredAt).toBeInstanceOf(Date)
+    expect(opened.rows[0]?.state).toBe('unsubscribed')
+    expect(opened.rows[0]?.unsubscribedAt).toBeInstanceOf(Date)
+
+    const unopened = await store.listRecipients(id, { engagement: 'unopened', search: null, page: 1, perPage: 50 })
+    expect(unopened.rows.map((r) => r.address)).toEqual(['unread@example.co.uk'])
+    expect(unopened.total).toBe(1)
+
+    const gone = await store.listRecipients(id, { engagement: 'unsubscribed', search: null, page: 1, perPage: 50 })
+    expect(gone.total).toBe(1)
+  })
+
+  it('a suppression added by hand stands down only the people still waiting', async () => {
+    const id = await store.createCampaign({ name: 'By hand', inboxId, createdBy: 'tester' })
+    await store.insertRecipients(id, [seed('hand@example.co.uk')], new Date())
+    const { rows } = await store.listRecipients(id, { state: null, search: null, page: 1, perPage: 50 })
+    await store.advanceRecipient(rows[0]!.id, {
+      sentAt: new Date(), messageId: 'm-hand@x', subject: 'Hi', nextStepIndex: null, nextDueAt: null,
+    })
+    expect(await store.unsubscribeEverywhere('hand@example.co.uk', new Date())).toBe(0)
+    expect((await store.campaignTally(id)).done).toBe(1)
+  })
+
+  it('finds a no to marketing on the card, on an order, and on the account', async () => {
+    // No shop on this database yet: the order half has to step aside quietly.
+    expect(await consent.hasOptedOutOfMarketing('nobody@example.co.uk')).toBe(false)
+
+    await db.$executeRawUnsafe(
+      `INSERT INTO "uin_people" ("display_name", "primary_email", "marketing_consent", "marketing_consent_at")
+       VALUES ('Card No', 'card@example.co.uk', false, now())`,
+    )
+    expect(await consent.hasOptedOutOfMarketing('Card@Example.co.uk')).toBe(true)
+
+    await db.$executeRawUnsafe(
+      `INSERT INTO "Member" ("id", "email", "username", "updatedAt", "marketingConsent")
+       VALUES ('m-acc', 'account@example.co.uk', 'account', now(), false)`,
+    )
+    expect(await consent.hasOptedOutOfMarketing('account@example.co.uk')).toBe(true)
+
+    // A shop's orders, with the column the real one has. Read through to_jsonb,
+    // so this is the same shape the live query meets.
+    await db.$executeRawUnsafe(
+      `CREATE TABLE "shp_orders" ("id" TEXT PRIMARY KEY, "customer_email" TEXT, "created_at" TIMESTAMP(3) NOT NULL, "marketing_consent" BOOLEAN)`,
+    )
+    await db.$executeRawUnsafe(
+      `INSERT INTO "shp_orders" VALUES
+         ('o1', 'order@example.co.uk', now() - interval '2 days', false),
+         ('o2', 'order@example.co.uk', now() - interval '1 day', NULL),
+         ('o3', 'changed@example.co.uk', now() - interval '9 days', false)`,
+    )
+    // A later order that never asked does not hide an earlier no.
+    expect(await consent.hasOptedOutOfMarketing('order@example.co.uk')).toBe(true)
+
+    // A yes on the card given after the checkout's no wins.
+    await db.$executeRawUnsafe(
+      `INSERT INTO "uin_people" ("display_name", "primary_email", "marketing_consent", "marketing_consent_at")
+       VALUES ('Changed Mind', 'changed@example.co.uk', true, now())`,
+    )
+    expect(await consent.hasOptedOutOfMarketing('changed@example.co.uk')).toBe(false)
+
+    // And the audience build sees the order's no for somebody whose card says
+    // nothing at all.
+    await db.$executeRawUnsafe(
+      `INSERT INTO "uin_people" ("display_name", "primary_email") VALUES ('Order Only', 'order@example.co.uk')`,
+    )
+    const candidates = await store.listAudienceCandidates([])
+    expect(candidates.find((c) => c.address === 'order@example.co.uk')?.marketingConsent).toBe(false)
+    expect(candidates.find((c) => c.address === 'changed@example.co.uk')?.marketingConsent).toBe(true)
+  })
+
+  it('writes an unsubscribe onto every card holding the address, and onto the account', async () => {
+    await db.$executeRawUnsafe(
+      `INSERT INTO "uin_people" ("display_name", "primary_email", "marketing_consent", "marketing_consent_at")
+       VALUES ('Leaving', 'leaving@example.co.uk', true, now() - interval '1 day')`,
+    )
+    await db.$executeRawUnsafe(
+      `INSERT INTO "Member" ("id", "email", "username", "updatedAt", "marketingConsent")
+       VALUES ('m-leaving', 'Leaving@example.co.uk', 'leaving', now(), true)`,
+    )
+    expect(await consent.recordOptOutEverywhere('leaving@example.co.uk', new Date(), 'Unsubscribed by email link')).toBe(1)
+    const card = await db.$queryRawUnsafe<{ marketing_consent: boolean; marketing_consent_source: string }[]>(
+      `SELECT "marketing_consent", "marketing_consent_source" FROM "uin_people" WHERE "primary_email" = 'leaving@example.co.uk'`,
+    )
+    expect(card[0]).toEqual({ marketing_consent: false, marketing_consent_source: 'Unsubscribed by email link' })
+    const member = await db.$queryRawUnsafe<{ marketingConsent: boolean }[]>(
+      `SELECT "marketingConsent" FROM "Member" WHERE "id" = 'm-leaving'`,
+    )
+    expect(member[0]?.marketingConsent).toBe(false)
+    expect(await consent.hasOptedOutOfMarketing('leaving@example.co.uk')).toBe(true)
   })
 })
 

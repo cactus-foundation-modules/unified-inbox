@@ -17,6 +17,8 @@ import type {
 } from './types'
 import { RECIPIENT_STATES } from './types'
 import type { AudienceCandidate } from './audience'
+import { effectiveConsent, outsideAnswersFor } from './consent'
+import type { CampaignDesign } from './design'
 import { OPEN_WINDOW } from './window'
 
 // ---------------------------------------------------------------------------
@@ -75,6 +77,9 @@ function mapCampaign(r: Record<string, unknown>): Campaign {
     updatedAt: r.updated_at as Date,
     startedAt: (r.started_at as Date | null) ?? null,
     finishedAt: (r.finished_at as Date | null) ?? null,
+    useWrapper: !!r.use_wrapper,
+    wrapperLayoutId: (r.wrapper_layout_id as string | null) ?? null,
+    archivedAt: (r.archived_at as Date | null) ?? null,
   }
 }
 
@@ -86,6 +91,9 @@ function mapStep(r: Record<string, unknown>): CampaignStep {
     waitDays: r.wait_days === null || r.wait_days === undefined ? null : Number(r.wait_days),
     subject: (r.subject as string | null) ?? null,
     body: (r.body as string | null) ?? '',
+    bodyDesign: r.body_design && typeof r.body_design === 'object'
+      ? r.body_design as CampaignDesign
+      : null,
   }
 }
 
@@ -161,9 +169,15 @@ const CAMPAIGN_SELECT = Prisma.sql`
 
 // ---- campaigns ------------------------------------------------------------
 
-export async function listCampaigns(): Promise<Campaign[]> {
+export async function listCampaigns(options: { archived?: boolean } = {}): Promise<Campaign[]> {
+  // The main list and the Archived one never overlap: archiving is putting a
+  // finished campaign somewhere other than the list of live ones.
+  const where = options.archived
+    ? Prisma.sql`WHERE c."archived_at" IS NOT NULL`
+    : Prisma.sql`WHERE c."archived_at" IS NULL`
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     ${CAMPAIGN_SELECT}
+    ${where}
      ORDER BY
        -- Anything still going first, whatever its age: it is the thing somebody
        -- opened this screen to look at.
@@ -215,6 +229,8 @@ export type CampaignPatch = {
   copyToSent?: boolean
   startAt?: Date | null
   excludeColleagues?: boolean
+  useWrapper?: boolean
+  wrapperLayoutId?: string | null
   window?: Partial<SendWindow>
 }
 
@@ -227,6 +243,8 @@ export async function updateCampaign(id: string, patch: CampaignPatch): Promise<
   if (patch.copyToSent !== undefined) sets.push(Prisma.sql`"copy_to_sent" = ${patch.copyToSent}`)
   if (patch.startAt !== undefined) sets.push(Prisma.sql`"start_at" = ${patch.startAt}`)
   if (patch.excludeColleagues !== undefined) sets.push(Prisma.sql`"exclude_colleagues" = ${patch.excludeColleagues}`)
+  if (patch.useWrapper !== undefined) sets.push(Prisma.sql`"use_wrapper" = ${patch.useWrapper}`)
+  if (patch.wrapperLayoutId !== undefined) sets.push(Prisma.sql`"wrapper_layout_id" = ${patch.wrapperLayoutId}`)
 
   const w = patch.window
   if (w) {
@@ -274,6 +292,9 @@ export async function setCampaignStatus(
            "pause_reason" = ${running ? null : (options?.pauseReason ?? null)},
            "started_at" = COALESCE("started_at", ${options?.startedAt ?? null}),
            "finished_at" = ${options?.finishedAt ?? null},
+           -- A campaign that can send again is back on the main list: nothing
+           -- that is going out may be hidden in the Archived tab.
+           "archived_at" = CASE WHEN ${status}::text IN ('done', 'stopped') THEN "archived_at" ELSE NULL END,
            "updated_at" = now()
      WHERE "id" = ${id}
   `
@@ -295,6 +316,7 @@ export async function resetCampaignForNewRun(id: string): Promise<void> {
   await prisma.$executeRaw`
     UPDATE "uin_campaigns"
        SET "status" = 'draft',
+           "archived_at" = NULL,
            "pause_kind" = NULL,
            "pause_reason" = NULL,
            "started_at" = NULL,
@@ -320,6 +342,17 @@ export async function setCampaignCategories(id: string, categoryIds: string[]): 
 export async function markCampaignTested(id: string, at: Date): Promise<void> {
   await prisma.$executeRaw`
     UPDATE "uin_campaigns" SET "tested_at" = ${at}, "updated_at" = now() WHERE "id" = ${id}
+  `
+}
+
+/** Put away, or brought back. Only the stamp moves; nothing about what was
+ *  sent, to whom, or what became of it is touched. */
+export async function setCampaignArchived(id: string, archived: boolean): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "uin_campaigns"
+       SET "archived_at" = ${archived ? new Date() : null},
+           "updated_at" = now()
+     WHERE "id" = ${id}
   `
 }
 
@@ -349,14 +382,23 @@ export async function listSteps(campaignId: string): Promise<CampaignStep[]> {
  */
 export async function replaceSteps(
   campaignId: string,
-  steps: Array<{ stepIndex: number; waitDays: number | null; subject: string | null; body: string }>,
+  steps: Array<{
+    stepIndex: number
+    waitDays: number | null
+    subject: string | null
+    body: string
+    bodyDesign?: CampaignDesign | null
+  }>,
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`DELETE FROM "uin_campaign_steps" WHERE "campaign_id" = ${campaignId}`
     for (const step of steps) {
+      // Through a text parameter and a cast: a raw query has no other way to
+      // say "this is a JSON document" rather than a string.
+      const design = step.bodyDesign ? JSON.stringify(step.bodyDesign) : null
       await tx.$executeRaw`
-        INSERT INTO "uin_campaign_steps" ("campaign_id", "step_index", "wait_days", "subject", "body")
-        VALUES (${campaignId}, ${step.stepIndex}, ${step.waitDays}, ${step.subject}, ${step.body})
+        INSERT INTO "uin_campaign_steps" ("campaign_id", "step_index", "wait_days", "subject", "body", "body_design")
+        VALUES (${campaignId}, ${step.stepIndex}, ${step.waitDays}, ${step.subject}, ${step.body}, ${design}::jsonb)
       `
     }
   })
@@ -394,6 +436,7 @@ export async function listAudienceCandidates(categoryIds: string[]): Promise<Aud
            p."display_name",
            p."primary_email" AS address,
            p."marketing_consent",
+           p."marketing_consent_at",
            o."name"      AS organisation_name
       FROM "uin_people" p
       LEFT JOIN "uin_organisations" o ON o."id" = p."organisation_id"
@@ -403,16 +446,34 @@ export async function listAudienceCandidates(categoryIds: string[]): Promise<Aud
        ${filter}
      ORDER BY p."last_name" ASC NULLS LAST, p."first_name" ASC NULLS LAST, p."id" ASC
   `
-  return rows.map((r) => ({
-    personId: r.person_id as string,
-    address: (r.address as string | null) ?? '',
-    title: (r.title as string | null) ?? null,
-    firstName: (r.first_name as string | null) ?? null,
-    lastName: (r.last_name as string | null) ?? null,
-    displayName: (r.display_name as string | null) ?? null,
-    organisationName: (r.organisation_name as string | null) ?? null,
-    marketingConsent: typeof r.marketing_consent === 'boolean' ? r.marketing_consent : null,
-  }))
+  // Their answer about marketing, from every place they may have given one -
+  // the card, their latest order, their account - so an opt-out made at the
+  // checkout keeps them off a mailshot to the Customers list even where the
+  // order never reached their card. See consent.ts.
+  const { orders, accounts } = await outsideAnswersFor(
+    rows.map((r) => (r.address as string | null) ?? ''),
+  )
+  return rows.map((r) => {
+    const address = (r.address as string | null) ?? ''
+    const key = normaliseAddress(address)
+    const card = typeof r.marketing_consent === 'boolean'
+      ? { consent: r.marketing_consent, at: (r.marketing_consent_at as Date | null) ?? null }
+      : null
+    return {
+      personId: r.person_id as string,
+      address,
+      title: (r.title as string | null) ?? null,
+      firstName: (r.first_name as string | null) ?? null,
+      lastName: (r.last_name as string | null) ?? null,
+      displayName: (r.display_name as string | null) ?? null,
+      organisationName: (r.organisation_name as string | null) ?? null,
+      marketingConsent: effectiveConsent({
+        card,
+        order: orders.get(key) ?? null,
+        account: accounts.get(key) ?? null,
+      }),
+    }
+  })
 }
 
 /** Which of these addresses are on the suppression list. Asked in one query
@@ -900,6 +961,23 @@ export async function settleSend(
   `
 }
 
+/**
+ * Whether this Message-ID is one a campaign sent.
+ *
+ * Asked by the collecting pass of every message it finds in a Sent folder: a
+ * campaign that files its copies there comes back a message at a time on the
+ * next collection, and each one is a conversation of its own. They arrive done
+ * rather than open, so a mailshot to two hundred customers does not leave two
+ * hundred conversations sitting in the Open pile for somebody to clear by hand.
+ * A reply from the customer still opens it, as any reply does.
+ */
+export async function isCampaignMessageId(messageId: string): Promise<boolean> {
+  const rows = await prisma.$queryRaw<{ one: number }[]>`
+    SELECT 1 AS one FROM "uin_campaign_sends" WHERE "message_id" = ${messageId} LIMIT 1
+  `
+  return rows.length > 0
+}
+
 export async function listSendsForRecipient(recipientId: string): Promise<CampaignSend[]> {
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     SELECT * FROM "uin_campaign_sends"
@@ -1021,33 +1099,138 @@ export async function sweepReplies(campaignId: string, limit: number): Promise<n
 
 // ---- the Watch table ------------------------------------------------------
 
+/** One person on the campaign with what became of what they were sent: the
+ *  first moment each thing happened across every step they have had. */
+export type RecipientProgress = CampaignRecipient & {
+  firstSentAt: Date | null
+  /** The mail service said it arrived - or, where it never says (mail sent
+   *  over a mailbox's own server), they opened it or followed a link in it,
+   *  which nobody can do to an email that did not arrive. */
+  deliveredAt: Date | null
+  openedAt: Date | null
+  clickedAt: Date | null
+}
+
+/** Which slice of the list, beyond the recipient states. */
+export type EngagementFilter = 'opened' | 'unopened' | 'clicked' | 'unsubscribed'
+
 export async function listRecipients(
   campaignId: string,
-  filters: { state?: RecipientState | null; search?: string | null; page: number; perPage: number },
-): Promise<{ rows: CampaignRecipient[]; total: number }> {
-  const conditions: Prisma.Sql[] = [Prisma.sql`"campaign_id" = ${campaignId}`]
-  if (filters.state) conditions.push(Prisma.sql`"state" = ${filters.state}`)
+  filters: {
+    state?: RecipientState | null
+    engagement?: EngagementFilter | null
+    search?: string | null
+    page: number
+    perPage: number
+  },
+): Promise<{ rows: RecipientProgress[]; total: number }> {
+  const conditions: Prisma.Sql[] = [Prisma.sql`r."campaign_id" = ${campaignId}`]
+  if (filters.state) conditions.push(Prisma.sql`r."state" = ${filters.state}`)
   if (filters.search) {
     const like = `%${filters.search.toLowerCase()}%`
     conditions.push(Prisma.sql`(
-      lower("address") LIKE ${like}
-      OR lower(COALESCE("display_name", '')) LIKE ${like}
-      OR lower(COALESCE("first_name", '') || ' ' || COALESCE("last_name", '')) LIKE ${like}
-      OR lower(COALESCE("organisation_name", '')) LIKE ${like}
+      lower(r."address") LIKE ${like}
+      OR lower(COALESCE(r."display_name", '')) LIKE ${like}
+      OR lower(COALESCE(r."first_name", '') || ' ' || COALESCE(r."last_name", '')) LIKE ${like}
+      OR lower(COALESCE(r."organisation_name", '')) LIKE ${like}
     )`)
   }
+  switch (filters.engagement) {
+    case 'opened':
+      conditions.push(Prisma.sql`s."opened_at" IS NOT NULL`)
+      break
+    case 'unopened':
+      conditions.push(Prisma.sql`s."first_sent_at" IS NOT NULL AND s."opened_at" IS NULL`)
+      break
+    case 'clicked':
+      conditions.push(Prisma.sql`s."clicked_at" IS NOT NULL`)
+      break
+    case 'unsubscribed':
+      conditions.push(Prisma.sql`r."unsubscribed_at" IS NOT NULL`)
+      break
+    default:
+      break
+  }
   const where = Prisma.sql`WHERE ${Prisma.join(conditions, ' AND ')}`
+  // Every step they have had, folded into one line per person. LATERAL so it
+  // is one index lookup per row on the page rather than a pass over every send
+  // the campaign has made.
+  const sends = Prisma.sql`
+    LEFT JOIN LATERAL (
+      SELECT min(x."sent_at")      AS first_sent_at,
+             min(x."delivered_at") AS delivered_at,
+             min(x."opened_at")    AS opened_at,
+             min(x."clicked_at")   AS clicked_at
+        FROM "uin_campaign_sends" x
+       WHERE x."recipient_id" = r."id"
+    ) s ON TRUE`
 
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT * FROM "uin_campaign_recipients"
+    SELECT r.*, s."first_sent_at", s."delivered_at", s."opened_at", s."clicked_at"
+      FROM "uin_campaign_recipients" r
+      ${sends}
     ${where}
-     ORDER BY "last_sent_at" DESC NULLS LAST, "created_at" ASC
+     ORDER BY r."last_sent_at" DESC NULLS LAST, r."created_at" ASC
      LIMIT ${filters.perPage} OFFSET ${(filters.page - 1) * filters.perPage}
   `
   const counted = await prisma.$queryRaw<{ count: bigint }[]>`
-    SELECT COUNT(*)::bigint AS count FROM "uin_campaign_recipients" ${where}
+    SELECT COUNT(*)::bigint AS count
+      FROM "uin_campaign_recipients" r
+      ${sends}
+    ${where}
   `
-  return { rows: rows.map(mapRecipient), total: Number(counted[0]?.count ?? 0) }
+  return {
+    rows: rows.map((r) => {
+      const openedAt = (r.opened_at as Date | null) ?? null
+      const clickedAt = (r.clicked_at as Date | null) ?? null
+      return {
+        ...mapRecipient(r),
+        firstSentAt: (r.first_sent_at as Date | null) ?? null,
+        deliveredAt: (r.delivered_at as Date | null) ?? openedAt ?? clickedAt,
+        openedAt,
+        clickedAt,
+      }
+    }),
+    total: Number(counted[0]?.count ?? 0),
+  }
+}
+
+/** How many people it reached, read it, followed a link and left the list -
+ *  each person counted once, however many steps they were sent. */
+export type CampaignEngagement = {
+  sent: number
+  delivered: number
+  opened: number
+  clicked: number
+  unsubscribed: number
+}
+
+export async function campaignEngagement(campaignId: string): Promise<CampaignEngagement> {
+  const rows = await prisma.$queryRaw<Record<string, bigint>[]>`
+    SELECT COUNT(*) FILTER (WHERE s."first_sent_at" IS NOT NULL)::bigint AS sent,
+           COUNT(*) FILTER (WHERE COALESCE(s."delivered_at", s."opened_at", s."clicked_at") IS NOT NULL)::bigint AS delivered,
+           COUNT(*) FILTER (WHERE s."opened_at" IS NOT NULL)::bigint AS opened,
+           COUNT(*) FILTER (WHERE s."clicked_at" IS NOT NULL)::bigint AS clicked,
+           COUNT(*) FILTER (WHERE r."unsubscribed_at" IS NOT NULL)::bigint AS unsubscribed
+      FROM "uin_campaign_recipients" r
+      LEFT JOIN LATERAL (
+        SELECT min(x."sent_at")      AS first_sent_at,
+               min(x."delivered_at") AS delivered_at,
+               min(x."opened_at")    AS opened_at,
+               min(x."clicked_at")   AS clicked_at
+          FROM "uin_campaign_sends" x
+         WHERE x."recipient_id" = r."id"
+      ) s ON TRUE
+     WHERE r."campaign_id" = ${campaignId}
+  `
+  const r = rows[0] ?? {}
+  return {
+    sent: Number(r.sent ?? 0),
+    delivered: Number(r.delivered ?? 0),
+    opened: Number(r.opened ?? 0),
+    clicked: Number(r.clicked ?? 0),
+    unsubscribed: Number(r.unsubscribed ?? 0),
+  }
 }
 
 /** Why people were left out, grouped, for the Who step. Counted in the
@@ -1140,16 +1323,41 @@ export async function removeSuppression(id: string): Promise<void> {
  * one mailshot, and a customer who unsubscribes on Monday and gets a different
  * campaign on Tuesday presses the spam button instead.
  */
-export async function unsubscribeEverywhere(address: string, at: Date): Promise<number> {
+export async function unsubscribeEverywhere(
+  address: string,
+  at: Date,
+  options: { markFinished?: boolean } = {},
+): Promise<number> {
+  const normalised = normaliseAddress(address)
+  if (!options.markFinished) {
+    return await prisma.$executeRaw`
+      UPDATE "uin_campaign_recipients"
+         SET "state" = 'unsubscribed',
+             "unsubscribed_at" = ${at},
+             "due_at" = NULL,
+             "claimed_at" = NULL,
+             "updated_at" = now()
+       WHERE lower("address") = ${normalised}
+         AND "state" IN ('queued', 'sending')
+    `
+  }
+  // The person themselves pressing the link. Anybody still waiting is stood
+  // down, and anybody who has had everything - the usual case, since the link
+  // is in an email they have already received - is marked too, so the
+  // campaign they pressed it in says so beside their name. A reply is left
+  // reading as a reply: that conversation happened, and the date beside it
+  // still records the unsubscribe. The CASEs read the row as it was.
   return await prisma.$executeRaw`
     UPDATE "uin_campaign_recipients"
-       SET "state" = 'unsubscribed',
-           "unsubscribed_at" = ${at},
-           "due_at" = NULL,
-           "claimed_at" = NULL,
+       SET "state" = CASE WHEN "state" IN ('queued', 'sending', 'done')
+                          THEN 'unsubscribed' ELSE "state" END,
+           "unsubscribed_at" = COALESCE("unsubscribed_at", ${at}),
+           "due_at" = CASE WHEN "state" IN ('queued', 'sending') THEN NULL ELSE "due_at" END,
+           "claimed_at" = CASE WHEN "state" IN ('queued', 'sending') THEN NULL ELSE "claimed_at" END,
            "updated_at" = now()
-     WHERE lower("address") = ${normaliseAddress(address)}
-       AND "state" IN ('queued', 'sending')
+     WHERE lower("address") = ${normalised}
+       AND "state" IN ('queued', 'sending', 'done', 'replied')
+       AND "unsubscribed_at" IS NULL
   `
 }
 

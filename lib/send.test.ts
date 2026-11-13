@@ -32,6 +32,7 @@ const db = vi.hoisted(() => ({
   reopenForRetry: vi.fn(),
   // Nothing was marked done unless a test says it was, so nothing is reopened.
   reopenOnOurReply: vi.fn(async (): Promise<boolean> => false),
+  touchThread: vi.fn(async (): Promise<void> => undefined),
   getMessage: vi.fn(),
   listAttachmentsForMessage: vi.fn(),
   getSettings: vi.fn(),
@@ -265,6 +266,46 @@ describe('sendMessage - something finished with, answered', () => {
     expect(db.reopenOnOurReply).not.toHaveBeenCalled()
     // Nothing can be waiting on a conversation that did not exist.
     expect(standDown.standDownScheduled).not.toHaveBeenCalled()
+  })
+})
+
+describe('sendMessage - to the top of the list', () => {
+  // The list is ordered on the conversation's newest message, and our own
+  // reply never comes back through the collecting pass to move it - so a
+  // conversation answered from here used to stay wherever the customer's last
+  // word had left it.
+
+  it('rolls the conversation forward to now, as ours, once the email has gone', async () => {
+    const before = Date.now()
+    await sendMessage(baseRequest())
+
+    expect(db.touchThread).toHaveBeenCalledTimes(1)
+    const [threadId, data] = db.touchThread.mock.calls[0] as unknown as [string, {
+      sentAt: Date; direction: string; markUnread: boolean; subject: string | null; inboxId: string | null
+    }]
+    expect(threadId).toBe('thread-1')
+    expect(data.direction).toBe('out')
+    expect(data.sentAt.getTime()).toBeGreaterThanOrEqual(before)
+    // Leaves the title, the address and the unread flag exactly as they were.
+    expect(data.markUnread).toBe(false)
+    expect(data.subject).toBeNull()
+    expect(data.inboxId).toBeNull()
+  })
+
+  it('does not move anything when the email did not go', async () => {
+    transport.deliver.mockResolvedValue({ ok: false, error: 'The mail server refused it.' })
+
+    await sendMessage(baseRequest())
+
+    expect(db.touchThread).not.toHaveBeenCalled()
+  })
+
+  it('does not touch a conversation this send has just started', async () => {
+    db.createOutboundThread.mockResolvedValue('thread-new')
+
+    await sendMessage(baseRequest({ threadId: undefined, inboxId: 'inbox-1', mode: 'new', to: ['jane@customer.com'], subject: 'Chairs' }))
+
+    expect(db.touchThread).not.toHaveBeenCalled()
   })
 })
 

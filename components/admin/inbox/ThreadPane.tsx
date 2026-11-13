@@ -1157,6 +1157,15 @@ export function ThreadPane({
                     /* Their reply, filed here because somebody texted them from
                        this conversation. The route checks the rest. */
                     canMoveToPhone={canReply && sideText && message.direction === 'in'}
+                    fullScreen={{
+                      id: message.id,
+                      from: message.fromName || message.fromAddress || message.fromPhone || 'Unknown sender',
+                      subject: message.subject ?? thread.subject,
+                      hasHtml: message.hasHtml,
+                      hasRemoteImages: message.remoteImages > 0,
+                      ownSender: message.ownSender,
+                      bodyText: message.bodyText,
+                    }}
                     base={base}
                     params={params}
                   />

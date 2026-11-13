@@ -1,6 +1,7 @@
 import { getSiteUrlOrNull } from '@/lib/config/env'
 import { isEncryptionKeyUsable } from '@/lib/crypto/secrets'
-import { unknownTags, tagsWithoutFallback } from './personalise'
+import { unknownTags, tagsWithoutFallback, usesUnsubscribeTag } from './personalise'
+import { isEmptyDesign } from './design'
 import { checkDomainRecords, domainForPreflight, type PreflightFinding } from './preflight'
 import { isAllDay } from './window'
 import type { Campaign, CampaignStep, CampaignTally } from './types'
@@ -51,13 +52,15 @@ export async function assessReadiness(input: {
     problems.push('Write the message.')
   } else {
     if (!first.subject?.trim()) problems.push('Give the message a subject.')
-    if (!first.body.trim()) problems.push('The message has nothing in it.')
+    // A designed message made only of pictures has no words and is still a
+    // message.
+    if (!first.body.trim() && isEmptyDesign(first.bodyDesign)) problems.push('The message has nothing in it.')
   }
 
   for (const step of steps) {
     const what = step.stepIndex === 0 ? 'the message' : `follow-up ${step.stepIndex}`
     if (step.stepIndex > 0) {
-      if (!step.body.trim()) problems.push(`There is nothing written in ${what}.`)
+      if (!step.body.trim() && isEmptyDesign(step.bodyDesign)) problems.push(`There is nothing written in ${what}.`)
       if (!step.waitDays) problems.push(`Say how many days to wait before ${what} goes out.`)
     }
     const bad = [...unknownTags(step.subject ?? ''), ...unknownTags(step.body)]
@@ -84,6 +87,23 @@ export async function assessReadiness(input: {
   }
 
   // ---- being able to stop it ----
+  //
+  // The link can ride in the footer, or in the message itself through
+  // {{unsubscribe_url}} - and every step needs one, since a chase is an email
+  // too. Either way it has to be possible to make: a web address to point it
+  // at, and a key to sign it with.
+  const linkInEveryStep = steps.length > 0
+    && steps.every((s) => usesUnsubscribeTag(s.body) || usesUnsubscribeTag(s.subject ?? ''))
+  const linkAnywhere = steps.some((s) => usesUnsubscribeTag(s.body) || usesUnsubscribeTag(s.subject ?? ''))
+  // With the footer on, the same two checks are made just below.
+  if (linkAnywhere && !campaign.includeUnsubscribe) {
+    if (!getSiteUrlOrNull()) {
+      problems.push('This site has no web address set, so the unsubscribe link cannot be made.')
+    }
+    if (!isEncryptionKeyUsable()) {
+      problems.push('This site is missing its encryption key, so unsubscribe links cannot be signed.')
+    }
+  }
   if (campaign.includeUnsubscribe) {
     if (!input.postalAddress?.trim()) {
       problems.push(
@@ -97,6 +117,14 @@ export async function assessReadiness(input: {
     if (!isEncryptionKeyUsable()) {
       problems.push('This site is missing its encryption key, so unsubscribe links cannot be signed.')
     }
+  } else if (linkInEveryStep) {
+    // Their own link is in every message, which does the footer's job. Nothing
+    // to say.
+  } else if (linkAnywhere) {
+    warnings.push(
+      'The unsubscribe footer is switched off, and not every message carries {{unsubscribe_url}} itself. '
+      + 'Put it in each follow-up too, or switch the footer back on.',
+    )
   } else {
     warnings.push(
       'The unsubscribe footer is switched off. Marketing email in the UK is expected to carry a way to opt out, '

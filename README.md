@@ -74,7 +74,10 @@ the same human collapse into one story.
 - **On a phone or a tablet.** The same mail program, one pane at a time: the
   rail becomes a bar along the top that says where you are, and pressing it
   slides the whole list of places in from the left. Dialogs and menus come up
-  from the bottom edge, and everything is sized for a finger.
+  from the bottom edge, and everything is sized for a finger. The page holds
+  still rather than zooming in on you, and the dots on any message offer
+  **Open full screen**, which gives that one message the whole phone - a
+  message narrower than the screen sits in the middle of it.
 - **Reading and replying.** One screen: your addresses along the top as tabs,
   where each conversation stands underneath them - open, snoozed, done or the
   lot - the conversations below, and whichever one you have open beside them.

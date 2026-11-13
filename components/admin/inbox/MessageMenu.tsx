@@ -7,6 +7,7 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { Dropdown, MenuItem } from './Dropdown'
 import { useComposerOpen } from './ComposerOpen'
 import { MoreIcon, ReplyIcon } from './icons'
+import { MessageFullScreen, type FullScreenMessage } from './MessageFullScreen'
 import { SendTextDialog } from './SendTextDialog'
 
 // Answering a message, from the message - and the two things that can be done
@@ -116,11 +117,14 @@ type Props = {
    *  string, so this is the whole of what "which conversation is open" means. */
   base: string
   params: Record<string, string>
+  /** The message itself, for "Open full screen" - offered on a phone only,
+   *  where a message otherwise gets what is left under the pinned header. */
+  fullScreen: FullScreenMessage
 }
 
 export function MessageMenu({
   threadId, messageId, actOn, canReply, canReplyAll, canForward, alsoByEmail, chatLabel, chatEnded, noReply, knownSubject,
-  canDeleteHere, canSplit, textTo, isText, canMoveToPhone, base, params,
+  canDeleteHere, canSplit, textTo, isText, canMoveToPhone, base, params, fullScreen,
 }: Props) {
   const router = useRouter()
   const { toggle } = useComposerOpen()
@@ -131,6 +135,7 @@ export function MessageMenu({
   const [subjectDraft, setSubjectDraft] = useState('')
   const [subjectError, setSubjectError] = useState('')
   const [error, setError] = useState('')
+  const [enlarged, setEnlarged] = useState(false)
 
   /** Back to unread, so it is still waiting tomorrow. A conversation-wide
    *  thing said from a message, which is how mail programs say it: there is no
@@ -257,6 +262,10 @@ export function MessageMenu({
         width={230}
         disabled={busy}
       >
+        {/* First, because on a phone it is the one most reached for. Drawn
+            on a phone only (inbox.css): anywhere wider the message already has
+            a pane of its own to be read in. */}
+        <MenuItem className="uin-menu-item-phone" onClick={() => setEnlarged(true)}>Open full screen</MenuItem>
         {canReplyAll && !isText && <MenuItem onClick={() => toggle('reply-all', messageId)}>Reply all</MenuItem>}
         {canForward && !isText && <MenuItem onClick={() => toggle('forward', messageId)}>Forward</MenuItem>}
         {textTo && chatLabel === null && (
@@ -328,6 +337,8 @@ export function MessageMenu({
           {ReplyIcon}
         </button>
       )}
+
+      <MessageFullScreen message={fullScreen} open={enlarged} onClose={() => setEnlarged(false)} />
 
       {textTo && (
         <SendTextDialog
