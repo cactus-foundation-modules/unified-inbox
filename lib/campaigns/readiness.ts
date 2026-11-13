@@ -107,7 +107,7 @@ export async function assessReadiness(input: {
   if (campaign.includeUnsubscribe) {
     if (!input.postalAddress?.trim()) {
       problems.push(
-        'The footer needs your business name and address before this can go out. '
+        'The footer needs your business address before this can go out. '
         + 'Add it under Settings, Unified Inbox, Campaigns.',
       )
     }

@@ -50,9 +50,6 @@
 .uin-page {
   max-width: 100%;
   overflow-x: clip;
-  /* Pans, never zooms - see NoZoom.tsx for why, and for the two other halves
-     of it that this alone cannot do on iOS. */
-  touch-action: pan-x pan-y;
 }
 
 /* ---- the frame the whole screen lives in -------------------------------- */
@@ -5720,14 +5717,10 @@ div.uin-camp-stat { cursor: default; }
 }
 
 /* ---- one message, full screen ------------------------------------------- */
-/* "Open full screen" on a message's dots. A phone's only: anywhere wider the
-   message already has a pane of its own. See MessageFullScreen. Put on the body
+/* "Open full screen" on a message's dots, on every screen. See
+   MessageFullScreen. Put on the body
    through a portal, so nothing here can lean on .uin-page's own variables -
    which is why it uses core's tokens only. */
-.uin-menu-item.uin-menu-item-phone { display: none; }
-@media (max-width: 768px) {
-  .uin-menu-item.uin-menu-item-phone { display: flex; }
-}
 .uin-fullmsg {
   position: fixed;
   inset: 0;
@@ -5789,3 +5782,23 @@ div.uin-camp-stat { cursor: default; }
 /* Plain text has no width of its own to centre, so it is given a reading
    column, in the middle, the width a line of prose is comfortable at. */
 .uin-fullmsg-text { max-width: 42rem; margin-inline: auto; }
+
+/* ---- a touch screen: no box small enough to zoom the page --------------- */
+/* iOS zooms the whole page in when a box under 16px takes focus, and the
+   inbox's search and writing boxes are 13-14px. Lifted to 16px where the
+   pointer is a finger, which takes the trigger away at the source. A newer core
+   says the same for all of HQ; this covers a site on an older core.
+   body:has(.uin-page) because the search, the writing box and the menus are
+   portalled onto the body. !important because it has to beat every size in
+   this file, and that is its only job. */
+@media (pointer: coarse) {
+  body:has(.uin-page) :is(
+    input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="button"], [type="submit"], [type="reset"], [type="image"]),
+    textarea,
+    select,
+    [contenteditable="true"],
+    [contenteditable=""]
+  ) {
+    font-size: max(16px, 1em) !important;
+  }
+}

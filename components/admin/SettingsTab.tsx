@@ -6,6 +6,7 @@ import { WebhooksSection } from './WebhooksSection'
 import { InboxStyles } from './inbox/styles'
 import { NoZoom } from './inbox/NoZoom'
 import { API, OFFLINE } from './settings/api'
+import { CampaignSettingsPanel } from './settings/CampaignSettingsPanel'
 import { ChannelsPanel } from './settings/ChannelsPanel'
 import { CollectingPanel } from './settings/CollectingPanel'
 import { ConnectionsPanel } from './settings/ConnectionsPanel'
@@ -21,7 +22,7 @@ import { MUTED, NoteAlert, PanelActiveContext } from './settings/ui'
 //
 // This used to be one page of six stacked cards and about forty controls, which
 // meant that changing a folder name involved scrolling past retention policy,
-// read receipts and a regular expression. It is now seven tabs of one job each,
+// read receipts and a regular expression. It is now tabs of one job each,
 // and this file is the shell around them: it loads the data once, keeps the
 // alerts that matter on screen whichever tab is open, and remembers which tab
 // that was in the URL.
@@ -204,6 +205,8 @@ export function UnifiedInboxSettingsTab() {
             call={call}
           />
         )
+      case 'campaigns':
+        return <CampaignSettingsPanel settings={data.settings} busy={busy} call={call} />
       case 'webhooks':
         return <WebhooksSection inboxes={data.inboxes} />
     }

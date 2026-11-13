@@ -111,6 +111,12 @@ export type Settings = {
   autoAssignOwnPost: boolean
   /** Whether somebody who pays for a shop order becomes a contact. */
   shopCustomerContacts: boolean
+  /** Days before any campaign may write to the same address again. */
+  campaignCooldownDays: number
+  /** Months a finished campaign's send-by-send log is kept. */
+  campaignLogMonths: number
+  /** The address printed in every campaign footer. Null until typed in. */
+  campaignFooterAddress: string | null
 }
 
 export type StaffMember = { id: string; name: string; email: string }
@@ -194,6 +200,7 @@ export type SubTab =
   | 'collecting'
   | 'receipts'
   | 'people'
+  | 'campaigns'
   | 'webhooks'
 
 export const SUB_TABS: ReadonlyArray<{ key: SubTab; label: string }> = [
@@ -204,5 +211,6 @@ export const SUB_TABS: ReadonlyArray<{ key: SubTab; label: string }> = [
   { key: 'collecting', label: 'Collecting' },
   { key: 'receipts', label: 'Sent replies' },
   { key: 'people', label: 'People' },
+  { key: 'campaigns', label: 'Campaigns' },
   { key: 'webhooks', label: 'Other apps' },
 ]

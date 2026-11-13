@@ -2,51 +2,66 @@
 
 import { useEffect } from 'react'
 
+const NO_ZOOM = ['maximum-scale=1']
+
+/** The viewport tag's content with maximum-scale=1 in it, or null when it is
+ *  already there and nothing needs writing. */
+function withNoZoom(content: string): string | null {
+  const parts = content.split(',').map((part) => part.trim()).filter(Boolean)
+  if (parts.some((part) => /^maximum-scale\s*=\s*1(\.0+)?$/i.test(part))) return null
+  const kept = parts.filter((part) => !/^(maximum-scale|user-scalable)\s*=/i.test(part))
+  return [...kept, ...NO_ZOOM].join(', ')
+}
+
 /**
- * The inbox does not zoom on a phone.
+ * The inbox does not zoom in on its own on a phone.
  *
- * A mail program is laid out to the width of the screen already, and the zoom
- * people met here was never one they asked for: iOS Safari zooms in on its own
- * the moment a field under 16px takes focus, and on a screen whose frame is
- * pinned to the viewport there is often nothing left to pinch against to get
- * back out again. So the page is held at its natural scale while the inbox is
- * on screen, and handed back exactly as it was the moment it is not.
+ * iOS zooms the whole page in when a box under 16px takes focus - the search,
+ * a reply - and on a screen whose frame is pinned to the window there is little
+ * left to pinch against on the way back out. maximum-scale=1 on the viewport
+ * tag is what stops that automatic zoom. A newer core's HQ layout says so itself
+ * as well, and its stylesheet lifts every box to 16px on a touch screen; this
+ * is the same thing for a site whose core predates that, and harmless on one
+ * that already does.
  *
- * Done here, on the inbox's own screens, rather than in the site's viewport:
- * that setting is the whole site's, public pages included, and a shop visitor
- * squinting at a photo of a chair is entitled to pinch it.
+ * It keeps saying so. Next re-renders the head's viewport tag on a refresh and
+ * a navigation, which quietly put the old content back and let the zoom return
+ * - so the tag is watched and corrected whenever it loses the setting.
  *
- * Three pieces, because no one of them covers every browser:
- * - maximum-scale=1 on the viewport tag, which is what stops the automatic
- *   zoom on focus (and pinch, on browsers that still honour it);
- * - gesturestart cancelled, which is the only thing iOS listens to for pinch
- *   since it stopped honouring user-scalable=no;
- * - touch-action in inbox.css on .uin-page, which tells everyone else the
- *   page pans but does not zoom.
+ * Deliberately NOT a block on pinching. An earlier version cancelled iOS's
+ * pinch gesture and set touch-action against it, and that turned a zoom that
+ * slipped through into a zoom nobody could get out of. iOS lets a person pinch
+ * whatever the tag says, and that is the way out, so it is left alone.
+ *
+ * Handed back exactly as it was when the inbox goes, because the tag is the
+ * whole site's.
  */
 export function NoZoom() {
   useEffect(() => {
-    const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]')
-    const before = meta?.getAttribute('content') ?? null
-    if (meta) {
-      const kept = (before ?? '')
-        .split(',')
-        .map((part) => part.trim())
-        .filter((part) => part && !/^(maximum-scale|minimum-scale|user-scalable)\s*=/i.test(part))
-      meta.setAttribute('content', [...kept, 'maximum-scale=1', 'user-scalable=no'].join(', '))
-    }
+    const current = () => document.querySelector<HTMLMetaElement>('meta[name="viewport"]')
+    const first = current()
+    const before = first?.getAttribute('content') ?? null
 
-    const stop = (event: Event) => event.preventDefault()
-    document.addEventListener('gesturestart', stop, { passive: false })
-    document.addEventListener('gesturechange', stop, { passive: false })
+    const apply = () => {
+      const meta = current()
+      if (!meta) return
+      const next = withNoZoom(meta.getAttribute('content') ?? '')
+      if (next !== null) meta.setAttribute('content', next)
+    }
+    apply()
+
+    // The whole head rather than the one tag, because a re-render may swap the
+    // element for a new one rather than rewrite the old one. Only writes when
+    // the setting has gone, so its own write is a no-op the next time round
+    // rather than a loop.
+    const watch = new MutationObserver(apply)
+    watch.observe(document.head, { subtree: true, childList: true, attributes: true, attributeFilter: ['content'] })
 
     return () => {
-      document.removeEventListener('gesturestart', stop)
-      document.removeEventListener('gesturechange', stop)
-      if (meta) {
-        if (before === null) meta.removeAttribute('content')
-        else meta.setAttribute('content', before)
-      }
+      watch.disconnect()
+      const meta = current()
+      if (!meta || before === null) return
+      meta.setAttribute('content', before)
     }
   }, [])
 

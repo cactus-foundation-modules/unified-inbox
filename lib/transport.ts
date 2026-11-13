@@ -46,7 +46,7 @@ export type SendableMessage = {
    *  core only ever applies to mail going out over SMTP. `{ ref }` names our row
    *  so every open and click comes back to it; `false` keeps the message
    *  untracked. REQUIRED rather than optional, so nothing new that sends -
-   *  a mailshot, above all, which stays on Brevo with its own counting - can
+   *  a mailshot, above all, which may go either way - can
    *  pick up tracking by forgetting to say. */
   tracking: EmailTrackingRequest
 }
@@ -127,19 +127,21 @@ export async function transportForInbox(inbox: Inbox): Promise<EmailTransport | 
 }
 
 /**
- * The account a mailshot from this inbox goes out on.
+ * The account a mailshot from this inbox goes out on: exactly the one an
+ * ordinary reply from the same inbox uses.
  *
- * The inbox's own, when it has one - an inbox set to send over its own mail
- * server keeps doing so. Otherwise Brevo on the site's key, named explicitly,
- * rather than "whatever the site uses": the site can now choose to send its own
- * mail over SMTP (Settings > Emails), and a mailshot must not follow it there.
- * Campaigns stay on Brevo, which counts them and carries the unsubscribe link.
+ * The inbox's own, when it has one; otherwise null, which hands the choice to
+ * the site (Settings > Emails) the same way every reply does. This used to name
+ * Brevo on the site's key outright, so a site that sends its mail over its own
+ * mail server (Zoho, say) had replies from hi@ leaving through that server and
+ * a campaign "from" hi@ leaving through Brevo instead - a different route, a
+ * different sending reputation, and not what the address picker on the
+ * campaign says. The unsubscribe link rides in the message whichever way it
+ * goes, and the site's own open counting covers mail sent over SMTP, so
+ * nothing a campaign relies on is lost by following the inbox.
  */
 export async function campaignTransportForInbox(inbox: Inbox): Promise<EmailTransport | null> {
-  const own = await transportForInbox(inbox)
-  if (own) return own
-  const siteKey = process.env.BREVO_API_KEY?.trim()
-  return siteKey ? { provider: 'brevo', apiKey: siteKey } : null
+  return transportForInbox(inbox)
 }
 
 /**

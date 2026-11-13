@@ -285,10 +285,15 @@ function Campaign({
     }
 
     await onReload()
+    // The list column beside this carries its own copy of the name, the sender
+    // and the head-count. A save can change all three - the audience rebuild
+    // above most of all - and leaving that column alone had it saying 356 on
+    // the list while this pane, rightly, said 47.
+    onStatusChanged()
     setBusy(false)
     setNotice('Saved.')
     return true
-  }, [audienceEditable, campaign.id, draft, nothingSent, onReload, saved, tally.total])
+  }, [audienceEditable, campaign.id, draft, nothingSent, onReload, onStatusChanged, saved, tally.total])
 
   const act = useCallback(async (action: 'start' | 'pause' | 'resume' | 'stop', accept = false) => {
     setBusy(true)

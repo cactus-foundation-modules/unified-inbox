@@ -182,6 +182,15 @@ const Body = z.object({
   hiddenChannelModules: z.array(z.string().trim().min(1).max(100)).max(50).optional(),
   autoAssignOwnPost: z.boolean().optional(),
   shopCustomerContacts: z.boolean().optional(),
+  // Held to the same bounds as the CHECK constraints on the columns
+  // (migration 027), so a bad number is a plain refusal here rather than a
+  // database error.
+  campaignCooldownDays: z.number().int().min(0).max(365).optional(),
+  campaignLogMonths: z.number().int().min(1).max(120).optional(),
+  // The footer's postal address. Blank is stored as NULL, which is what the
+  // readiness check reads as "not filled in".
+  campaignFooterAddress: z.string().trim().max(500).nullable().optional()
+    .transform((v) => (v === undefined ? undefined : v ? v : null)),
 })
 
 export async function PATCH(request: NextRequest) {

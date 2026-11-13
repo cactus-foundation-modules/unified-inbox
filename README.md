@@ -75,9 +75,11 @@ the same human collapse into one story.
   rail becomes a bar along the top that says where you are, and pressing it
   slides the whole list of places in from the left. Dialogs and menus come up
   from the bottom edge, and everything is sized for a finger. The page holds
-  still rather than zooming in on you, and the dots on any message offer
-  **Open full screen**, which gives that one message the whole phone - a
-  message narrower than the screen sits in the middle of it.
+  still rather than zooming in when you tap into a box, and you can always
+  pinch back out if you need to.
+- **One message, full screen.** The dots on any message, on any screen, offer
+  **Open full screen**, which gives that one message the whole window - a
+  message narrower than the window sits in the middle of it.
 - **Reading and replying.** One screen: your addresses along the top as tabs,
   where each conversation stands underneath them - open, snoozed, done or the
   lot - the conversations below, and whichever one you have open beside them.

@@ -117,8 +117,7 @@ type Props = {
    *  string, so this is the whole of what "which conversation is open" means. */
   base: string
   params: Record<string, string>
-  /** The message itself, for "Open full screen" - offered on a phone only,
-   *  where a message otherwise gets what is left under the pinned header. */
+  /** The message itself, for "Open full screen". */
   fullScreen: FullScreenMessage
 }
 
@@ -262,10 +261,9 @@ export function MessageMenu({
         width={230}
         disabled={busy}
       >
-        {/* First, because on a phone it is the one most reached for. Drawn
-            on a phone only (inbox.css): anywhere wider the message already has
-            a pane of its own to be read in. */}
-        <MenuItem className="uin-menu-item-phone" onClick={() => setEnlarged(true)}>Open full screen</MenuItem>
+        {/* First: reading one message with the whole screen to itself is the
+            plainest thing on this menu. */}
+        <MenuItem onClick={() => setEnlarged(true)}>Open full screen</MenuItem>
         {canReplyAll && !isText && <MenuItem onClick={() => toggle('reply-all', messageId)}>Reply all</MenuItem>}
         {canForward && !isText && <MenuItem onClick={() => toggle('forward', messageId)}>Forward</MenuItem>}
         {textTo && chatLabel === null && (
