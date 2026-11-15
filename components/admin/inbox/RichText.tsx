@@ -226,9 +226,9 @@ export function RichText({
    * it is genuinely inside this box, and the end of the writing otherwise, which
    * is where somebody who has not put a caret anywhere means.
    *
-   * A line break goes in behind it so there is somewhere to type: a block at the
-   * very end of a contentEditable with nothing after it is a box that will not
-   * take another word.
+   * openUpAround gives a block at the very end of the box a line to type on, and
+   * nothing is added between blocks: a spacer after every product is the gap
+   * that used to sit between them.
    */
   const insertHtml = useCallback((html: string) => {
     const el = box.current
@@ -250,11 +250,11 @@ export function RichText({
     }
     try {
       document.execCommand('styleWithCSS', false, 'false')
-      document.execCommand('insertHTML', false, `${html}<br />`)
+      document.execCommand('insertHTML', false, html)
     } catch {
       // Same failure the formatting buttons are written to survive: nothing is
       // lost, and the block goes on the end rather than nowhere at all.
-      el.insertAdjacentHTML('beforeend', `${html}<br />`)
+      el.insertAdjacentHTML('beforeend', html)
     }
     openUpAround(el)
     rememberSelection()

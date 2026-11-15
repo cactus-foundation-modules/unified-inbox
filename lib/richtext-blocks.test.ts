@@ -18,11 +18,24 @@ describe('writing round a block', () => {
     expect(el.firstChild?.nodeName).toBe('BR')
   })
 
-  it('puts a line between two that are shoulder to shoulder', () => {
+  it('puts no line between two that are shoulder to shoulder', () => {
     const el = box(block('p1') + block('p2'))
     openUpAround(el)
     const kinds = Array.from(el.childNodes).map((node) => node.nodeName)
-    expect(kinds).toEqual(['BR', 'DIV', 'BR', 'DIV', 'BR'])
+    expect(kinds).toEqual(['BR', 'DIV', 'DIV', 'BR'])
+  })
+
+  it('takes out the stray line the browser left behind a wrapped block that has more after it', () => {
+    const el = box(`<div>${block('p1')}<br></div><div>${block('p2')}<br></div><div><br></div><div>Thanks</div>`)
+    openUpAround(el)
+    expect(el.querySelectorAll('br').length).toBe(2)
+    expect(el.innerHTML).toContain('<div><br></div><div>Thanks</div>')
+  })
+
+  it('does not bring a deleted gap back', () => {
+    const el = box(`<p>Intro</p><div>${block('p1')}</div><div>${block('p2')}</div><p>Outro</p>`)
+    openUpAround(el)
+    expect(el.querySelectorAll('br').length).toBe(0)
   })
 
   it('puts a line under the last one, so the message can carry on', () => {
