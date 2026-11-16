@@ -36,6 +36,12 @@ describe('renderProductTable', () => {
     expect(html.match(/<td/g)).toHaveLength(2)
   })
 
+  it('carries no margin when it stands in for a block in the writing', () => {
+    // A line typed straight under the block must arrive straight under it.
+    expect(renderProductTable([product()], { inline: true })).toContain('margin:0;')
+    expect(renderProductTable([product()])).toContain('margin:16px 0;')
+  })
+
   it('prints nothing at all when there are no products', () => {
     expect(renderProductTable([])).toBe('')
     expect(renderProductText([])).toBe('')

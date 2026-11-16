@@ -73,7 +73,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     channel: thread.channel,
     bodyHtml: noteHtml(text, (ref) => {
       const choice = chosen(ref)
-      return choice ? renderProductTable([choice]) : null
+      return choice ? renderProductTable([choice], { inline: true }) : null
     }),
     bodyText: words,
     authorUserId: user.id,

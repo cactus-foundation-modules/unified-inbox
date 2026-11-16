@@ -79,8 +79,18 @@ export function priceLine(product: ProductChoice): string {
  * Returns '' for nothing at all, so a message carrying no products carries no
  * markup either.
  */
-export function renderProductTable(products: readonly ProductChoice[]): string {
+export function renderProductTable(
+  products: readonly ProductChoice[],
+  /** `inline`: the table stands where a block sat in the writing box, so it
+   *  carries no margin of its own. The box draws that block with a border and a
+   *  hair of space round it, and a line typed straight under it reads as
+   *  touching it; a 16px margin on top of the cells' own padding arrived as a
+   *  blank line nobody had typed. The run-on list under a message keeps its
+   *  margin, since that one is standing apart from the words on purpose. */
+  options: { inline?: boolean } = {},
+): string {
   if (products.length === 0) return ''
+  const margin = options.inline ? '0' : '16px 0'
   const withImages = products.some((p) => p.imageUrl)
 
   const base = `font-family:${FONT};font-size:15px;line-height:1.45;color:${TEXT};`
@@ -109,7 +119,7 @@ export function renderProductTable(products: readonly ProductChoice[]): string {
 
   return (
     '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" ' +
-    'style="border-collapse:collapse;width:100%;margin:16px 0;">' +
+    `style="border-collapse:collapse;width:100%;margin:${margin};">` +
     rows.join('') +
     '</table>'
   )

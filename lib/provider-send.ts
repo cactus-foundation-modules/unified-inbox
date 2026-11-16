@@ -124,7 +124,7 @@ async function emailReplyBody(
   for (const { choice } of products) {
     if (slotted.has(refKey(choice))) {
       placed.set(refKey(choice), {
-        html: renderProductTable([choice]),
+        html: renderProductTable([choice], { inline: true }),
         text: renderProductText([choice]),
       })
     } else {
