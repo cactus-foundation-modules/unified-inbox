@@ -15,6 +15,12 @@ export const BLOCK_CLASS = 'uin-richtext-block'
 /** On the cross inside it. Pressing it removes the block it sits in. */
 export const BLOCK_OFF_CLASS = 'uin-richtext-off'
 
+/** On any other control inside a block, alongside a `data-act` naming what it
+ *  does. The box does not know what any of them mean: pressing one hands the
+ *  block and the name to whatever drew the box, which does know - the
+ *  catalogue's "Add delivery", today. */
+export const BLOCK_ACT_CLASS = 'uin-richtext-act'
+
 /** Is there anything at all in the box after (or before) this node: a word, an
  *  image, another block? A bare line break does not count - it is a spacer, not
  *  content, and is exactly the thing being decided about. */

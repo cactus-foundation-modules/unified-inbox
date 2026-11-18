@@ -34,6 +34,30 @@ export type ProductRef = {
    *  sorted by key. Absent on everything else. Only ever narrows what the shop
    *  already sells: it names nothing that is not a real option value. */
   picks?: string
+  /** The delivery service somebody chose to quote beside it, by the service's
+   *  own key - `express-flat-pack`. Absent where nobody chose one. A key and
+   *  never a price, for the same reason as everything else here: the figure is
+   *  read from the shop at the moment the message goes. */
+  delivery?: string
+}
+
+/** One delivery service a product can be bought with, as the picker offers it
+ *  and as the message prints it. Priced exactly as the product beside it is -
+ *  the same side of tax, the same "+ VAT" - because a delivery charge is folded
+ *  into the line and taxed at the product's own rate. */
+export type DeliveryQuote = {
+  /** The service's key, which is what a slot carries. */
+  key: string
+  /** What the shop calls the service - 'Express flat-pack'. */
+  label: string
+  /** The shopper-facing sentence set on the service, where there is one. For
+   *  the picker: a customer is told the name and the price, not the brochure. */
+  description: string | null
+  /** Formatted: '£25.00', or 'Free' for a service that costs nothing. */
+  price: string
+  /** '+ VAT' on the same terms as a product's (see ProductChoice.priceSuffix);
+   *  null on a free service, where there is nothing to add tax to. */
+  priceSuffix: string | null
 }
 
 export type ProductKind = 'product' | 'variation'
@@ -83,6 +107,18 @@ export type ProductChoice = {
   /** How many variations hang off this listing. 0 on a plain product and on a
    *  variation itself, which is the leaf. */
   variationCount: number
+  /** Whether a delivery service can be chosen for it at all - the site has
+   *  something publishing delivery services. Decides whether the block in the
+   *  writing box offers "Add delivery"; whether THIS product is offered any is
+   *  only known once somebody asks. */
+  canQuoteDelivery?: boolean
+  /** The delivery service chosen for it (see ProductRef.delivery). Carried on
+   *  the choice as well as the reference so the two key identically. */
+  delivery?: string
+  /** That service as the shop prices it today, or null where it is no longer
+   *  offered for this product - in which case the product goes out without a
+   *  delivery line rather than not at all. Absent where none was chosen. */
+  deliveryQuote?: DeliveryQuote | null
 }
 
 /** One product as it is attached to the conversation once the message has gone.
@@ -165,4 +201,13 @@ export type ProductSource = {
    * through exactly the same door.
    */
   findByUrl(url: string): Promise<ProductRef | null>
+  /**
+   * The delivery services this product can be bought with, priced as it would
+   * be quoted, in the order the basket lists them. Empty where the site offers
+   * no delivery services at all or none reaches this product.
+   *
+   * Optional: a source that sells things nobody delivers simply has none, and
+   * the composer offers no delivery for its products.
+   */
+  deliveries?(ref: ProductRef): Promise<DeliveryQuote[]>
 }

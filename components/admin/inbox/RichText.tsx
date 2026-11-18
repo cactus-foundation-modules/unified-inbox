@@ -4,7 +4,7 @@ import {
   createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
   type ReactNode,
 } from 'react'
-import { BLOCK_CLASS, BLOCK_OFF_CLASS, openUpAround } from '@/modules/unified-inbox/lib/richtext-blocks'
+import { BLOCK_ACT_CLASS, BLOCK_CLASS, BLOCK_OFF_CLASS, openUpAround } from '@/modules/unified-inbox/lib/richtext-blocks'
 import {
   anchorAtCaret, linkifyEditable, openableHref, type LinkifyMode,
 } from '@/modules/unified-inbox/lib/richtext-links'
@@ -116,6 +116,8 @@ type RichTextValue = {
   /** What a pasted web address should become instead of words, or null to keep
    *  it as words - see Props. Absent where nothing is offered. */
   pasteAddress?: (url: string) => Promise<string | null>
+  /** Who answers a control inside a block - see Props. */
+  blockAction?: (action: BlockAction) => void
   placeholder: string
   label: string
 }
@@ -152,14 +154,31 @@ type Props = {
    *  words, which is what every other paste gets. The box has no idea what a
    *  product is; whatever drew it does. */
   onPasteAddress?: (url: string) => Promise<string | null>
+  /** A control inside a block was pressed - one wearing BLOCK_ACT_CLASS, with
+   *  its `data-act` as the action. The box has no idea what it means, so it
+   *  hands over the block and the control; whoever answers may rewrite the
+   *  block in place and must call `changed` when it has, so the edit is kept. */
+  onBlockAction?: (action: BlockAction) => void
   /** The box and the buttons, in whatever order the composer wants them. */
   children: ReactNode
+}
+
+/** What a press on a control inside a block hands to whoever drew the box. */
+export type BlockAction = {
+  /** The control's `data-act`. */
+  act: string
+  /** The block it sits in. */
+  block: HTMLElement
+  /** The control itself, for drawing something beside it. */
+  control: HTMLElement
+  /** Call after rewriting the block, so the box reports the new markup. */
+  changed: () => void
 }
 
 /** Holds the writing box and the commands that act on it. Draw a RichTextBox
  *  inside it for the words, and a RichTextTools wherever the buttons belong. */
 export function RichText({
-  id, value, onChange, placeholder, label, handleRef, onPasteAddress, children,
+  id, value, onChange, placeholder, label, handleRef, onPasteAddress, onBlockAction, children,
 }: Props) {
   const box = useRef<HTMLDivElement | null>(null)
   /** Where the caret was when the link box was opened. */
@@ -300,10 +319,10 @@ export function RichText({
   const api = useMemo<RichTextValue>(
     () => ({
       id, attach, emit, exec, rememberSelection, restoreSelection, insertHtml, linkify,
-      pasteAddress: onPasteAddress, placeholder, label,
+      pasteAddress: onPasteAddress, blockAction: onBlockAction, placeholder, label,
     }),
     [
-      attach, emit, exec, id, insertHtml, label, linkify, onPasteAddress, placeholder,
+      attach, emit, exec, id, insertHtml, label, linkify, onBlockAction, onPasteAddress, placeholder,
       rememberSelection, restoreSelection,
     ],
   )
@@ -321,7 +340,7 @@ const BUBBLE_ROOM = 280
 export function RichTextBox() {
   const {
     id, attach, emit, exec, rememberSelection, restoreSelection, insertHtml, linkify, pasteAddress,
-    placeholder, label,
+    blockAction, placeholder, label,
   } = useRichText()
   /** The link the caret is in, when it is in one, and where to draw the
    *  bubble for it. A link in an editable box cannot be followed by pressing
@@ -371,6 +390,13 @@ export function RichTextBox() {
       return
     }
     notice(event.currentTarget)
+    const act = target?.closest?.(`.${BLOCK_ACT_CLASS}`)
+    const actBlock = act?.closest(`.${BLOCK_CLASS}`)
+    if (act instanceof HTMLElement && actBlock instanceof HTMLElement && blockAction) {
+      event.preventDefault()
+      blockAction({ act: act.dataset.act ?? '', block: actBlock, control: act, changed: emit })
+      return
+    }
     const off = target?.closest?.(`.${BLOCK_OFF_CLASS}`)
     if (!off) return
     event.preventDefault()
@@ -379,7 +405,7 @@ export function RichTextBox() {
     // need a line between them as much as they ever did.
     openUpAround(event.currentTarget)
     emit()
-  }, [emit, notice])
+  }, [blockAction, emit, notice])
 
   /** An address is finished when something goes in behind it that cannot be
    *  part of it - a space, a new line - and that is the moment it is linked. */

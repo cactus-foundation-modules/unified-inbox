@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { PICKS_PATTERN } from './products/slots'
+import { DELIVERY_KEY_PATTERN, PICKS_PATTERN } from './products/slots'
 import { CampaignDesignBody } from './campaigns/design'
 
 // Shared between the create and the edit route, so an inbox cannot be saved
@@ -75,6 +75,9 @@ const ProductRefBody = z.object({
   kind: z.enum(['product', 'variation']),
   id: z.string().min(1).max(200),
   picks: z.string().max(400).regex(PICKS_PATTERN).optional(),
+  /** A delivery service to quote beside it, by key. The price is the shop's,
+   *  read when the message goes, exactly like the product's. */
+  delivery: z.string().max(60).regex(DELIVERY_KEY_PATTERN).optional(),
 })
 
 /** What the composer posts to send a message. Deliberately strict: an

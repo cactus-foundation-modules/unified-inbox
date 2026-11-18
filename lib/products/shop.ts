@@ -11,7 +11,8 @@ import {
   type PriceDisplay,
 } from './price'
 import { slugFromProductAddress } from './address'
-import type { ProductChoice, ProductRef, ProductSource, ResolvedProduct } from './types'
+import { deliveryOptionsFor, hasDeliveryProvider, type RawDeliveryOption } from './delivery'
+import type { DeliveryQuote, ProductChoice, ProductRef, ProductSource, ResolvedProduct } from './types'
 import { VARIATION_LIMIT } from './types'
 
 // What the shop sells, for putting on a message.
@@ -43,6 +44,8 @@ type ShopSettings = {
   rootStyle: boolean
   /** The site's own address, or null when there is none to hang a link off. */
   siteUrl: string | null
+  /** Whether anything publishes delivery services to quote beside a product. */
+  deliverable: boolean
 }
 
 /**
@@ -65,6 +68,7 @@ async function readSettings(): Promise<ShopSettings> {
     saleEnabled: false,
     rootStyle: false,
     siteUrl: getSiteUrlOrNull(),
+    deliverable: false,
   }
 
   const rows = await prisma
@@ -95,6 +99,7 @@ async function readSettings(): Promise<ShopSettings> {
       : '£',
     saleEnabled: Array.isArray(config.enabledPriceTypes) && config.enabledPriceTypes.includes('sale'),
     rootStyle: config.productUrlStyle === 'ROOT',
+    deliverable: await hasDeliveryProvider(),
   }
 
   // The rate comes from the shop's DEFAULT zone - the catch-all with no
@@ -211,8 +216,7 @@ function toChoice(
     variationCount?: number
   },
 ): ProductChoice {
-  const taxClassId = typeof row.tax_class_id === 'string' ? row.tax_class_id : null
-  const rate = taxClassId ? settings.rates.get(taxClassId) ?? 0 : 0
+  const rate = rateOf(row, settings)
   const own = effectivePrice(
     toNumber(row.price) ?? 0,
     toNumber(row.sale_price),
@@ -242,6 +246,31 @@ function toChoice(
     url: productPage(row.slug, settings),
     sku: typeof row.sku === 'string' && row.sku.trim() ? row.sku.trim() : null,
     variationCount: extras.variationCount ?? 0,
+    canQuoteDelivery: settings.deliverable,
+  }
+}
+
+/** A product row's tax rate in the shop's default zone, as a fraction. */
+function rateOf(row: Record<string, unknown>, settings: ShopSettings): number {
+  const taxClassId = typeof row.tax_class_id === 'string' ? row.tax_class_id : null
+  return taxClassId ? settings.rates.get(taxClassId) ?? 0 : 0
+}
+
+/**
+ * One delivery service priced for a customer, exactly as the product beside it
+ * is priced: the provider's figure is on the product's own side of tax and is
+ * taxed at the product's own rate, so it goes through the same conversion and
+ * earns the same "+ VAT". A service that costs nothing says so in a word -
+ * "£0.00 + VAT" is a sum nobody should have to do.
+ */
+function toQuote(option: RawDeliveryOption, rate: number, settings: ShopSettings): DeliveryQuote {
+  const free = !(option.price > 0)
+  return {
+    key: option.key,
+    label: option.label,
+    description: option.description,
+    price: free ? 'Free' : formatPrice(displayAmount(option.price, settings.display, rate), settings.currencySymbol),
+    priceSuffix: free ? null : taxSuffix(settings.display, rate),
   }
 }
 
@@ -436,6 +465,8 @@ export const shopProducts: ProductSource = {
     const settings = await readSettings()
     const found = new Map<string, ProductChoice>()
     const listingRows = new Map<string, Record<string, unknown>>()
+    /** Each product's tax rate, for pricing a delivery chosen beside it. */
+    const rates = new Map<string, number>()
 
     if (productIds.length > 0) {
       const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
@@ -460,6 +491,7 @@ export const shopProducts: ProductSource = {
         })
         found.set(`product:${choice.id}`, choice)
         listingRows.set(choice.id, row)
+        rates.set(choice.id, rateOf(row, settings))
       }
     }
 
@@ -494,8 +526,17 @@ export const shopProducts: ProductSource = {
           options: typeof row.options === 'string' && row.options.trim() ? row.options.trim() : null,
         })
         found.set(`variation:${choice.id}`, choice)
+        rates.set(choice.id, rateOf(row, settings))
       }
     }
+
+    // The delivery services somebody chose, priced as they stand. One read for
+    // every product that has one; a service no longer offered for its product
+    // leaves the product going out without a delivery line, never not at all.
+    const wantDelivery = refs.filter((r) => r.delivery && found.has(`${r.kind}:${r.id}`))
+    const menus = wantDelivery.length > 0
+      ? await deliveryOptionsFor(wantDelivery.map((r) => r.id))
+      : new Map<string, RawDeliveryOption[]>()
 
     const out: ResolvedProduct[] = []
     for (const ref of refs) {
@@ -504,6 +545,15 @@ export const shopProducts: ProductSource = {
       const row = listingRows.get(ref.id)
       if (ref.kind === 'product' && ref.picks && row && (await variationsAvailable())) {
         choice = await narrowByPicks(choice, row, ref.picks, settings)
+      }
+      if (ref.delivery) {
+        const option = menus.get(ref.id)?.find((o) => o.key === ref.delivery)
+        choice = {
+          ...choice,
+          // Always carried, so the choice keys exactly as the slot it fills.
+          delivery: ref.delivery,
+          deliveryQuote: option ? toQuote(option, rates.get(ref.id) ?? 0, settings) : null,
+        }
       }
       out.push({
         choice,
@@ -531,6 +581,32 @@ export const shopProducts: ProductSource = {
    * address: a listing that has been withdrawn or taken out of the catalogue
    * has no page to send anybody to, and a link to a 404 is worse than no link.
    */
+  /**
+   * The delivery services one product can be bought with, priced as a message
+   * would quote them.
+   *
+   * Asked of the listing itself for a listing - narrowed by picks or not - and
+   * of the exact variation for a variation, because that is the row the basket
+   * would hold and the services can differ between variations of one range.
+   * Only something on sale is asked about at all.
+   */
+  async deliveries(ref): Promise<DeliveryQuote[]> {
+    const settings = await readSettings()
+    if (!settings.deliverable) return []
+    const rows = await prisma.$queryRaw<{ tax_class_id: unknown }[]>`
+      SELECT p."tax_class_id"
+        FROM "shp_products" p
+       WHERE p."id" = ${ref.id}
+         AND p."status" = 'ACTIVE'
+       LIMIT 1
+    `
+    const row = rows[0]
+    if (!row) return []
+    const rate = rateOf(row, settings)
+    const menu = (await deliveryOptionsFor([ref.id])).get(ref.id) ?? []
+    return menu.map((option) => toQuote(option, rate, settings))
+  },
+
   async pageUrls(refs): Promise<Map<string, string>> {
     const productIds = refs.filter((r) => r.kind === 'product').map((r) => r.id)
     const variationIds = refs.filter((r) => r.kind === 'variation').map((r) => r.id)

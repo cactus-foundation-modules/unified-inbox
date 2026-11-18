@@ -3,11 +3,11 @@ import type { SessionUser } from '@/lib/auth/session'
 import { existingTables, installedModuleNames } from '../installed'
 import { shopProducts } from './shop'
 import { refKey } from './slots'
-import type { ProductChoice, ProductRef, ProductSource, ResolvedProduct } from './types'
+import type { DeliveryQuote, ProductChoice, ProductRef, ProductSource, ResolvedProduct } from './types'
 import { PRODUCT_SEARCH_LIMIT } from './types'
 
 export type {
-  ProductChoice, ProductKind, ProductLink, ProductRef, ProductSource, ResolvedProduct,
+  DeliveryQuote, ProductChoice, ProductKind, ProductLink, ProductRef, ProductSource, ResolvedProduct,
 } from './types'
 export { MAX_PRODUCTS_PER_MESSAGE, PRODUCT_SEARCH_LIMIT } from './types'
 
@@ -82,6 +82,22 @@ export async function listVariations(
     return await source.variations(productId)
   } catch (err) {
     console.error(`[unified-inbox] could not list ${moduleName} variations:`, err)
+    return []
+  }
+}
+
+/**
+ * The delivery services one product can be bought with, for quoting one beside
+ * it. Gated exactly as the picker is - choosing a delivery is part of choosing
+ * the product - and empty wherever the source sells nothing it delivers.
+ */
+export async function listDeliveries(user: SessionUser, ref: ProductRef): Promise<DeliveryQuote[]> {
+  const source = (await usableProductSources(user)).find((s) => s.moduleName === ref.moduleName)
+  if (!source?.deliveries) return []
+  try {
+    return await source.deliveries(ref)
+  } catch (err) {
+    console.error(`[unified-inbox] could not list the ${ref.moduleName} delivery services:`, err)
     return []
   }
 }

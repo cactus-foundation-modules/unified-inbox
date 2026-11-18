@@ -3882,6 +3882,21 @@ div.uin-camp-stat { cursor: default; }
 }
 .uin-menu-item-after { flex: none; display: inline-flex; color: var(--color-text-secondary); }
 .uin-menu-sep { height: 1px; margin: 0.2rem 0.25rem; background: var(--color-border); }
+/* "Add delivery" on a product in the writing box: what the shop can deliver it
+   by, and what each would add. The service's own sentence sits under its name
+   where the shop has written one. */
+.uin-delivery-menu-desc {
+  display: block;
+  margin-top: 0.1rem;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+.uin-delivery-menu-note {
+  margin: 0;
+  padding: 0.45rem 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+}
 
 /* ---- a button that is only an icon -------------------------------------- */
 /* No border until it is wanted, so a run of them beside a name reads as marks
@@ -4509,6 +4524,31 @@ div.uin-camp-stat { cursor: default; }
 }
 .uin-ps-opts { color: #666666; font-size: 13px; }
 .uin-ps-price { flex: none; white-space: nowrap; }
+/* The delivery quoted beside it. The words are the email's (painted on the
+   email's white, like the rest of the block); the control after them is ours
+   and never leaves the building - the block is replaced by the real table when
+   the message goes - so it wears the admin's own colours, like the cross. */
+.uin-ps-dl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 4px;
+}
+.uin-ps-dl-words { color: #666666; font-size: 14px; }
+.uin-ps-dl-act {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 0.375rem);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.uin-ps-dl-act:hover { color: var(--color-text); border-color: var(--color-border-strong); }
 /* Takes the whole block out. Ours rather than the recipient's, so it is drawn
    in the admin's own colours rather than the email's. */
 .uin-richtext-off {

@@ -1,5 +1,5 @@
-import { BLOCK_CLASS, BLOCK_OFF_CLASS } from '../richtext-blocks'
-import type { ProductChoice, ProductRef } from './types'
+import { BLOCK_ACT_CLASS, BLOCK_CLASS, BLOCK_OFF_CLASS } from '../richtext-blocks'
+import type { DeliveryQuote, ProductChoice, ProductRef } from './types'
 
 // A product where somebody put it, rather than in a heap at the bottom.
 //
@@ -44,12 +44,24 @@ const REF_PREFIX = 'uin-ps--'
 /** How a product is keyed everywhere in this module: the picker, the composer's
  *  own list and the send path all compare on this and nothing else. */
 export function refKey(ref: ProductRef | ProductChoice): string {
-  return `${ref.moduleName}:${ref.kind}:${ref.id}${ref.picks ? `~${ref.picks}` : ''}`
+  return `${ref.moduleName}:${ref.kind}:${ref.id}${refSuffix(ref)}`
+}
+
+/** What follows the id in both a key and a class token: the picks after a
+ *  '~', then the delivery service after an '@'. Neither character can appear
+ *  in either half, so the two split apart again unambiguously. */
+function refSuffix(ref: ProductRef | ProductChoice): string {
+  return `${ref.picks ? `~${ref.picks}` : ''}${ref.delivery ? `@${ref.delivery}` : ''}`
 }
 
 /** What a picks string may look like: `key.slug` pairs joined by '+', and
  *  nothing a class token or a query string would need escaping for. */
 export const PICKS_PATTERN = /^[a-z0-9-]+\.[a-z0-9-]+(\+[a-z0-9-]+\.[a-z0-9-]+)*$/
+
+/** What a delivery service's key may look like to ride on a slot: letters,
+ *  digits, hyphens and underscores. A service whose key is anything else is
+ *  simply not offered - see lib/products/delivery.ts, which says the same. */
+export const DELIVERY_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,59}$/
 
 /** Written in a template rather than imported: the one escaper this module could
  *  borrow lives in core's email blocks, and that file pulls the Puck helpers in
@@ -65,7 +77,7 @@ function escapeHtml(value: string): string {
 
 /** The class token that carries the reference. */
 export function refClass(ref: ProductRef | ProductChoice): string {
-  return `${REF_PREFIX}${ref.moduleName}--${ref.kind}--${ref.id}${ref.picks ? `~${ref.picks}` : ''}`
+  return `${REF_PREFIX}${ref.moduleName}--${ref.kind}--${ref.id}${refSuffix(ref)}`
 }
 
 /** The reference back out of one class token, or null for a token that is not
@@ -76,15 +88,67 @@ export function parseRefClass(token: string): ProductRef | null {
   const parts = token.slice(REF_PREFIX.length).split('--')
   if (parts.length < 3) return null
   const [moduleName, kind, ...rest] = parts
-  const joined = rest.join('--')
+  const whole = rest.join('--')
+  const at = whole.indexOf('@')
+  const joined = at === -1 ? whole : whole.slice(0, at)
+  const delivery = at === -1 ? '' : whole.slice(at + 1)
   const tilde = joined.indexOf('~')
   const id = tilde === -1 ? joined : joined.slice(0, tilde)
   const picks = tilde === -1 ? '' : joined.slice(tilde + 1)
   if (!moduleName || !id) return null
   if (kind !== 'product' && kind !== 'variation') return null
-  if (!picks) return { moduleName, kind, id }
+  if (at !== -1 && !DELIVERY_KEY_PATTERN.test(delivery)) return null
+  const ref: ProductRef = { moduleName, kind, id }
+  if (delivery) ref.delivery = delivery
+  if (!picks) return ref
   // Picks only narrow a listing, and only in the shape we write them.
-  return kind === 'product' && PICKS_PATTERN.test(picks) ? { moduleName, kind, id, picks } : null
+  return kind === 'product' && PICKS_PATTERN.test(picks) ? { ...ref, picks } : null
+}
+
+/** A reference with a different delivery service on it, or none. The class
+ *  token the composer swaps onto a slot when somebody picks one. */
+export function withDelivery<T extends ProductRef | ProductChoice>(ref: T, delivery: string | null): T {
+  const next = { ...ref }
+  if (delivery && DELIVERY_KEY_PATTERN.test(delivery)) next.delivery = delivery
+  else delete next.delivery
+  return next
+}
+
+/** The delivery as one line: 'Delivery: Express flat-pack - £25.00 + VAT', or
+ *  'Delivery: Standard - Free'. The same sentence lib/products/render.ts prints
+ *  into the email and the plain-text half, and the one Live Chat looks for to
+ *  tidy away under its own card. */
+export function deliveryLine(quote: DeliveryQuote): string {
+  const price = quote.priceSuffix ? `${quote.price} ${quote.priceSuffix}` : quote.price
+  return `Delivery: ${quote.label} - ${price}`
+}
+
+/** On the delivery line inside a slot, so the composer can rewrite it in place. */
+export const SLOT_DELIVERY_CLASS = 'uin-ps-dl'
+
+/** On the "Add delivery" control inside a slot. Generic to the writing box (see
+ *  lib/richtext-blocks.ts, BLOCK_ACT_CLASS), named here for the composer. */
+export const SLOT_DELIVERY_ACT = 'delivery'
+
+/**
+ * The inside of a slot's delivery line: what is quoted, if anything, and the
+ * control that adds or changes it. Spans only - see slotHtml for why there is
+ * never a <div> inside a slot.
+ *
+ * The control is for whoever is writing and for nobody else: the slot is
+ * thrown away and replaced by the real table at the moment Send is pressed, so
+ * nothing in here ever reaches a customer.
+ */
+export function slotDeliveryInnerHtml(quote: DeliveryQuote | null | undefined): string {
+  const words = quote
+    ? `<span class="uin-ps-dl-words">${escapeHtml(deliveryLine(quote))}</span>`
+    : ''
+  return (
+    words +
+    `<span class="${BLOCK_ACT_CLASS} uin-ps-dl-act" data-act="${SLOT_DELIVERY_ACT}" role="button" tabindex="-1">` +
+    (quote ? 'Change delivery' : 'Add delivery') +
+    '</span>'
+  )
 }
 
 /** The price as one line: 'From £419.00 + VAT'. The same sentence
@@ -120,10 +184,16 @@ export function slotHtml(product: ProductChoice): string {
   const options = product.options
     ? `<span class="uin-ps-opts">${escapeHtml(product.options)}</span>`
     : ''
+  // Offered where the site has delivery services to offer, and shown wherever
+  // one has been chosen - a draft reopened on a site that has since lost its
+  // delivery module still says what it was going to quote.
+  const delivery = product.canQuoteDelivery || product.deliveryQuote
+    ? `<span class="${SLOT_DELIVERY_CLASS}">${slotDeliveryInnerHtml(product.deliveryQuote)}</span>`
+    : ''
   return (
     `<div class="${SLOT_CLASS} ${BLOCK_CLASS} ${refClass(product)}" contenteditable="false">` +
     thumb +
-    `<span class="uin-ps-words"><strong>${escapeHtml(product.name)}</strong>${options}</span>` +
+    `<span class="uin-ps-words"><strong>${escapeHtml(product.name)}</strong>${options}${delivery}</span>` +
     (price ? `<span class="uin-ps-price">${escapeHtml(price)}</span>` : '') +
     `<span class="${BLOCK_OFF_CLASS}" role="button" tabindex="-1" ` +
     `title="Take it off this message" aria-label="Take ${escapeHtml(product.name)} off this message">` +

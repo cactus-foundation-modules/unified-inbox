@@ -134,3 +134,41 @@ describe('renderProductText', () => {
     expect(renderProductText([product({ price: null, url: null })])).toBe('Ergo Task Chair')
   })
 })
+
+describe('a delivery chosen beside a product', () => {
+  const quote = { key: 'express', label: 'Express flat-pack', description: null, price: '£25.00', priceSuffix: '+ VAT' }
+
+  it('prints the delivery on its own row, priced in the price column', () => {
+    const html = renderProductTable([product({ delivery: 'express', deliveryQuote: quote })])
+    expect(html.match(/<tr>/g)).toHaveLength(2)
+    expect(html).toContain('Delivery: Express flat-pack')
+    expect(html).toContain('£25.00 + VAT')
+  })
+
+  it('prints nothing extra where the service is no longer offered', () => {
+    const html = renderProductTable([product({ delivery: 'express', deliveryQuote: null })])
+    expect(html.match(/<tr>/g)).toHaveLength(1)
+    expect(html).not.toContain('Delivery:')
+  })
+
+  it('puts the delivery under the product line and above its address in plain text', () => {
+    expect(renderProductText([product({ deliveryQuote: quote })])).toBe(
+      'Ergo Task Chair - £249.00\nDelivery: Express flat-pack - £25.00 + VAT\nhttps://example.com/shop/products/ergo-task-chair',
+    )
+  })
+
+  it('names the service on the link for a channel that draws the product itself', () => {
+    expect(renderProductText([product({ deliveryQuote: quote })], { markdownLinks: true })).toBe(
+      '[Ergo Task Chair](https://example.com/shop/products/ergo-task-chair?delivery-service=express) - £249.00'
+        + '\nDelivery: Express flat-pack - £25.00 + VAT',
+    )
+  })
+
+  it('says Free for a service that costs nothing', () => {
+    const free = { ...quote, price: 'Free', priceSuffix: null }
+    expect(renderProductText([product({ url: null, deliveryQuote: free })])).toBe(
+      'Ergo Task Chair - £249.00\nDelivery: Express flat-pack - Free',
+    )
+  })
+})
+

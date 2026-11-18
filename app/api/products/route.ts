@@ -2,12 +2,15 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSessionFromCookie } from '@/lib/auth/session'
 import { hasPermission } from '@/lib/permissions/check'
 import { errorResponse } from '@/lib/utils'
-import { listVariations, productFromUrl, searchProducts } from '@/modules/unified-inbox/lib/products'
+import { listDeliveries, listVariations, productFromUrl, searchProducts } from '@/modules/unified-inbox/lib/products'
+import { PICKS_PATTERN } from '@/modules/unified-inbox/lib/products/slots'
 
 // The catalogue, for putting something out of it on a message.
 //
 // Two questions and one route: what could I mean (a search, or a browse when
-// nothing is typed), and what does this listing come in (its variations). They
+// nothing is typed), and what does this listing come in (its variations). A
+// third rides along for the same reason - what can this one be delivered by,
+// for quoting a delivery service beside it. They
 // are the same gesture a keystroke apart, and splitting them across two
 // addresses would only mean two lots of the same three permission checks.
 //
@@ -25,6 +28,22 @@ export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams
   const listing = params.get('of')
   const moduleName = params.get('module')
+
+  // The delivery services one chosen thing can be bought with, for quoting one
+  // beside it. The same reference a slot carries, checked the same way.
+  const deliveryFor = params.get('deliveries')
+  if (deliveryFor !== null) {
+    const kind = params.get('kind')
+    const picks = params.get('picks') ?? ''
+    if (!moduleName) return errorResponse('Say which module the product belongs to.')
+    if (kind !== 'product' && kind !== 'variation') return errorResponse('Say what kind of thing it is.')
+    if (!deliveryFor || deliveryFor.length > 200) return errorResponse('Say which product.')
+    if (picks && !PICKS_PATTERN.test(picks)) return errorResponse('Those options are not ones the shop sells.')
+    const items = await listDeliveries(user, {
+      moduleName, kind, id: deliveryFor, ...(picks ? { picks } : {}),
+    })
+    return NextResponse.json({ items }, { headers: { 'Cache-Control': 'no-store' } })
+  }
 
   // The variations of one listing. Both halves are required: which module sells
   // it is not something to guess at, and guessing would mean asking every

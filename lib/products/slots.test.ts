@@ -10,8 +10,9 @@ import {
   slotHtml,
   slotRefs,
   stripSlots,
+  withDelivery,
 } from './slots'
-import type { ProductChoice } from './types'
+import type { ProductChoice, ProductRef } from './types'
 
 function product(over: Partial<ProductChoice> = {}): ProductChoice {
   return {
@@ -142,3 +143,46 @@ describe('what a slot shows', () => {
     expect(slotHtml(product()).match(/<div/g)).toHaveLength(1)
   })
 })
+
+describe('a delivery service on a slot', () => {
+  it('rides on the class token and comes back off it', () => {
+    const ref = { moduleName: 'shop', kind: 'product' as const, id: 'p1', delivery: 'express-flat-pack' }
+    expect(refClass(ref)).toBe('uin-ps--shop--product--p1@express-flat-pack')
+    expect(parseRefClass(refClass(ref))).toEqual(ref)
+  })
+
+  it('sits after the picks, and both come back', () => {
+    const ref = { moduleName: 'shop', kind: 'product' as const, id: 'p1', picks: 'finish.grey-oak', delivery: 'standard' }
+    expect(parseRefClass(refClass(ref))).toEqual(ref)
+  })
+
+  it('keys a product with a delivery apart from the same product without one', () => {
+    expect(refKey(product())).not.toBe(refKey(product({ delivery: 'standard' })))
+  })
+
+  it('refuses a key it could not carry safely', () => {
+    expect(parseRefClass('uin-ps--shop--product--p1@')).toBeNull()
+    expect(parseRefClass('uin-ps--shop--product--p1@no.dots')).toBeNull()
+  })
+
+  it('is swapped and taken off by withDelivery', () => {
+    const ref: ProductRef = { moduleName: 'shop', kind: 'variation', id: 'v1' }
+    expect(withDelivery(ref, 'express').delivery).toBe('express')
+    expect(withDelivery({ ...ref, delivery: 'express' }, null)).toEqual(ref)
+  })
+
+  it('offers Add delivery only where the site can quote one', () => {
+    expect(slotHtml(product())).not.toContain('Add delivery')
+    expect(slotHtml(product({ canQuoteDelivery: true }))).toContain('Add delivery')
+  })
+
+  it('shows what will print, keeps no div inside, and survives the sanitiser', () => {
+    const quote = { key: 'standard', label: 'Standard', description: null, price: 'Free', priceSuffix: null }
+    const html = slotHtml(product({ canQuoteDelivery: true, delivery: 'standard', deliveryQuote: quote }))
+    expect(html).toContain('Delivery: Standard - Free')
+    expect(html).toContain('Change delivery')
+    expect(html.match(/<div/g)).toHaveLength(1)
+    expect(slotRefs(sanitizeEmailHtml(html))).toEqual([{ moduleName: 'shop', kind: 'product', id: 'p1', delivery: 'standard' }])
+  })
+})
+

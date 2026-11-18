@@ -15,6 +15,7 @@ import {
 import { describeSendAt, plainTextToHtml, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
 import { AttachmentChips, AttachmentPicker, plainReason, type Attachment } from './AttachmentPicker'
 import { ProductPicker, productForAddress, productKey } from './ProductPicker'
+import { useDeliveryPicker } from './DeliveryPicker'
 import { AttachmentDropNotice, AttachmentDropOverlay } from './AttachmentDropChrome'
 import { useAttachmentDrop } from './useAttachmentDrop'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -277,6 +278,8 @@ export function Composer({
   // Waiting for its own time, or going out this minute. Either way it is out of
   // this composer's hands.
   const waiting = sendState === 'scheduled' || sendState === 'sending'
+  /** "Add delivery" on a product in the writing box, and the menu it opens. */
+  const deliveryPicker = useDeliveryPicker()
 
   /** The chosen departure time in the shape the server reads it in: a wall
    *  clock with no zone on it, meant in the SITE's zone. */
@@ -1059,6 +1062,7 @@ export function Composer({
       id="uin-composer-text"
       handleRef={editor}
       onPasteAddress={canAddProducts && !noting ? pasteProduct : undefined}
+      onBlockAction={canAddProducts && !noting ? deliveryPicker.onBlockAction : undefined}
       value={text}
       onChange={(html) => {
         setText(html)
@@ -1069,6 +1073,7 @@ export function Composer({
       placeholder={noting ? 'Something for the others to see' : 'Write your reply'}
       label={noting ? 'Your note' : 'Your message'}
     >
+    {deliveryPicker.menu}
     <div className="uin-composer uin-droppable" {...drop.dropProps}>
       <AttachmentDropOverlay dragging={drop.dragging} />
       {/* First in the box, and shown whenever there is a reason at all. It used

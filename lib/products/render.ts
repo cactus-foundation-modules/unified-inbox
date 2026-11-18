@@ -1,5 +1,13 @@
 import { escapeHtml } from '@/lib/email/blocks'
+import { deliveryLine } from './slots'
 import type { ProductChoice } from './types'
+
+/** The query parameter a product link carries the chosen delivery service in.
+ *  The storefront reads only its own option names off a product address, so
+ *  this rides along untouched; Live Chat reads it to draw the delivery under
+ *  the product, the way the email does. Named so no product option is likely to
+ *  share it. */
+export const DELIVERY_PARAM = 'delivery-service'
 
 // The products on a message, as the message prints them.
 //
@@ -97,15 +105,18 @@ export function renderProductTable(
 
   const rows = products.map((product, index) => {
     const last = index === products.length - 1
+    const quote = product.deliveryQuote ?? null
     // The rule goes on the cells, not the row: a border on <tr> is one of the
-    // things Outlook simply does not draw.
-    const cell = `${base}padding:12px 0;vertical-align:top;${last ? '' : `border-bottom:1px solid ${RULE};`}`
+    // things Outlook simply does not draw. A product with a delivery under it
+    // hands its rule down to the delivery row, so the two read as one item.
+    const rule = last ? '' : `border-bottom:1px solid ${RULE};`
+    const cell = `${base}padding:12px 0;vertical-align:top;${quote ? '' : rule}`
     const options = product.options
       ? `<br /><span style="color:${MUTED};font-size:13px;">${escapeHtml(product.options)}</span>`
       : ''
     const price = priceLine(product)
 
-    return (
+    const productRow =
       '<tr>' +
       (withImages ? thumbCell(product, cell) : '') +
       `<td style="${cell}${withImages ? 'padding-left:12px;' : ''}">` +
@@ -113,6 +124,20 @@ export function renderProductTable(
       options +
       '</td>' +
       `<td align="right" style="${cell}padding-left:12px;white-space:nowrap;">${escapeHtml(price)}</td>` +
+      '</tr>'
+    if (!quote) return productRow
+
+    // The delivery chosen for it, on a line of its own under the name and
+    // priced in the same column, so a customer adding it up adds two figures
+    // that sit one above the other. Muted, because the product is the subject.
+    const dcell = `${base}padding:0 0 12px;vertical-align:top;color:${MUTED};font-size:14px;${rule}`
+    const dprice = quote.priceSuffix ? `${quote.price} ${quote.priceSuffix}` : quote.price
+    return (
+      productRow +
+      '<tr>' +
+      (withImages ? `<td width="${THUMB}" style="${dcell}width:${THUMB}px;">&nbsp;</td>` : '') +
+      `<td style="${dcell}${withImages ? 'padding-left:12px;' : ''}">Delivery: ${escapeHtml(quote.label)}</td>` +
+      `<td align="right" style="${dcell}padding-left:12px;white-space:nowrap;">${escapeHtml(dprice)}</td>` +
       '</tr>'
     )
   })
@@ -148,12 +173,30 @@ export function renderProductText(
         product.options ? `(${product.options})` : '',
       ].filter(Boolean).join(' ')
       const price = priceLine(product)
+      const delivery = product.deliveryQuote ? `\n${deliveryLine(product.deliveryQuote)}` : ''
       if (options.markdownLinks && product.url) {
         const label = head.replace(/[[\]]/g, '')
-        return price ? `[${label}](${product.url}) - ${price}` : `[${label}](${product.url})`
+        const url = withDeliveryParam(product.url, product.deliveryQuote?.key ?? null)
+        return (price ? `[${label}](${url}) - ${price}` : `[${label}](${url})`) + delivery
       }
-      const line = price ? `${head} - ${price}` : head
+      // The delivery belongs to the product, so it sits under its line and
+      // above the address, which is the thing a reader skips.
+      const line = (price ? `${head} - ${price}` : head) + delivery
       return product.url ? `${line}\n${product.url}` : line
     })
     .join('\n\n')
+}
+
+/** A product address with the chosen delivery service on it, for a channel that
+ *  draws the product itself (Live Chat) and so can draw its delivery too. The
+ *  address unchanged where nothing was chosen or it will not parse. */
+export function withDeliveryParam(url: string, key: string | null): string {
+  if (!key) return url
+  try {
+    const parsed = new URL(url)
+    parsed.searchParams.set(DELIVERY_PARAM, key)
+    return parsed.toString()
+  } catch {
+    return url
+  }
 }

@@ -20,6 +20,7 @@ import {
 import { describeSendAt, plainTextToHtml, toWallClock } from '@/modules/unified-inbox/lib/scheduled'
 import { AttachmentChips, AttachmentPicker, plainReason, type Attachment } from './AttachmentPicker'
 import { ProductPicker, productForAddress, productKey } from './ProductPicker'
+import { useDeliveryPicker } from './DeliveryPicker'
 import { AttachmentDropNotice, AttachmentDropOverlay } from './AttachmentDropChrome'
 import { useAttachmentDrop } from './useAttachmentDrop'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -103,6 +104,8 @@ export function ComposeView({
   base, params, inboxes, defaultInboxId, draft, canAddProducts, draftProducts, timezone,
 }: Props) {
   const router = useRouter()
+  /** "Add delivery" on a product in the writing box, and the menu it opens. */
+  const deliveryPicker = useDeliveryPicker()
   const [inboxId, setInboxId] = useState(draft?.inboxId ?? defaultInboxId ?? '')
   const [to, setTo] = useState((draft?.to ?? []).join(', '))
   const [cc, setCc] = useState((draft?.cc ?? []).join(', '))
@@ -619,6 +622,7 @@ export function ComposeView({
             id="uin-new-text"
             handleRef={editor}
             onPasteAddress={canAddProducts ? pasteProduct : undefined}
+            onBlockAction={canAddProducts ? deliveryPicker.onBlockAction : undefined}
             value={text}
             onChange={(html) => {
               setText(html)
@@ -629,6 +633,7 @@ export function ComposeView({
             placeholder="Write your message"
             label="Your message"
           >
+          {deliveryPicker.menu}
           <div className="uin-composer">
             {/* Who it is from, who it is to and what it is about are four short
                 answers, so they are four short lines with the label beside the
