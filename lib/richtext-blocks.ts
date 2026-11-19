@@ -125,3 +125,57 @@ export function openUpAround(el: HTMLElement): void {
     }
   }
 }
+
+/**
+ * Every pair of blocks with nothing at all between them: no word, no picture,
+ * not even an empty line. Those are the pairs with nowhere to put a caret -
+ * each block is one object, and two of them touching leave no gap a click can
+ * land in - so they are the pairs the box offers a line between.
+ *
+ * Browsers wrap what is inserted in a <div> of their own, so two blocks in
+ * neighbouring wrappers are still touching: the test is what lies between
+ * them, not whether they are siblings.
+ */
+export function touchingBlockPairs(el: HTMLElement): Array<[Element, Element]> {
+  const blocks = Array.from(el.querySelectorAll(`.${BLOCK_CLASS}`))
+  const pairs: Array<[Element, Element]> = []
+  for (let i = 0; i + 1 < blocks.length; i++) {
+    const first = blocks[i]
+    const second = blocks[i + 1]
+    if (!first || !second || first.contains(second)) continue
+    const range = document.createRange()
+    range.setStartAfter(first)
+    range.setEndBefore(second)
+    const between = range.cloneContents()
+    const empty = (between.textContent ?? '').trim() === ''
+      && between.querySelector('img, br, hr, table') === null
+    if (empty) pairs.push([first, second])
+  }
+  return pairs
+}
+
+/**
+ * An empty line straight after a block, with the caret put in it.
+ *
+ * A <div> holding a <br> - what the browser itself makes for a new line in a
+ * box like this - rather than a bare <br>: openUpAround takes a bare break
+ * behind a block out whenever something follows it, and something always
+ * follows this one.
+ */
+export function openLineAfter(el: HTMLElement, block: Element): HTMLElement | null {
+  const parent = block.parentNode
+  if (!parent || !el.contains(block)) return null
+  const line = document.createElement('div')
+  line.appendChild(document.createElement('br'))
+  parent.insertBefore(line, block.nextSibling)
+  el.focus()
+  const selection = window.getSelection()
+  if (selection) {
+    const range = document.createRange()
+    range.setStart(line, 0)
+    range.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(range)
+  }
+  return line
+}

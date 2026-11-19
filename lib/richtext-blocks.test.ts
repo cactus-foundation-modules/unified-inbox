@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { BLOCK_CLASS, keepOutOfBlocks, openUpAround, unnestBlocks } from './richtext-blocks'
+import {
+  BLOCK_CLASS, keepOutOfBlocks, openLineAfter, openUpAround, touchingBlockPairs, unnestBlocks,
+} from './richtext-blocks'
 
 function box(html: string): HTMLElement {
   const el = document.createElement('div')
@@ -95,5 +97,35 @@ describe('one product under another, never inside it', () => {
     const ids = Array.from(el.children).map((c) => /product--(\w)/.exec(c.className)?.[1])
     expect(ids).toEqual(['a', 'b', 'c', 'd'])
     expect(el.querySelector(`.${BLOCK_CLASS} .${BLOCK_CLASS}`)).toBeNull()
+  })
+})
+
+describe('a line between two products that are touching', () => {
+  const idOf = (el: Element) => /product--(\w+)/.exec(el.className)?.[1]
+
+  it('finds pairs with nothing between them, even in separate wrappers', () => {
+    const el = box(`<div>${block('a')}</div><div>${block('b')}</div>${block('c')}`)
+    expect(touchingBlockPairs(el).map(([x, y]) => [idOf(x), idOf(y)]))
+      .toEqual([['a', 'b'], ['b', 'c']])
+  })
+
+  it('leaves out pairs with words or an empty line between them', () => {
+    expect(touchingBlockPairs(box(block('a') + 'cheapest' + block('b')))).toHaveLength(0)
+    expect(touchingBlockPairs(box(block('a') + '<div><br></div>' + block('b')))).toHaveLength(0)
+  })
+
+  it('opens an empty line after the first, puts the caret in it, and the tidy keeps it', () => {
+    const el = box(block('a') + block('b'))
+    document.body.appendChild(el)
+    el.contentEditable = 'true'
+    const first = el.querySelector(`.${BLOCK_CLASS}`)!
+    const line = openLineAfter(el, first)
+    expect(line?.outerHTML).toBe('<div><br></div>')
+    expect(first.nextSibling).toBe(line)
+    expect(window.getSelection()?.getRangeAt(0).startContainer).toBe(line)
+    openUpAround(el)
+    expect(first.nextSibling).toBe(line)
+    expect(touchingBlockPairs(el)).toHaveLength(0)
+    el.remove()
   })
 })

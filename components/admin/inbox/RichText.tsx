@@ -10,6 +10,7 @@ import {
 } from '@/modules/unified-inbox/lib/richtext-links'
 import { isSingleAddress } from '@/modules/unified-inbox/lib/products/address'
 import { LinkIcon, ListIcon, NumberedListIcon, PaletteIcon } from './icons'
+import { useBlockSeams } from './useBlockSeams'
 
 // The writing box, with enough formatting to write an email in and no more.
 //
@@ -355,6 +356,14 @@ export function RichTextBox() {
   const [here, setHere] = useState<
     { href: string; top: number; left: number; maxWidth: number } | null
   >(null)
+  /** The box itself, for the seams between products - see useBlockSeams. State
+   *  rather than a ref so the listeners go on once the box is there. */
+  const [boxEl, setBoxEl] = useState<HTMLDivElement | null>(null)
+  const attachBox = useCallback((el: HTMLDivElement | null) => {
+    attach(el)
+    setBoxEl(el)
+  }, [attach])
+  const seam = useBlockSeams(boxEl, emit)
   const notice = useCallback((el: HTMLElement) => {
     const anchor = anchorAtCaret(el)
     const href = openableHref(anchor?.getAttribute('href') ?? null)
@@ -435,7 +444,7 @@ export function RichTextBox() {
     <div className="uin-richtext">
       <div
         id={id}
-        ref={attach}
+        ref={attachBox}
         className="uin-richtext-box"
         contentEditable
         suppressContentEditableWarning
@@ -491,6 +500,19 @@ export function RichTextBox() {
           emit()
         }}
       />
+      {seam && (
+        // Drawn, not pressed: the box itself answers the click or the tap, so
+        // this never takes the pointer from it.
+        <div
+          className="uin-rt-seam"
+          style={{ top: seam.top, left: seam.left, width: seam.width }}
+          aria-hidden="true"
+        >
+          <span className="uin-rt-seam-tip">
+            {seam.touch ? 'Tap again to add new line' : 'Click to add new line'}
+          </span>
+        </div>
+      )}
       {here && (
         <div
           className="uin-rt-linkbubble"
