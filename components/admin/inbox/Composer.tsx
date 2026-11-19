@@ -31,7 +31,7 @@ import { useComposerOpen } from './composer-open'
 import { ReplySuggestions } from '@/components/admin/ReplySuggestions'
 import type { DraftSendState } from '@/modules/unified-inbox/lib/types'
 import { EMAIL_REPLY_STYLE, type ReplyStyle } from '@/modules/unified-inbox/lib/channel-reply'
-import { appendSlots, refKey, slotHtml, slotRefs } from '@/modules/unified-inbox/lib/products/slots'
+import { appendSlots, bareRef, productsOnMessage, slotHtml, slotRefs, withDelivery } from '@/modules/unified-inbox/lib/products/slots'
 import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 import { pickQuotedPreview, type QuotedPreview } from '@/modules/unified-inbox/lib/quoted-preview'
 import { MessageBody } from './MessageBody'
@@ -241,12 +241,7 @@ export function Composer({
   // and there is no second list that could disagree with what is on the screen.
   const [picked, setPicked] = useState<ProductChoice[]>(draftProducts)
   const [pickingProduct, setPickingProduct] = useState(false)
-  const products = useMemo(() => {
-    const known = new Map(picked.map((one) => [productKey(one), one]))
-    return slotRefs(text)
-      .map((ref) => known.get(refKey(ref)))
-      .filter((one): one is ProductChoice => one !== undefined)
-  }, [picked, text])
+  const products = useMemo(() => productsOnMessage(text, picked), [picked, text])
   /** The writing box, for putting a product where the caret is. */
   const editor = useRef<RichTextHandle | null>(null)
   // Where a click was headed when it was caught, or null when nothing was.
@@ -600,7 +595,7 @@ export function Composer({
             mentions,
             // References only, same as a message: the note is built from what
             // the shop says when it is saved.
-            products: products.map(({ moduleName, kind, id }) => ({ moduleName, kind, id })),
+            products: products.map(bareRef),
           }),
         })
         if (!response.ok) {
@@ -629,7 +624,7 @@ export function Composer({
             attachments: attachments.map(({ key, url, filename, contentType }) => ({
               key, url, filename, contentType,
             })),
-            products: products.map(({ moduleName, kind, id }) => ({ moduleName, kind, id })),
+            products: products.map(bareRef),
             includeOriginalAttachments: mode === 'forward',
             // What is being answered or sent on, so the words quoted underneath
             // are that message's. Left out is the newest on the conversation,
@@ -726,7 +721,7 @@ export function Composer({
     // box was switched to a note stays picked and simply does not travel.
     products: mode === 'note'
       ? []
-      : products.map(({ moduleName, kind, id }) => ({ moduleName, kind, id })),
+      : products.map(bareRef),
     // Undefined is dropped by JSON.stringify, which is exactly what "leave
     // whatever time is on it" has to look like on the wire. A string sets a
     // time, null takes it off.
@@ -1600,7 +1595,7 @@ export function Composer({
           errand, not three trips into the catalogue. */}
       {pickingProduct && (
         <ProductPicker
-          chosen={products}
+          chosen={products.map((one) => withDelivery(one, null))}
           onClose={() => setPickingProduct(false)}
           onPick={(item) => {
             // Into the writing, where the caret is. The block that lands there

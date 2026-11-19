@@ -114,6 +114,41 @@ export function withDelivery<T extends ProductRef | ProductChoice>(ref: T, deliv
   return next
 }
 
+/**
+ * The products a message carries, in the order its writing has them: one per
+ * slot whose product is among those picked, carrying whatever the SLOT says on
+ * top - the delivery chosen on it after it was picked, which the picked list
+ * never hears about.
+ *
+ * Matched with the delivery taken off both sides. The picked list is keyed by
+ * what the catalogue handed over, and comparing on the full key dropped every
+ * product somebody had added a delivery to - silently, since a slot with no
+ * product behind it is simply printed as nothing.
+ */
+export function productsOnMessage(html: string, picked: readonly ProductChoice[]): ProductChoice[] {
+  const known = new Map(picked.map((one) => [refKey(withDelivery(one, null)), one]))
+  const out: ProductChoice[] = []
+  for (const ref of slotRefs(html)) {
+    const one = known.get(refKey(withDelivery(ref, null)))
+    if (one) out.push(withDelivery(one, ref.delivery ?? null))
+  }
+  return out
+}
+
+/** A product as the send and draft routes take it: the reference and nothing
+ *  else, but ALL of the reference. Picks and delivery are part of its key, and a
+ *  reference posted without them no longer matches the slot it is meant to fill,
+ *  so the product would go out as nothing. */
+export function bareRef(ref: ProductRef | ProductChoice): ProductRef {
+  return {
+    moduleName: ref.moduleName,
+    kind: ref.kind,
+    id: ref.id,
+    ...(ref.picks ? { picks: ref.picks } : {}),
+    ...(ref.delivery ? { delivery: ref.delivery } : {}),
+  }
+}
+
 /** The delivery as one line: 'Delivery: Express flat-pack - £25.00 + VAT', or
  *  'Delivery: Standard - Free'. The same sentence lib/products/render.ts prints
  *  into the email and the plain-text half, and the one Live Chat looks for to

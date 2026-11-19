@@ -11,6 +11,8 @@ import {
   slotRefs,
   stripSlots,
   withDelivery,
+  bareRef,
+  productsOnMessage,
 } from './slots'
 import type { ProductChoice, ProductRef } from './types'
 
@@ -183,6 +185,31 @@ describe('a delivery service on a slot', () => {
     expect(html).toContain('Change delivery')
     expect(html.match(/<div/g)).toHaveLength(1)
     expect(slotRefs(sanitizeEmailHtml(html))).toEqual([{ moduleName: 'shop', kind: 'product', id: 'p1', delivery: 'standard' }])
+  })
+})
+
+describe('the products a message carries', () => {
+  // The live fault, 2026-11-19: a product with a delivery added in the box was
+  // not on the message at all, because the composer matched slots against the
+  // picked list on the full key and posted only module, kind and id.
+  it('keeps a product a delivery was added to after it was picked', () => {
+    const plain = product({ id: 'p1' })
+    const other = product({ id: 'p2' })
+    const quote = { key: 'express-delivery', label: 'Express Flat-Pack', description: null, price: '£25.00', priceSuffix: '+ VAT' }
+    const html = slotHtml(product({ id: 'p1', delivery: 'express-delivery', deliveryQuote: quote })) + slotHtml(other)
+    const found = productsOnMessage(html, [plain, other])
+    expect(found.map((one) => refKey(one))).toEqual(['shop:product:p1@express-delivery', 'shop:product:p2'])
+  })
+
+  it('takes a delivery off when the slot no longer has one', () => {
+    const picked = product({ id: 'p1', delivery: 'express-delivery' })
+    expect(productsOnMessage(slotHtml(product({ id: 'p1' })), [picked])[0]?.delivery).toBeUndefined()
+  })
+
+  it('posts the whole reference, picks and delivery included', () => {
+    const one = product({ id: 'p1', picks: 'finish.grey-oak', delivery: 'standard-delivery' })
+    expect(bareRef(one)).toEqual({ moduleName: 'shop', kind: 'product', id: 'p1', picks: 'finish.grey-oak', delivery: 'standard-delivery' })
+    expect(refKey(bareRef(one))).toBe(refKey(one))
   })
 })
 

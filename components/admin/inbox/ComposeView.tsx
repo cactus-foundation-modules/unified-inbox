@@ -33,7 +33,7 @@ import { SendLaterPanel } from './SendLaterPanel'
 import { SnoozePanel } from './SnoozePanel'
 import { AlarmIcon, CloseIcon, PaperclipIcon, TagIcon } from './icons'
 import type { DraftSendState } from '@/modules/unified-inbox/lib/types'
-import { appendSlots, refKey, slotHtml, slotRefs } from '@/modules/unified-inbox/lib/products/slots'
+import { appendSlots, bareRef, productsOnMessage, slotHtml, slotRefs, withDelivery } from '@/modules/unified-inbox/lib/products/slots'
 import type { ProductChoice } from '@/modules/unified-inbox/lib/products/types'
 
 // Writing a brand new message, rather than answering one somebody else started.
@@ -138,12 +138,7 @@ export function ComposeView({
   // second list that could disagree with what is on the screen.
   const [picked, setPicked] = useState<ProductChoice[]>(draftProducts)
   const [pickingProduct, setPickingProduct] = useState(false)
-  const products = useMemo(() => {
-    const known = new Map(picked.map((one) => [productKey(one), one]))
-    return slotRefs(text)
-      .map((ref) => known.get(refKey(ref)))
-      .filter((one): one is ProductChoice => one !== undefined)
-  }, [picked, text])
+  const products = useMemo(() => productsOnMessage(text, picked), [picked, text])
   /** The writing box, for putting a product where the caret is. */
   const editor = useRef<RichTextHandle | null>(null)
   // Which job is in flight, rather than merely that one is: a button that says
@@ -402,7 +397,7 @@ export function ComposeView({
           attachments: attachments.map(({ key, url, filename, contentType }) => ({
             key, url, filename, contentType,
           })),
-          products: products.map(({ moduleName, kind, id }) => ({ moduleName, kind, id })),
+          products: products.map(bareRef),
           idempotencyKey: token.current,
           draftId: draftId ?? undefined,
         }),
@@ -475,7 +470,7 @@ export function ComposeView({
       attachments: attachments.map(({ key, url, filename, contentType, sizeBytes }) => ({
         key, url, filename, contentType, sizeBytes,
       })),
-      products: products.map(({ moduleName, kind, id }) => ({ moduleName, kind, id })),
+      products: products.map(bareRef),
       // Undefined is dropped by JSON.stringify, which is what "leave whatever
       // time is on it" looks like on the wire. A string sets one, null takes
       // it off.
@@ -1010,7 +1005,7 @@ export function ComposeView({
                 three trips back into it. */}
             {pickingProduct && (
               <ProductPicker
-                chosen={products}
+                chosen={products.map((one) => withDelivery(one, null))}
                 onClose={() => setPickingProduct(false)}
                 onPick={(item) => {
                   // Into the writing, where the caret is - see the same handler
