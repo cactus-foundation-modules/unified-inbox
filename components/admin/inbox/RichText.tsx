@@ -4,7 +4,7 @@ import {
   createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
   type ReactNode,
 } from 'react'
-import { BLOCK_ACT_CLASS, BLOCK_CLASS, BLOCK_OFF_CLASS, openUpAround } from '@/modules/unified-inbox/lib/richtext-blocks'
+import { BLOCK_ACT_CLASS, BLOCK_CLASS, BLOCK_OFF_CLASS, keepOutOfBlocks, openUpAround } from '@/modules/unified-inbox/lib/richtext-blocks'
 import {
   anchorAtCaret, linkifyEditable, openableHref, type LinkifyMode,
 } from '@/modules/unified-inbox/lib/richtext-links'
@@ -264,6 +264,9 @@ export function RichText({
           end.collapse(false)
           return end
         })()
+      // Never into another block: a caret left at the end of the last product
+      // would put the next one inside it, side by side instead of underneath.
+      keepOutOfBlocks(el, range)
       selection.removeAllRanges()
       selection.addRange(range)
     }

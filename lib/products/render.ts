@@ -103,14 +103,21 @@ export function renderProductTable(
 
   const base = `font-family:${FONT};font-size:15px;line-height:1.45;color:${TEXT};`
 
-  const rows = products.map((product, index) => {
-    const last = index === products.length - 1
+  // Each product in a box of its own, stacked one under the next with a hair of
+  // space between - the same object the writing box drew while it was being
+  // written. The rounded corners are what every client but desktop Outlook
+  // draws; Outlook squares them off and keeps the border, which is the right way
+  // round for it to fail.
+  //
+  // The box's border goes on a <table> with border-collapse:separate, not on the
+  // cells or a <tr>: a border on <tr> is one of the things Outlook does not
+  // draw, and border-radius does nothing at all under border-collapse:collapse.
+  const boxes = products.map((product) => {
     const quote = product.deliveryQuote ?? null
-    // The rule goes on the cells, not the row: a border on <tr> is one of the
-    // things Outlook simply does not draw. A product with a delivery under it
-    // hands its rule down to the delivery row, so the two read as one item.
-    const rule = last ? '' : `border-bottom:1px solid ${RULE};`
-    const cell = `${base}padding:12px 0;vertical-align:top;${quote ? '' : rule}`
+    // The box carries the padding round the edge; the cells carry the space
+    // between them. A product with a delivery under it keeps the two lines
+    // close, so they read as one item.
+    const cell = `${base}padding:12px 0 ${quote ? '4px' : '12px'} 12px;vertical-align:top;`
     const options = product.options
       ? `<br /><span style="color:${MUTED};font-size:13px;">${escapeHtml(product.options)}</span>`
       : ''
@@ -119,33 +126,45 @@ export function renderProductTable(
     const productRow =
       '<tr>' +
       (withImages ? thumbCell(product, cell) : '') +
-      `<td style="${cell}${withImages ? 'padding-left:12px;' : ''}">` +
+      `<td style="${cell}">` +
       `<strong>${linked(escapeHtml(product.name), product.url)}</strong>` +
       options +
       '</td>' +
-      `<td align="right" style="${cell}padding-left:12px;white-space:nowrap;">${escapeHtml(price)}</td>` +
+      `<td align="right" style="${cell}padding-right:12px;white-space:nowrap;">${escapeHtml(price)}</td>` +
       '</tr>'
-    if (!quote) return productRow
 
     // The delivery chosen for it, on a line of its own under the name and
     // priced in the same column, so a customer adding it up adds two figures
     // that sit one above the other. Muted, because the product is the subject.
-    const dcell = `${base}padding:0 0 12px;vertical-align:top;color:${MUTED};font-size:14px;${rule}`
-    const dprice = quote.priceSuffix ? `${quote.price} ${quote.priceSuffix}` : quote.price
+    const dcell = `${base}padding:0 0 12px 12px;vertical-align:top;color:${MUTED};font-size:14px;`
+    const dprice = quote ? (quote.priceSuffix ? `${quote.price} ${quote.priceSuffix}` : quote.price) : ''
+    const deliveryRow = quote
+      ? '<tr>' +
+        (withImages ? `<td width="${THUMB}" style="${dcell}width:${THUMB}px;">&nbsp;</td>` : '') +
+        `<td style="${dcell}">Delivery: ${escapeHtml(quote.label)}</td>` +
+        `<td align="right" style="${dcell}padding-right:12px;white-space:nowrap;">${escapeHtml(dprice)}</td>` +
+        '</tr>'
+      : ''
+
     return (
+      '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" ' +
+      `style="border-collapse:separate;width:100%;border:1px solid ${RULE};border-radius:8px;">` +
       productRow +
-      '<tr>' +
-      (withImages ? `<td width="${THUMB}" style="${dcell}width:${THUMB}px;">&nbsp;</td>` : '') +
-      `<td style="${dcell}${withImages ? 'padding-left:12px;' : ''}">Delivery: ${escapeHtml(quote.label)}</td>` +
-      `<td align="right" style="${dcell}padding-left:12px;white-space:nowrap;">${escapeHtml(dprice)}</td>` +
-      '</tr>'
+      deliveryRow +
+      '</table>'
     )
   })
 
+  // One row per box in an outer table, the gap as padding under every box but
+  // the last: a margin between tables is another thing Outlook ignores.
+  const GAP = 6
   return (
     '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" ' +
     `style="border-collapse:collapse;width:100%;margin:${margin};">` +
-    rows.join('') +
+    boxes
+      .map((box, index) =>
+        `<tr><td style="padding:${index === boxes.length - 1 ? '0' : `0 0 ${GAP}px`};">${box}</td></tr>`)
+      .join('') +
     '</table>'
   )
 }

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { BLOCK_CLASS, openUpAround } from './richtext-blocks'
+import { BLOCK_CLASS, keepOutOfBlocks, openUpAround, unnestBlocks } from './richtext-blocks'
 
 function box(html: string): HTMLElement {
   const el = document.createElement('div')
@@ -62,5 +62,38 @@ describe('writing round a block', () => {
     const el = box('<p>Just words.</p>')
     openUpAround(el)
     expect(el.innerHTML).toBe('<p>Just words.</p>')
+  })
+})
+
+describe('one product under another, never inside it', () => {
+  it('moves a caret left inside a block to just after it', () => {
+    const el = box(block('a') + 'after')
+    const inner = el.querySelector(`.${BLOCK_CLASS}`)!.firstChild!
+    const range = document.createRange()
+    range.setStart(inner, 1)
+    range.collapse(true)
+    keepOutOfBlocks(el, range)
+    expect(range.startContainer).toBe(el)
+    expect(range.startOffset).toBe(1)
+  })
+
+  it('leaves a caret in plain writing alone', () => {
+    const el = box('words' + block('a'))
+    const range = document.createRange()
+    range.setStart(el.firstChild!, 2)
+    range.collapse(true)
+    keepOutOfBlocks(el, range)
+    expect(range.startContainer).toBe(el.firstChild)
+    expect(range.startOffset).toBe(2)
+  })
+
+  it('lifts blocks nested inside one another out, in order', () => {
+    const nested = (id: string, inside = '') =>
+      `<div class="uin-product-slot ${BLOCK_CLASS} uin-ps--shop--product--${id}" contenteditable="false">x${inside}</div>`
+    const el = box(nested('a', nested('b', nested('c')) + nested('d')))
+    unnestBlocks(el)
+    const ids = Array.from(el.children).map((c) => /product--(\w)/.exec(c.className)?.[1])
+    expect(ids).toEqual(['a', 'b', 'c', 'd'])
+    expect(el.querySelector(`.${BLOCK_CLASS} .${BLOCK_CLASS}`)).toBeNull()
   })
 })

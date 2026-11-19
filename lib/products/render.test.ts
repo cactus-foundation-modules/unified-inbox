@@ -32,8 +32,9 @@ describe('renderProductTable', () => {
 
   it('has no quantity column, because nothing here has been ordered', () => {
     const html = renderProductTable([product()])
-    // Two cells to a row without pictures: the name and the price.
-    expect(html.match(/<td/g)).toHaveLength(2)
+    // Two cells to a row without pictures, the name and the price, inside the
+    // one cell of the outer table that holds the box.
+    expect(html.match(/<td/g)).toHaveLength(3)
   })
 
   it('carries no margin when it stands in for a block in the writing', () => {
@@ -67,7 +68,7 @@ describe('renderProductTable', () => {
       product({ imageUrl: 'https://example.com/a.jpg' }),
       product({ id: 'p2', imageUrl: null }),
     ])
-    expect(mixed.match(/<td/g)).toHaveLength(6)
+    expect(mixed.match(/<td/g)).toHaveLength(8)
   })
 
   it('links the name and the picture to the product page', () => {
@@ -99,10 +100,16 @@ describe('renderProductTable', () => {
     expect(html).not.toContain('onmouseover="alert(1)"')
   })
 
-  it('draws the rule on the cells rather than the row, because Outlook', () => {
+  it('draws each product in a rounded box of its own, stacked with a small gap', () => {
     const html = renderProductTable([product(), product({ id: 'p2' })])
+    // On the table, never the row: Outlook does not draw a border on a <tr>,
+    // and a radius means nothing under border-collapse:collapse.
     expect(html).not.toContain('<tr style')
-    expect(html).toContain('border-bottom:1px solid')
+    expect(html.match(/border-collapse:separate;width:100%;border:1px solid #e5e5e5;border-radius:8px;/g))
+      .toHaveLength(2)
+    // The gap under the first box and none under the last.
+    expect(html).toContain('<td style="padding:0 0 6px;">')
+    expect(html).toContain('<td style="padding:0;">')
   })
 })
 
@@ -140,14 +147,15 @@ describe('a delivery chosen beside a product', () => {
 
   it('prints the delivery on its own row, priced in the price column', () => {
     const html = renderProductTable([product({ delivery: 'express', deliveryQuote: quote })])
-    expect(html.match(/<tr>/g)).toHaveLength(2)
+    // The outer row holding the box, the product and its delivery.
+    expect(html.match(/<tr>/g)).toHaveLength(3)
     expect(html).toContain('Delivery: Express flat-pack')
     expect(html).toContain('£25.00 + VAT')
   })
 
   it('prints nothing extra where the service is no longer offered', () => {
     const html = renderProductTable([product({ delivery: 'express', deliveryQuote: null })])
-    expect(html.match(/<tr>/g)).toHaveLength(1)
+    expect(html.match(/<tr>/g)).toHaveLength(2)
     expect(html).not.toContain('Delivery:')
   })
 

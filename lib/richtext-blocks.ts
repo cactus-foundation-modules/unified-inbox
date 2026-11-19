@@ -33,6 +33,54 @@ function hasContentBeside(el: HTMLElement, node: Node, side: 'after' | 'before')
   return rest.textContent?.trim() !== '' || rest.querySelector(`img, .${BLOCK_CLASS}`) !== null
 }
 
+/** The outermost block holding this node inside the box, or null when it sits
+ *  in plain writing. */
+function outermostBlock(el: HTMLElement, node: Node | null): Element | null {
+  let found: Element | null = null
+  for (let n: Node | null = node; n && n !== el; n = n.parentNode) {
+    if (n instanceof Element && n.classList.contains(BLOCK_CLASS)) found = n
+  }
+  return found
+}
+
+/**
+ * Moves a caret that has ended up INSIDE a block to just after it.
+ *
+ * A block is one object, so there is no inside to put anything in - but the
+ * browser does not always agree. After a block is inserted, Safari and Chrome
+ * both leave the selection at the end of the block's own last span, and the
+ * next product picked went in there: nested in the one before, each squeezed
+ * into a flex row beside its host, three products wide and one syllable to a
+ * line. Whatever goes in at the caret goes after the block instead.
+ */
+export function keepOutOfBlocks(el: HTMLElement, range: Range): void {
+  const block = outermostBlock(el, range.endContainer) ?? outermostBlock(el, range.startContainer)
+  if (!block) return
+  range.setStartAfter(block)
+  range.collapse(true)
+}
+
+/**
+ * Lifts any block that has been nested inside another out to sit after it, in
+ * the order they were in. The repair for drafts saved while keepOutOfBlocks was
+ * not there - and a guard for the send path, which finds a block by matching to
+ * its first closing tag and would cut a nested pair in half.
+ */
+export function unnestBlocks(el: HTMLElement): void {
+  // Hosts worked out before anything moves, so every nested block - however
+  // deep - goes after its original top-level host, in document order.
+  const moves = Array.from(el.querySelectorAll(`.${BLOCK_CLASS} .${BLOCK_CLASS}`))
+    .map((block) => ({ block, host: outermostBlock(el, block.parentNode) }))
+  const lastPlaced = new Map<Element, Node>()
+  for (const { block, host } of moves) {
+    const parent = host?.parentNode
+    if (!host || !parent) continue
+    const after = lastPlaced.get(host) ?? host
+    parent.insertBefore(block, after.nextSibling)
+    lastPlaced.set(host, block)
+  }
+}
+
 /**
  * A line to type on at each END of the writing box, and nowhere else.
  *
@@ -53,6 +101,7 @@ function hasContentBeside(el: HTMLElement, node: Node, side: 'after' | 'before')
  * runs on every insert and on every draft opened.
  */
 export function openUpAround(el: HTMLElement): void {
+  unnestBlocks(el)
   for (const block of Array.from(el.querySelectorAll(`.${BLOCK_CLASS}`))) {
     const parent = block.parentNode
     if (!parent) continue
