@@ -443,6 +443,38 @@ export async function claimRuleRun(ruleId: string, messageId: string, threadId: 
   return rows[0]?.id ?? null
 }
 
+/**
+ * The other copies of one email sent between two of the site's own addresses.
+ *
+ * The collecting pass files that mail once per inbox (lib/sync.ts, "Mail
+ * between two of our own addresses"): the receiving inbox gets it inbound, the
+ * sending inbox gets it outbound, on conversations of their own, tied together
+ * only by `internal_key`. Rules read the inbound side, so a rule that marks the
+ * login code to sarah@ done would otherwise leave the sending side's copy - the
+ * one the "All" list shows from hi@ - open for ever.
+ *
+ * Same account, a different conversation, never one merged away. Empty for
+ * everything that is not internal mail, which is nearly everything.
+ */
+export async function internalCopies(messageId: string): Promise<{ messageId: string; threadId: string }[]> {
+  const rows = await prisma.$queryRaw<{ id: string; thread_id: string }[]>`
+    SELECT o."id", o."thread_id"
+      FROM "uin_messages" m
+      JOIN "uin_messages" o
+        ON o."internal_key" = m."internal_key"
+       AND o."connection_id" IS NOT DISTINCT FROM m."connection_id"
+       AND o."id" <> m."id"
+       AND o."thread_id" <> m."thread_id"
+      JOIN "uin_threads" t ON t."id" = o."thread_id"
+     WHERE m."id" = ${messageId}
+       AND m."internal_key" IS NOT NULL
+       AND o."direction" <> 'note'
+       AND t."merged_into_id" IS NULL
+     ORDER BY o."created_at" ASC, o."id" ASC
+  `
+  return rows.map((r) => ({ messageId: r.id, threadId: r.thread_id }))
+}
+
 /** The claim, finished: what the rule did, and the rule's tally moved on. */
 export async function finishRuleRun(input: {
   runId: string

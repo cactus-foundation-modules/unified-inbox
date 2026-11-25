@@ -24,6 +24,7 @@ import {
   finishRuleRun,
   findMergeTarget,
   getRule,
+  internalCopies,
   loadRuleMessage,
   loadRuleMessages,
   newestInboundMessageIds,
@@ -194,6 +195,60 @@ function joinSummaries(parts: string[]): string {
  * it is about to leave.
  */
 async function applyRule(rule: RuleRow, message: RuleMessage): Promise<boolean> {
+  const own = await applyRuleToOwnThread(rule, message)
+  // Asked even when the message's own go was spent long ago, so "run on recent
+  // mail" tidies a sending-side copy that an earlier version of this left open.
+  const copies = await applyRuleToInternalCopies(rule, message)
+  return own || copies
+}
+
+/** The steps that say how a conversation stands - done, read, snoozed - and so
+ *  hold for every copy of the same email. Assigning and moving are about one
+ *  inbox's desk, and merging only ever means the conversation the message
+ *  started, so those three stay with the copy the rule read. */
+const CARRIED_TO_COPIES: ReadonlySet<RuleAction['type']> = new Set(['markDone', 'markRead', 'snooze'])
+
+/**
+ * Mail between two of the site's own addresses is filed once per inbox (see
+ * internalCopies). The rule reads the inbound copy; the other copies get its
+ * done / read / snooze steps too, each claimed on its own message so it runs
+ * once and shows in the rule's activity like anything else.
+ */
+async function applyRuleToInternalCopies(rule: RuleRow, message: RuleMessage): Promise<boolean> {
+  const carried = rule.actions.filter((a) => CARRIED_TO_COPIES.has(a.type))
+  if (carried.length === 0) return false
+  let acted = false
+  for (const copy of await internalCopies(message.messageId)) {
+    const runId = await claimRuleRun(rule.id, copy.messageId, copy.threadId)
+    if (!runId) continue
+    const said: string[] = []
+    for (const action of carried) {
+      try {
+        const outcome = await runAction(action, rule, message, copy.threadId)
+        if (outcome) said.push(outcome.summary)
+      } catch (err) {
+        console.error(`[unified-inbox] rule "${rule.name}" failed on the copy ${copy.messageId} of message ${message.messageId}`, err)
+      }
+    }
+    if (said.length === 0) {
+      await releaseRuleRun(runId)
+      continue
+    }
+    const summary = `${joinSummaries(said)} (the sending side’s copy)`
+    await finishRuleRun({
+      runId,
+      ruleId: rule.id,
+      threadId: copy.threadId,
+      summary: summary.charAt(0).toUpperCase() + summary.slice(1),
+      detail: { mergeIds: [], fromThreadId: copy.threadId, copyOf: message.messageId },
+    })
+    acted = true
+  }
+  return acted
+}
+
+/** The rule on the conversation the message it read is on. */
+async function applyRuleToOwnThread(rule: RuleRow, message: RuleMessage): Promise<boolean> {
   const runId = await claimRuleRun(rule.id, message.messageId, message.threadId)
   if (!runId) return false
 

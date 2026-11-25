@@ -90,6 +90,7 @@ describe.runIf(shouldRun)('inbox rules, against a real database', () => {
     to: string[]
     sentAt: Date
     body?: string
+    internalKey?: string
   }): Promise<{ threadId: string; messageId: string }> {
     const threadId = await lib.createThread({
       inboxId: over.inboxId,
@@ -127,7 +128,7 @@ describe.runIf(shouldRun)('inbox rules, against a real database', () => {
       threadMatch: 'new',
       routedOn: 'to',
       autoKind: null,
-      internalKey: null,
+      internalKey: over.internalKey ?? null,
     })
     if (!messageId) throw new Error('message not written')
     return { threadId, messageId }
@@ -375,6 +376,65 @@ describe.runIf(shouldRun)('inbox rules, against a real database', () => {
     expect(thread?.assigneeUserId).toBe(userId)
     const runs = await rulesDb.listRuleRuns(rule.id)
     expect(runs[0]?.summary).toMatch(/^Assigned it, moved it to Purchasing, marked it read and marked it done$/)
+    await rulesDb.deleteRule(rule.id)
+  })
+  it('marks the sending side’s copy of mail between our own addresses done too, and tidies one left open', async () => {
+    const rule = await rulesDb.createRule({
+      name: 'Team login codes',
+      enabled: true,
+      trigger: 'newConversation',
+      match: 'all',
+      conditions: [
+        { id: 'a', field: 'subject', op: 'startsWith', value: 'Your login code:' },
+        { id: 'b', field: 'from', op: 'is', value: 'purchasing@shop.example' },
+      ],
+      actions: [{ type: 'markRead' }, { type: 'markDone' }],
+      stopProcessing: false,
+    }, null)
+
+    // One email from one of our addresses to another, filed once per inbox.
+    const pair = async (key: string) => {
+      const sent = await conversation({
+        inboxId: purchasingInbox, subject: 'Your login code: 123456', direction: 'out',
+        from: 'purchasing@shop.example', to: ['chris@shop.example'], sentAt: hoursAgo(1), internalKey: key,
+      })
+      const received = await conversation({
+        inboxId: chrisInbox, subject: 'Your login code: 123456', direction: 'in',
+        from: 'purchasing@shop.example', to: ['chris@shop.example'], sentAt: hoursAgo(1), internalKey: key,
+      })
+      return { sent, received }
+    }
+
+    // On arrival: both copies end up done.
+    const fresh = await pair('sha256-rt-internal-one')
+    expect(await rulesDb.internalCopies(fresh.received.messageId)).toEqual([fresh.sent])
+    await engine.applyRulesToMessage(fresh.received.messageId)
+    expect((await rulesDb.threadBasics(fresh.received.threadId))?.status).toBe('done')
+    expect((await rulesDb.threadBasics(fresh.sent.threadId))?.status).toBe('done')
+    const runs = await rulesDb.listRuleRuns(rule.id)
+    expect(runs).toHaveLength(2)
+    expect(runs.some((r) => r.messageId === fresh.sent.messageId && /sending side/.test(r.summary ?? ''))).toBe(true)
+
+    // Once only: a second go changes nothing and logs nothing.
+    await engine.applyRulesToMessage(fresh.received.messageId)
+    expect(await rulesDb.listRuleRuns(rule.id)).toHaveLength(2)
+
+    // One the rule already had its go on before copies were looked after: the
+    // received side's claim is spent, and "run on recent mail" still closes the
+    // sending side.
+    const stranded = await pair('sha256-rt-internal-two')
+    const spent = await rulesDb.claimRuleRun(rule.id, stranded.received.messageId, stranded.received.threadId)
+    expect(spent).not.toBeNull()
+    let after: string | null = null
+    for (let i = 0; i < 20; i++) {
+      const slice = await engine.backfillRule(rule.id, 7, after)
+      if ('error' in slice) throw new Error(slice.error)
+      if (slice.done || !slice.next) break
+      after = slice.next
+    }
+    expect((await rulesDb.threadBasics(stranded.sent.threadId))?.status).toBe('done')
+    expect((await rulesDb.threadBasics(stranded.received.threadId))?.status).toBe('open')
+
     await rulesDb.deleteRule(rule.id)
   })
 })
