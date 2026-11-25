@@ -984,9 +984,11 @@ async function fileMessage(
     && !junk && !automated && !securityMail
   // The site's own rules (lib/rules-engine.ts), on the same terms: new post
   // only, never the months of history the first pass copies, never junk, a
-  // bounce or the site's own login codes.
-  const rulesOnArrival = (side: 'in' | 'out') => side === 'in'
-    && pass === 'forward'
+  // bounce or the site's own login codes. Both directions: mail somebody sent
+  // from Outlook that starts a conversation of its own gets a rule's merge
+  // (and only that - see actionsForMessage in lib/rules.ts). Sent mail this
+  // hub sent itself is never written here twice, so never ruled twice.
+  const rulesOnArrival = pass === 'forward'
     && !junk && !automated && !securityMail
 
   // A bounce is filed against the message it is about as well as on the
@@ -1308,7 +1310,7 @@ async function fileMessage(
       primaryThread ??= side_.threadId
       if (side_.messageId) written.push(side_.messageId)
       if (side_.messageId && offerOnArrival(side.direction)) arrived.push(side_.messageId)
-      if (side_.messageId && rulesOnArrival(side.direction)) ruled.push(side_.messageId)
+      if (side_.messageId && rulesOnArrival) ruled.push(side_.messageId)
     }
 
     await markLocationProcessed({
@@ -1370,7 +1372,7 @@ async function fileMessage(
   // isAccountSecurityMail for the loop that would otherwise start.
   // The site's own rules, before anybody is told - see the internal branch
   // above for why. Never throws.
-  if (rulesOnArrival(direction)) await applyRulesToMessage(messageId)
+  if (rulesOnArrival) await applyRulesToMessage(messageId)
 
   if (!junk && !securityMail) await queueMessageWebhooks(messageId)
 

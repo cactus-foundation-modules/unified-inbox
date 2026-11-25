@@ -68,6 +68,8 @@ const media = vi.hoisted(() => ({
 }))
 
 vi.mock('./db', () => db)
+const rulesEngine = vi.hoisted(() => ({ applyRulesToMessage: vi.fn(async () => {}) }))
+vi.mock('./rules-engine', () => rulesEngine)
 vi.mock('./transport', async () => {
   const real = await vi.importActual<typeof import('./transport')>('./transport')
   return { ...real, ...transport }

@@ -19,6 +19,7 @@ import { normaliseAddress } from './addresses'
 import { buildSnippet, cleanMessageId, normaliseSubject } from './threading'
 import { cacheAttachment } from './attachments'
 import { htmlToText } from './html'
+import { applyRulesToMessage } from './rules-engine'
 
 // ---------------------------------------------------------------------------
 // Core handing this module a copy of another module's automatic email
@@ -141,6 +142,12 @@ async function record(email: RecordedOutboundEmail): Promise<void> {
   })
 
   if (keepFiles) await keepAttachments(row.id, email)
+
+  // A new conversation of its own, so the site's merge rules get their look:
+  // "payment sent for PO-00093" belongs under PO-00093 whoever wrote it. Only
+  // the merge step ever applies to mail we sent (actionsForMessage in
+  // lib/rules.ts). Never throws.
+  if (!existingThreadId) await applyRulesToMessage(row.id)
 
   // A new thread starts out counted and previewed by its creation; one that
   // already held mail has to be rolled forward, or the list keeps showing the

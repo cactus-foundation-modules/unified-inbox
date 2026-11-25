@@ -172,10 +172,21 @@ export async function reorderRules(ids: string[]): Promise<void> {
 // What a rule sees of a message.
 // ---------------------------------------------------------------------------
 
+/** The messages a rule may read, as a WHERE clause over `m` (uin_messages)
+ *  joined to `t` (its uin_threads row). One definition, so the live run, "run
+ *  on recent mail" and the preview can never disagree about what they see. */
+const RULE_READABLE = Prisma.sql`(
+  (m."direction" = 'in' OR (m."direction" = 'out' AND m."delivery_status" IS DISTINCT FROM 'failed'))
+  AND m."auto_kind" IS NULL
+  AND t."merged_into_id" IS NULL
+)`
+
 /**
  * One message in the shape a rule reads, or null when it is not one a rule
- * should see: gone, not inbound, an automatic message (a bounce, a newsletter
- * header), or on a conversation that has itself been merged away.
+ * should see: gone, a note, an automatic message (a bounce, a newsletter
+ * header), a send that failed, or on a conversation that has itself been
+ * merged away. Mail we sent is seen, flagged `sent` - what a rule may do to
+ * it is decided in lib/rules.ts (actionsForMessage).
  *
  * "Starts its conversation" means nothing earlier on the same conversation
  * other than notes - read live rather than taken from how the message was
@@ -191,7 +202,7 @@ export async function loadRuleMessage(messageId: string): Promise<RuleMessage | 
 export async function loadRuleMessages(messageIds: string[]): Promise<RuleMessage[]> {
   if (messageIds.length === 0) return []
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT m."id", m."thread_id", m."from_address", m."from_name", m."to_addresses", m."cc_addresses",
+    SELECT m."id", m."thread_id", m."direction", m."from_address", m."from_name", m."to_addresses", m."cc_addresses",
            m."subject", m."body_text", m."has_attachments",
            t."inbox_id", t."channel",
            NOT EXISTS (
@@ -204,8 +215,7 @@ export async function loadRuleMessages(messageIds: string[]): Promise<RuleMessag
       FROM "uin_messages" m
       JOIN "uin_threads" t ON t."id" = m."thread_id"
      WHERE m."id" = ANY(${messageIds}::text[])
-       AND m."direction" = 'in'
-       AND m."auto_kind" IS NULL
+       AND ${RULE_READABLE}
        AND t."merged_into_id" IS NULL
   `
   const byId = new Map(rows.map((r) => [r.id as string, r]))
@@ -225,18 +235,19 @@ export async function loadRuleMessages(messageIds: string[]): Promise<RuleMessag
       bodyText: (r.body_text as string | null) ?? null,
       hasAttachments: !!r.has_attachments,
       startsConversation: !!r.starts,
+      sent: r.direction === 'out',
     })
   }
   return out
 }
 
 /**
- * Inbound messages from the last `days`, oldest first, one page at a time -
+ * Messages from the last `days`, oldest first, one page at a time -
  * what "run on recent mail" walks. Oldest first so that a merge rule finds
  * each conversation's partner already in place, rather than merging a reply
  * into something that was itself about to be merged.
  */
-export async function recentInboundMessageIds(
+export async function recentRuleMessageIds(
   days: number,
   after: string | null,
   limit: number,
@@ -245,9 +256,7 @@ export async function recentInboundMessageIds(
     SELECT m."id"
       FROM "uin_messages" m
       JOIN "uin_threads" t ON t."id" = m."thread_id"
-     WHERE m."direction" = 'in'
-       AND m."auto_kind" IS NULL
-       AND t."merged_into_id" IS NULL
+     WHERE ${RULE_READABLE}
        AND m."created_at" >= now() - (${days} * interval '1 day')
        AND (
          ${after}::text IS NULL
@@ -259,16 +268,14 @@ export async function recentInboundMessageIds(
   return rows.map((r) => r.id)
 }
 
-/** The newest inbound messages first, for the preview - which wants to show
+/** The newest messages first, for the preview - which wants to show
  *  what a rule would have done lately, not in mid-September. */
-export async function newestInboundMessageIds(days: number, limit: number): Promise<string[]> {
+export async function newestRuleMessageIds(days: number, limit: number): Promise<string[]> {
   const rows = await prisma.$queryRaw<{ id: string }[]>`
     SELECT m."id"
       FROM "uin_messages" m
       JOIN "uin_threads" t ON t."id" = m."thread_id"
-     WHERE m."direction" = 'in'
-       AND m."auto_kind" IS NULL
-       AND t."merged_into_id" IS NULL
+     WHERE ${RULE_READABLE}
        AND m."created_at" >= now() - (${days} * interval '1 day')
      ORDER BY m."sent_at" DESC, m."id" DESC
      LIMIT ${limit}

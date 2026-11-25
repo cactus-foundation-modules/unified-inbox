@@ -26,6 +26,8 @@ const db = vi.hoisted(() => ({
   recordEvent: vi.fn(),
 }))
 vi.mock('./db', () => db)
+const rulesEngine = vi.hoisted(() => ({ applyRulesToMessage: vi.fn(async () => {}) }))
+vi.mock('./rules-engine', () => rulesEngine)
 
 const media = vi.hoisted(() => ({
   getActiveMediaProvider: vi.fn(),
@@ -95,6 +97,12 @@ describe('filing a module email', () => {
         authorUserId: null,
       }),
     )
+  })
+
+  it('offers a new conversation to the site\'s merge rules', async () => {
+    senders.getModuleCopyInboxId.mockResolvedValue('inbox-1')
+    await unifiedInboxOutboundRecord.record(EMAIL)
+    expect(rulesEngine.applyRulesToMessage).toHaveBeenCalledWith('message-1')
   })
 
   it('strips the brackets off a Message-ID core put on it', async () => {
@@ -179,6 +187,8 @@ describe('a module naming the conversation', () => {
     expect(db.createOutboundThread).not.toHaveBeenCalled()
     expect(db.insertOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'thread-9' }))
     expect(db.touchThread).toHaveBeenCalledWith('thread-9', expect.objectContaining({ direction: 'out', markUnread: false }))
+    // Already on the conversation it belongs to: nothing for a rule to merge.
+    expect(rulesEngine.applyRulesToMessage).not.toHaveBeenCalled()
   })
 
   it('opens a done or snoozed order conversation again, and says why', async () => {

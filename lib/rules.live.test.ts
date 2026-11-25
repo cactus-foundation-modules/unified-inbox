@@ -317,6 +317,49 @@ describe.runIf(shouldRun)('inbox rules, against a real database', () => {
     await rulesDb.deleteRule(rule.id)
   })
 
+  it('merges a new email we sent into the order it mentions, and does nothing else to it', async () => {
+    const rule = await rulesDb.createRule(mergeRule({
+      actions: [
+        { type: 'mergeByReference', pattern: 'PO-#####', lookIn: 'subject', sameCompany: true, withinDays: 60 },
+        { type: 'markDone' },
+      ],
+    }), null)
+    const po = await conversation({
+      inboxId: purchasingInbox, subject: 'Purchase order PO-00600 from Shop', direction: 'out',
+      from: 'purchasing@shop.example', to: ['sales@six.example'], sentAt: hoursAgo(10),
+    })
+    // Another company's order with the same number: the recipient decides.
+    const otherCompany = await conversation({
+      inboxId: purchasingInbox, subject: 'Purchase order PO-00600 for Seven', direction: 'out',
+      from: 'purchasing@shop.example', to: ['sales@seven.example'], sentAt: hoursAgo(11),
+    })
+    const payment = await conversation({
+      inboxId: purchasingInbox, subject: 'Payment sent for purchase order PO-00600', direction: 'out',
+      from: 'purchasing@shop.example', to: ['accounts@six.example'], sentAt: hoursAgo(1),
+    })
+
+    await engine.applyRulesToMessage(payment.messageId)
+    expect(await mergedInto(payment.threadId)).toBe(po.threadId)
+    expect(await mergedInto(otherCompany.threadId)).toBeNull()
+    // The merge only: mail we sent is never marked done by a rule.
+    expect((await rulesDb.threadBasics(po.threadId))?.status).not.toBe('done')
+    const runs = await rulesDb.listRuleRuns(rule.id)
+    expect(runs.filter((r) => r.messageId === payment.messageId)).toHaveLength(1)
+
+    // A rule with no merge in it never touches mail we sent.
+    const doneOnly = await rulesDb.createRule(mergeRule({ name: 'Done only', conditions: [], actions: [{ type: 'markDone' }] }), null)
+    const ours = await conversation({
+      inboxId: purchasingInbox, subject: 'A note to a supplier', direction: 'out',
+      from: 'purchasing@shop.example', to: ['sales@six.example'], sentAt: hoursAgo(1),
+    })
+    await engine.applyRulesToMessage(ours.messageId)
+    expect((await rulesDb.threadBasics(ours.threadId))?.status).not.toBe('done')
+    expect(await rulesDb.listRuleRuns(doneOnly.id)).toHaveLength(0)
+
+    await rulesDb.deleteRule(doneOnly.id)
+    await rulesDb.deleteRule(rule.id)
+  })
+
   it('finds the partner for mail already here, oldest first, and previews it first', async () => {
     const po = await conversation({
       inboxId: purchasingInbox, subject: 'Purchase order PO-00300 from Shop', direction: 'out',

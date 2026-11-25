@@ -10,7 +10,8 @@ import {
 } from './db'
 import { isPersonalDomain } from './people'
 import {
-  bareAddress,
+  actionsForMessage,
+  counterpartyAddress,
   domainOfAddress,
   mergeReferences,
   ruleMatches,
@@ -27,8 +28,8 @@ import {
   internalCopies,
   loadRuleMessage,
   loadRuleMessages,
-  newestInboundMessageIds,
-  recentInboundMessageIds,
+  newestRuleMessageIds,
+  recentRuleMessageIds,
   releaseRuleRun,
   staffUserExists,
   threadBasics,
@@ -39,11 +40,14 @@ import {
 // ---------------------------------------------------------------------------
 // Running rules.
 //
-// Called by the collecting pass for every inbound message it files (email and
-// every other channel alike), after the message is safely stored and BEFORE
-// the webhooks are queued and the listening modules are offered it - so a
-// merge has already put the message where it belongs by the time anybody else
-// looks at which conversation it is on.
+// Called by the collecting pass for every message it files (email and every
+// other channel alike), after the message is safely stored and BEFORE the
+// webhooks are queued and the listening modules are offered it - so a merge
+// has already put the message where it belongs by the time anybody else looks
+// at which conversation it is on. Also called for mail the site sends that
+// starts a conversation of its own (a module's email filed by
+// outbound-record.ts, a new email from the composer), where only a rule's
+// merge applies - see actionsForMessage in lib/rules.ts.
 //
 // Four things hold everywhere:
 //
@@ -64,11 +68,12 @@ type MergeAction = Extract<RuleAction, { type: 'mergeByReference' }>
  *  person...). */
 type ActionOutcome = { summary: string; threadId?: string; mergeIds?: string[] } | null
 
-/** Who "the same company" is, for a merge: the sender's domain, or the
- *  sender's own address where the domain is one everybody shares. */
+/** Who "the same company" is, for a merge: the other party's domain (the
+ *  sender's, or for mail we sent the recipient's), or their own address where
+ *  the domain is one everybody shares. */
 async function companyOf(message: RuleMessage): Promise<{ domain: string } | { address: string } | null> {
-  const address = bareAddress(message.fromAddress)
-  const domain = domainOfAddress(message.fromAddress)
+  const address = counterpartyAddress(message)
+  const domain = domainOfAddress(address)
   if (!address || !domain) return null
   const settings = await getSettings()
   return isPersonalDomain(domain, settings.personalDomains) ? { address } : { domain }
@@ -196,6 +201,9 @@ function joinSummaries(parts: string[]): string {
  */
 async function applyRule(rule: RuleRow, message: RuleMessage): Promise<boolean> {
   const own = await applyRuleToOwnThread(rule, message)
+  // A copy of mail we sent is the copy; the received half carries its steps
+  // to the others (see applyRuleToInternalCopies), never the other way round.
+  if (message.sent) return own
   // Asked even when the message's own go was spent long ago, so "run on recent
   // mail" tidies a sending-side copy that an earlier version of this left open.
   const copies = await applyRuleToInternalCopies(rule, message)
@@ -252,9 +260,10 @@ async function applyRuleToOwnThread(rule: RuleRow, message: RuleMessage): Promis
   const runId = await claimRuleRun(rule.id, message.messageId, message.threadId)
   if (!runId) return false
 
+  const actions = actionsForMessage(rule, message)
   const ordered = [
-    ...rule.actions.filter((a) => a.type === 'mergeByReference'),
-    ...rule.actions.filter((a) => a.type !== 'mergeByReference'),
+    ...actions.filter((a) => a.type === 'mergeByReference'),
+    ...actions.filter((a) => a.type !== 'mergeByReference'),
   ]
   let threadId = message.threadId
   const said: string[] = []
@@ -345,7 +354,7 @@ export async function previewRule(rule: RuleBody, days: number): Promise<{
   matched: number
   matches: RulePreviewMatch[]
 }> {
-  const ids = await newestInboundMessageIds(days, PREVIEW_SCAN)
+  const ids = await newestRuleMessageIds(days, PREVIEW_SCAN)
   const matches: RulePreviewMatch[] = []
   let matched = 0
   for (const message of await loadRuleMessages(ids)) {
@@ -354,7 +363,8 @@ export async function previewRule(rule: RuleBody, days: number): Promise<{
     if (matches.length >= PREVIEW_SHOW) continue
     const parts: string[] = []
     let wouldAct = false
-    for (const action of rule.actions) {
+    const actions = actionsForMessage(rule, message)
+    for (const action of actions) {
       if (action.type === 'mergeByReference') {
         const target = await mergeTargetFor(action, message)
         if (target) {
@@ -367,7 +377,7 @@ export async function previewRule(rule: RuleBody, days: number): Promise<{
         wouldAct = true
       }
     }
-    const others = rule.actions.filter((a) => a.type !== 'mergeByReference').length
+    const others = actions.filter((a) => a.type !== 'mergeByReference').length
     if (others > 0) parts.push(others === 1 ? 'one more step' : `${others} more steps`)
     matches.push({
       messageId: message.messageId,
@@ -395,7 +405,7 @@ export async function backfillRule(ruleId: string, days: number, after: string |
   const rule = await getRule(ruleId)
   if (!rule) return { error: 'That rule is not there any more.' }
   if (rule.unreadable) return { error: 'This rule was written by a different version of the inbox and cannot be run. Open it and save it again.' }
-  const ids = await recentInboundMessageIds(days, after, BACKFILL_PAGE)
+  const ids = await recentRuleMessageIds(days, after, BACKFILL_PAGE)
   let applied = 0
   for (const id of ids) {
     try {

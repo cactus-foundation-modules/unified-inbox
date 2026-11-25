@@ -278,7 +278,7 @@ export function patternFromExample(example: string): string {
 // Matching.
 // ---------------------------------------------------------------------------
 
-/** What a rule can see of an arriving message. */
+/** What a rule can see of a message. */
 export type RuleMessage = {
   messageId: string
   threadId: string
@@ -292,6 +292,43 @@ export type RuleMessage = {
   hasAttachments: boolean
   /** Whether this message is the first in its conversation. */
   startsConversation: boolean
+  /** True for mail the site itself sent (a purchase order going out, a reply
+   *  typed in Outlook), false for mail that arrived. See actionsForMessage. */
+  sent: boolean
+}
+
+/**
+ * The steps of a rule that apply to this message.
+ *
+ * Everything, for mail that arrived. For mail the site sent, the merge and
+ * nothing else. A merge is about which conversation a reference belongs with,
+ * and that is the same question whoever wrote the email: a "payment sent for
+ * PO-00093" going out as a brand-new email belongs under PO-00093 exactly as
+ * the supplier's pro forma does. The other steps are about dealing with post
+ * that has come in - assigning it, filing it, marking it done - and turning
+ * them on for our own sent mail would have every existing rule quietly start
+ * filing things nobody asked it to.
+ */
+export function actionsForMessage(rule: Pick<RuleBody, 'actions'>, message: Pick<RuleMessage, 'sent'>): RuleAction[] {
+  return message.sent ? rule.actions.filter((a) => a.type === 'mergeByReference') : rule.actions
+}
+
+/**
+ * Whose company a message is "from", for a merge's "same company": the
+ * sender's address for mail that arrived, and for mail we sent the first
+ * recipient who is not at our own domain - otherwise every conversation we
+ * ever wrote on would count as the same company. Null when there is nobody
+ * outside to go on (an email between two of our own addresses).
+ */
+export function counterpartyAddress(message: Pick<RuleMessage, 'sent' | 'fromAddress' | 'recipients'>): string | null {
+  if (!message.sent) return bareAddress(message.fromAddress)
+  const ours = domainOfAddress(message.fromAddress)
+  for (const recipient of message.recipients) {
+    const address = bareAddress(recipient)
+    const domain = domainOfAddress(recipient)
+    if (address && domain && domain !== ours) return address
+  }
+  return null
 }
 
 /** The bare address out of "Name <x@y>", lower case. */
@@ -372,8 +409,11 @@ export function conditionMatches(condition: RuleCondition, message: RuleMessage)
  * "every new conversation in sales@ is Sam's" is one condition, but "every new
  * conversation is Sam's" is none, and both are reasonable things to want.
  */
-export function ruleMatches(rule: Pick<RuleBody, 'trigger' | 'match' | 'conditions'>, message: RuleMessage): boolean {
+export function ruleMatches(rule: Pick<RuleBody, 'trigger' | 'match' | 'conditions' | 'actions'>, message: RuleMessage): boolean {
   if (rule.trigger === 'newConversation' && !message.startsConversation) return false
+  // Mail we sent only ever gets a rule's merge (actionsForMessage); a rule
+  // without one has nothing to say about it.
+  if (actionsForMessage(rule, message).length === 0) return false
   if (rule.conditions.length === 0) return true
   return rule.match === 'all'
     ? rule.conditions.every((c) => conditionMatches(c, message))

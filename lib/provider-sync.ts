@@ -849,7 +849,9 @@ async function offerArrival(
  *  history, and a rule is about what arrives, not about September. The window
  *  is the listening modules' one (offerArrival above). */
 function ruleWorthy(direction: string, sentAt: Date): boolean {
-  return direction === 'in' && Date.now() - sentAt.getTime() <= CATCH_UP_DAYS * 86_400_000
+  // Sent mail too: a rule's merge applies to either (see actionsForMessage in
+  // lib/rules.ts), and the engine leaves everything else to arriving post.
+  return (direction === 'in' || direction === 'out') && Date.now() - sentAt.getTime() <= CATCH_UP_DAYS * 86_400_000
 }
 
 type ProviderMessageAttachments = Array<{ filename: string; url: string; contentType: string | null }> | undefined

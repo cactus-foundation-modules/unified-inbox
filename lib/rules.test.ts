@@ -10,6 +10,8 @@ import {
   patternProblem,
   ruleMatches,
   ruleProblem,
+  actionsForMessage,
+  counterpartyAddress,
   type RuleMessage,
 } from './rules'
 
@@ -25,6 +27,23 @@ const supplierReply: RuleMessage = {
   bodyText: 'Thank you for placing your order with us.',
   hasAttachments: true,
   startsConversation: true,
+  sent: false,
+}
+
+// The purchase-orders module's own follow-up, filed as a new conversation.
+const ourPaymentNote: RuleMessage = {
+  messageId: 'm2',
+  threadId: 't2',
+  inboxId: 'purchasing',
+  channel: 'email',
+  fromAddress: 'purchasing@shop.example',
+  fromName: 'Purchasing',
+  recipients: ['Accounts <accounts@supplier.example>'],
+  subject: 'Payment sent for purchase order PO-00093',
+  bodyText: 'We have paid your proforma against our purchase order PO-00093.',
+  hasAttachments: true,
+  startsConversation: true,
+  sent: true,
 }
 
 const mergeRule = (over: Partial<RuleBody> = {}): RuleBody => ({
@@ -143,5 +162,30 @@ describe('rules', () => {
     expect(RuleBody.safeParse(mergeRule()).success).toBe(true)
     expect(RuleBody.safeParse({ ...mergeRule(), actions: [] }).success).toBe(false)
     expect(RuleBody.safeParse({ ...mergeRule(), conditions: [{ id: 'x', field: 'subject', op: 'sounds like', value: 'x' }] }).success).toBe(false)
+  })
+})
+
+describe('mail the site sent', () => {
+  it('gets a rule\'s merge and nothing else', () => {
+    const rule = mergeRule({ actions: [
+      { type: 'markDone' },
+      { type: 'mergeByReference', pattern: 'PO-#####', lookIn: 'subject', sameCompany: true, withinDays: 60 },
+    ] })
+    expect(actionsForMessage(rule, ourPaymentNote).map((a) => a.type)).toEqual(['mergeByReference'])
+    expect(actionsForMessage(rule, supplierReply).map((a) => a.type)).toEqual(['markDone', 'mergeByReference'])
+  })
+
+  it('matches a merge rule, and never a rule with no merge in it', () => {
+    expect(ruleMatches(mergeRule(), ourPaymentNote)).toBe(true)
+    expect(ruleMatches(mergeRule({ conditions: [], actions: [{ type: 'markDone' }] }), ourPaymentNote)).toBe(false)
+    expect(ruleMatches(mergeRule({ conditions: [], actions: [{ type: 'markDone' }] }), supplierReply)).toBe(true)
+  })
+
+  it('counts the recipient as the company, never ourselves', () => {
+    expect(counterpartyAddress(supplierReply)).toBe('faye.whitmore@supplier.example')
+    expect(counterpartyAddress(ourPaymentNote)).toBe('accounts@supplier.example')
+    expect(counterpartyAddress({ ...ourPaymentNote, recipients: ['chris@shop.example', 'a@supplier.example'] }))
+      .toBe('a@supplier.example')
+    expect(counterpartyAddress({ ...ourPaymentNote, recipients: ['chris@shop.example'] })).toBeNull()
   })
 })
