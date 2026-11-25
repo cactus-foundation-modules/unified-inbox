@@ -96,6 +96,7 @@ async function mergeTargetFor(action: MergeAction, message: RuleMessage): Promis
     references,
     withinDays: action.withinDays,
     company,
+    inBodies: action.lookIn === 'subjectOrBody',
   })
 }
 

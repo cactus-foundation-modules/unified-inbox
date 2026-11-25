@@ -89,6 +89,7 @@ describe.runIf(shouldRun)('inbox rules, against a real database', () => {
     from: string
     to: string[]
     sentAt: Date
+    body?: string
   }): Promise<{ threadId: string; messageId: string }> {
     const threadId = await lib.createThread({
       inboxId: over.inboxId,
@@ -115,7 +116,7 @@ describe.runIf(shouldRun)('inbox rules, against a real database', () => {
       toAddresses: over.to,
       ccAddresses: [],
       subject: over.subject,
-      bodyText: 'Thank you for placing your order.',
+      bodyText: over.body ?? 'Thank you for placing your order.',
       bodyHtml: null,
       snippet: 'Thank you for placing your order.',
       sentAt: over.sentAt,
@@ -276,6 +277,42 @@ describe.runIf(shouldRun)('inbox rules, against a real database', () => {
     expect(await mergedInto(stranger.threadId)).toBeNull()
     // Nothing done, so nothing logged and the claim given back.
     expect(await rulesDb.listRuleRuns(rule.id)).toHaveLength(0)
+    await rulesDb.deleteRule(rule.id)
+  })
+
+  it('finds a reference in the earlier conversation’s message text when told to look there', async () => {
+    const bodyRule = mergeRule({
+      conditions: [],
+      actions: [{ type: 'mergeByReference', pattern: 'PO-#####', lookIn: 'subjectOrBody', sameCompany: true, withinDays: 60 }],
+    })
+    // The order went out with a subject that never mentions its number.
+    const po = await conversation({
+      inboxId: purchasingInbox, subject: 'Your order from Shop', direction: 'out',
+      from: 'purchasing@shop.example', to: ['sales@five.example'], sentAt: hoursAgo(30),
+      body: 'Please find our purchase order PO-00500 attached.',
+    })
+    // A longer number in another body must not count.
+    const near = await conversation({
+      inboxId: purchasingInbox, subject: 'Another order', direction: 'out',
+      from: 'purchasing@shop.example', to: ['sales@five.example'], sentAt: hoursAgo(31),
+      body: 'Purchase order PO-005001 attached.',
+    })
+    const reply = await conversation({
+      inboxId: chrisInbox, subject: 'Order acknowledgement', direction: 'in',
+      from: 'orders@five.example', to: ['chris@shop.example'], sentAt: hoursAgo(2),
+      body: 'We confirm receipt of your PO-00500.',
+    })
+
+    // Subject-only leaves it alone: neither subject carries the number.
+    const subjectOnly = await rulesDb.createRule(mergeRule({ name: 'Subject only', conditions: [] }), null)
+    await engine.applyRulesToMessage(reply.messageId)
+    expect(await mergedInto(reply.threadId)).toBeNull()
+    await rulesDb.deleteRule(subjectOnly.id)
+
+    const rule = await rulesDb.createRule(bodyRule, null)
+    await engine.applyRulesToMessage(reply.messageId)
+    expect(await mergedInto(reply.threadId)).toBe(po.threadId)
+    expect(await mergedInto(near.threadId)).toBeNull()
     await rulesDb.deleteRule(rule.id)
   })
 

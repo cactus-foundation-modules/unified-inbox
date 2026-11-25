@@ -281,6 +281,9 @@ function ActionCard({ action, inboxes, users, onChange, onRemove }: {
                 <option value="subject">the subject</option>
                 <option value="subjectOrBody">the subject or the message text</option>
               </select>
+              <p className="field-hint" style={{ margin: '0.25rem 0 0' }}>
+                On both: the new message, and the earlier conversation it is matched with.
+              </p>
             </div>
             <div className="field">
               <label htmlFor={`${id}-days`}>Only conversations active in the last</label>

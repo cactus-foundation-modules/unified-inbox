@@ -5,7 +5,6 @@ import {
   RuleAction,
   RuleCondition,
   RULE_TRIGGERS,
-  containsReference,
   type RuleBody,
   type RuleMessage,
   type RuleTrigger,
@@ -287,6 +286,12 @@ function likeEscape(value: string): string {
   return value.replace(/[\\%_]/g, (c) => `\\${c}`)
 }
 
+/** The same for a Postgres regular expression: every character that means
+ *  something there stands for itself. */
+function regexEscape(value: string): string {
+  return value.replace(/[.^$*+?()[\]{}|\\-]/g, (c) => `\\${c}`)
+}
+
 export type MergeTarget = { id: string; subject: string | null; createdAt: Date }
 
 /**
@@ -297,10 +302,15 @@ export type MergeTarget = { id: string; subject: string | null; createdAt: Date 
  * into A. The oldest of the candidates wins, the same rule a merge by hand
  * follows (see pickWinner in lib/thread-merge.ts).
  *
- * The reference has to be in the candidate's subject - its own, or that of any
- * message on it - and has to be there whole: the SQL narrows with ILIKE, which
- * would happily find PO-00091 inside PO-000912, and the check afterwards
- * throws those out.
+ * Where the reference is looked for on the candidate follows the rule's own
+ * "look for it in": the subject (its own, or any message's), or the subject
+ * or the text of any message on it. Both sides are searched the same way, so a
+ * rule that finds PO-00091 in the body of a supplier's reply also finds the
+ * purchase order whose subject never mentioned it.
+ *
+ * The reference has to be there WHOLE: ILIKE narrows the field cheaply, and a
+ * case-blind regular expression then insists on something that is not a
+ * letter or a digit either side, so PO-00091 never matches inside PO-000912.
  *
  * `company` keeps it to conversations somebody from the same place is on: a
  * message from or to the sender's domain, or to the sender's own address where
@@ -314,9 +324,12 @@ export async function findMergeTarget(input: {
   references: string[]
   withinDays: number
   company: { domain: string } | { address: string } | null
+  /** Search the candidate's message text as well as its subjects. */
+  inBodies: boolean
 }): Promise<MergeTarget | null> {
   if (input.references.length === 0) return null
   const likes = input.references.map((ref) => `%${likeEscape(ref)}%`)
+  const wholes = input.references.map((ref) => `(^|[^A-Za-z0-9])${regexEscape(ref)}($|[^A-Za-z0-9])`)
 
   const companyClause = input.company === null
     ? Prisma.sql`TRUE`
@@ -346,13 +359,12 @@ export async function findMergeTarget(input: {
              )
         )`
 
+  const bodyClause = input.inBodies
+    ? Prisma.sql`OR (rm."body_text" ILIKE ANY(${likes}::text[]) AND rm."body_text" ~* ANY(${wholes}::text[]))`
+    : Prisma.empty
+
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
-    SELECT t."id", t."subject", t."created_at",
-           ARRAY(
-             SELECT DISTINCT sm."subject" FROM "uin_messages" sm
-              WHERE sm."thread_id" = t."id" AND sm."subject" IS NOT NULL
-              LIMIT 25
-           ) AS subjects
+    SELECT t."id", t."subject", t."created_at"
       FROM "uin_threads" t
      WHERE t."id" <> ${input.threadId}
        AND t."merged_into_id" IS NULL
@@ -361,24 +373,23 @@ export async function findMergeTarget(input: {
        AND t."created_at" < ${input.threadCreatedAt}
        AND COALESCE(t."last_message_at", t."created_at") >= now() - (${input.withinDays} * interval '1 day')
        AND (
-         t."subject" ILIKE ANY(${likes}::text[])
+         (t."subject" ILIKE ANY(${likes}::text[]) AND t."subject" ~* ANY(${wholes}::text[]))
          OR EXISTS (
            SELECT 1 FROM "uin_messages" rm
-            WHERE rm."thread_id" = t."id" AND rm."subject" ILIKE ANY(${likes}::text[])
+            WHERE rm."thread_id" = t."id"
+              AND (
+                (rm."subject" ILIKE ANY(${likes}::text[]) AND rm."subject" ~* ANY(${wholes}::text[]))
+                ${bodyClause}
+              )
          )
        )
        AND ${companyClause}
      ORDER BY t."created_at" ASC, t."id" ASC
-     LIMIT 20
+     LIMIT 1
   `
-  for (const r of rows) {
-    const subjects = [r.subject as string | null, ...((r.subjects as string[] | null) ?? [])]
-    const whole = input.references.some((ref) => subjects.some((s) => containsReference(s, ref)))
-    if (whole) {
-      return { id: r.id as string, subject: (r.subject as string | null) ?? null, createdAt: r.created_at as Date }
-    }
-  }
-  return null
+  const r = rows[0]
+  if (!r) return null
+  return { id: r.id as string, subject: (r.subject as string | null) ?? null, createdAt: r.created_at as Date }
 }
 
 export async function threadBasics(threadId: string): Promise<{
