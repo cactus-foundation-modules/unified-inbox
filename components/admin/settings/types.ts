@@ -198,6 +198,7 @@ export type SubTab =
   | 'inboxes'
   | 'channels'
   | 'collecting'
+  | 'rules'
   | 'receipts'
   | 'people'
   | 'campaigns'
@@ -209,6 +210,7 @@ export const SUB_TABS: ReadonlyArray<{ key: SubTab; label: string }> = [
   { key: 'inboxes', label: 'Inboxes' },
   { key: 'channels', label: 'Channels' },
   { key: 'collecting', label: 'Collecting' },
+  { key: 'rules', label: 'Rules' },
   { key: 'receipts', label: 'Sent replies' },
   { key: 'people', label: 'People' },
   { key: 'campaigns', label: 'Campaigns' },

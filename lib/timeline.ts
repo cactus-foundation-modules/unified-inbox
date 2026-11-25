@@ -152,7 +152,10 @@ function lineFor(
 ): string | null {
   const d = event.detail ?? {}
   const name = (id: string | null | undefined) => (id && ctx.staffById[id]) || null
-  const who = name(event.userId) ?? 'Somebody'
+  // A rule did it rather than a person: the line names the rule, so somebody
+  // wondering why a conversation moved can find the rule that moved it.
+  const rule = str(d.ruleName)
+  const who = rule ? `The rule “${rule}”` : name(event.userId) ?? 'Somebody'
   const when = (value: unknown) => {
     const iso = str(value)
     return iso ? formatFull(iso, ctx.timezone) : null
@@ -162,7 +165,7 @@ function lineFor(
     case 'assigned': {
       const to = str(d.to)
       const toName = name(to)
-      if (!event.userId) {
+      if (!event.userId && !rule) {
         // Nobody pressed anything: it was somebody's own post.
         return toName ? `It went to ${toName}, as it came to their own address` : 'It went to the owner of the address it came to'
       }

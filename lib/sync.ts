@@ -90,6 +90,7 @@ import type { Inbox } from './types'
 import { isAccountSecurityMail, queueMessageWebhooks } from './webhooks'
 import { cacheAttachment, MAX_ATTACHMENT_BYTES } from './attachments'
 import { gatherMessageHandlers, offerMessage, storableTypesFor, type MessageHandlerEntry } from './message-handlers'
+import { applyRulesToMessage } from './rules-engine'
 import { MAX_EAGER_BYTES_PER_MESSAGE, storableAs } from './inbound-file-policy'
 
 // ---------------------------------------------------------------------------
@@ -981,6 +982,12 @@ async function fileMessage(
     && ctx.messageHandlers.length > 0
     && pass === 'forward'
     && !junk && !automated && !securityMail
+  // The site's own rules (lib/rules-engine.ts), on the same terms: new post
+  // only, never the months of history the first pass copies, never junk, a
+  // bounce or the site's own login codes.
+  const rulesOnArrival = (side: 'in' | 'out') => side === 'in'
+    && pass === 'forward'
+    && !junk && !automated && !securityMail
 
   // A bounce is filed against the message it is about as well as on the
   // conversation - the "Sent" under our reply becomes "It did not arrive".
@@ -1284,6 +1291,7 @@ async function fileMessage(
   if (internal) {
     const written: string[] = []
     const arrived: string[] = []
+    const ruled: string[] = []
     let primaryThread: string | null = null
     for (const side of sides) {
       const sideMatch = chooseFor(side.inboxId, true)
@@ -1300,6 +1308,7 @@ async function fileMessage(
       primaryThread ??= side_.threadId
       if (side_.messageId) written.push(side_.messageId)
       if (side_.messageId && offerOnArrival(side.direction)) arrived.push(side_.messageId)
+      if (side_.messageId && rulesOnArrival(side.direction)) ruled.push(side_.messageId)
     }
 
     await markLocationProcessed({
@@ -1313,6 +1322,10 @@ async function fileMessage(
     // Nothing is told about post the site refused. A webhook is this hub saying
     // "something has arrived that you may want to act on", and the site has
     // just decided the opposite about this one.
+    // Rules before anybody is told, so a merge has put the message where it
+    // belongs by the time a webhook or a listening module asks which
+    // conversation it is on. Never throws.
+    for (const messageId of ruled) await applyRulesToMessage(messageId)
     if (!junk && !securityMail) for (const messageId of written) await queueMessageWebhooks(messageId)
     for (const messageId of arrived) {
       await offerMessage(messageId, { handlers: ctx.messageHandlers, deadline: ctx.deadline })
@@ -1355,6 +1368,10 @@ async function fileMessage(
   //
   // Nor about the site's own login codes and recovery links: see
   // isAccountSecurityMail for the loop that would otherwise start.
+  // The site's own rules, before anybody is told - see the internal branch
+  // above for why. Never throws.
+  if (rulesOnArrival(direction)) await applyRulesToMessage(messageId)
+
   if (!junk && !securityMail) await queueMessageWebhooks(messageId)
 
   // And then the modules listening for post, now that the message, its files

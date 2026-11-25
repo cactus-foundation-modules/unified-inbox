@@ -14,6 +14,7 @@ import { InboxesPanel } from './settings/InboxesPanel'
 import { OverviewPanel } from './settings/OverviewPanel'
 import { PeoplePanel } from './settings/PeoplePanel'
 import { ReceiptsPanel } from './settings/ReceiptsPanel'
+import { RulesPanel } from './settings/RulesPanel'
 import { SUB_TABS, type Note, type Payload, type SubTab } from './settings/types'
 import { MUTED, NoteAlert, PanelActiveContext } from './settings/ui'
 
@@ -189,6 +190,13 @@ export function UnifiedInboxSettingsTab() {
             users={data.users}
             busy={busy}
             call={call}
+          />
+        )
+      case 'rules':
+        return (
+          <RulesPanel
+            inboxes={data.inboxes.map((i) => ({ id: i.id, name: i.name }))}
+            users={data.users.map((u) => ({ id: u.id, name: u.name || u.email }))}
           />
         )
       case 'receipts':

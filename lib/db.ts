@@ -8996,6 +8996,10 @@ export async function mergeThreads(
   /** Who the merged conversation is with, picked from the people its halves
    *  are with. Omitted leaves it reading the newest message, as ever. */
   contactIn?: { name: string | null; address: string | null },
+  /** Said on the timeline line the merge writes. A rule that merges passes its
+   *  own id and name, so the line reads "The rule “...” merged it" rather than
+   *  "Somebody merged it" - see lib/rules-engine.ts. */
+  eventDetail?: { ruleId: string; ruleName: string },
 ): Promise<ThreadMergeResult | { error: string }> {
   const loserIds = [...new Set(loserIdsIn)].filter((id) => id !== winnerId)
   const found = await threadsForMerge([winnerId, ...loserIds])
@@ -9274,6 +9278,7 @@ export async function mergeThreads(
                 ...(rehomedTo ? { rehomedToInboxId: rehomedTo, fromInboxId: winner.inboxId } : {}),
                 ...(renameTo ? { subjectFrom: winner.subject, subjectTo: renameTo } : {}),
                 ...(pickedContact ? { contactTo: pickedContact.name ?? pickedContact.address } : {}),
+                ...(eventDetail ?? {}),
               })}::jsonb)
     `
 

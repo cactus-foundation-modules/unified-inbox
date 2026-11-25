@@ -5,6 +5,7 @@ import type {
 } from '@/lib/conversations/types'
 import { queueMessageWebhooks } from './webhooks'
 import { gatherMessageHandlers, offerMessage, type MessageHandlerEntry } from './message-handlers'
+import { applyRulesToMessage } from './rules-engine'
 import { CATCH_UP_DAYS } from './message-handlers-db'
 import {
   assignThreadIfUnassigned,
@@ -426,6 +427,7 @@ export async function syncProvider(
     await markProviderContentRead(channelKey, summary.id, contentAt)
 
     let stored = 0
+    const ruled: string[] = []
     // The first new message each way, which is what the timeline's lines sit
     // in front of: "a reply arrived, so it is no longer snoozed" belongs above
     // the reply, not wherever the collecting pass's clock put it.
@@ -489,6 +491,7 @@ export async function syncProvider(
         stored += 1
         await queueMessageWebhooks(id)
         await offerArrival(id, direction, sentAt, messageHandlers, opts.deadline)
+        if (ruleWorthy(direction, sentAt)) ruled.push(id)
         firstAny ??= id
         if (direction === 'in') firstIn ??= id
         if (direction === 'out') firstOut ??= id
@@ -509,6 +512,9 @@ export async function syncProvider(
       // can have been written against it yet.
       await wakeOnArrival(threadId, channelKey, { firstIn, firstOut, firstAny }, existing !== null)
     }
+    // The site's own rules, once the conversation is counted and woken, so a
+    // rule marking it done is not undone by the wake. Never throws.
+    for (const id of ruled) await applyRulesToMessage(id)
   }
 
   return outcome
@@ -678,6 +684,7 @@ async function collectLinkedConversation(input: {
 
     const firsts: Firsts = { firstIn: null, firstOut: null, firstAny: null }
     let here = 0
+    const ruled: string[] = []
     for (const { message, sentAt } of stay) {
       const direction = messageDirection(message)
       const text = typeof message.text === 'string' ? message.text : null
@@ -707,6 +714,7 @@ async function collectLinkedConversation(input: {
       here += 1
       await queueMessageWebhooks(id)
       await offerArrival(id, direction, sentAt, input.messageHandlers, input.deadline)
+      if (ruleWorthy(direction, sentAt)) ruled.push(id)
       firsts.firstAny ??= id
       if (direction === 'in') firsts.firstIn ??= id
       if (direction === 'out') firsts.firstOut ??= id
@@ -716,12 +724,14 @@ async function collectLinkedConversation(input: {
       await recountProviderThread(threadId)
       await wakeOnArrival(threadId, channelKey, firsts, existing !== null)
     }
+    for (const id of ruled) await applyRulesToMessage(id)
     await markProviderContentRead(channelKey, summary.id, input.contentAt)
   }
 
   // ---- the email conversation: the texts that answer it ------------------
   const firsts: Firsts = { firstIn: null, firstOut: null, firstAny: null }
   let there = 0
+  const ruled: string[] = []
   for (const { message, sentAt } of redirected) {
     const direction = messageDirection(message)
     const text = typeof message.text === 'string' ? message.text : null
@@ -761,6 +771,7 @@ async function collectLinkedConversation(input: {
     there += 1
     await queueMessageWebhooks(id)
     await offerArrival(id, direction, sentAt, input.messageHandlers, input.deadline)
+    if (ruleWorthy(direction, sentAt)) ruled.push(id)
     // Landing as an email does: to the top of the list, and unread when it
     // was them.
     await touchThread(link.threadId, {
@@ -781,6 +792,7 @@ async function collectLinkedConversation(input: {
     stored += there
     await wakeOnArrival(link.threadId, channelKey, firsts, true)
   }
+  for (const id of ruled) await applyRulesToMessage(id)
 
   // Last, and only once everything above is filed: a pass that stopped part
   // way must not leave a mark saying it had caught up.
@@ -830,6 +842,14 @@ async function offerArrival(
   } catch (err) {
     console.error(`[unified-inbox] could not offer message ${messageId} to the modules listening for post`, err)
   }
+}
+
+/** Whether a message just copied across is news the site's rules should see:
+ *  inbound, and recent - the first pass over a channel copies a month of
+ *  history, and a rule is about what arrives, not about September. The window
+ *  is the listening modules' one (offerArrival above). */
+function ruleWorthy(direction: string, sentAt: Date): boolean {
+  return direction === 'in' && Date.now() - sentAt.getTime() <= CATCH_UP_DAYS * 86_400_000
 }
 
 type ProviderMessageAttachments = Array<{ filename: string; url: string; contentType: string | null }> | undefined
