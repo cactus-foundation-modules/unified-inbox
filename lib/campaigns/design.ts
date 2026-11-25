@@ -19,9 +19,10 @@ import type { RecipientNames } from './types'
 // then escaped. A customer's name has to go through exactly that, so each of
 // the campaign's own tags is swapped for a placeholder before the render and
 // handed to the renderer as one of ITS values. The renderer then treats a name
-// the way it treats the site's name, field by field. The one change made here:
-// a value going into a field the renderer does not escape (raw HTML) is escaped
-// first, because a name typed at the checkout is not HTML anybody wrote.
+// the way it treats the site's name, field by field. Core escapes a merge value
+// going into a raw-HTML field itself (a name typed at the checkout is not HTML
+// anybody wrote), so nothing here escapes first - doing so would show
+// "&amp;lt;" for a "<". That is why this needs core 0.5.1981 or newer.
 //
 // No database, no server-only imports: the editor imports `designWords` to keep
 // the plain-text reading in step as somebody builds.
@@ -58,15 +59,6 @@ const RAW_HTML = new Set(['html', 'leftHtml', 'rightHtml'])
  *  rather than treated as a campaign tag nobody recognises. */
 export const SITE_TAGS: ReadonlySet<string> = new Set(['siteName', 'siteUrl', 'logoUrl', 'year'])
 const isSiteTag = (name: string) => SITE_TAGS.has(name)
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
 
 /** Whether there is anything in it at all. */
 export function isEmptyDesign(design: CampaignDesign | null | undefined): boolean {
@@ -130,16 +122,16 @@ export function renderCampaignDesign(input: {
   let next = 0
   // A name for each placeholder that cannot collide with anything the site's
   // own blocks fill: theirs are camelCase words, these are not.
-  const placeholder = (value: string, raw: boolean): string => {
+  const placeholder = (value: string): string => {
     const key = `uin_tag_${next++}`
-    values[key] = raw ? escapeHtml(value) : value
+    values[key] = value
     return `{{${key}}}`
   }
 
   const fill = (value: unknown, key: string): unknown => {
     if (typeof value !== 'string') return value
     if (INTERPOLATED.has(key)) {
-      return replaceTags(value, input.person, (filled) => placeholder(filled, RAW_HTML.has(key)), isSiteTag)
+      return replaceTags(value, input.person, (filled) => placeholder(filled), isSiteTag)
     }
     return replaceTags(value, input.person, (filled) => filled, isSiteTag)
   }
