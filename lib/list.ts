@@ -585,6 +585,41 @@ export function effectiveInboxParam(
 }
 
 /**
+ * Where the hub opens when the address names no folder: whatever this person
+ * keeps at the top of their own rail.
+ *
+ * It used to be their own inbox, full stop. Then the top of the rail became
+ * theirs to arrange (migration 043), and somebody who dragged All to the top
+ * because All is where they work still landed in their own address every
+ * morning - one click from where they had said, in so many words, they wanted
+ * to be.
+ *
+ * `own` is what the rail draws first under Yours, in that order (see
+ * splitInboxes); the rest are the folders beside it. With no order saved the
+ * answer is the first address of their own, which is exactly where the hub
+ * used to open - and nobody with no address of their own lands anywhere but
+ * All. Drafts and Scheduled only count while there is something in them,
+ * because only then are they on the rail at all. Spam and the Bin never do:
+ * they live behind More, and nobody means to start the day in either.
+ */
+export function landingInboxParam(
+  own: string[],
+  railOrder: string[],
+  show: { drafts: boolean; scheduled: boolean },
+): string {
+  const keys = [
+    ...own,
+    'all',
+    'mentions',
+    ...(show.drafts ? ['drafts'] : []),
+    ...(show.scheduled ? ['scheduled'] : []),
+    'sent',
+  ]
+  const [first] = sortByStoredOrder(keys.map((key) => ({ key })), railOrder)
+  return first?.key ?? 'all'
+}
+
+/**
  * The addresses along the top, with one person's own pulled to the front.
  *
  * `rest` stays in the site's own order, which is what the drag saves and what

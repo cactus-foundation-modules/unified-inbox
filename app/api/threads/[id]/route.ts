@@ -33,6 +33,55 @@ import { ThreadPatchBody } from '@/modules/unified-inbox/lib/validation'
 // Every change writes an audit row beside it. "Who marked this done, and when"
 // is the question asked a fortnight later, and a bare column cannot answer it.
 
+// A glimpse of one conversation for the pile drawn in the reading pane while
+// several are picked (see PickStack): its name, how many messages it holds, and
+// the newest thing anybody outside said or was sent, as the card on top of the
+// pile shows it. Reading only - nothing here marks it read, because looking at
+// a pile is not opening any one of it.
+//
+// The same check as opening the conversation: a pile picked off All can hold
+// something from an address this reader was let into, and nothing else.
+const PREVIEW_TEXT_LIMIT = 6000
+
+export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const user = await getSessionFromCookie()
+  if (!user) return errorResponse('Not authenticated', 401)
+  if (!await hasPermission(user, 'unifiedinbox.view')) return errorResponse('Forbidden', 403)
+
+  const { id } = await params
+  const thread = await getThreadDetail(id)
+  if (!thread) return errorResponse('That conversation no longer exists.', 404)
+  if (!await canOpenThread(user, thread)) return errorResponse('Forbidden', 403)
+
+  const messages = await listThreadMessages(id)
+  // The newest message that went somewhere, ahead of a colleague's note about
+  // it: the pile is for telling post apart, and a note is not post. A
+  // discussion is nothing BUT notes, so it falls back to its newest.
+  const sent = messages.filter((m) => m.direction !== 'note')
+  const latest = (sent.length > 0 ? sent : messages).at(-1) ?? null
+
+  return NextResponse.json({
+    id: thread.id,
+    subject: thread.subject,
+    messageCount: messages.length,
+    latest: latest && {
+      id: latest.id,
+      direction: latest.direction,
+      channel: latest.channel,
+      fromName: latest.fromName,
+      fromAddress: latest.fromAddress,
+      fromPhone: latest.fromPhone,
+      toAddresses: latest.toAddresses,
+      subject: latest.subject,
+      sentAt: latest.sentAt.toISOString(),
+      hasHtml: latest.hasHtml,
+      remoteImages: latest.remoteImages,
+      hasAttachments: latest.hasAttachments,
+      bodyText: latest.bodyText ? latest.bodyText.slice(0, PREVIEW_TEXT_LIMIT) : null,
+    },
+  }, { headers: { 'Cache-Control': 'private, no-store' } })
+}
+
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getSessionFromCookie()
   if (!user) return errorResponse('Not authenticated', 401)

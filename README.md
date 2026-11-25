@@ -50,8 +50,9 @@ the same human collapse into one story.
   when nobody else could pick it up anyway. Shared addresses are left alone, a
   conversation somebody already has is never taken off them, and there is a tick
   to switch the whole thing off.
-- **Everything of yours in one place.** Opening the hub lands you in your own
-  inbox, and your own inbox is where everything handed to you shows up - even
+- **Everything of yours in one place.** Opening the hub lands you on whatever
+  you keep at the top of your rail - your own inbox until you drag something
+  else above it - and your own inbox is where everything handed to you shows up - even
   when it arrived at a shared address. There is no separate "assigned to me"
   list to remember to check, because a list you have to remember to check is a
   list that goes unchecked. The handful of places at the top of the rail -
@@ -84,7 +85,8 @@ the same human collapse into one story.
   where each conversation stands underneath them - open, snoozed, done or the
   lot - the conversations below, and whichever one you have open beside them.
   Reply, reply to everybody, forward, or leave a note only your colleagues see.
-  The arrow you press is the message you answer: a reply written against the
+  Reply to something you sent and it goes to whoever you sent it to, not back
+  to you. The arrow you press is the message you answer: a reply written against the
   fourth message of nine quotes that fourth message and threads against it,
   rather than quoting whatever happens to be at the bottom, and a draft
   remembers which one it was answering. **Show the earlier messages** under the
@@ -124,6 +126,11 @@ the same human collapse into one story.
   Cmd-click - ctrl on Windows - picks out odd ones anywhere in the list, and
   there is a box above it for the whole screenful. No tick box sitting in front
   of every row for the two mornings a week anybody wants one.
+  Two or more picked and the reading pane shows the pile instead of whatever was
+  open: the one picked last on top, with its newest message in full, and the
+  edges of the rest underneath - press one to bring it forward, **Open** to read
+  the top one, Escape or the cross to put the pile down. Pick down to one and it
+  simply opens, so a tick and an open conversation never disagree.
 - **The bin.** A waste basket at the top of every conversation, and a **Delete**
   button on the bar when several are picked. It works the way the junk sign
   beside it works, which is to say it is yours: what you delete leaves your

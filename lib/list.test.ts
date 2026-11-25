@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  landingInboxParam,
   buildSearchHref,
   channelGlyph,
   channelLabel,
@@ -802,5 +803,31 @@ describe('channelGlyph', () => {
 
   it('says nothing for a channel it does not recognise, which keeps its dot', () => {
     expect(channelGlyph('pigeon', 'Carrier pigeon')).toBeNull()
+  })
+})
+
+describe('landingInboxParam', () => {
+  const none = { drafts: false, scheduled: false }
+
+  it('opens on your own address when you have never arranged the rail', () => {
+    expect(landingInboxParam(['inbox-chris'], [], none)).toBe('inbox-chris')
+  })
+
+  it('opens on All when there is no address of your own', () => {
+    expect(landingInboxParam([], [], none)).toBe('all')
+  })
+
+  it('opens on whatever you dragged to the top', () => {
+    expect(landingInboxParam(['inbox-chris'], ['all', 'inbox-chris', 'mentions', 'sent'], none)).toBe('all')
+    expect(landingInboxParam(['inbox-chris'], ['sent', 'all', 'inbox-chris'], none)).toBe('sent')
+  })
+
+  it('skips Drafts and Scheduled while they are empty, and never lands in Spam or the Bin', () => {
+    expect(landingInboxParam(['inbox-chris'], ['drafts', 'scheduled', 'spam', 'bin', 'mentions'], none)).toBe('mentions')
+    expect(landingInboxParam(['inbox-chris'], ['drafts', 'mentions'], { drafts: true, scheduled: false })).toBe('drafts')
+  })
+
+  it('ignores an address in the saved order that is no longer yours', () => {
+    expect(landingInboxParam(['inbox-chris'], ['inbox-gone', 'inbox-chris', 'all'], none)).toBe('inbox-chris')
   })
 })

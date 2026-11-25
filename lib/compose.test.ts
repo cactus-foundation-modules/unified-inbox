@@ -392,3 +392,29 @@ describe('outgoingHeaders', () => {
     expect(Object.keys(h).sort()).toEqual(['In-Reply-To', 'Message-ID', 'References'])
   })
 })
+
+describe('replyRecipients on a message we sent', () => {
+  const ours = {
+    fromAddress: 'chris@deskwell.co.uk',
+    replyTo: null,
+    toAddresses: ['olivia@dynamicos.co.uk', 'purchasing@deskwell.co.uk'],
+    ccAddresses: ['accounts@dynamicos.co.uk', 'chris@deskwell.co.uk'],
+  }
+  const own = ['chris@deskwell.co.uk', 'purchasing@deskwell.co.uk']
+
+  it('replies to whoever it went to, not to ourselves', () => {
+    expect(replyRecipients(ours, 'reply', own)).toEqual({ to: ['olivia@dynamicos.co.uk'], cc: [] })
+  })
+
+  it('keeps the copies on a reply to all, minus our own addresses', () => {
+    expect(replyRecipients(ours, 'reply-all', own)).toEqual({
+      to: ['olivia@dynamicos.co.uk'],
+      cc: ['accounts@dynamicos.co.uk'],
+    })
+  })
+
+  it('answers the sender as before when it only went to our own addresses', () => {
+    const toTeam = { ...ours, toAddresses: ['purchasing@deskwell.co.uk'], ccAddresses: [] }
+    expect(replyRecipients(toTeam, 'reply', own)).toEqual({ to: ['chris@deskwell.co.uk'], cc: [] })
+  })
+})

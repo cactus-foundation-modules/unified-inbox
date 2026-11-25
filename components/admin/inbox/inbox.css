@@ -1566,6 +1566,114 @@
    margin and stays the height of what it says. */
 .uin-read > .uin-empty { margin: 1rem; align-self: start; }
 
+/* ---- the pile, while several conversations are picked ------------------- */
+/* See PickStack. The pane as the server drew it stays in the page underneath
+   (a reply half-written in it survives) and is simply not drawn. */
+.uin-read[data-stacked="1"] > :not(.uin-stack) { display: none !important; }
+.uin-stack {
+  display: flex; flex-direction: column; gap: 1rem;
+  padding: 1rem 1.25rem 2rem;
+  min-height: 100%;
+}
+.uin-stack-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
+}
+.uin-stack-title h2 {
+  margin: 0; font-size: 1.0625rem; font-weight: 600; color: var(--color-text);
+}
+.uin-stack-title p {
+  margin: 0.2rem 0 0; font-size: 0.8125rem; color: var(--color-text-secondary);
+}
+/* The edges of the cards underneath, each a little narrower than the one in
+   front of it, tucked under the next so only a strip of each shows - the
+   way a pile of paper looks from the front. The ground is --color-surface, so
+   the edges are --color-surface-raised: one of the pairs that reads as two
+   colours in both themes (see the note at the top of this file). */
+/* isolation: the paper shadows under the top card sit at z-index -1, and
+   without a stacking context of its own here they would sink behind the
+   pane's background and vanish. */
+.uin-stack-pile { display: flex; flex-direction: column; isolation: isolate; }
+.uin-stack-edge {
+  --uin-stack-inset: calc(var(--uin-stack-depth, 1) * 0.875rem);
+  display: grid; grid-template-columns: minmax(0, 12rem) minmax(0, 1fr) auto;
+  align-items: center; gap: 0.75rem;
+  margin: 0 var(--uin-stack-inset) -0.5rem;
+  padding: 0.45rem 0.875rem 0.95rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 0.5rem) var(--radius-md, 0.5rem) 0 0;
+  background: var(--color-surface-raised);
+  color: var(--color-text-secondary);
+  font: inherit; font-size: 0.75rem; text-align: left;
+  cursor: pointer;
+  transition: transform 120ms ease, color 120ms ease;
+}
+.uin-stack-edge:hover { color: var(--color-text); transform: translateY(-2px); }
+.uin-stack-edge:focus-visible {
+  outline: 2px solid var(--color-border-focus); outline-offset: 2px;
+  position: relative; z-index: 2;
+}
+.uin-stack-edge-who { font-weight: 600; color: var(--color-text); }
+.uin-stack-edge-who,
+.uin-stack-edge-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uin-stack-edge-when { white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* The top card, the only whole one. Its own two shadows of paper underneath
+   it, offset downwards, so the pile has a bottom as well as a top. Positioned
+   but given no z-index, so the pseudo-elements at -1 sit behind its own
+   background rather than behind the whole pane. */
+.uin-stack-card {
+  position: relative;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg);
+}
+.uin-stack-pile[data-depth="1"] .uin-stack-card::after,
+.uin-stack-pile[data-depth="2"] .uin-stack-card::after,
+.uin-stack-pile[data-depth="2"] .uin-stack-card::before {
+  content: ""; position: absolute; z-index: -1;
+  border: 1px solid var(--color-border);
+  border-radius: inherit;
+  background: var(--color-surface-raised);
+}
+.uin-stack-pile .uin-stack-card::after { inset: 0.4rem 0.6rem -0.4rem; }
+.uin-stack-pile .uin-stack-card::before { inset: 0.8rem 1.2rem -0.8rem; }
+.uin-stack-card-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
+  padding: 0.875rem 1rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.uin-stack-card-lines { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+.uin-stack-card-who { font-size: 0.9375rem; font-weight: 600; color: var(--color-text); }
+.uin-stack-card-subject { font-size: 0.875rem; color: var(--color-text); }
+.uin-stack-card-to { font-size: 0.75rem; color: var(--color-text-secondary); }
+.uin-stack-card-who,
+.uin-stack-card-subject,
+.uin-stack-card-to { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uin-stack-card-side {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 0.4rem;
+  flex: 0 0 auto;
+  font-size: 0.75rem; color: var(--color-text-secondary);
+}
+.uin-stack-card-tags { display: inline-flex; gap: 0.3rem; align-items: center; }
+.uin-stack-open { display: inline-flex; align-items: center; gap: 0.3rem; }
+.uin-stack-open svg { width: 0.875rem; height: 0.875rem; }
+.uin-stack-card-body { padding: 0.25rem 0; min-width: 0; }
+.uin-stack-card-text {
+  padding: 0.75rem 1rem 1rem;
+  font-size: 0.875rem; color: var(--color-text);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.uin-stack-loading {
+  margin: 0; padding: 1.25rem 1rem;
+  font-size: 0.8125rem; color: var(--color-text-secondary);
+}
+.uin-stack-more { margin: 0.5rem 0 0; font-size: 0.8125rem; color: var(--color-text-secondary); }
+@media (prefers-reduced-motion: reduce) {
+  .uin-stack-edge { transition: none; }
+  .uin-stack-edge:hover { transform: none; }
+}
+
 /* ---- a colleague's draft, read only ------------------------------------- */
 /* The Drafts folder under somebody's name opens one of theirs beside the list.
    It is shaped like a message rather than like a form on purpose: there is

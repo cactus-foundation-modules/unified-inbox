@@ -296,11 +296,56 @@ export function ThreadListView({
     dropSelection()
   }, [dropSelection])
 
+  /** The bar's cross: put the pile down. On a desk the open conversation
+   *  stays open where it was in the pile; where it was not, the conversation on
+   *  top of the pile is the one the reader was looking at, so that is the one
+   *  left open - never something they did not pick. */
+  const letGo = useCallback(() => {
+    const top = picked.at(-1)
+    if (isPhone() || !top || (openThreadId && picked.includes(openThreadId))) {
+      clearPicked()
+      return
+    }
+    anchorRef.current = rows.findIndex((r) => r.id === top)
+    dropSelection()
+    setOpening({ id: top, from: openThreadId })
+    router.push(inboxHref(base, params, { id: top }))
+  }, [base, clearPicked, dropSelection, openThreadId, params, picked, router, rows])
+
   /** Back to the list with nothing open on it. */
   const closePane = useCallback(
     () => router.push(inboxHref(base, params, { id: null })),
     [base, params, router],
   )
+
+  /** Open one conversation the ordinary way and let go of any pick: the row
+   *  says so at once, the address follows. */
+  const openRow = useCallback((id: string, index: number) => {
+    anchorRef.current = index
+    setSelected([])
+    if (id === shownOpenId) return
+    setOpening({ id, from: openThreadId })
+    router.push(inboxHref(base, params, { id }))
+  }, [base, openThreadId, params, router, setSelected, shownOpenId])
+
+  /** Settle a new pick. On a desk a pick of exactly one is not a pick at all -
+   *  it is the open conversation, so it opens, and the pane, the highlight and
+   *  every button agree on which one that is. A pile is two or more, and the
+   *  pane shows the pile (see PickStack).
+   *
+   *  A phone keeps its pick of one: there the list and the conversation are
+   *  never on the screen together, and a press and hold that opened the row
+   *  instead of picking it would be no way into picking at all. */
+  const settle = useCallback((next: string[], index: number) => {
+    const here = next.filter((x) => onScreen.has(x))
+    const only = here.length === 1 ? here[0] : undefined
+    if (only && !isPhone()) {
+      const at = rows.findIndex((r) => r.id === only)
+      openRow(only, at >= 0 ? at : index)
+      return
+    }
+    setSelected(next)
+  }, [onScreen, openRow, rows, setSelected])
 
   /** One row on or off, and the point any later run is measured from.
    *
@@ -313,30 +358,39 @@ export function ThreadListView({
    *  Merge button, which wants two, never appeared. */
   const toggle = useCallback((id: string, index: number) => {
     anchorRef.current = index
-    setSelected((current) => {
-      if (current.includes(id)) return current.filter((x) => x !== id)
-      // Off what is on the screen, not off the whole list: a tick left behind on
-      // a page nobody is looking at is not a selection this row is joining.
-      const nothingPicked = !current.some((x) => onScreen.has(x))
-      const alsoOpen = nothingPicked && openThreadId && openThreadId !== id && onScreen.has(openThreadId)
-      return alsoOpen ? [...current, openThreadId, id] : [...current, id]
-    })
-  }, [onScreen, openThreadId, setSelected])
+    if (selected.includes(id)) {
+      settle(selected.filter((x) => x !== id), index)
+      return
+    }
+    // Off what is on the screen, not off the whole list: a tick left behind on
+    // a page nobody is looking at is not a selection this row is joining. And
+    // off the row the reader can SEE as open, which is the one just pressed if
+    // the server has not caught up yet - otherwise two quick presses picked one.
+    const nothingPicked = !selected.some((x) => onScreen.has(x))
+    const alsoOpen = nothingPicked && shownOpenId && shownOpenId !== id && onScreen.has(shownOpenId)
+    // The one pressed goes last, which is the top of the pile in the pane.
+    settle(alsoOpen ? [...selected, shownOpenId, id] : [...selected, id], index)
+  }, [onScreen, selected, settle, shownOpenId])
 
   /** Everything from the last row picked to this one, added to whatever was
    *  already picked. Added rather than replacing: picking three at the top,
    *  then a run further down, is one job and not two. With nothing picked yet
-   *  the run starts where it ends, which picks the one row pressed. */
+   *  the run starts where it ends, which picks the one row pressed.
+   *
+   *  The row pressed goes on top of the pile whichever end of the run it is,
+   *  because it is the one the reader was looking at when they pressed. */
   const extendTo = useCallback((index: number) => {
     // Nothing pressed yet this visit, but a conversation is open beside the
     // list: that is the one the reader last chose, so a run measured from it is
     // the run they mean. It survives a reload, which a ref does not.
-    const openIndex = openThreadId ? rows.findIndex((r) => r.id === openThreadId) : -1
+    const openIndex = shownOpenId ? rows.findIndex((r) => r.id === shownOpenId) : -1
     const from = anchorRef.current ?? (openIndex >= 0 ? openIndex : index)
     const [lo, hi] = from <= index ? [from, index] : [index, from]
-    const run = rows.slice(lo, hi + 1).map((r) => r.id)
-    setSelected((current) => [...new Set([...current, ...run])])
-  }, [rows, openThreadId, setSelected])
+    const pressed = rows[index]?.id
+    const run = rows.slice(lo, hi + 1).map((r) => r.id).filter((id) => id !== pressed)
+    const next = [...new Set([...selected, ...run])].filter((id) => id !== pressed)
+    settle(pressed ? [...next, pressed] : next, index)
+  }, [rows, selected, settle, shownOpenId])
 
   const onRowClick = useCallback((e: React.MouseEvent, id: string, index: number) => {
     if (e.shiftKey) {
@@ -974,7 +1028,7 @@ export function ThreadListView({
               acts on the pick rather than on the post. A cross, the way the head
               of a conversation closes it. */}
           <AdminTooltip body="Clear the selection" className="uin-bulk-clear">
-            <button type="button" className="uin-icon-btn" disabled={busy} onClick={clearPicked}>
+            <button type="button" className="uin-icon-btn" disabled={busy} onClick={letGo}>
               {CloseIcon}
               <span className="sr-only">Clear the selection</span>
             </button>
@@ -995,7 +1049,11 @@ export function ThreadListView({
           const startedBy = discussionFrom(row, endNames)
           const putTo = discussionTo(row, endNames)
           const who = startedBy ?? participantLabel(row)
-          const open = row.id === shownOpenId
+          // While anything is picked the pick is the only highlight on the
+          // list. The open conversation used to keep its own tint beside three
+          // ticked rows, wearing an empty circle - which read as picked and was
+          // not, and is most of what made a pile so hard to trust.
+          const open = !selecting && row.id === shownOpenId
           const assignee = row.assigneeUserId ? endNames[row.assigneeUserId] : null
           // Whose desk it is on. A name once somebody has taken it, and the
           // address it arrived at until then - which on a shared inbox is the

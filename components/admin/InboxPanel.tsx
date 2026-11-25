@@ -94,7 +94,7 @@ import { OrganisationCard, EMPTY_ORGANISATION } from './inbox/OrganisationCard'
 import { ContactImport } from './inbox/ContactImport'
 import { joinCategories, splitName } from '@/modules/unified-inbox/lib/contacts'
 import { forwardSubject, replyRecipients, replySubject } from '@/modules/unified-inbox/lib/compose'
-import { channelLabel, chooseSendingInbox, effectiveInboxParam, formatWhen, inboxHref, isSearching, NEW_CONTACT, parseInboxParams, PER_PAGE, shownCount, sortByChannelOrder } from '@/modules/unified-inbox/lib/list'
+import { channelLabel, chooseSendingInbox, effectiveInboxParam, formatWhen, inboxHref, isSearching, landingInboxParam, NEW_CONTACT, parseInboxParams, PER_PAGE, shownCount, sortByChannelOrder, splitInboxes } from '@/modules/unified-inbox/lib/list'
 import { answersByEmail, replyDestination, replyStyleFor } from '@/modules/unified-inbox/lib/channel-reply'
 import { pushProviderRead } from '@/modules/unified-inbox/lib/provider-read'
 import { providerForKey, visibleProviderChannels } from '@/modules/unified-inbox/lib/provider-registry'
@@ -108,6 +108,7 @@ import { SearchBar } from './inbox/SearchBar'
 import { Filters } from './inbox/Filters'
 import { ThreadListView } from './inbox/ThreadListView'
 import { SelectionProvider } from './inbox/Selection'
+import { ReadingPane } from './inbox/PickStack'
 import { UndoProvider } from './inbox/UndoProvider'
 import { NavProgress } from './inbox/NavProgress'
 import { MailViewBeacon } from './inbox/MailViewBeacon'
@@ -343,10 +344,16 @@ export async function UnifiedInboxPanel({
   )?.id ?? null
   const pinnedInboxId = (ownInboxId && visible.has(ownInboxId) ? ownInboxId : null) ?? ownedInboxId
 
-  // An address of one's own is where the hub opens when the URL names no tab,
-  // so it is settled here, before anything is parsed - every query, count and
-  // link below is then built from the one answer rather than from two.
-  const wantedInbox = effectiveInboxParam(searchParams.inbox, pinnedInboxId)
+  // Where the hub opens when the URL names no tab: the folder this person keeps
+  // at the top of their own rail (see landingInboxParam). Settled here, before
+  // anything is parsed - every query, count and link below is then built from
+  // the one answer rather than from two.
+  const landing = landingInboxParam(
+    splitInboxes(inboxes, pinnedInboxId, user.id).yours.map((i) => i.id),
+    railOrder,
+    { drafts: draftCount > 0, scheduled: scheduledCount > 0 },
+  )
+  const wantedInbox = effectiveInboxParam(searchParams.inbox, landing)
   const chosen = wantedInbox ? { ...searchParams, inbox: wantedInbox } : searchParams
   const params = parseInboxParams(chosen)
 
@@ -2474,7 +2481,18 @@ export async function UnifiedInboxPanel({
         {/* Only drawn when something is open. With nothing picked the list
             takes the whole width (data-list="full" above) rather than sharing
             it with half a screen that says there is nothing in it. */}
-        {opened && <div className="uin-read">{otherPane ?? threadPane}</div>}
+        {/* Or, while two or more conversations are picked in the list, the pile
+            of them in its place - see PickStack. What was open stays mounted
+            underneath, so nothing being written in it is lost. */}
+        <ReadingPane
+          opened={opened}
+          base={base}
+          params={carried}
+          timezone={timezone}
+          openThreadId={params.threadId}
+        >
+          {otherPane ?? threadPane}
+        </ReadingPane>
         {contactModal}
 
         {/* The two hairlines between the rail, the list and the conversation,

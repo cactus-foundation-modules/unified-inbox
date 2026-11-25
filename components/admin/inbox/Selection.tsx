@@ -118,7 +118,17 @@ const Register = createContext<(rows: PickedRow[]) => void>(() => {})
 export function useRegisterRows(rows: PickedRow[]) {
   const register = useContext(Register)
   useEffect(() => { register(rows) }, [register, rows])
+  // And take them back down when the list goes. Drafts, Sent and the rest are
+  // lists of their own that never hand anything up, so without this a pile
+  // picked in the post would still count as "on the screen" over the top of
+  // them - and the pane would go on drawing a pile nobody can see the rows of.
+  useEffect(() => () => register([]), [register])
 }
+
+/** How many picked conversations it takes for the reading pane to stop showing
+ *  the one that is open and show the pile instead (see PickStack). Two: one
+ *  picked conversation on a desk is simply the open one. */
+export const STACK_FROM = 2
 
 export function SelectionProvider({ children }: { children: ReactNode }) {
   const [selected, setSelected] = useState<string[]>([])

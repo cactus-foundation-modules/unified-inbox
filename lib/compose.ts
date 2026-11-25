@@ -152,6 +152,34 @@ export function replyRecipients(
     return { to: [], cc: [] }
   }
 
+  // A message WE sent. Answering its sender would address the reply to
+  // ourselves - pressing Reply on the email you sent a supplier ten minutes ago
+  // put your own address in the To box. What anybody means by that press is
+  // "write to them again", so it goes to whoever the message went to, and
+  // reply-all keeps its copies as copies. The way every mail program treats a
+  // reply from the Sent folder.
+  const fromUs = own.has(primary) || own.has(normaliseAddress(original.fromAddress ?? ''))
+  if (fromUs) {
+    const pick = (list: string[], skip: Set<string>) => {
+      const out: string[] = []
+      for (const raw of list) {
+        const address = normaliseAddress(raw)
+        if (!address || !isValidAddress(address) || own.has(address) || skip.has(address)) continue
+        skip.add(address)
+        out.push(address)
+      }
+      return out
+    }
+    const seenOurs = new Set<string>()
+    const theirs = pick(original.toAddresses, seenOurs)
+    // Sent only to one of our own addresses (a note to the team inbox, a test
+    // to ourselves): there is nobody else to answer, so it answers that - the
+    // same as it always did, rather than an empty box.
+    if (theirs.length > 0) {
+      return { to: theirs, cc: mode === 'reply-all' ? pick(original.ccAddresses, seenOurs) : [] }
+    }
+  }
+
   if (mode === 'reply') return { to, cc: [] }
 
   const seen = new Set(to)
