@@ -119,6 +119,10 @@ export const RuleBody = z.object({
   conditions: z.array(RuleCondition).max(MAX_CONDITIONS),
   actions: z.array(RuleAction).min(1).max(MAX_ACTIONS),
   stopProcessing: z.boolean(),
+  /** Run every step on mail the site sends as well, not only the merge. Off
+   *  unless asked for - see actionsForMessage. Defaulted so a screen from
+   *  before the option existed still saves. */
+  includeSent: z.boolean().default(false),
 })
 export type RuleBody = z.infer<typeof RuleBody>
 
@@ -301,16 +305,24 @@ export type RuleMessage = {
  * The steps of a rule that apply to this message.
  *
  * Everything, for mail that arrived. For mail the site sent, the merge and
- * nothing else. A merge is about which conversation a reference belongs with,
+ * nothing else - unless the rule says "mail the site sends too" (includeSent),
+ * when it is everything again. That is for the site's own automatic mail
+ * somebody wants out of the way: a login code or a security alert the site
+ * emails a customer lands in the inbox as a sent conversation, and "mark it
+ * done" is exactly what a rule for those should do. A merge is about which conversation a reference belongs with,
  * and that is the same question whoever wrote the email: a "payment sent for
  * PO-00093" going out as a brand-new email belongs under PO-00093 exactly as
  * the supplier's pro forma does. The other steps are about dealing with post
  * that has come in - assigning it, filing it, marking it done - and turning
  * them on for our own sent mail would have every existing rule quietly start
- * filing things nobody asked it to.
+ * filing things nobody asked it to, which is why it is a box to tick.
  */
-export function actionsForMessage(rule: Pick<RuleBody, 'actions'>, message: Pick<RuleMessage, 'sent'>): RuleAction[] {
-  return message.sent ? rule.actions.filter((a) => a.type === 'mergeByReference') : rule.actions
+export function actionsForMessage(
+  rule: Pick<RuleBody, 'actions'> & { includeSent?: boolean },
+  message: Pick<RuleMessage, 'sent'>,
+): RuleAction[] {
+  if (!message.sent || rule.includeSent) return rule.actions
+  return rule.actions.filter((a) => a.type === 'mergeByReference')
 }
 
 /**
@@ -409,10 +421,13 @@ export function conditionMatches(condition: RuleCondition, message: RuleMessage)
  * "every new conversation in sales@ is Sam's" is one condition, but "every new
  * conversation is Sam's" is none, and both are reasonable things to want.
  */
-export function ruleMatches(rule: Pick<RuleBody, 'trigger' | 'match' | 'conditions' | 'actions'>, message: RuleMessage): boolean {
+export function ruleMatches(
+  rule: Pick<RuleBody, 'trigger' | 'match' | 'conditions' | 'actions'> & { includeSent?: boolean },
+  message: RuleMessage,
+): boolean {
   if (rule.trigger === 'newConversation' && !message.startsConversation) return false
-  // Mail we sent only ever gets a rule's merge (actionsForMessage); a rule
-  // without one has nothing to say about it.
+  // Mail we sent gets only a rule's merge unless the rule takes sent mail too
+  // (actionsForMessage); a rule left with no steps has nothing to say about it.
   if (actionsForMessage(rule, message).length === 0) return false
   if (rule.conditions.length === 0) return true
   return rule.match === 'all'

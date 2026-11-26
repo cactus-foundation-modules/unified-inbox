@@ -41,6 +41,7 @@ function mapRule(r: Record<string, unknown>): RuleRow {
     conditions: conditions.success ? conditions.data : [],
     actions: actions.success ? actions.data : [],
     stopProcessing: !!r.stop_processing,
+    includeSent: !!r.include_sent,
     fireCount: Number(r.fire_count ?? 0),
     lastFiredAt: (r.last_fired_at as Date | null) ?? null,
     createdAt: r.created_at as Date,
@@ -51,7 +52,7 @@ function mapRule(r: Record<string, unknown>): RuleRow {
 
 const RULE_COLUMNS = Prisma.sql`
   "id", "name", "enabled", "position", "trigger", "match_mode", "conditions", "actions",
-  "stop_processing", "fire_count", "last_fired_at", "created_at", "updated_at"
+  "stop_processing", "include_sent", "fire_count", "last_fired_at", "created_at", "updated_at"
 `
 
 export async function listRules(): Promise<RuleRow[]> {
@@ -104,13 +105,13 @@ export async function createRule(body: RuleBody, userId: string | null): Promise
   const rows = await prisma.$queryRaw<Record<string, unknown>[]>`
     INSERT INTO "uin_rules"
       ("name", "enabled", "position", "trigger", "match_mode", "conditions", "actions",
-       "stop_processing", "created_by", "updated_by")
+       "stop_processing", "include_sent", "created_by", "updated_by")
     VALUES (
       ${body.name}, ${body.enabled},
       (SELECT COALESCE(MAX("position"), -1) + 1 FROM "uin_rules"),
       ${body.trigger}, ${body.match},
       ${JSON.stringify(body.conditions)}::jsonb, ${JSON.stringify(body.actions)}::jsonb,
-      ${body.stopProcessing}, ${userId}, ${userId}
+      ${body.stopProcessing}, ${body.includeSent}, ${userId}, ${userId}
     )
     RETURNING ${RULE_COLUMNS}
   `
@@ -128,6 +129,7 @@ export async function updateRule(id: string, body: RuleBody, userId: string | nu
            "conditions" = ${JSON.stringify(body.conditions)}::jsonb,
            "actions" = ${JSON.stringify(body.actions)}::jsonb,
            "stop_processing" = ${body.stopProcessing},
+           "include_sent" = ${body.includeSent},
            "updated_by" = ${userId},
            "updated_at" = CURRENT_TIMESTAMP
      WHERE "id" = ${id}

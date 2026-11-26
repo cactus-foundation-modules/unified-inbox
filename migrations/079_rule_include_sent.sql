@@ -1,0 +1,12 @@
+-- Unified Inbox - Migration 079: rules that also read the site's sent mail.
+--
+-- Until now a rule gave mail the site sent its merge step and nothing else.
+-- include_sent lets a rule run every step on sent mail too - the case that
+-- asked for it is the site's own login codes and security alerts, which are
+-- filed as sent conversations and wanted marked read and done like anything
+-- else nobody needs to answer. Off for every existing rule, so nothing that
+-- worked yesterday starts doing more today.
+--
+-- A NEW numbered file, idempotent, no dollar-quoted blocks, and a boolean,
+-- which the core backup serialiser already covers.
+ALTER TABLE "uin_rules" ADD COLUMN IF NOT EXISTS "include_sent" BOOLEAN NOT NULL DEFAULT false;

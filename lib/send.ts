@@ -537,17 +537,17 @@ export async function sendMessage(request: SendRequest): Promise<SendResult> {
     sentAt: new Date(),
   })
 
-  // A brand-new email, so the site's merge rules get their look - a fresh
-  // email about PO-00093 belongs under PO-00093 like the supplier's own. Only
-  // a rule's merge ever applies to mail we sent (actionsForMessage in
-  // lib/rules.ts). Last, once the email has gone and its copy is filed, and the
-  // conversation it ended up on is the one handed back, so the screen opens
-  // where the message now lives. Never throws.
-  let finalThreadId = threadId
-  if (!prepared.threadId) {
-    await applyRulesToMessage(row.id)
-    finalThreadId = (await getMessage(row.id))?.threadId ?? threadId
-  }
+  // The site's rules get their look. A brand-new email gets a rule's merge - a
+  // fresh email about PO-00093 belongs under PO-00093 like the supplier's own -
+  // and a rule that takes the site's sent mail too gets every step, replies
+  // included when it reads "any message" (actionsForMessage in lib/rules.ts).
+  // Last, once the email has gone and its copy is filed, and the conversation
+  // it ended up on is the one handed back, so the screen opens where the
+  // message now lives. Never throws.
+  await applyRulesToMessage(row.id)
+  const finalThreadId = prepared.threadId
+    ? threadId
+    : (await getMessage(row.id))?.threadId ?? threadId
 
   return { ok: true, messageId: row.id, threadId: finalThreadId, alreadySent: false }
 }

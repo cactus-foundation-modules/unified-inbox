@@ -539,6 +539,14 @@ export function RuleEditor({ initial, ruleId, inboxes, users, onSaved, onCancel 
             )
           })}
         </div>
+        <div style={{ marginTop: '0.75rem' }}>
+          <CheckField
+            label="Mail the site sends too"
+            checked={rule.includeSent}
+            onChange={(next) => update({ includeSent: next })}
+            hint="Also run every step on email the site sends itself - login codes, security alerts, order emails - and on replies sent from here. Left off, sent mail only ever gets a rule’s merge."
+          />
+        </div>
       </Section>
 
       <Section

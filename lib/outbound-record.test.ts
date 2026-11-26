@@ -187,8 +187,10 @@ describe('a module naming the conversation', () => {
     expect(db.createOutboundThread).not.toHaveBeenCalled()
     expect(db.insertOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'thread-9' }))
     expect(db.touchThread).toHaveBeenCalledWith('thread-9', expect.objectContaining({ direction: 'out', markUnread: false }))
-    // Already on the conversation it belongs to: nothing for a rule to merge.
-    expect(rulesEngine.applyRulesToMessage).not.toHaveBeenCalled()
+    // Offered to the rules too, after the conversation has been rolled forward,
+    // for a rule that takes the site's sent mail (a merge has nothing to do on
+    // a conversation already running - the engine decides that).
+    expect(rulesEngine.applyRulesToMessage).toHaveBeenCalledWith('message-1')
   })
 
   it('opens a done or snoozed order conversation again, and says why', async () => {

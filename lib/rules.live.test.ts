@@ -65,6 +65,7 @@ const mergeRule = (over: Partial<RuleBody> = {}): RuleBody => ({
   conditions: [{ id: 'c1', field: 'subject', op: 'matches', value: 'PO-#####' }],
   actions: [{ type: 'mergeByReference', pattern: 'PO-#####', lookIn: 'subject', sameCompany: true, withinDays: 60 }],
   stopProcessing: false,
+  includeSent: false,
   ...over,
 })
 
@@ -356,6 +357,21 @@ describe.runIf(shouldRun)('inbox rules, against a real database', () => {
     expect((await rulesDb.threadBasics(ours.threadId))?.status).not.toBe('done')
     expect(await rulesDb.listRuleRuns(doneOnly.id)).toHaveLength(0)
 
+    // Unless the rule takes the site's sent mail too: then every step lands,
+    // and the box survives a save and a read back.
+    const updated = await rulesDb.updateRule(doneOnly.id, mergeRule({
+      name: 'Done only', conditions: [], actions: [{ type: 'markRead' }, { type: 'markDone' }], includeSent: true,
+    }), null)
+    expect(updated?.includeSent).toBe(true)
+    expect((await rulesDb.getRule(doneOnly.id))?.includeSent).toBe(true)
+    const alert = await conversation({
+      inboxId: purchasingInbox, subject: 'Security alert on your account', direction: 'out',
+      from: 'hi@shop.example', to: ['customer@gmail.example'], sentAt: hoursAgo(1),
+    })
+    await engine.applyRulesToMessage(alert.messageId)
+    expect((await rulesDb.threadBasics(alert.threadId))?.status).toBe('done')
+    expect((await rulesDb.listRuleRuns(doneOnly.id)).map((r) => r.messageId)).toContain(alert.messageId)
+
     await rulesDb.deleteRule(doneOnly.id)
     await rulesDb.deleteRule(rule.id)
   })
@@ -406,6 +422,7 @@ describe.runIf(shouldRun)('inbox rules, against a real database', () => {
       ],
       actions: [{ type: 'assign', userId }, { type: 'move', inboxId: purchasingInbox }, { type: 'markRead' }, { type: 'markDone' }],
       stopProcessing: true,
+      includeSent: false,
     }, null)
     const invoice = await conversation({
       inboxId: chrisInbox, subject: 'Invoice 4411', direction: 'in',
@@ -433,6 +450,7 @@ describe.runIf(shouldRun)('inbox rules, against a real database', () => {
       ],
       actions: [{ type: 'markRead' }, { type: 'markDone' }],
       stopProcessing: false,
+      includeSent: false,
     }, null)
 
     // One email from one of our addresses to another, filed once per inbox.

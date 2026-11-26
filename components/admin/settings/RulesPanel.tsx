@@ -326,6 +326,7 @@ function RuleCard({
               {!rule.enabled && !rule.unreadable && <Chip tone="plain">Off</Chip>}
               {rule.unreadable && <Chip tone="bad">Needs saving again</Chip>}
               {rule.stopProcessing && <Chip tone="info">Stops here</Chip>}
+              {rule.includeSent && <Chip tone="info">Sent mail too</Chip>}
             </div>
             <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap' }}>
               <button type="button" className="btn btn-secondary btn-sm" onClick={onEdit}>Edit</button>
@@ -413,6 +414,7 @@ export function RulesPanel({ inboxes, users }: { inboxes: Named[]; users: Named[
       conditions: rule.conditions,
       actions: rule.actions,
       stopProcessing: rule.stopProcessing,
+      includeSent: rule.includeSent,
     }
   }
 

@@ -54,6 +54,7 @@ const mergeRule = (over: Partial<RuleBody> = {}): RuleBody => ({
   conditions: [{ id: 'c1', field: 'subject', op: 'matches', value: 'PO-#####' }],
   actions: [{ type: 'mergeByReference', pattern: 'PO-#####', lookIn: 'subject', sameCompany: true, withinDays: 60 }],
   stopProcessing: false,
+  includeSent: false,
   ...over,
 })
 
@@ -179,6 +180,17 @@ describe('mail the site sent', () => {
     expect(ruleMatches(mergeRule(), ourPaymentNote)).toBe(true)
     expect(ruleMatches(mergeRule({ conditions: [], actions: [{ type: 'markDone' }] }), ourPaymentNote)).toBe(false)
     expect(ruleMatches(mergeRule({ conditions: [], actions: [{ type: 'markDone' }] }), supplierReply)).toBe(true)
+  })
+
+  it('gets every step when the rule takes the site\'s sent mail too', () => {
+    const tidy = mergeRule({ conditions: [], includeSent: true, actions: [{ type: 'markRead' }, { type: 'markDone' }] })
+    expect(actionsForMessage(tidy, ourPaymentNote).map((a) => a.type)).toEqual(['markRead', 'markDone'])
+    expect(ruleMatches(tidy, ourPaymentNote)).toBe(true)
+    expect(ruleMatches(tidy, supplierReply)).toBe(true)
+    // A rule saved before the option existed reads as off.
+    const { includeSent: _unused, ...old } = mergeRule({ conditions: [], actions: [{ type: 'markDone' }] })
+    void _unused
+    expect(ruleMatches(old, ourPaymentNote)).toBe(false)
   })
 
   it('counts the recipient as the company, never ourselves', () => {

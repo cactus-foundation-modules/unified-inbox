@@ -46,8 +46,9 @@ import {
 // has already put the message where it belongs by the time anybody else looks
 // at which conversation it is on. Also called for mail the site sends that
 // starts a conversation of its own (a module's email filed by
-// outbound-record.ts, a new email from the composer), where only a rule's
-// merge applies - see actionsForMessage in lib/rules.ts.
+// outbound-record.ts, an email from the composer), where only a rule's merge
+// applies unless the rule takes the site's sent mail too - see
+// actionsForMessage in lib/rules.ts.
 //
 // Four things hold everywhere:
 //

@@ -65,6 +65,7 @@ export function blankRule(): RuleBody {
     conditions: [blankCondition()],
     actions: [],
     stopProcessing: false,
+    includeSent: false,
   }
 }
 
@@ -179,7 +180,9 @@ function joinAnd(parts: string[], word: 'and' | 'or' = 'and'): string {
 /** The rule as one sentence: "When a new conversation starts and the subject
  *  has a reference like “PO-#####”, merge it with ..." */
 export function describeRule(rule: RuleBody, inboxes: Named[], users: Named[]): string {
-  const when = rule.trigger === 'newConversation' ? 'When a message starts a new conversation' : 'When any message arrives'
+  const when = rule.trigger === 'newConversation'
+    ? `When a message starts a new conversation${rule.includeSent ? ' (the site’s own sent mail included)' : ''}`
+    : `When any message arrives${rule.includeSent ? ' or the site sends one' : ''}`
   const conditions = rule.conditions.map((c) => conditionWords(c, inboxes))
   const ifPart = conditions.length === 0
     ? ''

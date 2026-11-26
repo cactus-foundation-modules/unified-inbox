@@ -143,12 +143,6 @@ async function record(email: RecordedOutboundEmail): Promise<void> {
 
   if (keepFiles) await keepAttachments(row.id, email)
 
-  // A new conversation of its own, so the site's merge rules get their look:
-  // "payment sent for PO-00093" belongs under PO-00093 whoever wrote it. Only
-  // the merge step ever applies to mail we sent (actionsForMessage in
-  // lib/rules.ts). Never throws.
-  if (!existingThreadId) await applyRulesToMessage(row.id)
-
   // A new thread starts out counted and previewed by its creation; one that
   // already held mail has to be rolled forward, or the list keeps showing the
   // first email's preview and the order's newest email never moves it up.
@@ -177,6 +171,15 @@ async function record(email: RecordedOutboundEmail): Promise<void> {
     const was = await reopenOnReply(threadId)
     if (was) await recordEvent(threadId, null, 'woken', { was, cause: 'module-email', direction: 'out', messageId: row.id })
   }
+
+  // The site's rules get their look, last, so a rule's "mark done" is not
+  // undone by the wake above. A new conversation gets a rule's merge -
+  // "payment sent for PO-00093" belongs under PO-00093 whoever wrote it - and a
+  // rule that takes the site's sent mail too gets every step, on a new
+  // conversation or (for "any message") one already running: the site's
+  // login codes and security alerts are what that option is for. See
+  // actionsForMessage in lib/rules.ts. Never throws.
+  await applyRulesToMessage(row.id)
 }
 
 /**
